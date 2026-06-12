@@ -46,5 +46,9 @@ export async function submitCommand(argv: string[]): Promise<number> {
     printJson(response.body);
     return response.status === 200 ? 0 : 1;
   }
+  if (response.status === 404) {
+    // The session vanished between resolution and submit — actionable, not internal.
+    fail("E_UNKNOWN_SESSION", `daemon no longer knows session ${session.id}`);
+  }
   fail("E_INTERNAL", `submit failed: ${JSON.stringify(response.body)}`, undefined, 2);
 }

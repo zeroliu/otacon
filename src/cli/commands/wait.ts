@@ -10,15 +10,13 @@
 // response-headers timeout (DECISIONS.md "wait parks in slices").
 
 import { parseArgs } from "node:util";
-import { api, ensureDaemon } from "../client.js";
+import { api, ensureDaemon, sleep } from "../client.js";
 import { CliError, fail, printJson, usageError } from "../output.js";
 import { listSessions, realpathOr, resolveSession } from "../session.js";
 
 const MAX_PARK_SECONDS = 240;
 const RESPONSE_GRACE_MS = 10_000;
 const RETRY_DELAY_MS = 250;
-
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export async function waitCommand(argv: string[]): Promise<number> {
   const { values } = parseArgs({
@@ -47,19 +45,26 @@ export async function waitCommand(argv: string[]): Promise<number> {
         // Guard a wedged connection; generous because the daemon owns the clock.
         AbortSignal.timeout(Math.min(remainingMs, parkSeconds * 1000) + RESPONSE_GRACE_MS),
       );
-      if (response.status !== 200) {
+      if (response.status === 404) {
         fail(
           "E_UNKNOWN_SESSION",
           `daemon no longer knows session ${session.id}: ${JSON.stringify(response.body)}`,
         );
       }
+      if (response.status !== 200) {
+        // A daemon 500 is not "unknown session" — surface it as what it is.
+        fail("E_INTERNAL", `wait failed: ${JSON.stringify(response.body)}`, undefined, 2);
+      }
       if ((response.body as { event?: string }).event === "timeout") continue; // re-park
       printJson(response.body);
       return 0;
     } catch (error) {
-      if (error instanceof CliError) throw error; // ensureDaemon refusals, 404s
-      // Connection died (daemon killed or restarting): back off, then the loop
-      // re-ensures the daemon and re-parks. Queued events survive on disk.
+      // Only a dead/wedged connection (daemon killed or restarting) is
+      // retryable: back off, then the loop re-ensures the daemon and re-parks
+      // (queued events survive on disk). Everything else — ensureDaemon
+      // refusals, 404s, programming errors — propagates instead of being
+      // silently retried until the deadline.
+      if (!(error instanceof CliError) || error.code !== "E_DAEMON_DOWN") throw error;
       await sleep(RETRY_DELAY_MS);
     }
   }

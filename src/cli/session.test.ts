@@ -85,6 +85,11 @@ describe("resolveSession: explicit --session", () => {
     expect(error.code).toBe("E_UNKNOWN_SESSION");
     expect(error.exitCode).toBe(1);
   });
+
+  test("explicit id may name an approved session (escape hatch)", () => {
+    const sessions = [session("otc_aaaaaa", dir, "approved")];
+    expect(resolveSession(sessions, "otc_aaaaaa", dir).id).toBe("otc_aaaaaa");
+  });
 });
 
 describe("resolveSession: current-session pointer", () => {
@@ -108,6 +113,17 @@ describe("resolveSession: current-session pointer", () => {
     const error = caught(() => resolveSession([session("otc_aaaaaa", dir)], undefined, dir));
     expect(error.code).toBe("E_STALE_POINTER");
     expect(error.message).toContain("otc_gonexx");
+  });
+
+  test("a pointer at an approved session refuses — the session is over", () => {
+    gitInit(dir);
+    writePointer(dir, "otc_aaaaaa");
+    const sessions = [session("otc_aaaaaa", dir, "approved"), session("otc_bbbbbb", dir)];
+    const error = caught(() => resolveSession(sessions, undefined, dir));
+    expect(error.code).toBe("E_SESSION_OVER");
+    expect(error.exitCode).toBe(1);
+    expect(error.message).toContain("otc_aaaaaa");
+    expect(error.message).toContain("approved");
   });
 });
 

@@ -47,7 +47,8 @@ export function currentBranch(cwd: string): string {
   return git(cwd, ["branch", "--show-current"]) ?? "";
 }
 
-function readPointer(repoRoot: string): string | undefined {
+/** The .otacon/current-session pointer at a repo root, if readable. */
+export function readPointer(repoRoot: string): string | undefined {
   try {
     return readFileSync(currentSessionPath(repoRoot), "utf8").trim() || undefined;
   } catch {
@@ -86,6 +87,15 @@ export function resolveSession(
       fail(
         "E_STALE_POINTER",
         `${currentSessionPath(root)} points at ${pointer}, which is not in the daemon registry; run otacon start or pass --session <id>`,
+      );
+    }
+    if (!isActive(session)) {
+      // An approved session is over (DESIGN.md §6); implicitly submitting to
+      // it would resurrect a finished plan. Explicit --session stays the
+      // escape hatch (e.g. draining a queued approved event after a crash).
+      fail(
+        "E_SESSION_OVER",
+        `${currentSessionPath(root)} points at ${pointer}, which is ${session.status} — that session is over; run otacon start for the next plan or pass --session <id> explicitly`,
       );
     }
     return session;

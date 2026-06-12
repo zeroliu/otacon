@@ -28,8 +28,10 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 ## Daemon spawned by resolved file path, never PATH
 
 - **Decision:** The CLI auto-spawns otacond via `process.execPath` + the daemon entry
-  resolved relative to its own module (`new URL("../daemon/main.js", import.meta.url)`).
-  The `otacond` bin exists only as a manual-debugging convenience.
+  resolved relative to its own module (`new URL("../daemon/main.js", import.meta.url)`;
+  when no built sibling exists — a source-tree run under bun — the `.ts` entry, which
+  bun's execPath runs directly). The `otacond` bin exists only as a manual-debugging
+  convenience.
 - **Why:** The CLI always spawns *its own package's* daemon — `npm i -g`, `npm link`,
   and local dev all behave identically, and "which otacond is on PATH" version skew
   cannot happen. This is what makes the version handshake meaningful.
@@ -255,9 +257,9 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 - **Decision:** Exit 0 covers every protocol-normal outcome including
   `{"event":"timeout"}`; exit 1 is an expected failure the agent can act on (lint
-  reject, no/ambiguous/unknown session, port conflict, daemon won't start); exit 2 is
-  bad flags or an internal error. Always exactly one JSON line on stdout; notices on
-  stderr.
+  reject, no/ambiguous/unknown session, port conflict, daemon won't start, daemon
+  unreachable mid-command — `E_DAEMON_DOWN`); exit 2 is bad flags or an internal
+  error. Always exactly one JSON line on stdout; notices on stderr.
 - **Why:** Agents branch on exit codes before parsing: 1 means "fix your input or
   environment and retry", 2 means "you invoked the tool wrong or it is broken — stop
   and report". Timeout exits 0 because re-parking is the normal loop (DESIGN.md §6),
@@ -270,9 +272,11 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Decision:** `--session` always wins (even over a pointer). Otherwise the
   `.otacon/current-session` pointer at the repo root decides; a pointer naming a
   session the registry does not know is a hard refusal (`E_STALE_POINTER`), never a
-  fall-through to the registry scan. Only with no pointer at all may the repo's
-  single *active* (non-approved) registry session be assumed; two or more refuse
-  with the candidate list attached (`E_AMBIGUOUS_SESSION`).
+  fall-through to the registry scan, and one naming an approved session refuses too
+  (`E_SESSION_OVER`) — implicitly submitting would resurrect a finished plan, so an
+  ended session is reachable only via explicit `--session`. Only with no pointer at
+  all may the repo's single *active* (non-approved) registry session be assumed; two
+  or more refuse with the candidate list attached (`E_AMBIGUOUS_SESSION`).
 - **Why:** The never-guess rule (DESIGN.md §7) exists because cross-posting feedback
   to the wrong plan is unrecoverable confusion. A stale pointer silently resolving to
   "the other session in this repo" is exactly that failure, so it refuses even when a

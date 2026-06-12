@@ -12,11 +12,12 @@ export OTACON_HOME="$TMP/home"
 REPO="$TMP/repo"
 mkdir -p "$OTACON_HOME" "$REPO"
 
+BASE="" # set once the port is picked; the trap may fire before that (set -u)
 DAEMON_PID=""
 WAIT_PID=""
 PASS=0
 cleanup() {
-  curl -s -X POST "$BASE/api/shutdown" > /dev/null 2>&1 || true
+  [ -n "$BASE" ] && curl -s -X POST "$BASE/api/shutdown" > /dev/null 2>&1 || true
   [ -n "$DAEMON_PID" ] && kill -9 "$DAEMON_PID" 2>/dev/null || true
   [ -n "$WAIT_PID" ] && kill -9 "$WAIT_PID" 2>/dev/null || true
   rm -rf "$TMP"

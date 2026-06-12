@@ -317,7 +317,10 @@ file-based because env vars don't persist across an agent's Bash calls:
 - `start` writes `.otacon/current-session` in the cwd; all commands default to it.
   Different worktrees = different cwds = parallel planning with zero flags.
 - `--session <id>` overrides everywhere. If a directory has two active sessions, the
-  CLI **refuses** the implicit default and errors with the list — never guesses.
+  CLI **refuses** the implicit default and errors with the list — never guesses. The
+  same never-guess rule covers the pointer itself: one naming a session the registry
+  does not know, or an approved (ended) one, is refused — only explicit `--session`
+  reaches an ended session.
 
 **Event isolation.** One event queue per session. `otacon wait` long-polls only its own
 session's queue; a comment on plan A wakes only plan A's agent. N parked waits = N open
