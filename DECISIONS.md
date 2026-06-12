@@ -170,18 +170,23 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Once otacon can run its own planning sessions, the hand-written
   plan files should become real otacon sessions.
 
-## SessionQueue API: explicit flush, requeue, and store-minted seqs
+## SessionQueue API: in-flight tracking, flush(event) ack, store-minted seqs
 
-- **Decision:** `take()` and waiter wake-ups dequeue in memory only; the caller
-  responds, then calls `flush()` to trim disk. `requeue(event)` returns an
-  undeliverable event (wait aborted after wake) to the head. Event `seq`s are minted
-  by `Store.bumpCounter("eventSeq")` (persisted in `session.json`), not by the queue.
-- **Why:** This is at-least-once delivery made literal — the dequeue→respond→flush
-  crash window re-delivers instead of losing. `requeue` covers the in-process
-  abort-after-wake case without an ack protocol. Seqs live in the session counters so
-  they never reset when the queue file drains, keeping duplicates detectable.
-- **Revisit when:** An ack protocol lands, or queue wiring wants the seq owned in one
-  place.
+- **Decision:** `take()` and waiter wake-ups move the event to an in-flight list; the
+  caller responds, then acks with `flush(event)`. Every flush persists in-flight +
+  queued events, so only an ack removes an event from disk. `requeue(event)` returns
+  an undeliverable event (wait aborted after wake) to the head; a waiter that throws
+  gets its event put back at the head. Event `seq`s are minted by
+  `Store.bumpCounter("eventSeq")` (persisted in `session.json`), not by the queue.
+- **Why:** This is at-least-once delivery made literal — the dequeue→respond→ack
+  crash window re-delivers instead of losing. A bare `flush()` that persisted only
+  the queued tail let any interleaved enqueue's internal flush trim an unacked
+  in-flight event from disk — losing it in exactly the window the contract protects
+  (caught in M1e review). `requeue` covers the in-process abort-after-wake case
+  without a heavier ack protocol. Seqs live in the session counters so they never
+  reset when the queue file drains, keeping duplicates detectable.
+- **Revisit when:** Consumers need exactly-once (seq-based dedupe stops being
+  enough), or queue wiring wants the seq owned in one place.
 
 ## M1 scope: CLI surface is `start`/`submit`/`wait`/`status` only
 

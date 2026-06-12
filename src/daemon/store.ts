@@ -20,7 +20,8 @@ export function writeFileAtomic(path: string, data: string): void {
   renameSync(tmp, path);
 }
 
-function stringify(value: unknown): string {
+/** Canonical on-disk JSON formatting for all otacon state files. */
+export function stringify(value: unknown): string {
   return JSON.stringify(value, null, 2) + "\n";
 }
 
@@ -42,6 +43,26 @@ function parseRegistry(raw: unknown, path: string): RegistryFile {
     file.sessions === null
   ) {
     throw new Error(`corrupt registry: ${path}`);
+  }
+  return file;
+}
+
+function parseState(raw: unknown, path: string): SessionStateFile {
+  const file = raw as SessionStateFile;
+  const counters = file?.counters;
+  if (
+    typeof file !== "object" ||
+    file === null ||
+    typeof file.id !== "string" ||
+    typeof file.revision !== "number" ||
+    typeof counters !== "object" ||
+    counters === null ||
+    typeof counters.batch !== "number" ||
+    typeof counters.thread !== "number" ||
+    typeof counters.question !== "number" ||
+    typeof counters.eventSeq !== "number"
+  ) {
+    throw new Error(`corrupt session state: ${path}`);
   }
   return file;
 }
@@ -94,8 +115,9 @@ export class Store {
       createdAt: now,
       updatedAt: now,
     };
-    this.registry.sessions[id] = session;
-    this.flushRegistry();
+    // State files first, registry entry last: the registry is the commit point.
+    // A crash in between leaves an orphan .otacon/<id>/ dir (harmless), never a
+    // registered session whose state files are missing (wedged forever).
     const state: SessionStateFile = {
       id,
       revision: 0,
@@ -103,6 +125,8 @@ export class Store {
     };
     writeFileAtomic(paths.sessionStatePath(input.repo, id), stringify(state));
     writeFileAtomic(paths.eventsPath(input.repo, id), stringify({ version: 1, events: [] }));
+    this.registry.sessions[id] = session;
+    this.flushRegistry();
     return { ...session };
   }
 
@@ -120,7 +144,7 @@ export class Store {
   readState(id: string): SessionStateFile {
     const session = this.require(id);
     const path = paths.sessionStatePath(session.repo, id);
-    return readJson(path, "session state") as SessionStateFile;
+    return parseState(readJson(path, "session state"), path);
   }
 
   /** Increment one daemon-owned counter (DESIGN.md §6 stable ids) and persist it. */

@@ -133,6 +133,17 @@ describe("Store counters and revisions", () => {
     });
   });
 
+  test("a corrupt session.json shape throws instead of silently corrupting counters", () => {
+    const store = new Store();
+    const { id } = store.createSession({ title: "t", repo });
+    const statePath = join(sessionDir(repo, id), "session.json");
+    writeFileSync(statePath, JSON.stringify({ id })); // missing revision + counters
+    expect(() => store.readState(id)).toThrow(/corrupt session state/);
+    expect(() => store.bumpCounter(id, "eventSeq")).toThrow(/corrupt session state/);
+    writeFileSync(statePath, JSON.stringify({ id, revision: 0, counters: {} }));
+    expect(() => store.bumpCounter(id, "eventSeq")).toThrow(/corrupt session state/);
+  });
+
   test("saveRevision writes r<N>.md snapshots and bumps revision", () => {
     const store = new Store();
     const { id } = store.createSession({ title: "t", repo });
@@ -175,7 +186,7 @@ describe("end to end: store + queue across instances", () => {
     const first = queue2.take();
     expect(first?.seq).toBe(1);
     expect(first?.payload).toMatchObject({ event: "question", id: "q1" });
-    queue2.flush();
+    if (first) queue2.flush(first);
 
     // Second "restart": only the comment batch remains, seq continuity intact.
     const store3 = new Store();

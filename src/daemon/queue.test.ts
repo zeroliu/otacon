@@ -130,24 +130,72 @@ describe("SessionQueue abort", () => {
 });
 
 describe("SessionQueue at-least-once delivery", () => {
-  test("take dequeues in memory only; disk keeps the event until flush", () => {
+  test("take dequeues in memory only; disk keeps the event until the flush ack", () => {
     const q = new SessionQueue(file);
     q.enqueue(payload(1), 1);
-    expect(q.take()?.seq).toBe(1);
+    const taken = q.take();
+    expect(taken?.seq).toBe(1);
+    expect(q.inFlightCount).toBe(1);
     // Simulated crash before flush: a fresh instance re-delivers the event.
     expect(new SessionQueue(file).take()?.seq).toBe(1);
-    q.flush();
+    q.flush(taken as QueuedEvent);
+    expect(q.inFlightCount).toBe(0);
     expect(new SessionQueue(file).size).toBe(0);
   });
 
-  test("a woken waiter's event survives on disk until flush", () => {
+  test("a woken waiter's event survives on disk until the flush ack", () => {
     const q = new SessionQueue(file);
-    q.park(() => {});
+    let delivered: QueuedEvent | undefined;
+    q.park((e) => {
+      delivered = e;
+    });
     q.enqueue(payload(1), 1);
     expect(q.size).toBe(0);
+    expect(q.inFlightCount).toBe(1);
     expect(new SessionQueue(file).size).toBe(1);
-    q.flush();
+    q.flush(delivered as QueuedEvent);
     expect(new SessionQueue(file).size).toBe(0);
+  });
+
+  test("an enqueue between take and ack cannot trim the in-flight event from disk", () => {
+    const q = new SessionQueue(file);
+    q.enqueue(payload(1), 1);
+    const taken = q.take() as QueuedEvent;
+    // A concurrent POST lands before the taker's response goes out.
+    q.enqueue(payload(2), 2);
+    // Simulated crash before the taker's ack: both events survive, FIFO intact.
+    const fresh = new SessionQueue(file);
+    expect(fresh.take()?.seq).toBe(1);
+    expect(fresh.take()?.seq).toBe(2);
+    // The ack trims only the acked event.
+    q.flush(taken);
+    expect(new SessionQueue(file).take()?.seq).toBe(2);
+  });
+
+  test("flush(event) acks only that event; other in-flight events stay durable", () => {
+    const q = new SessionQueue(file);
+    q.enqueue(payload(1), 1);
+    q.enqueue(payload(2), 2);
+    const first = q.take() as QueuedEvent;
+    const second = q.take() as QueuedEvent;
+    q.flush(second);
+    expect(q.inFlightCount).toBe(1);
+    expect(new SessionQueue(file).take()?.seq).toBe(1);
+    q.flush(first);
+    expect(new SessionQueue(file).size).toBe(0);
+  });
+
+  test("a waiter that throws gets its event back at the head, still durable", () => {
+    const q = new SessionQueue(file);
+    q.park(() => {
+      throw new Error("response write failed");
+    });
+    expect(() => q.enqueue(payload(1), 1)).toThrow("response write failed");
+    expect(q.size).toBe(1);
+    expect(q.inFlightCount).toBe(0);
+    expect(q.waiterCount).toBe(0);
+    expect(q.take()?.seq).toBe(1);
+    expect(new SessionQueue(file).take()?.seq).toBe(1);
   });
 
   test("requeue returns an undeliverable event to the head, durably", () => {
@@ -158,7 +206,10 @@ describe("SessionQueue at-least-once delivery", () => {
     expect(event?.seq).toBe(1);
     q.requeue(event as QueuedEvent);
     expect(q.size).toBe(2);
-    expect(new SessionQueue(file).take()?.seq).toBe(1);
+    expect(q.inFlightCount).toBe(0);
+    const fresh = new SessionQueue(file);
+    expect(fresh.size).toBe(2); // requeue moved it back, never duplicated it
+    expect(fresh.take()?.seq).toBe(1);
   });
 
   test("requeue wakes a parked waiter", () => {
@@ -180,8 +231,9 @@ describe("SessionQueue persistence", () => {
 
     const q2 = new SessionQueue(file);
     expect(q2.size).toBe(2);
-    expect(q2.take()?.payload).toEqual(payload(1));
-    q2.flush();
+    const first = q2.take();
+    expect(first?.payload).toEqual(payload(1));
+    q2.flush(first as QueuedEvent);
 
     const q3 = new SessionQueue(file);
     expect(q3.size).toBe(1);
