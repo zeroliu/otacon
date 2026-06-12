@@ -170,6 +170,19 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Once otacon can run its own planning sessions, the hand-written
   plan files should become real otacon sessions.
 
+## SessionQueue API: explicit flush, requeue, and store-minted seqs
+
+- **Decision:** `take()` and waiter wake-ups dequeue in memory only; the caller
+  responds, then calls `flush()` to trim disk. `requeue(event)` returns an
+  undeliverable event (wait aborted after wake) to the head. Event `seq`s are minted
+  by `Store.bumpCounter("eventSeq")` (persisted in `session.json`), not by the queue.
+- **Why:** This is at-least-once delivery made literal — the dequeue→respond→flush
+  crash window re-delivers instead of losing. `requeue` covers the in-process
+  abort-after-wake case without an ack protocol. Seqs live in the session counters so
+  they never reset when the queue file drains, keeping duplicates detectable.
+- **Revisit when:** An ack protocol lands, or queue wiring wants the seq owned in one
+  place.
+
 ## M1 scope: CLI surface is `start`/`submit`/`wait`/`status` only
 
 - **Decision:** M1 ships sessions, registry, submit + linter (L1/L2/L6), event queues,
