@@ -211,27 +211,26 @@ export async function postReviewed(id: string, revision?: number): Promise<boole
 }
 
 /**
- * The structural diff `from` → `to` (DESIGN.md §6). One payload drives both
- * the diff view's hunks and the clean view's gutter markers, so it is fetched
- * whenever a plan exists. Refetches when either endpoint moves (a new
- * revision over SSE, a baseline pick, a dismiss moving last-reviewed); the
- * previous payload stays rendered meanwhile, same posture as useRevision.
+ * GET `path` as JSON, retrying every 2s on failure (recovery from a daemon
+ * restart is automatic), with responses for an abandoned path ignored. The
+ * previous payload stays rendered while the next one is in flight, so a live
+ * update swaps content without a loading flash; `null` clears it.
  */
-export function useDiff(id: string, from: number, to: number): DiffPayload | undefined {
-  const [payload, setPayload] = useState<DiffPayload>();
+function usePolledJson<T>(path: string | null): T | undefined {
+  const [payload, setPayload] = useState<T>();
 
   useEffect(() => {
-    if (to < 1) {
+    if (path === null) {
       setPayload(undefined);
       return;
     }
     let live = true;
     let retry: ReturnType<typeof setTimeout> | undefined;
     const load = (): void => {
-      fetch(`/api/sessions/${id}/diff?from=${from}&to=${to}`)
+      fetch(path, { headers: { accept: "application/json" } })
         .then((res) => {
-          if (!res.ok) throw new Error(`diff fetch failed: ${res.status}`);
-          return res.json() as Promise<DiffPayload>;
+          if (!res.ok) throw new Error(`fetch failed: ${res.status} ${path}`);
+          return res.json() as Promise<T>;
         })
         .then((data) => {
           if (live) setPayload(data);
@@ -245,47 +244,28 @@ export function useDiff(id: string, from: number, to: number): DiffPayload | und
       live = false;
       if (retry !== undefined) clearTimeout(retry);
     };
-  }, [id, from, to]);
+  }, [path]);
 
   return payload;
 }
 
 /**
+ * The structural diff `from` → `to` (DESIGN.md §6). One payload drives both
+ * the diff view's hunks and the clean view's gutter markers, so it is fetched
+ * whenever a plan exists. Refetches when either endpoint moves (a new
+ * revision over SSE, a baseline pick, a dismiss moving last-reviewed).
+ */
+export function useDiff(id: string, from: number, to: number): DiffPayload | undefined {
+  return usePolledJson<DiffPayload>(
+    to < 1 ? null : `/api/sessions/${id}/diff?from=${from}&to=${to}`,
+  );
+}
+
+/**
  * The stored revision `n` (markdown + the warnings it was accepted with).
  * Re-fetches when `n` bumps — the session stream's `revision` frame drives
- * that — while keeping the previous payload rendered, so a live update swaps
- * content without a loading flash. Failed fetches retry; recovery from a
- * daemon restart is automatic.
+ * that.
  */
 export function useRevision(id: string, n: number): RevisionPayload | undefined {
-  const [payload, setPayload] = useState<RevisionPayload>();
-
-  useEffect(() => {
-    if (n < 1) {
-      setPayload(undefined);
-      return;
-    }
-    let live = true;
-    let retry: ReturnType<typeof setTimeout> | undefined;
-    const load = (): void => {
-      fetch(`/api/sessions/${id}/revisions/${n}`, { headers: { accept: "application/json" } })
-        .then((res) => {
-          if (!res.ok) throw new Error(`revision fetch failed: ${res.status}`);
-          return res.json() as Promise<RevisionPayload>;
-        })
-        .then((data) => {
-          if (live) setPayload(data);
-        })
-        .catch(() => {
-          if (live) retry = setTimeout(load, 2000);
-        });
-    };
-    load();
-    return () => {
-      live = false;
-      if (retry !== undefined) clearTimeout(retry);
-    };
-  }, [id, n]);
-
-  return payload;
+  return usePolledJson<RevisionPayload>(n < 1 ? null : `/api/sessions/${id}/revisions/${n}`);
 }

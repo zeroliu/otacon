@@ -106,12 +106,11 @@ export function ReviewControls({
   changelogOpen: boolean;
   onToggleChangelog: () => void;
 }) {
-  // Prior revisions, newest first; the empty plan is always reachable, and
+  // Prior revisions, newest first, down to the always-reachable empty plan;
   // last-reviewed keeps its seat even when it equals the current revision.
+  const top = lastReviewed === revision ? revision : revision - 1;
   const options: number[] = [];
-  for (let n = revision; n >= 0; n--) {
-    if (n < revision || lastReviewed === revision) options.push(n);
-  }
+  for (let n = top; n >= 0; n--) options.push(n);
   return (
     <div className="review-controls">
       <div className="seg" role="group" aria-label="plan view">

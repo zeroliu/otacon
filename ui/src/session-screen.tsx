@@ -129,15 +129,21 @@ function ReviewLoop({
   const diff = useDiff(session.id, from, session.revision);
 
   // Gutter markers (§10): changed/added units vs the baseline, in clean view.
-  // Joined to one string so PlanView's memo survives this loop's re-renders.
-  // A baseline of 0 means "never reviewed" — everything is new, so marking
-  // every section would carry zero signal (DECISIONS.md).
-  const changedIds = useMemo(() => {
-    if (!diff || diff.from === 0) return "";
-    return diff.sections
-      .filter((s) => s.status === "changed" || s.status === "added")
-      .map((s) => s.id)
-      .join(" ");
+  // Joined to one string so PlanView's memo survives this loop's re-renders
+  // (it ticks per selection change and drawer keystroke). A baseline of 0
+  // means "never reviewed" — everything is new, so marking every section
+  // would carry zero signal (DECISIONS.md). changedCount is the controls
+  // strip's tally: all touched units, removals included.
+  const { changedIds, changedCount } = useMemo(() => {
+    if (!diff || diff.from === 0) return { changedIds: "", changedCount: 0 };
+    const touched = diff.sections.filter((s) => s.status !== "unchanged");
+    return {
+      changedIds: touched
+        .filter((s) => s.status !== "removed")
+        .map((s) => s.id)
+        .join(" "),
+      changedCount: touched.length,
+    };
   }, [diff]);
 
   // j/k targets, in plan order. Removed units only exist in the diff view;
@@ -310,7 +316,7 @@ function ReviewLoop({
               lastReviewed={session.lastReviewedRevision}
               baseline={from}
               onBaseline={setBaseline}
-              changedCount={diff && diff.from > 0 ? diff.sections.filter((s) => s.status !== "unchanged").length : 0}
+              changedCount={changedCount}
               showChangelog={!fresh && currentChangelog != null}
               changelogOpen={changelogOpen}
               onToggleChangelog={() => setChangelogOpen((value) => !value)}
@@ -322,7 +328,11 @@ function ReviewLoop({
               changelog={currentChangelog}
               fresh
               onViewDiff={() => setView("diff")}
-              onDismiss={() => postReviewed(session.id)}
+              // Pin the revision the banner showed: if a newer one lands on
+              // the daemon in the click-to-POST window, only what the user
+              // actually read gets marked reviewed — the banner stays up for
+              // the newcomer instead of silently swallowing it.
+              onDismiss={() => postReviewed(session.id, session.revision)}
               onClose={() => undefined}
             />
           )}

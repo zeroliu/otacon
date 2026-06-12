@@ -68,7 +68,7 @@ export const ThreadsRail = memo(function ThreadsRail({
           ))}
         </div>
       )}
-      {live.length === 0 ? (
+      {threads.length === 0 ? (
         <p className="rail-empty">no threads yet — select plan text to comment or ask</p>
       ) : (
         live.map((thread) =>
@@ -161,11 +161,16 @@ function ResolvedCard({ thread, onJump }: { thread: CommentThread; onJump: Jump 
 
 /**
  * A tray entry: the dead quote is the headline (clamped); clicking the card
- * unclamps it to the full original anchor text and reveals any resolution.
+ * unclamps it to the full original anchor text and reveals the agent's reply
+ * (a comment's resolution, or a question's answer — orphaning must never
+ * hide either, DESIGN.md §4: kept, never silently dropped).
  */
 function OrphanCard({ thread }: { thread: Thread }) {
   const [open, setOpen] = useState(false);
-  const resolution = thread.kind === "comment" ? thread.resolution : undefined;
+  const reply =
+    thread.kind === "comment"
+      ? thread.resolution && { label: `↳ agent · r${thread.resolution.revision}`, body: thread.resolution.body }
+      : thread.answer && { label: "↳ agent", body: thread.answer.body };
   const toggle = () => setOpen((value) => !value);
   return (
     <article
@@ -192,10 +197,10 @@ function OrphanCard({ thread }: { thread: Thread }) {
         <blockquote className="thread-quote orphan-quote">{thread.anchor.exact}</blockquote>
       )}
       <p className="thread-body">{thread.body}</p>
-      {open && resolution && (
+      {open && reply && (
         <div className="thread-answer">
-          <span className="thread-answer-label">↳ agent · r{resolution.revision}</span>
-          <p className="thread-answer-body">{resolution.body}</p>
+          <span className="thread-answer-label">{reply.label}</span>
+          <p className="thread-answer-body">{reply.body}</p>
         </div>
       )}
     </article>
