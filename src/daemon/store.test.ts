@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registryPath, sessionDir } from "../shared/paths.js";
 import { SessionQueue } from "./queue.js";
-import { Store, writeFileAtomic } from "./store.js";
+import { quarantineCorruptFile, Store, writeFileAtomic } from "./store.js";
 
 let home: string;
 let repo: string;
@@ -39,6 +39,15 @@ describe("writeFileAtomic", () => {
     writeFileAtomic(path, "two");
     expect(readFileSync(path, "utf8")).toBe("two");
     expect(readdirSync(repo)).toEqual(["file.json"]);
+  });
+});
+
+describe("quarantineCorruptFile", () => {
+  test("does not throw when the file vanished before the rename", () => {
+    // Quarantine exists to keep the daemon alive; a corrupt file deleted out
+    // from under us mid-recovery must not turn into the new fatal path.
+    expect(() => quarantineCorruptFile(join(home, "ghost.json"), "test file")).not.toThrow();
+    expect(readdirSync(home)).toEqual([]); // nothing moved, nothing created
   });
 });
 

@@ -38,7 +38,19 @@ export function stringify(value: unknown): string {
  */
 export function quarantineCorruptFile(path: string, what: string): string {
   const aside = `${path}.corrupt-${Date.now()}-${quarantineSerial++}`;
-  renameSync(path, aside);
+  try {
+    renameSync(path, aside);
+  } catch (error) {
+    // The file vanished (deleted out from under us mid-recovery) or the rename
+    // itself failed. Quarantine exists to keep the daemon alive — moving the
+    // evidence aside must never become the new fatal path; the caller's fresh
+    // rebuild overwrites whatever is (or is not) left at `path`.
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(
+      `otacond: ${what} at ${path} is corrupt and could not be moved aside (${message}); continuing with fresh state\n`,
+    );
+    return aside;
+  }
   process.stderr.write(
     `otacond: ${what} at ${path} is corrupt; moved it to ${aside} and continuing with fresh state\n`,
   );

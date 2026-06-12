@@ -171,7 +171,19 @@ const srv = http.createServer((req, res) => {
 srv.listen(Number(process.env.OTACON_PORT), "127.0.0.1");
 ' &
 STALE_PID=$!
-sleep 0.5
+# Poll until the fake daemon answers as 0.0.1 — a fixed sleep flakes on slow
+# machines: if the CLI probes before the fake binds, it sees "down", spawns a
+# real otacond, and the restart notice this check greps for is never emitted.
+STALE_UP=""
+for _ in $(seq 1 50); do
+  if curl -sf --max-time 1 "$BASE/api/health" > "$TMP/stale-health.json" 2>/dev/null \
+    && [ "$(json_field version "$TMP/stale-health.json")" = "0.0.1" ]; then
+    STALE_UP=1
+    break
+  fi
+  sleep 0.1
+done
+[ -n "$STALE_UP" ] || fail "fake stale otacond never started listening"
 otacon status > "$TMP/status-restart.json" 2> "$TMP/restart.err" \
   || fail "status exited nonzero across the stale-daemon restart ($(cat "$TMP/restart.err"))"
 grep -q "restarting stale otacond 0.0.1" "$TMP/restart.err" || fail "no restart notice on stderr"
