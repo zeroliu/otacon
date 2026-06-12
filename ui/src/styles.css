@@ -1,0 +1,509 @@
+/* otacon — codec-screen utilitarianism.
+ *
+ * System stacks only (DESIGN.md §3): the sans stack carries prose, the mono
+ * stack carries everything operational — ids, repos, chips, timestamps — so
+ * the UI reads like good mission telemetry, not a generic dashboard.
+ * Light = warm paper; dark = green-tinted near-black. Each session's accent
+ * is hsl(var(--hue) S L) with S/L fixed per scheme (DECISIONS.md "Session
+ * accent color"). Mobile-first; the column caps at 720px on desktop.
+ */
+
+:root {
+  color-scheme: light dark;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, "Cascadia Code", Menlo, Consolas, monospace;
+
+  --bg: #f2f1ec;
+  --surface: #fbfaf7;
+  --ink: #211f1a;
+  --ink-soft: #6f6a5e;
+  --line: #e0ddd2;
+  --line-strong: #cbc6b6;
+
+  --accent: hsl(var(--hue, 152) 45% 34%);
+  --live: #3e8a4d;
+
+  --chip-await-ink: #8a5800;
+  --chip-await-bg: #f5e7c8;
+  --chip-revise-ink: #1f5e93;
+  --chip-revise-bg: #dce9f5;
+  --chip-draft-ink: #6f6a5e;
+  --chip-draft-bg: #e9e7dd;
+  --chip-approved-ink: #2c6a38;
+  --chip-approved-bg: #dcecdc;
+
+  --shadow: 0 1px 2px rgb(33 31 26 / 4%), 0 8px 24px rgb(33 31 26 / 7%);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #10130f;
+    --surface: #171b16;
+    --ink: #e6e4da;
+    --ink-soft: #97998b;
+    --line: #252a23;
+    --line-strong: #39402f;
+
+    --accent: hsl(var(--hue, 152) 55% 62%);
+    --live: #7cc188;
+
+    --chip-await-ink: #e8b75c;
+    --chip-await-bg: #2d2410;
+    --chip-revise-ink: #79b1e3;
+    --chip-revise-bg: #14222e;
+    --chip-draft-ink: #97998b;
+    --chip-draft-bg: #20251f;
+    --chip-approved-ink: #7cc188;
+    --chip-approved-bg: #15281a;
+
+    --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 10px 28px rgb(0 0 0 / 35%);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.5 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Faint horizontal scanlines: the codec-screen texture, barely there. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    180deg,
+    transparent 0 3px,
+    color-mix(in srgb, var(--ink) 2%, transparent) 3px 4px
+  );
+}
+
+.page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 22px 16px 64px;
+}
+
+@media (min-width: 640px) {
+  .page {
+    padding: 44px 24px 80px;
+  }
+}
+
+/* ───────────────────────── masthead ───────────────────────── */
+
+.masthead {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.wordmark {
+  margin: 0;
+  font: 700 17px/1 var(--mono);
+  letter-spacing: 0.42em;
+  text-transform: uppercase;
+}
+
+.tagline {
+  margin: 7px 0 0;
+  font: 11px/1 var(--mono);
+  letter-spacing: 0.14em;
+  color: var(--ink-soft);
+}
+
+.link-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 11px/1 var(--mono);
+  letter-spacing: 0.12em;
+  color: var(--ink-soft);
+  padding-bottom: 2px;
+}
+
+.link-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--line-strong);
+}
+
+.is-live .link-dot {
+  background: var(--live);
+  animation: live-pulse 2.4s ease-out infinite;
+}
+
+@keyframes live-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--live) 45%, transparent);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+.list-head {
+  display: flex;
+  justify-content: space-between;
+  margin: 24px 2px 12px;
+  font: 11px/1 var(--mono);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.list-count {
+  color: var(--ink);
+}
+
+.freq {
+  opacity: 0.55;
+}
+
+/* ───────────────────────── session cards ───────────────────────── */
+
+.cards {
+  display: grid;
+  gap: 12px;
+}
+
+.card {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  padding: 14px 16px 13px 19px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: inherit;
+  text-decoration: none;
+  animation: card-in 0.4s cubic-bezier(0.22, 0.7, 0.3, 1) both;
+  animation-delay: calc(var(--i, 0) * 45ms);
+  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+/* The session's accent: a blade down the left edge. */
+.card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--accent);
+}
+
+@media (hover: hover) {
+  .card:hover {
+    transform: translateY(-1px);
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+    box-shadow: var(--shadow);
+  }
+}
+
+.card:active {
+  transform: translateY(0);
+}
+
+.card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+}
+
+/* One-shot wash when a card's data changes live (remounted via key). */
+.card-flash {
+  position: absolute;
+  inset: 0;
+  background: var(--accent);
+  opacity: 0;
+  pointer-events: none;
+  animation: card-flash 0.9s ease-out both;
+}
+
+@keyframes card-flash {
+  from {
+    opacity: 0.18;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.card-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.card-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.badge {
+  flex: none;
+  font: 600 11px/1 var(--mono);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 999px;
+  padding: 4px 9px;
+  white-space: nowrap;
+}
+
+.card-where {
+  margin: 5px 0 12px;
+  font: 12px/1.4 var(--mono);
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.card-time {
+  margin-left: auto;
+  font: 11px/1 var(--mono);
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.session-meta .card-time {
+  margin-left: 0;
+}
+
+/* ───────────────────────── status chips ───────────────────────── */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font: 600 10.5px/1.2 var(--mono);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  transition: background 0.3s ease, color 0.3s ease;
+}
+
+.chip-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.chip-await {
+  background: var(--chip-await-bg);
+  color: var(--chip-await-ink);
+}
+
+/* Awaiting = your move: the dot breathes for attention. */
+.chip-await .chip-dot {
+  animation: chip-breathe 1.6s ease-in-out infinite;
+}
+
+.chip-revise {
+  background: var(--chip-revise-bg);
+  color: var(--chip-revise-ink);
+}
+
+.chip-draft {
+  background: var(--chip-draft-bg);
+  color: var(--chip-draft-ink);
+}
+
+.chip-approved {
+  background: var(--chip-approved-bg);
+  color: var(--chip-approved-ink);
+}
+
+@keyframes chip-breathe {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* ───────────────────────── empty / loading ───────────────────────── */
+
+.empty {
+  margin-top: 10px;
+  padding: 46px 24px;
+  border: 1.5px dashed var(--line-strong);
+  border-radius: 14px;
+  text-align: center;
+  color: var(--ink-soft);
+}
+
+.empty-title {
+  margin: 0 0 12px;
+  font: 600 12px/1 var(--mono);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.empty-body {
+  max-width: 44ch;
+  margin: 0 auto;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.empty-offline {
+  margin: 16px 0 0;
+  font: 12px/1.4 var(--mono);
+  color: var(--chip-await-ink);
+}
+
+.loading {
+  margin-top: 40px;
+  text-align: center;
+  font: 12px/1 var(--mono);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+code {
+  font: 0.92em var(--mono);
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  border-radius: 4px;
+  padding: 1.5px 5px;
+}
+
+/* ───────────────────────── session screen ───────────────────────── */
+
+.backlink {
+  display: inline-block;
+  margin-bottom: 18px;
+  font: 12px/1 var(--mono);
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+  text-decoration: none;
+}
+
+.backlink:hover,
+.backlink:focus-visible {
+  color: var(--ink);
+}
+
+.session-head {
+  padding: 18px 18px 16px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
+  border-left: 4px solid var(--accent);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  animation: card-in 0.4s cubic-bezier(0.22, 0.7, 0.3, 1) both;
+}
+
+.session-head-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.session-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.session-rev {
+  flex: none;
+  font: 700 13px/1 var(--mono);
+  color: var(--accent);
+}
+
+.session-where {
+  margin: 8px 0 14px;
+  font: 12px/1.4 var(--mono);
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+}
+
+.session-meta .link-state {
+  margin-left: auto;
+}
+
+.review-stub {
+  margin-top: 20px;
+  padding: 22px;
+  border: 1.5px dashed var(--line-strong);
+  border-radius: 12px;
+  color: var(--ink-soft);
+  font-size: 14px;
+  line-height: 1.65;
+  animation: card-in 0.4s cubic-bezier(0.22, 0.7, 0.3, 1) 60ms both;
+}
+
+.review-stub p {
+  margin: 0 0 10px;
+}
+
+.review-stub p:last-child {
+  margin-bottom: 0;
+}
+
+.stub-line {
+  font: 12px/1 var(--mono);
+  letter-spacing: 0.06em;
+  color: color-mix(in srgb, var(--accent) 75%, var(--ink-soft));
+}
+
+.stub-id {
+  font: 12px/1.4 var(--mono);
+}
+
+/* ───────────────────────── motion preferences ───────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

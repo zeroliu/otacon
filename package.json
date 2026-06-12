@@ -15,12 +15,14 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json && vite build ui",
+    "typecheck": "tsc --noEmit && tsc -p ui",
     "test": "bun test",
     "dev:daemon": "bun run src/daemon/main.ts",
+    "dev:ui": "vite ui",
     "e2e": "bash test/e2e-daemon.sh",
     "e2e:cli": "bash test/e2e-cli.sh",
+    "e2e:ui": "bun run build && playwright test",
     "smoke": "bash test/smoke.sh"
   },
   "dependencies": {
@@ -28,8 +30,15 @@
     "hono": "^4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "@types/bun": "latest",
     "@types/node": "^24",
-    "typescript": "^5"
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "typescript": "^5",
+    "vite": "^8.0.16"
   }
 }

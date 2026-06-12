@@ -274,13 +274,19 @@ POST /api/sessions/:id/answers              answer to an agent question
 POST /api/sessions/:id/approve              approve (daemon writes final artifact)
 GET  /api/sessions/:id/revisions/:n         raw revision markdown
 GET  /api/sessions/:id/diff?from=&to=       computed diff
-GET  /api/sessions/:id/stream               SSE for the UI
-GET  /s/:id                                 review page for a session
+GET  /api/sessions/:id/stream               SSE for the UI (one session)
+GET  /api/stream                            SSE for the index (all sessions)
+GET  /                                      index page (the SPA)
+GET  /s/:id                                 review page for a session (same SPA)
 ```
 
 `/api` errors are machine-readable JSON — `{"error":{"code":…,"message":…}}` — except
-a failed submit, which returns 422 carrying the linter's `errors`/`warnings` arrays
-(`/s/:id` is a browser page and 404s as text). State-changing `/api` requests carrying
+a failed submit, which returns 422 carrying the linter's `errors`/`warnings` arrays.
+`/` and `/s/:id` serve the SPA shell (static assets under `/assets/`); an unknown
+session id renders as a client-side not-found state. Each SSE stream opens with a
+`snapshot` frame, then pushes `session` / `revision` / `queue` frames as state
+changes, with a comment heartbeat to keep idle proxies from closing the stream.
+State-changing `/api` requests carrying
 a foreign `Origin` header are refused 403: the loopback bind alone does not stop a
 malicious webpage from firing `fetch()` at 127.0.0.1, and only browsers send `Origin`.
 Event delivery over `/events` is at-least-once: an event is removed from the queue
@@ -391,9 +397,9 @@ Two screens only. No settings UI in v1 — config is a file.
 
 ### Index (the phone bookmark)
 
-Card per session: title, repo + branch, status chip (`awaiting your review` /
-`agent revising` / `questions pending` / `approved`), unread-change badge, last
-activity, accent color. Tap → review screen.
+Card per session: title, repo + branch, status chip (`agent drafting` /
+`awaiting your review` / `agent revising` / `questions pending` / `approved`),
+unread-change badge, last activity, accent color. Tap → review screen.
 
 ### Review screen — desktop (Google-Docs margin model)
 

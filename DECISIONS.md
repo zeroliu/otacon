@@ -152,13 +152,22 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   registry; the prefix makes them greppable.
 - **Revisit when:** Never, realistically.
 
-## `/s/:id` serves a plain-text placeholder until the UI ships
+## Daemon serves the built SPA from dist/ui with a hand-rolled static handler
 
-- **Decision:** `otacon start` prints the review URL per spec; the daemon answers it
-  with one line of text until the real UI lands.
-- **Why:** The printed URL must not be a dead 404 — it anchors the protocol and lets
-  smoke tests assert the route exists.
-- **Revisit when:** The web UI replaces it (next milestone after M1).
+- **Decision:** `vite build` emits the UI into `dist/ui`; the daemon serves `/` and
+  `/s/:id` as the SPA shell (index.html, no-cache) and `/assets/<name>` with a strict
+  flat-name regex and immutable cache headers, resolving the UI dir relative to its
+  own module (`../ui` from `dist/daemon`, falling back to `<root>/dist/ui` for
+  source-tree runs). No serveStatic middleware. `/s/:id` always answers 200 — unknown
+  ids render a client-side not-found. Without a build, the pages answer 503.
+  (Supersedes the M1 plain-text `/s/:id` placeholder.)
+- **Why:** @hono/node-server's serveStatic resolves roots against `process.cwd()`,
+  which is meaningless for a daemon spawnable from any repo; resolving next to the
+  module is the same trick that makes daemon spawn-by-path reliable. Vite's output is
+  a flat hashed-asset dir, so the name regex is a complete traversal guard in ~40
+  lines. A static shell cannot know session ids, so the 404 moved into the client.
+- **Revisit when:** the UI build stops emitting a flat assets dir, or the daemon must
+  serve anything user-supplied.
 
 ## Documentation structure: behavior spec, decision log, gitignored work plans
 
@@ -337,6 +346,74 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   genuine version fight into an actionable error.
 - **Revisit when:** `/api/shutdown` grows a conditional "only if you are version X"
   parameter, which would close the remaining race window entirely.
+
+## UI live updates: in-process Notifier, snapshot-first SSE, no replay
+
+- **Decision:** Daemon mutations publish `{type, session, data}` UiEvents through one
+  EventEmitter-backed Notifier (`src/daemon/notify.ts`). Two SSE endpoints consume
+  it — `GET /api/stream` (index, all sessions) and `GET /api/sessions/:id/stream`
+  (filtered) — each opening with a `snapshot` frame, then `session` (full summary:
+  registry entry + revision + pendingEvents), `revision` (`{session, revision}`),
+  and `queue` (`{session, pending}`) frames, plus a `: hb` comment every 25s. No
+  event ids, no Last-Event-ID resume.
+- **Why:** One daemon process makes an in-process emitter the whole bus. Opening with
+  the snapshot kills the subscribe-vs-fetch race and makes reconnects self-healing
+  (EventSource retries on its own; the fresh snapshot re-syncs) — which is exactly
+  what makes replay pointless at personal scale. The index is poll-free by
+  subscription instead of polling `/api/sessions`. The heartbeat keeps
+  Tailscale-serve/proxy idle timeouts from severing quiet streams.
+- **Revisit when:** snapshots get heavy (many sessions × payload size), or a second
+  consumer needs guaranteed replay rather than resync.
+
+## Session accent color: FNV-1a of the id picks a hue
+
+- **Decision:** accent hue = FNV-1a-32(session id) mod 360; the UI fixes
+  saturation/lightness per color scheme (45%/34% light, 55%/62% dark) and derives
+  every accent use from one `--hue` custom property set inline per session.
+- **Why:** Deterministic on every device with zero stored state — the same session is
+  always the same color on phone and desktop, which is the whole point of DESIGN.md
+  §7's wrong-plan-feedback guard. FNV-1a is five lines and spreads short `otc_` ids
+  well. Varying hue only keeps contrast in both schemes under control.
+- **Revisit when:** two concurrently open sessions collide on hue often enough to
+  annoy (then: golden-angle spacing by registry order, trading stability for spread).
+
+## UI toolchain: Vite builds into dist/, React stays a devDependency
+
+- **Decision:** `ui/` is a Vite root built by `vite build ui` into `dist/ui`;
+  react/react-dom/vite/@vitejs/plugin-react are devDependencies; runtime deps stay
+  hono + @hono/node-server. `ui/` has its own tsconfig (DOM libs, JSX, bundler
+  resolution); `bun run typecheck` checks both projects. The SPA imports wire types
+  type-only from `src/shared/types.ts`.
+- **Why:** The shipped artifact is static bytes under `dist/` — `files: ["dist"]`
+  already publishes it, `npm i -g otacon` pulls no UI or native deps, and the
+  Node-runnable invariant is untouched. The type-only import keeps the SPA and the
+  daemon from drifting on wire shapes without entangling their builds.
+- **Revisit when:** the UI needs a dependency that must exist at runtime.
+
+## Unread badge state lives in the browser, not the daemon
+
+- **Decision:** The index unread badge compares each session's revision to a
+  per-device localStorage map (`otacon.seenRevisions`), written when the session
+  screen is opened. The daemon stores nothing about read state.
+- **Why:** "What has this device shown me" is presentation state; the daemon's
+  contract stays "single source of truth for plan state", and no API surface exists
+  for something only the UI cares about. Cross-device unread sync is not worth daemon
+  state for a single user.
+- **Revisit when:** M3 revision banners need richer read tracking, or multi-device
+  divergence actually bites.
+
+## Playwright e2e drives the real daemon; specs are `*.e2e.ts`
+
+- **Decision:** `bun run e2e:ui` builds, then @playwright/test boots
+  `node dist/daemon/main.js` via its webServer (temp OTACON_HOME, port 4790,
+  loopback NO_PROXY) and tests seed state through the real HTTP API. Specs live in
+  `test/ui/*.e2e.ts`.
+- **Why:** Testing the built artifact end-to-end matches the shell e2e suites and
+  exercises the same socket paths (SSE, statics) real browsers hit. bun test
+  auto-discovers `*.test.*` and `*.spec.*` anywhere, so the `.e2e.ts` suffix is what
+  keeps the two runners' files disjoint in both directions.
+- **Revisit when:** the suites need shared fixtures, or bun can run Playwright specs
+  natively.
 
 ## M1 scope: CLI surface is `start`/`submit`/`wait`/`status` only
 

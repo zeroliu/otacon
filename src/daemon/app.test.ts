@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +14,7 @@ import { Store } from "./store.js";
 
 let home: string;
 let repo: string;
+let uiDir: string;
 let savedHome: string | undefined;
 let store: Store;
 let app: Hono<{ Bindings: NodeBindings }>;
@@ -23,10 +24,15 @@ beforeEach(() => {
   savedHome = process.env.OTACON_HOME;
   home = mkdtempSync(join(tmpdir(), "otacon-home-"));
   repo = mkdtempSync(join(tmpdir(), "otacon-repo-"));
+  // A fake built SPA, so tests never depend on whether dist/ui exists.
+  uiDir = mkdtempSync(join(tmpdir(), "otacon-ui-"));
+  writeFileSync(join(uiDir, "index.html"), "<!doctype html><div id=\"root\"></div>\n");
+  mkdirSync(join(uiDir, "assets"));
+  writeFileSync(join(uiDir, "assets", "app-abc123.js"), "console.log(\"shell\");\n");
   process.env.OTACON_HOME = home;
   store = new Store();
   shutdowns = 0;
-  app = createApp({ store, onShutdown: () => (shutdowns += 1) });
+  app = createApp({ store, onShutdown: () => (shutdowns += 1), uiDir });
 });
 
 afterEach(() => {
@@ -34,6 +40,7 @@ afterEach(() => {
   else process.env.OTACON_HOME = savedHome;
   rmSync(home, { recursive: true, force: true });
   rmSync(repo, { recursive: true, force: true });
+  rmSync(uiDir, { recursive: true, force: true });
 });
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -350,7 +357,7 @@ describe("events long-poll", () => {
   });
 });
 
-describe("revisions and placeholder page", () => {
+describe("revisions", () => {
   test("GET /revisions/:n returns the stored markdown", async () => {
     const session = mintSession();
     const plan = validPlanFor(session.id);
@@ -367,21 +374,145 @@ describe("revisions and placeholder page", () => {
     expect((await app.request(`/api/sessions/${session.id}/revisions/abc`)).status).toBe(400);
     expect((await app.request(`/api/sessions/${session.id}/revisions/0`)).status).toBe(400);
   });
+});
 
-  test("GET /s/:id serves the placeholder page; unknown ids 404", async () => {
+describe("SPA shell and static assets", () => {
+  test("GET / and GET /s/:id serve the shell — including unknown session ids", async () => {
     const session = mintSession();
-    const res = await app.request(`/s/${session.id}`);
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toContain("text/html");
-    expect(await res.text()).toContain(session.id);
-    expect((await app.request("/s/otc_zzzzzz")).status).toBe(404);
+    for (const path of ["/", `/s/${session.id}`, "/s/otc_zzzzzz"]) {
+      const res = await app.request(path);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("text/html");
+      expect(await res.text()).toContain("<div id=\"root\">");
+    }
   });
 
-  test("placeholder page escapes HTML in session titles", async () => {
-    const session = store.createSession({ title: "<script>alert(1)</script>", repo });
-    const text = await (await app.request(`/s/${session.id}`)).text();
-    expect(text).not.toContain("<script>");
-    expect(text).toContain("&lt;script&gt;");
+  test("assets are served with their content type and an immutable cache header", async () => {
+    const res = await app.request("/assets/app-abc123.js");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/javascript");
+    expect(res.headers.get("cache-control")).toContain("immutable");
+    expect(await res.text()).toContain("shell");
+  });
+
+  test("traversal attempts and unknown asset names 404", async () => {
+    expect((await app.request("/assets/../index.html")).status).toBe(404);
+    expect((await app.request("/assets/..%2Findex.html")).status).toBe(404);
+    expect((await app.request("/assets/nope.js")).status).toBe(404);
+    expect((await app.request("/assets/app-abc123.exe")).status).toBe(404);
+  });
+
+  test("without a UI build the browser pages answer 503, never a crash", async () => {
+    const bare = createApp({ store, uiDir: null });
+    expect((await bare.request("/")).status).toBe(503);
+    expect((await bare.request("/s/otc_zzzzzz")).status).toBe(503);
+    expect((await bare.request("/assets/app-abc123.js")).status).toBe(404);
+  });
+});
+
+/** Incremental SSE frame parser over a fetch Response body. */
+function sseReader(res: Response) {
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  return {
+    async next(): Promise<{ event?: string; data?: unknown; comment?: string }> {
+      for (;;) {
+        const index = buffer.indexOf("\n\n");
+        if (index !== -1) {
+          const raw = buffer.slice(0, index);
+          buffer = buffer.slice(index + 2);
+          const frame: { event?: string; data?: unknown; comment?: string } = {};
+          for (const line of raw.split("\n")) {
+            if (line.startsWith("event: ")) frame.event = line.slice(7);
+            else if (line.startsWith("data: ")) frame.data = JSON.parse(line.slice(6));
+            else if (line.startsWith(": ")) frame.comment = line.slice(2);
+          }
+          return frame;
+        }
+        const { value, done } = await reader.read();
+        if (done) throw new Error("SSE stream ended unexpectedly");
+        buffer += decoder.decode(value, { stream: true });
+      }
+    },
+    async cancel(): Promise<void> {
+      await reader.cancel();
+    },
+  };
+}
+
+describe("UI SSE streams", () => {
+  test("the index stream opens with a snapshot, then carries session and revision frames", async () => {
+    const reader = sseReader(await app.request("/api/stream"));
+    expect(await reader.next()).toEqual({ event: "snapshot", data: { sessions: [] } });
+
+    const created = (await (await postJson("/api/sessions", { title: "live", repo })).json()) as {
+      id: string;
+    };
+    const sessionFrame = await reader.next();
+    expect(sessionFrame.event).toBe("session");
+    const summary = (sessionFrame.data as { session: Record<string, unknown> }).session;
+    expect(summary).toMatchObject({ id: created.id, status: "draft", revision: 0, pendingEvents: 0 });
+
+    await app.request(`/api/sessions/${created.id}/submit`, {
+      method: "POST",
+      body: validPlanFor(created.id),
+    });
+    const updated = await reader.next();
+    expect(updated.event).toBe("session");
+    expect((updated.data as { session: { status: string } }).session.status).toBe("in_review");
+    expect(await reader.next()).toEqual({
+      event: "revision",
+      data: { session: created.id, revision: 1 },
+    });
+    await reader.cancel();
+  });
+
+  test("a per-session stream only carries its own session's frames", async () => {
+    const mine = mintSession();
+    const other = mintSession();
+    const reader = sseReader(await app.request(`/api/sessions/${mine.id}/stream`));
+    const snapshot = await reader.next();
+    expect(snapshot.event).toBe("snapshot");
+    expect((snapshot.data as { session: { id: string } }).session.id).toBe(mine.id);
+
+    await postJson(`/api/sessions/${other.id}/questions`, { body: "other" });
+    await postJson(`/api/sessions/${mine.id}/questions`, { body: "mine" });
+    // The very next frame is mine's queue activity — other's never appears here.
+    expect(await reader.next()).toEqual({
+      event: "queue",
+      data: { session: mine.id, pending: 1 },
+    });
+    await reader.cancel();
+  });
+
+  test("delivering a queued event publishes the drained pending count", async () => {
+    const session = mintSession();
+    const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
+    await reader.next(); // snapshot
+    await postJson(`/api/sessions/${session.id}/questions`, { body: "q" });
+    expect(await reader.next()).toEqual({
+      event: "queue",
+      data: { session: session.id, pending: 1 },
+    });
+    await app.request(`/api/sessions/${session.id}/events`); // agent picks it up (test path acks immediately)
+    expect(await reader.next()).toEqual({
+      event: "queue",
+      data: { session: session.id, pending: 0 },
+    });
+    await reader.cancel();
+  });
+
+  test("streams for unknown sessions 404", async () => {
+    expect((await app.request("/api/sessions/otc_zzzzzz/stream")).status).toBe(404);
+  });
+
+  test("heartbeat comments keep flowing on an idle stream", async () => {
+    const beating = createApp({ store, uiDir: null, sseHeartbeatMs: 15 });
+    const reader = sseReader(await beating.request("/api/stream"));
+    await reader.next(); // snapshot
+    expect((await reader.next()).comment).toBe("hb");
+    await reader.cancel();
   });
 });
 

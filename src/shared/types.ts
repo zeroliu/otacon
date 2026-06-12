@@ -29,6 +29,12 @@ export interface RegistryFile {
   sessions: Record<string, RegistrySession>;
 }
 
+/** Registry entry plus live detail — what the web UI renders (SSE snapshot/session frames). */
+export interface SessionSummary extends RegistrySession {
+  revision: number;
+  pendingEvents: number;
+}
+
 /** W3C-annotation-style anchor; null anchor on an event item = whole-plan. */
 export interface Anchor {
   section: string;

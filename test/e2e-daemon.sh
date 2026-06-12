@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# End-to-end exercise of the real otacond daemon (M1f) over curl: long-poll
+# End-to-end exercise of the real otacond daemon over curl: long-poll
 # delivery, queue persistence, kill -9 at-least-once survival, lint reject and
-# accept, placeholder page, port-squatter refusal, cross-origin refusal, clean
-# shutdown. Hermetic: temp OTACON_HOME, temp repo, ephemeral ports.
+# accept, SPA shell + SSE stream, port-squatter refusal, cross-origin refusal,
+# clean shutdown. Hermetic: temp OTACON_HOME, temp repo, ephemeral ports.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -117,9 +117,15 @@ curl -s "$BASE/api/sessions/$SID" > "$TMP/detail.json"
 [ "$(json_field status "$TMP/detail.json")" = "in_review" ] || fail "submit did not set in_review"
 ok "session detail reports in_review after submit"
 
-# --- placeholder review page -------------------------------------------------
-curl -sf "$BASE/s/$SID" | grep -q "$SID" || fail "placeholder page missing session id"
-ok "GET /s/:id serves the placeholder page"
+# --- SPA shell and index SSE stream ------------------------------------------
+curl -sf "$BASE/s/$SID" | grep -q '<div id="root">' || fail "/s/:id did not serve the SPA shell"
+curl -sf "$BASE/" | grep -q '<div id="root">' || fail "/ did not serve the SPA shell"
+ok "GET / and GET /s/:id serve the SPA shell"
+
+STREAM="$(curl -s --max-time 2 "$BASE/api/stream" || true)"
+printf '%s' "$STREAM" | grep -q "event: snapshot" || fail "/api/stream sent no snapshot frame"
+printf '%s' "$STREAM" | grep -q "$SID" || fail "/api/stream snapshot missing the session"
+ok "GET /api/stream opens with a snapshot carrying the session"
 
 # --- port squatted by a non-otacon process: refuse to start ------------------
 SQUAT_PORT="$(free_port)"

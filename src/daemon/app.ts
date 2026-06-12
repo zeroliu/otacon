@@ -15,12 +15,21 @@ import type { Context } from "hono";
 import type { ServerResponse } from "node:http";
 import { isAbsolute } from "node:path";
 import { loadConfig } from "../shared/config.js";
-import type { Anchor, CommentItem, EventPayload, QueuedEvent } from "../shared/types.js";
+import type {
+  Anchor,
+  CommentItem,
+  EventPayload,
+  QueuedEvent,
+  RegistrySession,
+  SessionSummary,
+} from "../shared/types.js";
 import { VERSION } from "../shared/version.js";
 import { lint } from "./linter/index.js";
+import { Notifier } from "./notify.js";
 import type { ParkHandle } from "./queue.js";
 import { SessionQueue } from "./queue.js";
 import type { Store } from "./store.js";
+import { registerUiRoutes } from "./ui.js";
 
 /** Provided by @hono/node-server; absent under app.request() in tests. */
 export interface NodeBindings {
@@ -31,6 +40,10 @@ export interface AppOptions {
   store: Store;
   /** Invoked once POST /api/shutdown's response is out; main.ts exits in it. */
   onShutdown?: () => void;
+  /** Test override: where the built SPA lives (null = no UI). Default: resolved next to the module. */
+  uiDir?: string | null;
+  /** Test override for the SSE heartbeat interval. */
+  sseHeartbeatMs?: number;
 }
 
 type AppContext = Context<{ Bindings: NodeBindings }>;
@@ -68,9 +81,6 @@ function parseAnchor(raw: unknown): Anchor | null | undefined {
   return anchor;
 }
 
-const escapeHtml = (s: string) =>
-  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
 /** True when the Origin header names this daemon itself (the M2 web UI). */
 function sameOrigin(origin: string, host: string | undefined): boolean {
   try {
@@ -99,11 +109,26 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
 
   const sessionFor = (c: AppContext) => store.getSession(c.req.param("id") ?? "");
 
+  // UI pub/sub (DECISIONS.md "UI live updates"): every state mutation below
+  // publishes, and the SSE routes in ui.ts fan the events out to browsers.
+  const notifier = new Notifier();
+  const summarize = (session: RegistrySession): SessionSummary => ({
+    ...session,
+    revision: store.readState(session.id).revision,
+    pendingEvents: queueFor(session.id).size,
+  });
+  const publishSession = (session: RegistrySession): void =>
+    notifier.publish({ type: "session", session: session.id, data: { session: summarize(session) } });
+  const publishQueue = (id: string, pending: number): void =>
+    notifier.publish({ type: "queue", session: id, data: { session: id, pending } });
+
   /** Respond with the event; ack only after the bytes are out (see header comment). */
   function respondEvent(c: AppContext, queue: SessionQueue, event: QueuedEvent): Response {
+    const session = event.payload.session;
     const outgoing = c.env?.outgoing;
     if (!outgoing) {
       queue.flush(event); // app.request() test path: no socket to wait on
+      publishQueue(session, queue.size);
     } else if (outgoing.destroyed || outgoing.closed) {
       // Client vanished before we built the response. The closed check matters:
       // once "close" has fired, a listener added below would never run and the
@@ -113,6 +138,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       outgoing.once("close", () => {
         if (outgoing.writableFinished) queue.flush(event);
         else queue.requeue(event);
+        publishQueue(session, queue.size);
       });
     }
     return c.json(event.payload);
@@ -180,7 +206,9 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     if (quick !== undefined && typeof quick !== "boolean") {
       return badRequest(c, "quick must be a boolean");
     }
-    return c.json(store.createSession({ title, repo, branch, quick }), 201);
+    const session = store.createSession({ title, repo, branch, quick });
+    publishSession(session);
+    return c.json(session, 201);
   });
 
   app.get("/api/sessions/:id", (c) => {
@@ -266,7 +294,9 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       return c.json({ ok: false, errors: result.errors, warnings: result.warnings }, 422);
     }
     const revision = store.saveRevision(session.id, content);
-    store.updateSession(session.id, { status: "in_review" });
+    const updated = store.updateSession(session.id, { status: "in_review" });
+    publishSession(updated);
+    notifier.publish({ type: "revision", session: session.id, data: { session: session.id, revision } });
     return c.json({
       ok: true,
       session: session.id,
@@ -308,9 +338,10 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     const batch = `b${counters.batch}`;
     // Comments are revision requests (DECISIONS.md "Status transitions"); flip
     // status before the enqueue wakes a parked agent.
-    store.updateSession(session.id, { status: "revising" });
+    const updated = store.updateSession(session.id, { status: "revising" });
     const payload: EventPayload = { event: "comments", session: session.id, batch, items };
     queue.enqueue(payload, counters.eventSeq);
+    publishSession(updated); // after the enqueue, so the summary carries the fresh pending count
     return c.json(
       { ok: true, batch, threads: items.map((i) => i.thread), seq: counters.eventSeq },
       202,
@@ -337,6 +368,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       body: body.body,
     };
     queue.enqueue(payload, counters.eventSeq);
+    publishQueue(session.id, queue.size);
     return c.json({ ok: true, id, seq: counters.eventSeq }, 202);
   });
 
@@ -355,14 +387,17 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     });
   });
 
-  // Placeholder review page until the web UI lands in M2 (DECISIONS.md
-  // "`/s/:id` serves a plain-text placeholder until the UI ships").
-  app.get("/s/:id", (c) => {
-    const session = sessionFor(c);
-    if (!session) return c.text(`otacon: unknown session ${c.req.param("id")}\n`, 404);
-    return c.html(
-      `<!doctype html><title>otacon — ${escapeHtml(session.title)}</title><p>otacon session <code>${session.id}</code> — “${escapeHtml(session.title)}” (${session.status}). The review UI lands in M2.</p>\n`,
-    );
+  // The SPA (GET /, GET /s/:id, /assets/*) and its SSE feeds (GET /api/stream,
+  // GET /api/sessions/:id/stream) — see ui.ts.
+  registerUiRoutes(app, {
+    notifier,
+    listSummaries: () => store.listSessions().map(summarize),
+    getSummary: (id) => {
+      const session = store.getSession(id);
+      return session ? summarize(session) : undefined;
+    },
+    uiDir: options.uiDir,
+    heartbeatMs: options.sseHeartbeatMs,
   });
 
   return app;
