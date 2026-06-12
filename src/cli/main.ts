@@ -3,19 +3,24 @@
 // invocation; notices go to stderr; exit 0 success / 1 expected failure /
 // 2 usage or internal error (src/cli/output.ts).
 
+import { startCommand } from "./commands/start.js";
 import { statusCommand } from "./commands/status.js";
+import { submitCommand } from "./commands/submit.js";
+import { waitCommand } from "./commands/wait.js";
 import { CliError, printJson } from "./output.js";
 
 const USAGE = "usage: otacon <start|submit|wait|status> [options]";
 
 async function dispatch(command: string | undefined, argv: string[]): Promise<number> {
   switch (command) {
+    case "start":
+      return startCommand(argv);
+    case "submit":
+      return submitCommand(argv);
+    case "wait":
+      return waitCommand(argv);
     case "status":
       return statusCommand(argv);
-    case "start":
-    case "submit":
-    case "wait":
-      throw new CliError("E_NOT_IMPLEMENTED", `otacon ${command} lands with M1h`, 1);
     default:
       throw new CliError("E_USAGE", USAGE, 2);
   }

@@ -265,6 +265,40 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** A consumer needs finer-grained codes than the JSON `error.code`
   already provides.
 
+## Session resolution precedence: explicit, then pointer, then lone active session
+
+- **Decision:** `--session` always wins (even over a pointer). Otherwise the
+  `.otacon/current-session` pointer at the repo root decides; a pointer naming a
+  session the registry does not know is a hard refusal (`E_STALE_POINTER`), never a
+  fall-through to the registry scan. Only with no pointer at all may the repo's
+  single *active* (non-approved) registry session be assumed; two or more refuse
+  with the candidate list attached (`E_AMBIGUOUS_SESSION`).
+- **Why:** The never-guess rule (DESIGN.md §7) exists because cross-posting feedback
+  to the wrong plan is unrecoverable confusion. A stale pointer silently resolving to
+  "the other session in this repo" is exactly that failure, so it refuses even when a
+  scan would find one candidate. Approved sessions are excluded because they are
+  over by definition (§6) — a finished plan should never block starting work on the
+  next one. The refusal carries the machine-readable list so the agent's very next
+  call can pass `--session`.
+- **Revisit when:** `otacon clean` starts managing pointers, or archived-but-active
+  states appear.
+
+## `wait` parks in ≤240-second slices under one fixed deadline
+
+- **Decision:** The CLI computes its deadline once (`now + --timeout`), then loops:
+  re-ensure the daemon, long-poll `?wait=min(remaining, 240)`, re-park on a daemon
+  "timeout" body or a connection failure (after a 250ms backoff), until the deadline
+  expires and it prints `{"event":"timeout"}` with exit 0. Per-request parks are
+  capped at 240s even though the daemon accepts 600s.
+- **Why:** Node's fetch (undici) kills any request whose response headers take more
+  than 300s, and a parked long-poll sends headers only when an event (or the daemon
+  timeout) fires — a single 540s park would die mid-request. Slicing costs one
+  no-op HTTP round trip every 4 minutes; the daemon's disk-backed queue makes
+  re-parking free, which is also exactly what makes a kill -9 mid-park invisible to
+  the agent (the same loop just respawns and re-parks).
+- **Revisit when:** The CLI adopts an HTTP client with configurable timeouts, or
+  agents' Bash caps move and the slice math deserves retuning.
+
 ## M1 scope: CLI surface is `start`/`submit`/`wait`/`status` only
 
 - **Decision:** M1 ships sessions, registry, submit + linter (L1/L2/L6), event queues,
