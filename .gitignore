@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.otacon/
+.DS_Store
+*.log
