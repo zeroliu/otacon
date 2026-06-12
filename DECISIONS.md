@@ -770,3 +770,88 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   around. The reviewed pointer merely degrades the default diff baseline, which
   the user can re-select in one tap — not worth a recovery source.
 - **Revisit when:** Any new id-bearing state file appears (add it to the scan).
+  *(Happened in M4a: transcript.json joined the scan when grill questions started
+  minting q ids.)*
+
+## Grill transcript: its own transcript.json; q ids shared with user questions
+
+- **Decision:** Agent grill questions persist in `.otacon/<id>/transcript.json`
+  (`{version, entries: [{id, question, options?, recommend?, multi?, askedAt,
+  answer?}]}`), not in threads.json — same atomic-write/quarantine posture, the
+  user's answer is written inline on its entry, re-answers overwrite and re-queue
+  the answer event. Agent-question ids come from the same `question` counter as
+  user-question threads (one `q<n>` space); the counter-recovery scan reads the
+  transcript too.
+- **Why:** The transcript and the threads rail are different surfaces with
+  different lifecycles — the transcript ships inside the approved artifact while
+  threads stay gitignored review exhaust — so sharing a file would entangle the
+  artifact's contents with comment-resolution state. One q id space because L3
+  citations and the UI's decision deep-links must be unambiguous: with two `q7`s,
+  `D3 ← q7` could point at either. Overwrite-on-re-answer mirrors answerQuestion:
+  at-least-once delivery makes duplicate POSTs legitimate, newest wins.
+- **Revisit when:** Transcript entries need threading (follow-up questions), or a
+  UI wants to render questions and threads in one merged timeline.
+
+## L3 rides the L5 context seam; stable codes, severity flips on --quick
+
+- **Decision:** `checkL3(plan, ctx)` is pure; the daemon composes
+  `{quick, knownQuestions}` (session registry flag + transcript q ids) at submit.
+  Without the context (unit callers) L3 does not run. Both checks — an untraced
+  `- D<n>:` entry (`E_DECISION_UNTRACED`) and a citation of a q id missing from
+  the transcript (`E_UNKNOWN_QUESTION_CITED`) — keep their codes in `--quick`
+  sessions and flip severity to warning. Citations accept `← q7`, `← q7, q9`,
+  and the ASCII `<-` arrow; `[assumed]` anywhere in the entry satisfies the rule;
+  non-`D<n>` list items in Decisions are ignored.
+- **Why:** Same argument as L5: the linter never touches disk, and the daemon
+  already owns both inputs (registry, transcript). Severity-not-code is the
+  contextual dimension because agents and the UI key behavior off `severity`
+  while dashboards aggregate by `code` — a `W_`-prefixed twin code would make
+  every consumer match two names for one rule. `<-` is accepted for the same
+  reason the phase grammar accepts both dashes: models emit both, and a lint
+  bounce over an arrow glyph is pure friction. Unknown citations are errors
+  because a fabricated `← q9` would otherwise game traceability invisibly.
+- **Revisit when:** Decisions want richer provenance (multiple sources, comment
+  citations), or quick-mode warnings prove too quiet to keep plans honest.
+
+## Approve: unresolved = open comments + unanswered questions; force bypasses
+
+- **Decision:** POST /approve counts comment threads without a resolution plus
+  question threads without an answer; a non-zero count answers 409
+  `E_UNRESOLVED_THREADS` with `unresolved: n` unless the body is exactly
+  `{"force": true}` — the UI warns with the count and retries with force on
+  confirm. A session with no revisions answers 409 `E_NO_REVISION`. The artifact
+  is written before the status flips (write, flip, enqueue `approved`) so a crash
+  can leave an orphan file but never an approved session without its artifact.
+  After the flip, submit/comments/questions/question-answers/ask/answers/approve
+  all answer 409 `E_SESSION_OVER` — the daemon enforces the terminal state, not
+  just the CLI's pointer rules.
+- **Why:** §9 says Approve *warns* on unresolved threads — a hard refusal would
+  make the daemon override the human's judgment, and silence would make dangling
+  feedback invisible; 409-unless-force encodes "warn then allow" in one round
+  trip and leaves the count machine-readable for the confirm sheet. Unanswered
+  questions count because they are visibly open in the rail; approving past them
+  is the same conscious shrug as an open comment. Daemon-side enforcement exists
+  because curl/UI/--session callers never pass the CLI's pointer guard.
+- **Revisit when:** A "withdraw question" verb appears (open-question deadlock
+  stops being theoretical), or approve wants per-thread acknowledgment.
+
+## Approve archives logically; the artifact appends an "## Interview" section
+
+- **Decision:** Approve writes `docs/plans/YYYY-MM-DD-<slug>.md` (local approve
+  date; slug from the session title, `plan` fallback; name collisions suffix
+  `-2`, `-3`, … rather than overwrite) containing the final revision with
+  frontmatter `status`/`revision` rewritten by the daemon and the transcript
+  appended as `## Interview` (`### q<n> — question`, an `- Options:` line with
+  `(recommended)`/`(multi)` tags, an `- Answer:` line; `_unanswered_` for open
+  questions; omitted entirely on an empty transcript). `.otacon/<id>/` stays on
+  disk untouched; physical archival is `otacon clean`'s job (M5).
+- **Why:** The daemon owns frontmatter truth (DECISIONS "Frontmatter authority"),
+  so the committed file must carry its values, not the agent's last guess. The
+  Interview lives outside the closed schema because the artifact is post-lint
+  output for humans and `snake`, never resubmitted — extending the schema for it
+  would weaken L1's anti-smuggling closure. Logical-only archival because the
+  approved event still has to drain through the session's queue file, and
+  `E_SESSION_OVER`/registry status already remove the session from every active
+  surface; moving directories under a live queue would be a race for zero gain.
+- **Revisit when:** `otacon clean` lands (it owns the physical move), or `snake`
+  needs structured (non-markdown) access to the interview.

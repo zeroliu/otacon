@@ -13,27 +13,31 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { ServerResponse } from "node:http";
-import { isAbsolute } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { loadConfig } from "../shared/config.js";
 import type {
   Anchor,
   CommentItem,
   DiffPayload,
   EventPayload,
+  GrillAnswer,
   QueuedEvent,
   RegistrySession,
   Resolutions,
   RevisionPayload,
   SessionSummary,
   Thread,
+  TranscriptEntry,
 } from "../shared/types.js";
 import { VERSION } from "../shared/version.js";
+import { composeArtifact, localDate, pickArtifactRelPath } from "./approve.js";
 import { diffPlans } from "./diff.js";
 import { lint } from "./linter/index.js";
 import { Notifier } from "./notify.js";
 import type { ParkHandle } from "./queue.js";
 import { SessionQueue } from "./queue.js";
 import type { Store } from "./store.js";
+import { writeFileAtomic } from "./store.js";
 import {
   answerQuestion,
   appendThreads,
@@ -41,6 +45,7 @@ import {
   commentThreadStates,
   readThreads,
 } from "./threads.js";
+import { answerEntry, appendEntry, readTranscript } from "./transcript.js";
 import { registerUiRoutes } from "./ui.js";
 
 /** Provided by @hono/node-server; absent under app.request() in tests. */
@@ -68,6 +73,14 @@ const badRequest = (c: AppContext, message: string) =>
 const notFound = (c: AppContext, message: string) =>
   c.json({ error: { code: "E_NOT_FOUND", message } }, 404);
 const timeoutEvent = (c: AppContext) => c.json({ event: "timeout" });
+// Approved sessions are over (DESIGN.md §6, §12 status machine): every
+// state-mutating verb refuses — the CLI's pointer rules guard its side, but
+// curl/UI/--session calls must hit the same wall.
+const sessionOver = (c: AppContext, id: string) =>
+  c.json(
+    { error: { code: "E_SESSION_OVER", message: `session ${id} is approved — the session is over` } },
+    409,
+  );
 
 async function readJsonBody(c: AppContext): Promise<Record<string, unknown> | undefined> {
   try {
@@ -169,6 +182,8 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     notifier.publish({ type: "queue", session: id, data: { session: id, pending } });
   const publishThread = (id: string, thread: Thread): void =>
     notifier.publish({ type: "thread", session: id, data: { session: id, thread } });
+  const publishGrill = (id: string, entry: TranscriptEntry): void =>
+    notifier.publish({ type: "grill", session: id, data: { session: id, entry } });
 
   /** Respond with the event; ack only after the bytes are out (see header comment). */
   function respondEvent(c: AppContext, queue: SessionQueue, event: QueuedEvent): Response {
@@ -312,6 +327,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/submit", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.status === "approved") return sessionOver(c, session.id);
     // Raw markdown body, or {"plan": "...", "resolutions": {...}} JSON — the
     // CLI sends resolutions.json's content along (DESIGN.md §6). The raw path
     // carries no resolutions, so L5 still rejects it when threads are open.
@@ -344,7 +360,11 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       session: session.id,
       expectedRevision: state.revision + 1,
       expectedStatus: "in_review",
-      // L5's context is composed here: rules stay pure, the daemon does the I/O.
+      // L3/L5 context is composed here: rules stay pure, the daemon does the I/O.
+      grill: {
+        quick: session.quick,
+        knownQuestions: readTranscript(store.transcriptPath(session.id)).map((e) => e.id),
+      },
       resolutions: {
         revision: state.revision + 1,
         commentThreads: commentThreadStates(store.threadsPath(session.id)),
@@ -441,6 +461,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/comments", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.status === "approved") return sessionOver(c, session.id);
     const queue = queueFor(session.id); // before any state write: can throw on a corrupt file
     const body = (await readJsonBody(c)) ?? {};
     const rawItems = body.items;
@@ -499,6 +520,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/questions", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.status === "approved") return sessionOver(c, session.id);
     const queue = queueFor(session.id); // before any state write: can throw on a corrupt file
     const body = (await readJsonBody(c)) ?? {};
     const anchor = parseAnchor(body.anchor);
@@ -535,6 +557,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/questions/:qid/answer", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.status === "approved") return sessionOver(c, session.id);
     const body = (await readJsonBody(c)) ?? {};
     if (typeof body.body !== "string" || body.body.trim() === "") {
       return badRequest(c, "answer needs a non-empty body");
@@ -565,6 +588,198 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
     return c.json({ session: session.id, threads: readThreads(store.threadsPath(session.id)) });
+  });
+
+  // The agent's grill question (otacon ask, DESIGN.md §6, §8): persisted in
+  // the transcript and pushed to the UI as a card; no agent event is queued —
+  // the asker goes straight back to `otacon wait` for the answer.
+  app.post("/api/sessions/:id/ask", async (c) => {
+    const session = sessionFor(c);
+    if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.status === "approved") return sessionOver(c, session.id);
+    const body = (await readJsonBody(c)) ?? {};
+    const { question, options, recommend, multi } = body;
+    if (typeof question !== "string" || question.trim() === "") {
+      return badRequest(c, "question must be a non-empty string");
+    }
+    if (options !== undefined) {
+      const ok =
+        Array.isArray(options) &&
+        options.length >= 2 &&
+        options.every((o) => typeof o === "string" && o.trim() !== "") &&
+        new Set(options).size === options.length;
+      if (!ok) return badRequest(c, "options must be 2+ distinct non-empty strings");
+    }
+    if (recommend !== undefined) {
+      if (!Array.isArray(options) || typeof recommend !== "string" || !options.includes(recommend)) {
+        return badRequest(c, "recommend must name one of the options");
+      }
+    }
+    if (multi !== undefined && (typeof multi !== "boolean" || (multi && options === undefined))) {
+      return badRequest(c, "multi must be a boolean and requires options");
+    }
+    const counters = store.bumpCounters(session.id, { question: 1 });
+    const entry: TranscriptEntry = {
+      id: `q${counters.question}`,
+      question,
+      ...(options !== undefined ? { options: options as string[] } : {}),
+      ...(recommend !== undefined ? { recommend: recommend as string } : {}),
+      ...(multi === true ? { multi: true } : {}),
+      askedAt: new Date().toISOString(),
+    };
+    appendEntry(store.transcriptPath(session.id), entry);
+    publishGrill(session.id, entry);
+    return c.json({ ok: true, session: session.id, id: entry.id }, 201);
+  });
+
+  // The user's side of a grill question (DESIGN.md §6, §8): the answer lands
+  // on the transcript entry and an `answer` event wakes the parked agent.
+  app.post("/api/sessions/:id/answers", async (c) => {
+    const session = sessionFor(c);
+    if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.status === "approved") return sessionOver(c, session.id);
+    const queue = queueFor(session.id); // before any state write: can throw on a corrupt file
+    const body = (await readJsonBody(c)) ?? {};
+    const { question, choice, choices, text } = body;
+    if (typeof question !== "string" || question === "") {
+      return badRequest(c, "question must name a transcript question id (q<n>)");
+    }
+    const asked = readTranscript(store.transcriptPath(session.id)).find((e) => e.id === question);
+    if (!asked) {
+      return c.json(
+        {
+          error: {
+            code: "E_UNKNOWN_QUESTION",
+            message: `session ${session.id} has no grill question ${question}`,
+          },
+        },
+        404,
+      );
+    }
+    if (text !== undefined && typeof text !== "string") {
+      return badRequest(c, "text must be a string");
+    }
+    // The answer must fit the question's shape: chips for option questions
+    // (one chip, or 1+ under --multi), free text for optionless ones.
+    if (asked.options === undefined) {
+      if (choice !== undefined || choices !== undefined) {
+        return badRequest(c, `${question} has no options — answer with text only`);
+      }
+      if (typeof text !== "string" || text.trim() === "") {
+        return badRequest(c, `${question} needs a non-empty text answer`);
+      }
+    } else if (asked.multi === true) {
+      const ok =
+        choice === undefined &&
+        Array.isArray(choices) &&
+        choices.length > 0 &&
+        choices.every((x) => typeof x === "string" && (asked.options as string[]).includes(x)) &&
+        new Set(choices).size === choices.length;
+      if (!ok) {
+        return badRequest(c, `${question} is multi-choice — pass distinct choices from its options`);
+      }
+    } else if (
+      choices !== undefined ||
+      typeof choice !== "string" ||
+      !asked.options.includes(choice)
+    ) {
+      return badRequest(c, `${question} needs a single choice from its options`);
+    }
+    const answer: GrillAnswer = {
+      ...(typeof choice === "string" ? { choice } : {}),
+      ...(Array.isArray(choices) ? { choices: choices as string[] } : {}),
+      ...(typeof text === "string" && text.trim() !== "" ? { text } : {}),
+      answeredAt: new Date().toISOString(),
+    };
+    // Re-answering overwrites (at-least-once: a duplicate POST is legitimate);
+    // the agent sees a second answer event with the same question id.
+    const updated = answerEntry(store.transcriptPath(session.id), question, answer);
+    const payload: EventPayload = {
+      event: "answer",
+      session: session.id,
+      question,
+      ...(answer.choice !== undefined ? { choice: answer.choice } : {}),
+      ...(answer.choices !== undefined ? { choices: answer.choices } : {}),
+      ...(answer.text !== undefined ? { text: answer.text } : {}),
+    };
+    queue.enqueue(payload, store.bumpCounter(session.id, "eventSeq"));
+    publishQueue(session.id, queue.size);
+    if (updated) publishGrill(session.id, updated);
+    return c.json({ ok: true, session: session.id, question }, 202);
+  });
+
+  app.get("/api/sessions/:id/transcript", (c) => {
+    const session = sessionFor(c);
+    if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    return c.json({
+      session: session.id,
+      transcript: readTranscript(store.transcriptPath(session.id)),
+    });
+  });
+
+  // Approve ends the session (DESIGN.md §6 step 6, §12): the daemon writes
+  // docs/plans/YYYY-MM-DD-<slug>.md (final revision, status: approved, grill
+  // transcript appended), flips the session approved — after which every
+  // mutating verb refuses — and queues the `approved` event for the parked
+  // agent to commit the file. Unresolved threads refuse 409 unless {force}.
+  app.post("/api/sessions/:id/approve", async (c) => {
+    const session = sessionFor(c);
+    if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.status === "approved") return sessionOver(c, session.id);
+    const queue = queueFor(session.id); // before any state write: can throw on a corrupt file
+    const body = (await readJsonBody(c)) ?? {};
+    if (body.force !== undefined && typeof body.force !== "boolean") {
+      return badRequest(c, "force must be a boolean");
+    }
+    const state = store.readState(session.id);
+    if (state.revision === 0) {
+      return c.json(
+        {
+          error: {
+            code: "E_NO_REVISION",
+            message: `session ${session.id} has no revisions to approve`,
+          },
+        },
+        409,
+      );
+    }
+    // Unresolved = comment threads with no resolution + user questions with no
+    // answer — the same open items the rail shows. The 409 carries the count;
+    // the UI warns and retries with {force:true} on confirm.
+    const unresolved = readThreads(store.threadsPath(session.id)).filter((t) =>
+      t.kind === "comment" ? t.resolution === undefined : t.answer === undefined,
+    ).length;
+    if (unresolved > 0 && body.force !== true) {
+      return c.json(
+        {
+          error: {
+            code: "E_UNRESOLVED_THREADS",
+            message: `session has ${unresolved} unresolved thread(s); approve with {"force":true} to override`,
+          },
+          unresolved,
+        },
+        409,
+      );
+    }
+    const artifact = composeArtifact(store.readRevision(session.id, state.revision), {
+      revision: state.revision,
+      entries: readTranscript(store.transcriptPath(session.id)),
+    });
+    const relPath = pickArtifactRelPath(session.repo, session.title, localDate());
+    // Artifact on disk first, then the status flip (the registry is the commit
+    // point — same ordering argument as createSession), then the wake-up.
+    writeFileAtomic(join(session.repo, relPath), artifact);
+    const updated = store.updateSession(session.id, { status: "approved" });
+    const payload: EventPayload = { event: "approved", session: session.id, path: relPath };
+    queue.enqueue(payload, store.bumpCounter(session.id, "eventSeq"));
+    publishSession(updated); // after the enqueue, so the summary carries the fresh pending count
+    return c.json({
+      ok: true,
+      session: session.id,
+      revision: state.revision,
+      path: relPath,
+      unresolved,
+    });
   });
 
   app.get("/api/sessions/:id/revisions/:n", (c) => {
@@ -605,6 +820,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       return session ? summarize(session) : undefined;
     },
     getThreads: (id) => readThreads(store.threadsPath(id)),
+    getTranscript: (id) => readTranscript(store.transcriptPath(id)),
     uiDir: options.uiDir,
     heartbeatMs: options.sseHeartbeatMs,
   });

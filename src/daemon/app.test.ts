@@ -966,3 +966,287 @@ describe("last-reviewed tracking and the diff endpoint (M3)", () => {
     expect((await app.request(`/api/sessions/otc_zzzzzz/diff`)).status).toBe(404);
   });
 });
+
+describe("the grill loop: ask, answers, transcript, L3 (M4)", () => {
+  const ask = (id: string, body: unknown) => postJson(`/api/sessions/${id}/ask`, body);
+  const answers = (id: string, body: unknown) => postJson(`/api/sessions/${id}/answers`, body);
+
+  test("ask persists a transcript entry and queues nothing for the agent", async () => {
+    const session = mintSession();
+    const res = await ask(session.id, {
+      question: "RS256 or HS256?",
+      options: ["RS256", "HS256"],
+      recommend: "RS256",
+    });
+    expect(res.status).toBe(201);
+    expect(await res.json()).toEqual({ ok: true, session: session.id, id: "q1" });
+
+    const transcript = await app.request(`/api/sessions/${session.id}/transcript`);
+    const listed = (await transcript.json()) as { transcript: Record<string, unknown>[] };
+    expect(listed.transcript[0]).toMatchObject({
+      id: "q1",
+      question: "RS256 or HS256?",
+      options: ["RS256", "HS256"],
+      recommend: "RS256",
+    });
+    // The asker goes back to wait — no event exists until the user answers.
+    const event = await app.request(`/api/sessions/${session.id}/events`);
+    expect(await event.json()).toEqual({ event: "timeout" });
+  });
+
+  test("agent questions share the q counter with user-question threads", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/questions`, { body: "user asks first" });
+    const res = await ask(session.id, { question: "agent asks second" });
+    expect(((await res.json()) as { id: string }).id).toBe("q2");
+  });
+
+  test("ask validates its shape", async () => {
+    const session = mintSession();
+    expect((await ask(session.id, {})).status).toBe(400);
+    expect((await ask(session.id, { question: "x", options: ["only one"] })).status).toBe(400);
+    expect((await ask(session.id, { question: "x", options: ["A", "A"] })).status).toBe(400);
+    expect(
+      (await ask(session.id, { question: "x", options: ["A", "B"], recommend: "C" })).status,
+    ).toBe(400);
+    expect((await ask(session.id, { question: "x", recommend: "A" })).status).toBe(400);
+    expect((await ask(session.id, { question: "x", multi: true })).status).toBe(400);
+    expect((await ask("otc_zzzzzz", { question: "x" })).status).toBe(404);
+  });
+
+  test("an answer lands on the transcript and wakes the agent with an answer event", async () => {
+    const session = mintSession();
+    await ask(session.id, { question: "algo?", options: ["RS256", "HS256"] });
+    const res = await answers(session.id, {
+      question: "q1",
+      choice: "RS256",
+      text: "rotation matters",
+    });
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ ok: true, session: session.id, question: "q1" });
+
+    const event = await app.request(`/api/sessions/${session.id}/events`);
+    expect(await event.json()).toEqual({
+      event: "answer",
+      session: session.id,
+      question: "q1",
+      choice: "RS256",
+      text: "rotation matters",
+    });
+    const transcript = await app.request(`/api/sessions/${session.id}/transcript`);
+    const listed = (await transcript.json()) as { transcript: { answer?: unknown }[] };
+    expect(listed.transcript[0]?.answer).toMatchObject({ choice: "RS256", text: "rotation matters" });
+  });
+
+  test("answers validate against the question's shape", async () => {
+    const session = mintSession();
+    await ask(session.id, { question: "single", options: ["A", "B"] });
+    await ask(session.id, { question: "multi", options: ["A", "B", "C"], multi: true });
+    await ask(session.id, { question: "free text" });
+
+    expect((await answers(session.id, { question: "q9", choice: "A" })).status).toBe(404);
+    expect((await answers(session.id, { question: "q1", choice: "Z" })).status).toBe(400);
+    expect((await answers(session.id, { question: "q1", choices: ["A"] })).status).toBe(400);
+    expect((await answers(session.id, { question: "q2", choice: "A" })).status).toBe(400);
+    expect((await answers(session.id, { question: "q2", choices: ["A", "Z"] })).status).toBe(400);
+    expect((await answers(session.id, { question: "q2", choices: [] })).status).toBe(400);
+    expect((await answers(session.id, { question: "q3", choice: "A" })).status).toBe(400);
+    expect((await answers(session.id, { question: "q3" })).status).toBe(400);
+
+    expect((await answers(session.id, { question: "q2", choices: ["A", "C"] })).status).toBe(202);
+    expect((await answers(session.id, { question: "q3", text: "like so" })).status).toBe(202);
+  });
+
+  test("re-answering overwrites the stored answer (at-least-once)", async () => {
+    const session = mintSession();
+    await ask(session.id, { question: "algo?", options: ["A", "B"] });
+    await answers(session.id, { question: "q1", choice: "A" });
+    await answers(session.id, { question: "q1", choice: "B" });
+    const transcript = await app.request(`/api/sessions/${session.id}/transcript`);
+    const listed = (await transcript.json()) as { transcript: { answer?: { choice?: string } }[] };
+    expect(listed.transcript[0]?.answer?.choice).toBe("B");
+  });
+
+  test("L3: citing a q id missing from the transcript rejects 422; a real one passes", async () => {
+    const session = mintSession();
+    const cited = validPlanFor(session.id).replace(
+      "- D1: RS256 over HS256 [assumed]",
+      "- D1: RS256 over HS256 ← q1",
+    );
+    const rejected = await app.request(`/api/sessions/${session.id}/submit`, {
+      method: "POST",
+      body: cited,
+    });
+    expect(rejected.status).toBe(422);
+    const issues = (await rejected.json()) as { errors: { code: string; rule: string }[] };
+    expect(issues.errors.map((e) => e.code)).toContain("E_UNKNOWN_QUESTION_CITED");
+    expect(issues.errors.find((e) => e.code === "E_UNKNOWN_QUESTION_CITED")?.rule).toBe("L3");
+
+    await ask(session.id, { question: "algo?", options: ["RS256", "HS256"] });
+    const accepted = await app.request(`/api/sessions/${session.id}/submit`, {
+      method: "POST",
+      body: cited,
+    });
+    expect(accepted.status).toBe(200);
+  });
+
+  test("L3: an untraced decision rejects normal sessions, only warns --quick ones", async () => {
+    const strict = mintSession();
+    const untraced = (id: string) => validPlanFor(id).replace(" [assumed]", "");
+    const rejected = await app.request(`/api/sessions/${strict.id}/submit`, {
+      method: "POST",
+      body: untraced(strict.id),
+    });
+    expect(rejected.status).toBe(422);
+
+    const quick = store.createSession({ title: "quick plan", repo, quick: true });
+    const accepted = await app.request(`/api/sessions/${quick.id}/submit`, {
+      method: "POST",
+      body: untraced(quick.id),
+    });
+    expect(accepted.status).toBe(200);
+    const body = (await accepted.json()) as { warnings: { code: string; severity: string }[] };
+    const downgraded = body.warnings.find((w) => w.code === "E_DECISION_UNTRACED");
+    expect(downgraded?.severity).toBe("warning");
+  });
+
+  test("the per-session stream snapshots the transcript and pushes grill frames", async () => {
+    const session = mintSession();
+    const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
+    const snapshot = await reader.next();
+    expect((snapshot.data as { transcript: unknown[] }).transcript).toEqual([]);
+
+    await ask(session.id, { question: "algo?", options: ["A", "B"] });
+    const askedFrame = await reader.next();
+    expect(askedFrame.event).toBe("grill");
+    expect((askedFrame.data as { entry: { id: string } }).entry.id).toBe("q1");
+
+    await answers(session.id, { question: "q1", choice: "A" });
+    // queue frame (the enqueue) then the grill upsert carrying the answer.
+    expect((await reader.next()).event).toBe("queue");
+    const answeredFrame = await reader.next();
+    expect(answeredFrame.event).toBe("grill");
+    expect((answeredFrame.data as { entry: { answer?: { choice: string } } }).entry.answer?.choice).toBe("A");
+    await reader.cancel();
+  });
+});
+
+describe("approve and the status machine (M4)", () => {
+  const submitValid = async (id: string) => {
+    const res = await app.request(`/api/sessions/${id}/submit`, {
+      method: "POST",
+      body: validPlanFor(id),
+    });
+    expect(res.status).toBe(200);
+  };
+  const approve = (id: string, body: unknown = {}) =>
+    postJson(`/api/sessions/${id}/approve`, body);
+
+  test("approve refuses a session with no revisions", async () => {
+    const session = mintSession();
+    const res = await approve(session.id);
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("E_NO_REVISION");
+  });
+
+  test("unresolved threads 409 with the count unless forced", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ body: "open comment" }] });
+    await postJson(`/api/sessions/${session.id}/questions`, { body: "open question" });
+
+    const refused = await approve(session.id);
+    expect(refused.status).toBe(409);
+    const body = (await refused.json()) as { error: { code: string }; unresolved: number };
+    expect(body.error.code).toBe("E_UNRESOLVED_THREADS");
+    expect(body.unresolved).toBe(2);
+
+    const forced = await approve(session.id, { force: true });
+    expect(forced.status).toBe(200);
+  });
+
+  test("an answered question no longer counts as unresolved", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await postJson(`/api/sessions/${session.id}/questions`, { body: "open question" });
+    await postJson(`/api/sessions/${session.id}/questions/q1/answer`, { body: "answered" });
+    expect((await approve(session.id)).status).toBe(200);
+  });
+
+  test("approve writes the artifact, flips status, and queues the approved event", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/ask`, {
+      question: "algo?",
+      options: ["RS256", "HS256"],
+      recommend: "RS256",
+    });
+    await postJson(`/api/sessions/${session.id}/answers`, { question: "q1", choice: "RS256" });
+    await app.request(`/api/sessions/${session.id}/events`); // drain the answer event
+    const cited = validPlanFor(session.id).replace(
+      "- D1: RS256 over HS256 [assumed]",
+      "- D1: RS256 over HS256 ← q1",
+    );
+    const submitted = await app.request(`/api/sessions/${session.id}/submit`, {
+      method: "POST",
+      body: cited,
+    });
+    expect(submitted.status).toBe(200);
+
+    const res = await approve(session.id);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { path: string; revision: number };
+    expect(body.revision).toBe(1);
+    expect(body.path).toMatch(/^docs\/plans\/\d{4}-\d{2}-\d{2}-e2e-plan\.md$/);
+
+    const artifact = readFileSync(join(repo, body.path), "utf8");
+    expect(artifact).toContain("status: approved");
+    expect(artifact).toContain("## Interview");
+    expect(artifact).toContain("### q1 — algo?");
+    expect(artifact).toContain("- Answer: RS256");
+    expect(store.getSession(session.id)?.status).toBe("approved");
+
+    const event = await app.request(`/api/sessions/${session.id}/events`);
+    expect(await event.json()).toEqual({
+      event: "approved",
+      session: session.id,
+      path: body.path,
+    });
+  });
+
+  test("a same-title re-approve suffixes the artifact name instead of overwriting", async () => {
+    const first = mintSession();
+    await submitValid(first.id);
+    const a = (await (await approve(first.id)).json()) as { path: string };
+    const second = mintSession(); // same "e2e plan" title
+    await submitValid(second.id);
+    const b = (await (await approve(second.id)).json()) as { path: string };
+    expect(b.path).not.toBe(a.path);
+    expect(b.path).toMatch(/-e2e-plan-2\.md$/);
+    expect(readFileSync(join(repo, a.path), "utf8")).toContain(first.id);
+    expect(readFileSync(join(repo, b.path), "utf8")).toContain(second.id);
+  });
+
+  test("every mutating verb refuses an approved session with E_SESSION_OVER", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await postJson(`/api/sessions/${session.id}/questions`, { body: "pre-approve question" });
+    await postJson(`/api/sessions/${session.id}/questions/q1/answer`, { body: "answered" });
+    expect((await approve(session.id)).status).toBe(200);
+
+    const attempts: [string, Response | Promise<Response>][] = [
+      ["submit", app.request(`/api/sessions/${session.id}/submit`, { method: "POST", body: validPlanFor(session.id) })],
+      ["comments", postJson(`/api/sessions/${session.id}/comments`, { items: [{ body: "x" }] })],
+      ["questions", postJson(`/api/sessions/${session.id}/questions`, { body: "x" })],
+      ["question answer", postJson(`/api/sessions/${session.id}/questions/q1/answer`, { body: "x" })],
+      ["ask", postJson(`/api/sessions/${session.id}/ask`, { question: "x" })],
+      ["answers", postJson(`/api/sessions/${session.id}/answers`, { question: "q1", text: "x" })],
+      ["approve", approve(session.id, { force: true })],
+    ];
+    for (const [verb, pending] of attempts) {
+      const res = await pending;
+      expect(res.status, `${verb} should 409 on an approved session`).toBe(409);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code, verb).toBe("E_SESSION_OVER");
+    }
+  });
+});

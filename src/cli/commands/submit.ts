@@ -58,5 +58,10 @@ export async function submitCommand(argv: string[]): Promise<number> {
     // The session vanished between resolution and submit — actionable, not internal.
     fail("E_UNKNOWN_SESSION", `daemon no longer knows session ${session.id}`);
   }
+  if (response.status === 409) {
+    // The session was approved (e.g. via --session to an ended one) — over.
+    const message = (response.body as { error?: { message?: string } })?.error?.message;
+    fail("E_SESSION_OVER", message ?? `session ${session.id} is approved — the session is over`);
+  }
   fail("E_INTERNAL", `submit failed: ${JSON.stringify(response.body)}`, undefined, 2);
 }

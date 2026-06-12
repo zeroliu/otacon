@@ -21,7 +21,7 @@ flowchart LR
 
 ## Decisions
 
-- D1: RS256 over HS256 ← q7
+- D1: RS256 over HS256 [assumed]
 - D2: Sessions table stays until phase 3 [assumed]
   Kept for rollback safety during the migration window.
 

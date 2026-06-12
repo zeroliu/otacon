@@ -366,3 +366,63 @@ describe("L5 thread resolutions and changelog", () => {
     ).toBeTrue();
   });
 });
+
+describe("L3 decision traceability", () => {
+  const l3 = (
+    decisions: string,
+    ctx: Partial<NonNullable<LintOptions["grill"]>> = {},
+  ): LintResult =>
+    run(doc({ decisions }), {
+      session: SESSION,
+      grill: { quick: false, knownQuestions: ["q1", "q2"], ...ctx },
+    });
+
+  test("L3 never runs without a daemon-composed context", () => {
+    expect(run(doc({ decisions: "## Decisions\n\n- D1: untraced\n" })).ok).toBeTrue();
+  });
+
+  test("citations of transcript questions and [assumed] both pass", () => {
+    const result = l3(
+      "## Decisions\n\n- D1: choice ← q1\n- D2: other ← q1, q2\n- D3: guessed [assumed]\n",
+    );
+    expect(result.ok).toBeTrue();
+    expect(result.warnings).toEqual([]);
+  });
+
+  test("an entry with neither citation nor [assumed] is an error", () => {
+    const result = l3("## Decisions\n\n- D1: silently decided\n");
+    expect(result.errors.map((e) => e.code)).toEqual(["E_DECISION_UNTRACED"]);
+    expect(result.errors[0]).toMatchObject({ rule: "L3", section: "decisions", line: 15 });
+  });
+
+  test("a citation on a continuation line still counts", () => {
+    expect(l3("## Decisions\n\n- D1: long decision\n  ← q2\n").ok).toBeTrue();
+  });
+
+  test("ASCII arrow citations are accepted alongside ←", () => {
+    expect(l3("## Decisions\n\n- D1: choice <- q1\n").ok).toBeTrue();
+  });
+
+  test("cited q ids must exist in the transcript", () => {
+    const result = l3("## Decisions\n\n- D1: choice ← q9\n- D2: pair ← q1, q7\n");
+    const cited = result.errors.filter((e) => e.code === "E_UNKNOWN_QUESTION_CITED");
+    expect(cited).toHaveLength(2);
+    expect(cited.map((e) => e.message)).toEqual([
+      expect.stringContaining("q9"),
+      expect.stringContaining("q7"),
+    ]);
+  });
+
+  test("--quick downgrades every L3 issue to a warning", () => {
+    const result = l3("## Decisions\n\n- D1: untraced\n- D2: ghost ← q9\n", { quick: true });
+    expect(result.ok).toBeTrue();
+    expect(result.warnings.map((w) => w.code).sort()).toEqual([
+      "E_DECISION_UNTRACED",
+      "E_UNKNOWN_QUESTION_CITED",
+    ]);
+  });
+
+  test("non-D list items in Decisions are not L3's business", () => {
+    expect(l3("## Decisions\n\n- a plain note without a D label\n").ok).toBeTrue();
+  });
+});

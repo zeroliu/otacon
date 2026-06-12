@@ -58,7 +58,16 @@ export type EventPayload =
       id: string;
       anchor: Anchor | null;
       body: string;
-    };
+    }
+  | {
+      event: "answer";
+      session: string;
+      question: string;
+      choice?: string;
+      choices?: string[];
+      text?: string;
+    }
+  | { event: "approved"; session: string; path: string };
 
 /**
  * One review thread, persisted in .otacon/<id>/threads.json (DESIGN.md §9).
@@ -105,6 +114,38 @@ export interface ThreadsFile {
   threads: Thread[];
 }
 
+/** The user's answer to an agent grill question (POST /api/sessions/:id/answers). */
+export interface GrillAnswer {
+  /** The chosen option (single-choice questions). */
+  choice?: string;
+  /** The chosen options (questions asked with --multi). */
+  choices?: string[];
+  /** Free text — the whole answer on optionless questions, extra context otherwise. */
+  text?: string;
+  answeredAt: string;
+}
+
+/**
+ * One grill Q&A, persisted in .otacon/<id>/transcript.json (DESIGN.md §8) —
+ * distinct from user-question threads (threads.json); ids share the q counter
+ * so citations (`D3 ← q7`, lint L3) and deep links are one unambiguous space.
+ */
+export interface TranscriptEntry {
+  id: string; // q<n>
+  question: string;
+  /** Option labels in the agent's order; the UI puts `recommend` first. */
+  options?: string[];
+  recommend?: string;
+  multi?: boolean;
+  askedAt: string;
+  answer?: GrillAnswer;
+}
+
+export interface TranscriptFile {
+  version: 1;
+  entries: TranscriptEntry[];
+}
+
 /** {"event":"timeout"} is synthesized at response time and never queued. */
 export interface QueuedEvent {
   seq: number;
@@ -133,7 +174,7 @@ export interface SessionStateFile {
 export type LintSeverity = "error" | "warning";
 
 export interface LintIssue {
-  rule: "L1" | "L2" | "L5" | "L6";
+  rule: "L1" | "L2" | "L3" | "L5" | "L6";
   code: string;
   severity: LintSeverity;
   message: string;

@@ -8,6 +8,8 @@ import type { LintIssue } from "../../shared/types.js";
 export interface ListItem {
   startLine: number;
   lineCount: number;
+  /** Raw item text — the bullet line plus continuation lines (L3 reads it). */
+  text: string;
 }
 
 export type PhaseFieldName = "goal" | "files" | "verification" | "outOfScope";
@@ -250,7 +252,7 @@ export function parsePlan(content: string): ParsedPlan {
         field.listItemCount++;
         field.budgetedLineCount++;
       } else if (!phase && section) {
-        item = { startLine: lineNo, lineCount: 1 };
+        item = { startLine: lineNo, lineCount: 1, text: line };
         section.listItems.push(item);
         section.budgetedLineCount++;
       }
@@ -261,6 +263,7 @@ export function parsePlan(content: string): ParsedPlan {
       field.budgetedLineCount++;
     } else if (item && section) {
       item.lineCount++;
+      item.text += `\n${line}`;
       section.budgetedLineCount++;
     } else if (!phase && section) {
       section.budgetedLineCount++;

@@ -23,6 +23,7 @@
     "e2e": "bash test/e2e-daemon.sh",
     "e2e:cli": "bash test/e2e-cli.sh",
     "e2e:revise": "bash test/e2e-revise.sh",
+    "e2e:grill": "bash test/e2e-grill.sh",
     "e2e:ui": "bun run build && playwright test",
     "smoke": "bash test/smoke.sh"
   },

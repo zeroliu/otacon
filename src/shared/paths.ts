@@ -59,6 +59,16 @@ export function threadsPath(repoRoot: string, id: string): string {
   return join(sessionDir(repoRoot, id), "threads.json");
 }
 
+/** The grill Q&A transcript (DESIGN.md §8) — appended to the approved artifact. */
+export function transcriptPath(repoRoot: string, id: string): string {
+  return join(sessionDir(repoRoot, id), "transcript.json");
+}
+
+/** Where approved plan artifacts land (DESIGN.md §12). */
+export function plansDir(repoRoot: string): string {
+  return join(repoRoot, "docs", "plans");
+}
+
 export function revisionPath(repoRoot: string, id: string, n: number): string {
   return join(sessionDir(repoRoot, id), `r${n}.md`);
 }

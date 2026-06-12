@@ -8,7 +8,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Context, Hono } from "hono";
-import type { SessionSummary, Thread } from "../shared/types.js";
+import type { SessionSummary, Thread, TranscriptEntry } from "../shared/types.js";
 import type { NodeBindings } from "./app.js";
 import type { Notifier, UiEvent } from "./notify.js";
 
@@ -18,6 +18,8 @@ export interface UiDeps {
   getSummary: (id: string) => SessionSummary | undefined;
   /** The session's review threads — ride the per-session snapshot for the rail. */
   getThreads: (id: string) => Thread[];
+  /** The session's grill transcript — rides the snapshot for the Interview panel. */
+  getTranscript: (id: string) => TranscriptEntry[];
   /** undefined = resolve the built UI next to this module; null = no UI (503s). */
   uiDir?: string | null;
   /** Test override; production keeps the 25s default. */
@@ -168,8 +170,18 @@ export function registerUiRoutes(app: Hono<{ Bindings: NodeBindings }>, deps: Ui
     if (!deps.getSummary(id)) {
       return c.json({ error: { code: "E_NOT_FOUND", message: `unknown session: ${id}` } }, 404);
     }
-    // Threads ride the snapshot so the rail never races a separate fetch
-    // against `thread` frames (same argument as snapshot-first itself).
-    return sse(c, deps, () => ({ session: deps.getSummary(id), threads: deps.getThreads(id) }), id);
+    // Threads and the transcript ride the snapshot so the rail and the
+    // Interview panel never race a separate fetch against `thread`/`grill`
+    // frames (same argument as snapshot-first itself).
+    return sse(
+      c,
+      deps,
+      () => ({
+        session: deps.getSummary(id),
+        threads: deps.getThreads(id),
+        transcript: deps.getTranscript(id),
+      }),
+      id,
+    );
   });
 }

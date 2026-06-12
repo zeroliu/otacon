@@ -167,7 +167,7 @@ test("the revision loop: banner, dismiss, diff + j/k, resolution, orphan tray", 
 
   // r4 deletes the quoted decision text: the thread orphans into the tray,
   // live over the SSE thread frame — never silently dropped (DESIGN.md §4).
-  plan = plan.replace("- D1: RS256 over HS256 ← q7\n", "");
+  plan = plan.replace("- D1: RS256 over HS256 [assumed]\n", "");
   await cliSubmit(session, dir, plan, { changelog: "Dropped the RS256 decision line." });
   const tray = page.locator(".orphan-toggle");
   await expect(tray).toBeVisible();

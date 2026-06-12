@@ -63,11 +63,15 @@ describe("parsePlan on the valid fixture", () => {
     expect(summary.listItems).toEqual([]);
   });
 
-  test("decisions: list items with continuation lines", () => {
+  test("decisions: list items with continuation lines and raw text", () => {
     const decisions = plan.sections[1]!;
     expect(decisions.listItems).toEqual([
-      { startLine: 24, lineCount: 1 },
-      { startLine: 25, lineCount: 2 },
+      { startLine: 24, lineCount: 1, text: "- D1: RS256 over HS256 [assumed]" },
+      {
+        startLine: 25,
+        lineCount: 2,
+        text: "- D2: Sessions table stays until phase 3 [assumed]\n  Kept for rollback safety during the migration window.",
+      },
     ]);
   });
 

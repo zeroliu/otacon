@@ -59,5 +59,9 @@ export async function answerCommand(argv: string[]): Promise<number> {
   if (response.status === 404) {
     fail("E_UNKNOWN_SESSION", `daemon no longer knows session ${session.id}`);
   }
+  if (response.status === 409) {
+    const message = (response.body as { error?: { message?: string } })?.error?.message;
+    fail("E_SESSION_OVER", message ?? `session ${session.id} is approved — the session is over`);
+  }
   fail("E_INTERNAL", `answer failed: ${JSON.stringify(response.body)}`, undefined, 2);
 }

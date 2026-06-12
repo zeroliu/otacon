@@ -198,7 +198,7 @@ errors on stdout; the agent fixes and resubmits. Invalid revisions never reach t
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
 | L1   | Schema completeness: required sections present, in order; phases have Goal/Files/Verification                                                    | error                                  |
 | L2   | Read-path budgets (Summary ≤5 lines, Goal ≤3, etc.)                                                                                              | error                                  |
-| L3   | Decision traceability: every `D<n>` cites a `q<n>` or `[assumed]`                                                                                | error (warning in `--quick` sessions)  |
+| L3   | Decision traceability: every `D<n>` cites a `q<n>` (`← q7` or `← q7, q9`; `<-` accepted) or `[assumed]`; cited ids must exist in the grill transcript | error (warning in `--quick` sessions)  |
 | L4   | Detail containment heuristics: file paths in Details must appear in that phase's Files; new dependency names in Details must appear in Decisions | warning                                |
 | L5   | Revision accompaniment: a submit must include a resolution reply for every open comment thread, and every revision ≥ 2 must carry a changelog    | error                                  |
 | L6   | Detail soft caps (>80 lines/section)                                                                                                             | warning, surfaced as a badge in the UI |
@@ -284,6 +284,9 @@ replies are refused 400 before linting.
 ```
 
 Every payload carries `session` so the agent can sanity-check it is handling its own plan.
+An `answer` to a `--multi` question carries `choices` (an array) instead of `choice`; an
+answer to an optionless question carries only `text` (`text` may also accompany a choice
+as extra context). `approved.path` is repo-relative — the agent commits that file.
 
 ### HTTP API (daemon, 127.0.0.1 only)
 
@@ -301,8 +304,23 @@ POST /api/sessions/:id/questions/:qid/answer  agent's answer to a user question
                                             (otacon answer); 404 E_UNKNOWN_QUESTION
                                             on ids that are not open questions
 GET  /api/sessions/:id/threads              comment + question threads (the UI's rail)
-POST /api/sessions/:id/answers              answer to an agent question
-POST /api/sessions/:id/approve              approve (daemon writes final artifact)
+POST /api/sessions/:id/ask                  agent grill question (otacon ask):
+                                            {question, options?, recommend?, multi?}
+                                            → 201 {id: "q<n>"}; persisted in the
+                                            transcript, no agent event queued
+GET  /api/sessions/:id/transcript           the grill transcript (asked + answered)
+POST /api/sessions/:id/answers              user's answer to an agent question:
+                                            {question, choice|choices, text?} —
+                                            validated against the question's options
+                                            and multi-ness; queues the answer event
+POST /api/sessions/:id/approve              approve: writes the final artifact, flips
+                                            the session approved, queues `approved`.
+                                            Unresolved threads (comments without a
+                                            resolution + questions without an answer)
+                                            → 409 E_UNRESOLVED_THREADS carrying the
+                                            count, unless the body is {"force":true}
+                                            (the UI warns, then forces on confirm);
+                                            no revisions yet → 409 E_NO_REVISION
 POST /api/sessions/:id/reviewed             mark a revision reviewed ({revision},
                                             default: latest) — the diff baseline;
                                             monotonic, also set by a comment flush
@@ -337,14 +355,21 @@ line numbers are 1-based within the unit.
 
 `/api` errors are machine-readable JSON — `{"error":{"code":…,"message":…}}` — except
 a failed submit, which returns 422 carrying the linter's `errors`/`warnings` arrays.
+Every state-mutating session verb (submit, comments, questions and their answers,
+ask, answers, approve) refuses an approved session with 409 `E_SESSION_OVER` — the
+status machine's terminal state is enforced on the daemon, not just by the CLI's
+pointer rules.
 `/` and `/s/:id` serve the SPA shell (static assets under `/assets/`); an unknown
 session id renders as a client-side not-found state. Each SSE stream opens with a
-`snapshot` frame (the per-session stream's snapshot carries the thread list), then
-pushes `session` / `revision` / `queue` / `thread` frames as state changes — a
+`snapshot` frame (the per-session stream's snapshot carries the thread list and the
+grill transcript), then pushes `session` / `revision` / `queue` / `thread` / `grill`
+frames as state changes — a
 `revision` frame carries the revision number and its changelog; a `thread` frame is
 an upsert: a new comment/question thread, or an existing thread changing (a question
 gaining its answer, a comment gaining its resolution, an anchor re-anchoring or
-orphaning) — with a comment heartbeat to keep idle proxies from closing the stream.
+orphaning); a `grill` frame is the transcript's upsert: a question asked via
+`otacon ask`, or an entry gaining the user's answer — with a comment heartbeat to
+keep idle proxies from closing the stream.
 Session payloads (snapshot, `session` frames, session detail) carry
 `lastReviewedRevision` alongside `revision`.
 State-changing `/api` requests carrying
@@ -365,9 +390,11 @@ only after its response is fully written; a dropped connection requeues it.
    reply), resubmits. Daemon resolves the threads, re-anchors every quote in the new
    text (§4), computes diff vs the user's last-reviewed revision, pushes the
    changelog banner. Repeat 4–5.
-6. **Approve.** User taps Approve (warned if unresolved threads exist). The **daemon**
+6. **Approve.** User taps Approve (warned if unresolved threads exist — the daemon
+   answers 409 with the count until the UI confirms with `force`). The **daemon**
    writes `docs/plans/YYYY-MM-DD-<slug>.md` with `status: approved` + the grill
-   transcript appended, archives the session, queues the `approved` event. The agent's
+   transcript appended, flips the session to `approved` (ending it — every further
+   mutation refuses), queues the `approved` event. The agent's
    `wait` returns it; agent `git add` + commits the plan file, prints a one-line
    summary, stops. Session over — implementation is somebody else's job (`snake`, later).
 
@@ -412,6 +439,12 @@ asking whenever the code can answer.
 Transport is `otacon ask` → question card in the UI (option chips, recommended option
 first, free text) → answer via `wait`. **Grilling works from the phone, one thumb,
 while walking.**
+
+The transcript persists in `.otacon/<session>/transcript.json` — distinct from the
+user-question threads in `threads.json` (different surface, different lifecycle: the
+transcript ships with the artifact; threads stay review exhaust). Agent questions
+mint their `q<n>` ids from the same counter as user questions, so citations and
+deep links live in one unambiguous id space.
 
 Structural integration:
 
@@ -574,13 +607,28 @@ Operational requirement: the Mac stays awake while a plan is in review
 
 | Location                                 | Contents                                                                                                       | Git                                        |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `<repo>/.otacon/`                        | Working state: `current-session`, `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), threads (`threads.json`: comment + question threads with answers, resolutions, and anchor states inline), Q&A transcript, queues | **gitignored**                             |
+| `<repo>/.otacon/`                        | Working state: `current-session`, `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), threads (`threads.json`: comment + question threads with answers, resolutions, and anchor states inline), the grill transcript (`transcript.json`), queues | **gitignored**                             |
 | `<repo>/docs/plans/YYYY-MM-DD-<slug>.md` | Final approved plan (`status: approved` frontmatter + grill transcript)                                        | **committed** (by the agent, post-approve) |
 | `~/.otacon/registry.json`                | Session registry: ID → repo, branch, title, status                                                             | n/a (global)                               |
 
 The committed plan is the contract `snake` consumes — any fresh session, worktree, or
 machine can find it. Review exhaust stays out of git. `otacon clean` archives ended
 sessions' working state.
+
+**The approved artifact** is the final revision's markdown with the frontmatter
+`status` rewritten to `approved` and `revision` corrected to the daemon's count (the
+daemon owns both), plus the grill transcript appended as an `## Interview` section —
+one `### q<n> — <question>` per entry with an `- Options:` line (recommended option
+tagged `(recommended)`, `(multi)` on the label for multi-choice) and an `- Answer:`
+line (`choice`/comma-joined `choices`, ` — text` appended when both were given,
+`_unanswered_` when the question was never answered). A `--quick` session's empty
+transcript appends no section. The filename is dated with the approve day and slugged
+from the session title; a taken name gets a `-2`, `-3`, … suffix — never overwritten.
+The artifact is post-lint output: the closed plan schema (§4-5) governs submits, not
+this file. Approve ends the session **logically** — `status: approved` excludes it
+from implicit CLI resolution and every mutating verb refuses — while `.otacon/<id>/`
+stays on disk (the parked `wait` still drains the `approved` event from it) until
+`otacon clean` archives it.
 
 Session status machine: `draft → in_review ⇄ revising → approved`.
 

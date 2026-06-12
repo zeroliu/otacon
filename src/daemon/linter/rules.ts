@@ -325,6 +325,66 @@ export function checkL6(plan: ParsedPlan, budgets: Budgets): LintIssue[] {
 }
 
 /**
+ * Everything L3 needs, composed by the daemon (same seam as L5 — the linter
+ * stays pure; transcript.json is read in app.ts and handed in here).
+ */
+export interface GrillContext {
+  /** Session started --quick: the grill was skipped, L3 downgrades to warnings. */
+  quick: boolean;
+  /** q ids present in the session's grill transcript. */
+  knownQuestions: string[];
+}
+
+const DECISION_RE = /^[-*+]\s+(D\d+):/;
+// "← q7" or "← q7, q9"; "<-" accepted alongside "←" (models emit both arrows,
+// same accommodation as the —/- phase-heading dashes).
+const CITATION_RE = /(?:←|<-)\s*(q\d+(?:\s*,\s*q\d+)*)/;
+
+/**
+ * L3 (DESIGN.md §4, §5, §8): every `- D<n>:` decision entry must cite the
+ * grill question(s) that produced it (`← q7`) or wear `[assumed]`, and every
+ * cited q id must exist in the transcript. Errors normally; warnings in
+ * --quick sessions (codes stay stable — severity is the contextual dimension).
+ */
+export function checkL3(plan: ParsedPlan, ctx: GrillContext): LintIssue[] {
+  const severity: LintSeverity = ctx.quick ? "warning" : "error";
+  const known = new Set(ctx.knownQuestions);
+  const issues: LintIssue[] = [];
+  const decisions = plan.sections.find((s) => s.id === "decisions");
+  for (const item of decisions?.listItems ?? []) {
+    const label = DECISION_RE.exec(item.text)?.[1];
+    if (label === undefined) continue; // non-D entries are not L3's business
+    const cited = CITATION_RE.exec(item.text)?.[1];
+    if (cited === undefined && !item.text.includes("[assumed]")) {
+      issues.push(
+        issue(
+          "L3",
+          "E_DECISION_UNTRACED",
+          severity,
+          `Decision ${label} cites no grill question — add "← q<n>" or tag it [assumed]`,
+          { line: item.startLine, section: "decisions" },
+        ),
+      );
+      continue;
+    }
+    for (const qid of cited === undefined ? [] : cited.split(",").map((q) => q.trim())) {
+      if (!known.has(qid)) {
+        issues.push(
+          issue(
+            "L3",
+            "E_UNKNOWN_QUESTION_CITED",
+            severity,
+            `Decision ${label} cites ${qid}, which is not in this session's grill transcript`,
+            { line: item.startLine, section: "decisions" },
+          ),
+        );
+      }
+    }
+  }
+  return issues;
+}
+
+/**
  * Everything L5 needs, composed by the daemon (the linter stays pure — rules
  * never touch disk; threads.json is read in app.ts and handed in here).
  */

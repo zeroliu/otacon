@@ -137,6 +137,13 @@ function recoverCounters(repo: string, id: string): SessionStateFile["counters"]
     see("question", thread?.id, /^q(\d+)$/);
     see("batch", thread?.batch, /^b(\d+)$/);
   }
+  // Agent grill questions share the q counter with user-question threads.
+  const transcriptRaw = readJsonOr(paths.transcriptPath(repo, id)) as
+    | { entries?: unknown[] }
+    | undefined;
+  for (const e of Array.isArray(transcriptRaw?.entries) ? transcriptRaw.entries : []) {
+    see("question", (e as { id?: unknown })?.id, /^q(\d+)$/);
+  }
   const eventsRaw = readJsonOr(paths.eventsPath(repo, id)) as { events?: unknown[] } | undefined;
   for (const e of Array.isArray(eventsRaw?.events) ? eventsRaw.events : []) {
     const event = e as { seq?: unknown; payload?: { batch?: unknown; id?: unknown; items?: unknown[] } };
@@ -362,6 +369,11 @@ export class Store {
   /** Where this session's review threads persist (src/daemon/threads.ts). */
   threadsPath(id: string): string {
     return paths.threadsPath(this.require(id).repo, id);
+  }
+
+  /** Where this session's grill transcript persists (src/daemon/transcript.ts). */
+  transcriptPath(id: string): string {
+    return paths.transcriptPath(this.require(id).repo, id);
   }
 
   private require(id: string): RegistrySession {

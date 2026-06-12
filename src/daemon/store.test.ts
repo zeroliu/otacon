@@ -404,17 +404,25 @@ describe("counter recovery high-water scans threads and events (M3)", () => {
         ],
       }),
     );
+    // Grill questions share the q counter — the transcript is scanned too (M4).
+    writeFileSync(
+      join(dir, "transcript.json"),
+      JSON.stringify({
+        version: 1,
+        entries: [{ id: "q12", question: "algo?", askedAt: "2026-06-13" }],
+      }),
+    );
     writeFileSync(join(dir, "session.json"), "{nope");
     expect(store.readState(id).counters).toEqual({
       batch: 4,
       thread: 5,
-      question: 9,
+      question: 12,
       eventSeq: 8,
     });
-    // The next minted ids are fresh: t6 / q10 / b5.
+    // The next minted ids are fresh: t6 / q13 / b5.
     expect(store.bumpCounters(id, { thread: 1, question: 1, batch: 1 })).toMatchObject({
       thread: 6,
-      question: 10,
+      question: 13,
       batch: 5,
     });
   });
