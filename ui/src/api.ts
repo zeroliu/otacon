@@ -5,13 +5,15 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type {
+  Anchor,
   LintIssue,
   RevisionPayload,
   SessionStatus,
   SessionSummary,
+  Thread,
 } from "../../src/shared/types";
 
-export type { LintIssue, RevisionPayload, SessionStatus, SessionSummary };
+export type { Anchor, LintIssue, RevisionPayload, SessionStatus, SessionSummary, Thread };
 
 /** A summary plus the client-side "this card just changed" timestamp. */
 export interface LiveSession extends SessionSummary {
@@ -66,17 +68,21 @@ export function useSessions(): { sessions: LiveSession[]; connected: boolean } {
 
 export interface SessionDetail {
   session?: LiveSession;
+  /** Review threads, oldest first; live over the stream's `thread` frames. */
+  threads: Thread[];
   missing: boolean;
   connected: boolean;
 }
 
 export function useSession(id: string): SessionDetail {
   const [session, setSession] = useState<LiveSession>();
+  const [threads, setThreads] = useState<Thread[]>([]);
   const [missing, setMissing] = useState(false);
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
     setSession(undefined);
+    setThreads([]);
     setMissing(false);
     setConnected(false);
     let source: EventSource | undefined;
@@ -101,7 +107,12 @@ export function useSession(id: string): SessionDetail {
           source = new EventSource(`/api/sessions/${id}/stream`);
           source.onopen = () => setConnected(true);
           source.onerror = () => setConnected(false);
-          on<{ session: SessionSummary }>(source, "snapshot", (data) => setSession(data.session));
+          // Threads ride the snapshot (no separate fetch to race) and arrive
+          // as upserts after that: an existing id is the agent's answer landing.
+          on<{ session: SessionSummary; threads?: Thread[] }>(source, "snapshot", (data) => {
+            setSession(data.session);
+            setThreads(data.threads ?? []);
+          });
           on<{ session: SessionSummary }>(source, "session", (data) =>
             setSession({ ...data.session, changedAt: Date.now() }),
           );
@@ -110,6 +121,15 @@ export function useSession(id: string): SessionDetail {
           );
           on<{ session: string; pending: number }>(source, "queue", (data) =>
             setSession((prev) => (prev ? { ...prev, pendingEvents: data.pending } : prev)),
+          );
+          on<{ session: string; thread: Thread }>(source, "thread", ({ thread }) =>
+            setThreads((prev) => {
+              const at = prev.findIndex((t) => t.id === thread.id);
+              if (at === -1) return [...prev, thread];
+              const next = [...prev];
+              next[at] = thread;
+              return next;
+            }),
           );
         })
         .catch(() => {
@@ -125,7 +145,45 @@ export function useSession(id: string): SessionDetail {
     };
   }, [id]);
 
-  return { session, missing, connected };
+  return { session, threads, missing, connected };
+}
+
+/** A drawer item not yet flushed to the daemon (DESIGN.md §9 batching). */
+export interface CommentDraft {
+  anchor: Anchor | null;
+  body: string;
+}
+
+/** Flush comment drafts as one batch; resolves false when the POST failed. */
+export async function postComments(id: string, items: CommentDraft[]): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/sessions/${id}/comments`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ items }),
+    });
+    return res.status === 202;
+  } catch {
+    return false;
+  }
+}
+
+/** Fire a question instantly (DESIGN.md §9); the answer arrives as a thread frame. */
+export async function postQuestion(
+  id: string,
+  anchor: Anchor | null,
+  body: string,
+): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/sessions/${id}/questions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ anchor, body }),
+    });
+    return res.status === 202;
+  } catch {
+    return false;
+  }
 }
 
 /**

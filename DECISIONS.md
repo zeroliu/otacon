@@ -497,6 +497,69 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Revisions need richer read-side metadata (diff stats, changelog)
   — then a real `?format=` or detail endpoint should subsume the Accept switch.
 
+## Threads: one threads.json per session; answer is a question sub-resource
+
+- **Decision:** Comment and question threads persist in `.otacon/<id>/threads.json`
+  (append on post; the agent's answer is written inline on its question thread,
+  re-answers overwrite). The agent answers via
+  `POST /api/sessions/:id/questions/:qid/answer`; non-question ids 404 with
+  `E_UNKNOWN_QUESTION`. The UI reads threads from the per-session SSE snapshot and
+  applies `thread` frames as upserts; `GET /threads` exists for the CLI/curl surface.
+- **Why:** The event queue drains on delivery, so it cannot back the rail — threads
+  need their own durable file, and one whole-file JSON matches the storage posture
+  (atomic writes, quarantine-not-fatal) at single-user volumes. The endpoint is a
+  sub-resource because §6's `POST /:id/answers` is already reserved for the *user*
+  answering an *agent* question (M4) — overloading one route with both directions
+  invites cross-posting bugs. Overwrite-on-re-answer because at-least-once delivery
+  means a duplicate `answer` call is legitimate, and the newer text wins. Snapshot
+  threads ride the stream for the same no-fetch-race argument as snapshot-first
+  itself.
+- **Revisit when:** M3 resolutions need per-thread state transitions (then threads
+  likely want ids beyond t/q and a real update API), or thread counts make
+  whole-file rewrites notable.
+
+## Review-loop drafts live in the browser, not the daemon
+
+- **Decision:** Pending drawer comments (and the composer's text) are React state —
+  nothing is persisted until the user sends; a reload drops unsent drafts.
+- **Why:** The drawer is presentation state, like the unread badges: the daemon's
+  contract stays "source of truth for *sent* feedback", and a draft API would add
+  server state for something only one screen cares about. Batches are short-lived
+  by design (§9) — the loss window is minutes, not sessions.
+- **Revisit when:** Real use shows drafts dying to accidental reloads (then:
+  localStorage, still never the daemon).
+
+## Selection anchors capture Range context; flashing uses CSS highlights
+
+- **Decision:** The anchor's prefix/suffix are 32 chars of Range-measured text
+  between the selection and its enclosing slug-ID section. Click-to-flash
+  re-locates the quote (prefix-disambiguated) over the section's text nodes and
+  paints it with the CSS Custom Highlight API plus a section-level wash class;
+  browsers without the API just get the wash.
+- **Why:** Ranges measure exactly what the user saw, and `closest("section[id]")`
+  makes the innermost slug (phase over section) the anchor for free. Highlights
+  paint without mutating the DOM — wrapping quotes in `<mark>`s would fight React's
+  reconciliation over nodes it owns. A quote spanning block boundaries fails to
+  re-locate (toString() synthesizes newlines) and degrades to the section wash;
+  M3's orphan tray is the real answer for moved/edited quotes.
+- **Revisit when:** Re-anchoring across revisions lands in M3 (fuzzy matching will
+  want a real algorithm, e.g. diff-match-patch-style), or Safari/Firefox support
+  data changes the fallback calculus.
+
+## The plan renderer is memo'd: a re-render rewrites the DOM and kills selections
+
+- **Decision:** `PlanView` (the lazy chunk's root) and `Markdown` are wrapped in
+  `React.memo`, so review-loop state churn (selection tracking, drawer edits) never
+  re-renders the dossier; only a new revision payload does.
+- **Why:** React re-applies `dangerouslySetInnerHTML` whenever the owning component
+  re-renders — the `{__html}` wrapper object is new each time — which rebuilds every
+  text node, collapses the user's selection mid-anchoring, and re-renders mermaid
+  SVGs. memo is correct here because the props are a string and the revision
+  payload's stable arrays, so shallow comparison is exact.
+- **Revisit when:** React's host-prop diffing compares `__html` by value (making the
+  memo a pure perf optimization), or the renderer gains props that defeat shallow
+  equality.
+
 ## Review screen: reading surface only until the verbs exist
 
 - **Decision:** The M2-era review screen renders the dossier — header, sections,
@@ -510,4 +573,6 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   comment anchoring (DESIGN.md §4) attaches to a stable contract rather than
   retrofitting one.
 - **Revisit when:** M2c lands the comment flow (drawer + selection toolbar mount
-  around the dossier).
+  around the dossier). *(Happened: M2c shipped the toolbar, drawer, and threads
+  rail. The principle stands for what remains — no Approve/Diff/Changelog chrome
+  until M3+ gives those verbs life.)*

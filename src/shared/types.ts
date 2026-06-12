@@ -59,6 +59,34 @@ export type EventPayload =
       body: string;
     };
 
+/**
+ * One review thread, persisted in .otacon/<id>/threads.json (DESIGN.md §9).
+ * Comment threads come from comment batches (one per item); question threads
+ * gain an `answer` when the agent runs `otacon answer`.
+ */
+export type Thread =
+  | {
+      id: string; // t<n>
+      kind: "comment";
+      batch: string; // b<n>
+      anchor: Anchor | null;
+      body: string;
+      createdAt: string;
+    }
+  | {
+      id: string; // q<n>
+      kind: "question";
+      anchor: Anchor | null;
+      body: string;
+      createdAt: string;
+      answer?: { body: string; answeredAt: string };
+    };
+
+export interface ThreadsFile {
+  version: 1;
+  threads: Thread[];
+}
+
 /** {"event":"timeout"} is synthesized at response time and never queued. */
 export interface QueuedEvent {
   seq: number;

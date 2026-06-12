@@ -6,7 +6,7 @@
 // loads this chunk so the index bundle stays light.
 
 import type { CSSProperties } from "react";
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import type { LintIssue } from "../../../src/shared/types";
 import { CodeFence, MermaidFigure, PairFences } from "./code";
 import { Markdown } from "./markdown";
@@ -116,7 +116,12 @@ function SectionBlock({
   );
 }
 
-export default function PlanView({
+// memo'd so the review loop's state churn (selection tracking, drawer edits)
+// never re-renders the dossier: a re-render rewrites the .md innerHTML (see
+// markdown.tsx), which would collapse the very selection being anchored. The
+// props are a string and the revision payload's stable warnings array, so
+// the shallow compare only fails when a new revision actually lands.
+export default memo(function PlanView({
   markdown,
   warnings,
 }: {
@@ -141,4 +146,4 @@ export default function PlanView({
       ))}
     </article>
   );
-}
+});

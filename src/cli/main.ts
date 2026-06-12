@@ -3,13 +3,14 @@
 // invocation; notices go to stderr; exit 0 success / 1 expected failure /
 // 2 usage or internal error (src/cli/output.ts).
 
+import { answerCommand } from "./commands/answer.js";
 import { startCommand } from "./commands/start.js";
 import { statusCommand } from "./commands/status.js";
 import { submitCommand } from "./commands/submit.js";
 import { waitCommand } from "./commands/wait.js";
 import { CliError, printJson } from "./output.js";
 
-const USAGE = "usage: otacon <start|submit|wait|status> [options]";
+const USAGE = "usage: otacon <start|submit|wait|answer|status> [options]";
 
 async function dispatch(command: string | undefined, argv: string[]): Promise<number> {
   switch (command) {
@@ -19,6 +20,8 @@ async function dispatch(command: string | undefined, argv: string[]): Promise<nu
       return submitCommand(argv);
     case "wait":
       return waitCommand(argv);
+    case "answer":
+      return answerCommand(argv);
     case "status":
       return statusCommand(argv);
     default:

@@ -23,6 +23,7 @@ import type {
   RegistrySession,
   RevisionPayload,
   SessionSummary,
+  Thread,
 } from "../shared/types.js";
 import { VERSION } from "../shared/version.js";
 import { lint } from "./linter/index.js";
@@ -30,6 +31,7 @@ import { Notifier } from "./notify.js";
 import type { ParkHandle } from "./queue.js";
 import { SessionQueue } from "./queue.js";
 import type { Store } from "./store.js";
+import { answerQuestion, appendThreads, readThreads } from "./threads.js";
 import { registerUiRoutes } from "./ui.js";
 
 /** Provided by @hono/node-server; absent under app.request() in tests. */
@@ -122,6 +124,8 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     notifier.publish({ type: "session", session: session.id, data: { session: summarize(session) } });
   const publishQueue = (id: string, pending: number): void =>
     notifier.publish({ type: "queue", session: id, data: { session: id, pending } });
+  const publishThread = (id: string, thread: Thread): void =>
+    notifier.publish({ type: "thread", session: id, data: { session: id, thread } });
 
   /** Respond with the event; ack only after the bytes are out (see header comment). */
   function respondEvent(c: AppContext, queue: SessionQueue, event: QueuedEvent): Response {
@@ -337,12 +341,25 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       ...draft,
     }));
     const batch = `b${counters.batch}`;
+    // Each item becomes a persistent thread (DESIGN.md §9) — the rail's
+    // source of truth; the queued event is only the agent's wake-up copy.
+    const createdAt = new Date().toISOString();
+    const threads: Thread[] = items.map((item) => ({
+      id: item.thread,
+      kind: "comment",
+      batch,
+      anchor: item.anchor,
+      body: item.body,
+      createdAt,
+    }));
+    appendThreads(store.threadsPath(session.id), threads);
     // Comments are revision requests (DECISIONS.md "Status transitions"); flip
     // status before the enqueue wakes a parked agent.
     const updated = store.updateSession(session.id, { status: "revising" });
     const payload: EventPayload = { event: "comments", session: session.id, batch, items };
     queue.enqueue(payload, counters.eventSeq);
     publishSession(updated); // after the enqueue, so the summary carries the fresh pending count
+    for (const thread of threads) publishThread(session.id, thread);
     return c.json(
       { ok: true, batch, threads: items.map((i) => i.thread), seq: counters.eventSeq },
       202,
@@ -360,6 +377,14 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     }
     const counters = store.bumpCounters(session.id, { question: 1, eventSeq: 1 });
     const id = `q${counters.question}`;
+    const thread: Thread = {
+      id,
+      kind: "question",
+      anchor,
+      body: body.body,
+      createdAt: new Date().toISOString(),
+    };
+    appendThreads(store.threadsPath(session.id), [thread]);
     // Questions leave the plan — and the status — untouched (DESIGN.md §9).
     const payload: EventPayload = {
       event: "question",
@@ -370,7 +395,46 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     };
     queue.enqueue(payload, counters.eventSeq);
     publishQueue(session.id, queue.size);
+    publishThread(session.id, thread);
     return c.json({ ok: true, id, seq: counters.eventSeq }, 202);
+  });
+
+  // The agent's side of a user question (otacon answer, DESIGN.md §6, §9):
+  // the answer lands on the thread — the plan and the status stay untouched —
+  // and the UI's "answering…" placeholder resolves over SSE.
+  app.post("/api/sessions/:id/questions/:qid/answer", async (c) => {
+    const session = sessionFor(c);
+    if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    const body = (await readJsonBody(c)) ?? {};
+    if (typeof body.body !== "string" || body.body.trim() === "") {
+      return badRequest(c, "answer needs a non-empty body");
+    }
+    const qid = c.req.param("qid") ?? "";
+    const thread = answerQuestion(store.threadsPath(session.id), qid, body.body);
+    if (!thread || thread.kind !== "question") {
+      return c.json(
+        {
+          error: {
+            code: "E_UNKNOWN_QUESTION",
+            message: `session ${session.id} has no question ${qid}`,
+          },
+        },
+        404,
+      );
+    }
+    publishThread(session.id, thread);
+    return c.json({
+      ok: true,
+      session: session.id,
+      question: qid,
+      answeredAt: thread.answer?.answeredAt,
+    });
+  });
+
+  app.get("/api/sessions/:id/threads", (c) => {
+    const session = sessionFor(c);
+    if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    return c.json({ session: session.id, threads: readThreads(store.threadsPath(session.id)) });
   });
 
   app.get("/api/sessions/:id/revisions/:n", (c) => {
@@ -409,6 +473,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       const session = store.getSession(id);
       return session ? summarize(session) : undefined;
     },
+    getThreads: (id) => readThreads(store.threadsPath(id)),
     uiDir: options.uiDir,
     heartbeatMs: options.sseHeartbeatMs,
   });

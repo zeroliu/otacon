@@ -275,6 +275,10 @@ GET  /api/sessions/:id/events?wait=540      agent long-poll
 POST /api/sessions/:id/submit               lint; reject 422 with issues, or store revision N
 POST /api/sessions/:id/comments             flush a comment batch
 POST /api/sessions/:id/questions            user question (instant)
+POST /api/sessions/:id/questions/:qid/answer  agent's answer to a user question
+                                            (otacon answer); 404 E_UNKNOWN_QUESTION
+                                            on ids that are not open questions
+GET  /api/sessions/:id/threads              comment + question threads (the UI's rail)
 POST /api/sessions/:id/answers              answer to an agent question
 POST /api/sessions/:id/approve              approve (daemon writes final artifact)
 GET  /api/sessions/:id/revisions/:n         raw revision markdown; with Accept:
@@ -291,8 +295,11 @@ GET  /s/:id                                 review page for a session (same SPA)
 a failed submit, which returns 422 carrying the linter's `errors`/`warnings` arrays.
 `/` and `/s/:id` serve the SPA shell (static assets under `/assets/`); an unknown
 session id renders as a client-side not-found state. Each SSE stream opens with a
-`snapshot` frame, then pushes `session` / `revision` / `queue` frames as state
-changes, with a comment heartbeat to keep idle proxies from closing the stream.
+`snapshot` frame (the per-session stream's snapshot carries the thread list), then
+pushes `session` / `revision` / `queue` / `thread` frames as state changes — a
+`thread` frame is an upsert: a new comment/question thread, or an existing question
+thread gaining its answer — with a comment heartbeat to keep idle proxies from
+closing the stream.
 State-changing `/api` requests carrying
 a foreign `Origin` header are refused 403: the loopback bind alone does not stop a
 malicious webpage from firing `fetch()` at 127.0.0.1, and only browsers send `Origin`.
@@ -432,7 +439,11 @@ unread-change badge, last activity, accent color. Tap → review screen.
 
 - Select text → floating toolbar: **Comment** (→ drawer) | **Ask** (fires immediately;
   thread shows "answering…" until the reply lands).
-- Drawer = bottom bar: review/edit/delete pending comments, **Send all**.
+- Drawer = bottom bar: review/edit/delete pending comments, per-comment **send now**,
+  **Send all**; when nothing is pending it shrinks to the whole-plan comment
+  affordance alone.
+- Threads rail: clicking an anchored thread scrolls to its section and flashes the
+  quoted text in the plan.
 - New revision → banner: _changelog / diff / dismiss_.
 - Agent questions: card queue pinned above the plan (chips + free text), session-colored.
 - Collapsed Details show size badges ("▸ 34 lines · 1 diagram · 2 code blocks") —
@@ -490,7 +501,7 @@ Operational requirement: the Mac stays awake while a plan is in review
 
 | Location                                 | Contents                                                                                                       | Git                                        |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `<repo>/.otacon/`                        | Working state: `current-session`, `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`), threads, Q&A transcript, queues | **gitignored**                             |
+| `<repo>/.otacon/`                        | Working state: `current-session`, `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`), threads (`threads.json`: comment + question threads with answers inline), Q&A transcript, queues | **gitignored**                             |
 | `<repo>/docs/plans/YYYY-MM-DD-<slug>.md` | Final approved plan (`status: approved` frontmatter + grill transcript)                                        | **committed** (by the agent, post-approve) |
 | `~/.otacon/registry.json`                | Session registry: ID → repo, branch, title, status                                                             | n/a (global)                               |
 

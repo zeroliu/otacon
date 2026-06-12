@@ -21,7 +21,7 @@ an LLM.
 - **M1 — daemon + CLI core** (sessions, registry, submit + linter, wait/event queues,
   status; testable via curl/CLI) — **done**
 - **M2 — web UI core** (index, plan rendering, SSE, desktop comment/question flow,
-  batch send) — **in progress**
+  batch send) — **done**
 - **M3 — revisions** (diff vs last-reviewed, gutter markers, changelog, threads +
   resolutions, orphan tray)
 - **M4 — grill + approve** (ask/answer cards, transcript panel, traceability lint,

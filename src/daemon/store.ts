@@ -277,6 +277,11 @@ export class Store {
     return paths.eventsPath(this.require(id).repo, id);
   }
 
+  /** Where this session's review threads persist (src/daemon/threads.ts). */
+  threadsPath(id: string): string {
+    return paths.threadsPath(this.require(id).repo, id);
+  }
+
   private require(id: string): RegistrySession {
     const session = this.registry.sessions[id];
     if (!session) throw new Error(`unknown session: ${id}`);

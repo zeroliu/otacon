@@ -5,11 +5,16 @@
 
 import DOMPurify from "dompurify";
 import { marked } from "marked";
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 
 marked.use({ gfm: true });
 
-export function Markdown({ source }: { source: string }) {
+// memo matters here beyond performance: React re-applies
+// dangerouslySetInnerHTML whenever the component re-renders (the {__html}
+// wrapper object is new each time), which rebuilds the text nodes and
+// collapses any user selection inside them — the review loop anchors
+// selections to exactly these nodes (ui/src/review/anchor.ts).
+export const Markdown = memo(function Markdown({ source }: { source: string }) {
   const html = useMemo(
     () =>
       DOMPurify.sanitize(marked.parse(source, { async: false }), {
@@ -26,4 +31,4 @@ export function Markdown({ source }: { source: string }) {
   );
   // eslint-disable-next-line react/no-danger — sanitized above
   return <div className="md" dangerouslySetInnerHTML={{ __html: html }} />;
-}
+});

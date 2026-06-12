@@ -54,6 +54,11 @@ export function eventsPath(repoRoot: string, id: string): string {
   return join(sessionDir(repoRoot, id), "events.json");
 }
 
+/** Comment + question threads for the review UI's rail (DESIGN.md §9, §12). */
+export function threadsPath(repoRoot: string, id: string): string {
+  return join(sessionDir(repoRoot, id), "threads.json");
+}
+
 export function revisionPath(repoRoot: string, id: string, n: number): string {
   return join(sessionDir(repoRoot, id), `r${n}.md`);
 }

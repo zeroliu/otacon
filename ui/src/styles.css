@@ -33,6 +33,10 @@
   --chip-approved-bg: #dcecdc;
 
   --shadow: 0 1px 2px rgb(33 31 26 / 4%), 0 8px 24px rgb(33 31 26 / 7%);
+  /* Ink on an accent-filled control, and the accent that reads on inverted
+   * (ink-colored) surfaces like the selection toolbar. */
+  --accent-contrast: #fbfaf7;
+  --accent-on-ink: hsl(var(--hue, 152) 55% 62%);
 
   /* The dossier's code surfaces + syntax inks: the same hue families as the
    * chips (revise blue, approved green, await amber) so highlighted code
@@ -70,6 +74,8 @@
     --chip-approved-bg: #15281a;
 
     --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 10px 28px rgb(0 0 0 / 35%);
+    --accent-contrast: #10130f;
+    --accent-on-ink: hsl(var(--hue, 152) 45% 34%);
 
     --code-bg: #121610;
     --diff-del: #e0907a;
@@ -987,6 +993,654 @@ code {
 
 .hljs-strong {
   font-weight: 700;
+}
+
+/* ───────────────────────── the review loop ─────────────────────────
+ * M2c's verbs. The selection toolbar is the UI's one inverted surface — a
+ * codec cursor floating above the page; the composer and drawer are accent-
+ * bladed instruments; the rail is flat hairline telemetry beside the plan.
+ */
+
+.page-review {
+  padding-bottom: 120px; /* the drawer floats over the column's tail */
+}
+
+.review-layout {
+  display: grid;
+  gap: 30px;
+}
+
+.review-main {
+  min-width: 0;
+}
+
+@media (min-width: 721px) {
+  .page-review {
+    max-width: 1056px;
+  }
+
+  .review-layout {
+    grid-template-columns: minmax(0, 1fr) clamp(220px, 28vw, 288px);
+    align-items: start;
+  }
+
+  .review-main {
+    max-width: 720px; /* the reading measure holds even when the page widens */
+  }
+
+  .rail {
+    position: sticky;
+    top: 18px;
+    max-height: calc(100vh - 36px);
+    overflow-y: auto;
+  }
+}
+
+/* ── selection toolbar: the codec cursor ── */
+
+.sel-toolbar {
+  position: fixed;
+  z-index: 40;
+  transform: translate(-50%, -100%);
+  display: flex;
+  align-items: center;
+  background: var(--ink);
+  color: var(--bg);
+  border-radius: 9px;
+  box-shadow: 0 3px 8px rgb(0 0 0 / 22%), 0 12px 32px rgb(0 0 0 / 18%);
+  animation: toolbar-in 0.14s cubic-bezier(0.2, 0.9, 0.3, 1.3) both;
+  user-select: none;
+}
+
+.sel-toolbar.sel-below {
+  transform: translate(-50%, 0);
+}
+
+/* The caret nub pointing at the selection. */
+.sel-toolbar::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -5px;
+  width: 10px;
+  height: 10px;
+  background: var(--ink);
+  transform: translateX(-50%) rotate(45deg);
+  border-radius: 2px;
+}
+
+.sel-toolbar.sel-below::after {
+  bottom: auto;
+  top: -5px;
+}
+
+@keyframes toolbar-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-100% + 4px)) scale(0.96);
+  }
+}
+
+.sel-slug {
+  padding: 0 4px 0 12px;
+  font: 10px/1 var(--mono);
+  letter-spacing: 0.08em;
+  color: var(--accent-on-ink);
+  max-width: 12ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sel-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 12px;
+  border: none;
+  background: none;
+  color: inherit;
+  font: 600 11px/1 var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.sel-btn:hover,
+.sel-btn:focus-visible {
+  color: var(--accent-on-ink);
+  outline: none;
+}
+
+.sel-key {
+  font: 600 10px/1 var(--mono);
+  padding: 2px 5px;
+  border: 1px solid color-mix(in srgb, var(--bg) 35%, transparent);
+  border-radius: 4px;
+  opacity: 0.8;
+}
+
+.sel-divide {
+  width: 1px;
+  align-self: stretch;
+  margin: 7px 0;
+  background: color-mix(in srgb, var(--bg) 22%, transparent);
+}
+
+/* ── composer: the anchored note card ── */
+
+.composer {
+  position: fixed;
+  z-index: 41;
+  left: var(--cx);
+  top: var(--cy);
+  transform: translateX(-50%);
+  width: min(380px, calc(100vw - 24px));
+  padding: 11px 13px 12px;
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line-strong));
+  border-left: 3px solid var(--accent);
+  border-radius: 12px;
+  box-shadow: var(--shadow), 0 18px 48px rgb(0 0 0 / 14%);
+  animation: composer-in 0.16s cubic-bezier(0.22, 0.7, 0.3, 1) both;
+}
+
+.composer-sheet {
+  left: 50%;
+  top: auto;
+  bottom: calc(14px + env(safe-area-inset-bottom));
+  width: min(520px, calc(100vw - 24px));
+}
+
+@keyframes composer-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(5px);
+  }
+}
+
+.composer-head {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-bottom: 9px;
+  font: 600 10px/1 var(--mono);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.composer-mode {
+  color: var(--accent);
+}
+
+.composer-target {
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-close {
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: none;
+  color: var(--ink-soft);
+  font: 600 9.5px/1 var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.composer-close:hover {
+  color: var(--ink);
+  border-color: var(--ink-soft);
+}
+
+.composer-quote,
+.pending-quote,
+.thread-quote {
+  margin: 0 0 9px;
+  padding: 1px 0 1px 9px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 55%, var(--line-strong));
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.composer-input {
+  width: 100%;
+  min-height: 64px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--ink) 3%, var(--surface));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  font: 14px/1.5 var(--sans);
+  resize: vertical;
+}
+
+.composer-input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.composer-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 9px;
+}
+
+.composer-hint {
+  font: 10.5px/1.3 var(--mono);
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+}
+
+.composer-failed {
+  color: var(--chip-await-ink);
+}
+
+.composer-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* ── shared buttons (composer + drawer) ── */
+
+.btn {
+  padding: 7px 13px;
+  border-radius: 7px;
+  font: 600 11px/1 var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: filter 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn-primary {
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.btn-primary:not(:disabled):hover {
+  filter: brightness(1.08);
+}
+
+.btn-ghost {
+  border: 1px solid var(--line-strong);
+  background: none;
+  color: var(--ink-soft);
+}
+
+.btn-ghost:not(:disabled):hover {
+  color: var(--ink);
+  border-color: var(--ink-soft);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── the drawer: a glass instrument bar over the reading column ── */
+
+.drawer {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px calc(10px + env(safe-area-inset-bottom));
+  pointer-events: none;
+}
+
+.drawer-bar,
+.drawer-list {
+  pointer-events: auto;
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow);
+}
+
+.drawer-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100vw - 24px);
+  padding: 8px 10px 8px 12px;
+  border-radius: 12px;
+  animation: drawer-in 0.25s cubic-bezier(0.22, 0.7, 0.3, 1) both;
+}
+
+.drawer-bar-empty {
+  padding: 6px 10px;
+  border-style: dashed;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+}
+
+@keyframes drawer-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+.drawer-whole {
+  padding: 5px 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--ink-soft);
+  font: 600 10.5px/1 var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.drawer-whole:hover,
+.drawer-whole:focus-visible {
+  color: var(--ink);
+  outline: none;
+}
+
+.drawer-tally {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font: 600 10.5px/1 var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  border-left: 1px solid var(--line-strong);
+  padding-left: 12px;
+}
+
+.drawer-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font: 700 11px/1 var(--mono);
+}
+
+.drawer-failed {
+  font: 10.5px/1.3 var(--mono);
+  color: var(--chip-await-ink);
+}
+
+.drawer-list {
+  width: min(560px, calc(100vw - 24px));
+  max-height: 44vh;
+  overflow-y: auto;
+  padding: 8px;
+  border-radius: 12px;
+  display: grid;
+  gap: 8px;
+  animation: drawer-in 0.18s cubic-bezier(0.22, 0.7, 0.3, 1) both;
+}
+
+.pending {
+  padding: 9px 11px 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 3px solid color-mix(in srgb, var(--accent) 60%, var(--line));
+  border-radius: 9px;
+}
+
+.pending-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+
+.pending-slug {
+  font: 600 10px/1 var(--mono);
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending-act {
+  padding: 3px 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: none;
+  color: var(--ink-soft);
+  font: 600 9.5px/1 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.pending-act:first-of-type {
+  margin-left: auto;
+}
+
+.pending-act:not(:disabled):hover {
+  color: var(--ink);
+  border-color: var(--ink-soft);
+}
+
+.pending-act:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.pending-delete:not(:disabled):hover {
+  color: var(--diff-del);
+  border-color: var(--diff-del);
+}
+
+.pending-quote {
+  margin-bottom: 7px;
+  -webkit-line-clamp: 1;
+}
+
+.pending-body {
+  width: 100%;
+  padding: 4px 6px;
+  margin: 0 -6px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--ink);
+  font: 13.5px/1.5 var(--sans);
+  resize: none;
+}
+
+.pending-body:hover {
+  border-color: var(--line);
+}
+
+.pending-body:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--ink) 3%, var(--surface));
+}
+
+/* ── the threads rail ── */
+
+.rail {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.rail-top {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 2px;
+  font: 600 11px/1 var(--mono);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.rail-count {
+  color: var(--ink);
+}
+
+.rail-empty {
+  margin: 0;
+  padding: 18px 14px;
+  border: 1.5px dashed var(--line-strong);
+  border-radius: 10px;
+  font: 11px/1.7 var(--mono);
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+}
+
+.thread {
+  padding: 10px 12px 11px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 2px solid color-mix(in srgb, var(--accent) 55%, var(--line));
+  border-radius: 9px;
+  animation: card-in 0.3s cubic-bezier(0.22, 0.7, 0.3, 1) both;
+}
+
+.thread-anchored {
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+@media (hover: hover) {
+  .thread-anchored:hover {
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+    transform: translateY(-1px);
+  }
+}
+
+.thread-anchored:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.thread-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-bottom: 7px;
+  font: 600 10px/1 var(--mono);
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+}
+
+.thread-glyph {
+  color: var(--accent);
+}
+
+.thread-where {
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-quote {
+  margin-bottom: 7px;
+}
+
+.thread-body {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.thread-answer {
+  margin-top: 9px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  border-radius: 7px;
+  animation: details-in 0.3s ease-out both;
+}
+
+.thread-answer-label {
+  display: block;
+  margin-bottom: 4px;
+  font: 600 9.5px/1 var(--mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.thread-answer-body {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* The codec cursor blinks while the agent types. */
+.thread-answering {
+  margin: 9px 0 0;
+  font: 600 11px/1 var(--mono);
+  letter-spacing: 0.1em;
+  color: color-mix(in srgb, var(--accent) 80%, var(--ink-soft));
+}
+
+.thread-answering::after {
+  content: "…▍";
+  animation: cursor-blink 1.1s steps(2, start) infinite;
+}
+
+@keyframes cursor-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* ── jump-and-flash: the anchored text lights up ── */
+
+::highlight(otacon-flash) {
+  background-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.anchor-hit {
+  animation: anchor-hit 1.6s ease-out both;
+  border-radius: 8px;
+}
+
+@keyframes anchor-hit {
+  0% {
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+  100% {
+    background: transparent;
+    box-shadow: 0 0 0 6px transparent;
+  }
 }
 
 /* ───────────────────────── motion preferences ───────────────────────── */

@@ -4,16 +4,19 @@
 // in-process Notifier, snapshot-first SSE, no replay").
 
 import { EventEmitter } from "node:events";
-import type { SessionSummary } from "../shared/types.js";
+import type { SessionSummary, Thread } from "../shared/types.js";
 
 /**
  * One UI event: `type` becomes the SSE event name, `session` is the routing
- * key per-session streams filter on, `data` the JSON frame body.
+ * key per-session streams filter on, `data` the JSON frame body. A `thread`
+ * frame carries the full thread — both a new thread (comment/question posted)
+ * and an updated one (the agent's answer landing); the UI upserts by id.
  */
 export type UiEvent =
   | { type: "session"; session: string; data: { session: SessionSummary } }
   | { type: "revision"; session: string; data: { session: string; revision: number } }
-  | { type: "queue"; session: string; data: { session: string; pending: number } };
+  | { type: "queue"; session: string; data: { session: string; pending: number } }
+  | { type: "thread"; session: string; data: { session: string; thread: Thread } };
 
 export class Notifier {
   private readonly emitter = new EventEmitter();

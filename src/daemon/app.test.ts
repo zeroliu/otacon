@@ -297,6 +297,98 @@ describe("comments and questions", () => {
   });
 });
 
+describe("threads", () => {
+  test("comments and questions persist threads, readable via GET /threads", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [
+        { anchor: { section: "phase-1", exact: "RS256" }, body: "why not HS256?" },
+        { anchor: null, body: "overall: too broad" },
+      ],
+    });
+    await postJson(`/api/sessions/${session.id}/questions`, {
+      anchor: { section: "decisions" },
+      body: "what about refresh tokens?",
+    });
+    const res = await app.request(`/api/sessions/${session.id}/threads`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      session: string;
+      threads: { id: string; kind: string; batch?: string; anchor: unknown; body: string }[];
+    };
+    expect(body.session).toBe(session.id);
+    expect(body.threads.map((t) => [t.id, t.kind])).toEqual([
+      ["t1", "comment"],
+      ["t2", "comment"],
+      ["q1", "question"],
+    ]);
+    expect(body.threads[0]).toMatchObject({
+      batch: "b1",
+      anchor: { section: "phase-1", exact: "RS256" },
+      body: "why not HS256?",
+    });
+  });
+
+  test("answering a question stores the answer and returns it on later reads", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/questions`, { body: "why?" });
+    const res = await postJson(`/api/sessions/${session.id}/questions/q1/answer`, {
+      body: "because of key rotation",
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; question: string; answeredAt: string };
+    expect(body.ok).toBe(true);
+    expect(body.question).toBe("q1");
+    expect(typeof body.answeredAt).toBe("string");
+    // Status untouched — answers never flip the session (DESIGN.md §9).
+    expect(store.getSession(session.id)?.status).toBe("draft");
+
+    const threads = (await (await app.request(`/api/sessions/${session.id}/threads`)).json()) as {
+      threads: { id: string; answer?: { body: string } }[];
+    };
+    expect(threads.threads[0]?.answer?.body).toBe("because of key rotation");
+  });
+
+  test("answer validation: unknown question, comment id, empty body", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ body: "c" }] });
+    await postJson(`/api/sessions/${session.id}/questions`, { body: "q" });
+
+    const unknown = await postJson(`/api/sessions/${session.id}/questions/q9/answer`, { body: "x" });
+    expect(unknown.status).toBe(404);
+    expect(((await unknown.json()) as { error: { code: string } }).error.code).toBe(
+      "E_UNKNOWN_QUESTION",
+    );
+    // A comment thread is resolved by resubmit, never answered.
+    const comment = await postJson(`/api/sessions/${session.id}/questions/t1/answer`, { body: "x" });
+    expect(comment.status).toBe(404);
+    const empty = await postJson(`/api/sessions/${session.id}/questions/q1/answer`, { body: "  " });
+    expect(empty.status).toBe(400);
+    const noSession = await postJson("/api/sessions/otc_zzzzzz/questions/q1/answer", { body: "x" });
+    expect(noSession.status).toBe(404);
+  });
+
+  test("the per-session stream snapshots threads and pushes thread frames live", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/questions`, { body: "first?" });
+    const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
+    const snapshot = await reader.next();
+    expect(snapshot.event).toBe("snapshot");
+    const snapData = snapshot.data as { threads: { id: string }[] };
+    expect(snapData.threads.map((t) => t.id)).toEqual(["q1"]);
+
+    // The agent's answer lands as a thread frame — the "answering…" flip.
+    await postJson(`/api/sessions/${session.id}/questions/q1/answer`, { body: "an answer" });
+    const frame = await reader.next();
+    expect(frame.event).toBe("thread");
+    expect(frame.data).toMatchObject({
+      session: session.id,
+      thread: { id: "q1", kind: "question", answer: { body: "an answer" } },
+    });
+    await reader.cancel();
+  });
+});
+
 describe("events long-poll", () => {
   test("fast path: a queued event is delivered without waiting and acked on disk", async () => {
     const session = mintSession();
@@ -531,6 +623,7 @@ describe("UI SSE streams", () => {
       event: "queue",
       data: { session: session.id, pending: 1 },
     });
+    expect((await reader.next()).event).toBe("thread"); // the question's rail thread
     await app.request(`/api/sessions/${session.id}/events`); // agent picks it up (test path acks immediately)
     expect(await reader.next()).toEqual({
       event: "queue",

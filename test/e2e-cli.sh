@@ -106,6 +106,29 @@ WAIT_PID=""
 [ "$(json_field batch "$TMP/wait1.json")" = "b1" ] || fail "expected batch b1"
 ok "parked wait printed the comment batch posted while it waited (exit 0)"
 
+# --- 4b. user question delivered by wait, answered via otacon answer ----------
+curl -s -X POST "$BASE/api/sessions/$SID/questions" -H 'content-type: application/json' \
+  -d '{"anchor":{"section":"decisions"},"body":"why RS256?"}' > /dev/null
+otacon wait --timeout 10 > "$TMP/question.json"
+[ "$(json_field event "$TMP/question.json")" = "question" ] || fail "wait did not deliver the question"
+QID="$(json_field id "$TMP/question.json")"
+otacon answer "$QID" --body "verifiers only need the public key" > "$TMP/answer.json"
+[ "$(json_field ok "$TMP/answer.json")" = "true" ] || fail "answer did not report ok"
+[ "$(json_field question "$TMP/answer.json")" = "$QID" ] || fail "answer echoed the wrong question id"
+curl -s "$BASE/api/sessions/$SID/threads" > "$TMP/threads.json"
+node -e '
+const data = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+const q = data.threads.find((t) => t.id === process.argv[2]);
+if (!q || !q.answer || q.answer.body !== "verifiers only need the public key") process.exit(1);
+' "$TMP/threads.json" "$QID" || fail "GET /threads does not carry the stored answer"
+set +e
+otacon answer q999 --body nope > "$TMP/badanswer.json" 2> /dev/null
+CODE=$?
+set -e
+[ "$CODE" = "1" ] || fail "answering an unknown question exited $CODE, expected 1"
+[ "$(json_field error.code "$TMP/badanswer.json")" = "E_UNKNOWN_QUESTION" ] || fail "expected E_UNKNOWN_QUESTION"
+ok "question delivered by wait; otacon answer stored it on the thread (unknown id refused)"
+
 # --- 5. kill -9 mid-wait: re-park, respawn, still deliver ---------------------
 otacon wait --timeout 60 > "$TMP/wait2.json" 2> /dev/null &
 WAIT_PID=$!
