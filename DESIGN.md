@@ -32,25 +32,25 @@ that consumes Otacon's approved plan artifacts. Otacon itself never implements a
 
 Every decision below was resolved deliberately; rationale follows in the relevant section.
 
-| # | Decision | Choice |
-|---|---|---|
-| 1 | Scope | Plan review surface only. Implementation/orchestration = future `snake` skill |
-| 2 | Surface | Local web UI served by a CLI daemon; built fresh (lavish-axi as pattern reference, no fork) |
-| 3 | Plan format | Schema'd markdown: frontmatter + fixed sections, stable IDs, phases first-class |
-| 4 | Conciseness | Deterministic linter at submit + 2-tier schema (budgeted read path / unbudgeted collapsible detail) |
-| 5 | Re-review | 3 layers: agent changelog, mandatory comment-resolution threads, diff vs last-reviewed revision |
-| 6 | Agent integration | Replace native plan modes with one CLI protocol; thin skill wrapper per agent |
-| 7 | Approval | Approve ends the session; output = approved plan file committed to the repo |
-| 8 | Phone access | Tailscale Serve to the local daemon; plans never leave personal devices |
-| 9 | State topology | Local-first. Daemon on the Mac is the single source of truth (hosted relay considered and rejected for privacy/simplicity; protocol stays plain HTTP so it remains a future lift) |
-| 10 | Feedback grammar | User comments (batched), user questions (instant, plan untouched), agent questions (`otacon ask`) |
-| 11 | Mixed batch | Questions answered first, then all comments applied as one revision with one changelog |
-| 12 | Visuals v1 | Mermaid, code + before/after blocks, ASCII wireframes. Images deferred to v2 |
-| 13 | Storage | Working state in gitignored `.otacon/`; approved plan committed to `docs/plans/` |
-| 14 | LLM cost | Zero API spend invariant: daemon/CLI/UI never call a model; all intelligence runs in the user's interactive subscription-backed session. No Agent SDK anywhere |
-| 15 | Multi-session | One daemon, many concurrent sessions; per-session event queues; UI session switcher |
-| 16 | Grilling | grill-me discipline is a mandatory protocol phase before drafting; decisions must trace to grill answers (linted) |
-| 17 | Name | CLI `otacon`, daemon `otacond`. Future implementer: `snake` (suggestion, not locked) |
+| #   | Decision          | Choice                                                                                                                                                                            |
+| --- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Scope             | Plan review surface only. Implementation/orchestration = future `snake` skill                                                                                                     |
+| 2   | Surface           | Local web UI served by a CLI daemon; built fresh (lavish-axi as pattern reference, no fork)                                                                                       |
+| 3   | Plan format       | Schema'd markdown: frontmatter + fixed sections, stable IDs, phases first-class                                                                                                   |
+| 4   | Conciseness       | Deterministic linter at submit + 2-tier schema (budgeted read path / unbudgeted collapsible detail)                                                                               |
+| 5   | Re-review         | 3 layers: agent changelog, mandatory comment-resolution threads, diff vs last-reviewed revision                                                                                   |
+| 6   | Agent integration | Replace native plan modes with one CLI protocol; thin skill wrapper per agent                                                                                                     |
+| 7   | Approval          | Approve ends the session; output = approved plan file committed to the repo                                                                                                       |
+| 8   | Phone access      | Tailscale Serve to the local daemon; plans never leave personal devices                                                                                                           |
+| 9   | State topology    | Local-first. Daemon on the Mac is the single source of truth (hosted relay considered and rejected for privacy/simplicity; protocol stays plain HTTP so it remains a future lift) |
+| 10  | Feedback grammar  | User comments (batched), user questions (instant, plan untouched), agent questions (`otacon ask`)                                                                                 |
+| 11  | Mixed batch       | Questions answered first, then all comments applied as one revision with one changelog                                                                                            |
+| 12  | Visuals v1        | Mermaid, code + before/after blocks, ASCII wireframes. Images deferred to v2                                                                                                      |
+| 13  | Storage           | Working state in gitignored `.otacon/`; approved plan committed to `docs/plans/`                                                                                                  |
+| 14  | LLM cost          | Zero API spend invariant: daemon/CLI/UI never call a model; all intelligence runs in the user's interactive subscription-backed session. No Agent SDK anywhere                    |
+| 15  | Multi-session     | One daemon, many concurrent sessions; per-session event queues; UI session switcher                                                                                               |
+| 16  | Grilling          | grill-me discipline is a mandatory protocol phase before drafting; decisions must trace to grill answers (linted)                                                                 |
+| 17  | Name              | CLI `otacon`, daemon `otacond`. Future implementer: `snake` (suggestion, not locked)                                                                                              |
 
 ---
 
@@ -84,12 +84,12 @@ Three principles:
 
 ### Components
 
-| Component | Description |
-|---|---|
-| `otacon` CLI | Thin client. Used by agents via their Bash tool, and by the human for setup (`otacon open`). Auto-spawns the daemon if not running |
-| `otacond` | Single Node process (Hono). HTTP API + static React UI on `127.0.0.1:4747`. Per-session event queues, revision store, linter, diff engine |
-| Web UI | React + Vite SPA, mobile-first. Talks to the same HTTP API + SSE stream |
-| Skill wrappers | One thin markdown skill per agent (Claude Code, Codex, OpenCode) teaching the identical protocol |
+| Component      | Description                                                                                                                               |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `otacon` CLI   | Thin client. Used by agents via their Bash tool, and by the human for setup (`otacon open`). Auto-spawns the daemon if not running        |
+| `otacond`      | Single Node process (Hono). HTTP API + static React UI on `127.0.0.1:4747`. Per-session event queues, revision store, linter, diff engine |
+| Web UI         | React + Vite SPA, mobile-first. Talks to the same HTTP API + SSE stream                                                                   |
+| Skill wrappers | One thin markdown skill per agent (Claude Code, Codex, OpenCode) teaching the identical protocol                                          |
 
 ### Stack
 
@@ -112,20 +112,20 @@ The plan is a markdown file the agent writes with its native Write/Edit tools at
 title: auth-refactor
 session: otc_a1b2c3
 revision: 4
-status: in_review        # draft | in_review | revising | approved
+status: in_review # draft | in_review | revising | approved
 created: 2026-06-12
 ---
 ```
 
 ### Sections (fixed order, H2)
 
-| Section | Tier | Budget |
-|---|---|---|
-| `## Summary` | read path (normative) | ≤5 lines |
-| `## Decisions` | read path (normative) | each entry ≤3 lines |
-| `## Phases` (H3 per phase) | read path (normative) + detail | see below |
-| `## Risks` | read path (normative) | ≤5 items, ≤2 lines each |
-| `## Open Questions` | read path | may be empty |
+| Section                    | Tier                           | Budget                  |
+| -------------------------- | ------------------------------ | ----------------------- |
+| `## Summary`               | read path (normative)          | ≤5 lines                |
+| `## Decisions`             | read path (normative)          | each entry ≤3 lines     |
+| `## Phases` (H3 per phase) | read path (normative) + detail | see below               |
+| `## Risks`                 | read path (normative)          | ≤5 items, ≤2 lines each |
+| `## Open Questions`        | read path                      | may be empty            |
 
 Each `### Phase <n> — <name>` requires: **Goal** (≤3 lines), **Files** (list),
 **Verification** (≤3 lines), optional **Out of scope**. Each phase may have one
@@ -137,8 +137,8 @@ This is the rule that makes "I only carefully read the read path" a safe review 
 
 - The **read path is normative**: decisions, scope, files touched, risks, verification —
   everything that changes what gets built MUST appear there.
-- **Detail blocks are informative**: they may only *elaborate* on something already
-  stated in the read path, never *introduce* it.
+- **Detail blocks are informative**: they may only _elaborate_ on something already
+  stated in the read path, never _introduce_ it.
 - Downstream consequence: the future `snake` implementer treats the read path as
   authoritative and detail as advisory.
 
@@ -177,14 +177,14 @@ are also supported.
 Runs in the daemon on every `otacon submit`. Failure = non-zero exit + machine-readable
 errors on stdout; the agent fixes and resubmits. Invalid revisions never reach the user.
 
-| Rule | Check | Severity |
-|---|---|---|
-| L1 | Schema completeness: required sections present, in order; phases have Goal/Files/Verification | error |
-| L2 | Read-path budgets (Summary ≤5 lines, Goal ≤3, etc.) | error |
-| L3 | Decision traceability: every `D<n>` cites a `q<n>` or `[assumed]` | error (warning in `--quick` sessions) |
-| L4 | Detail containment heuristics: file paths in Details must appear in that phase's Files; new dependency names in Details must appear in Decisions | warning |
-| L5 | Thread resolutions: a resubmit after a comment batch must include a resolution reply for every thread in that batch | error |
-| L6 | Detail soft caps (>80 lines/section) | warning, surfaced as a badge in the UI |
+| Rule | Check                                                                                                                                            | Severity                               |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
+| L1   | Schema completeness: required sections present, in order; phases have Goal/Files/Verification                                                    | error                                  |
+| L2   | Read-path budgets (Summary ≤5 lines, Goal ≤3, etc.)                                                                                              | error                                  |
+| L3   | Decision traceability: every `D<n>` cites a `q<n>` or `[assumed]`                                                                                | error (warning in `--quick` sessions)  |
+| L4   | Detail containment heuristics: file paths in Details must appear in that phase's Files; new dependency names in Details must appear in Decisions | warning                                |
+| L5   | Thread resolutions: a resubmit after a comment batch must include a resolution reply for every thread in that batch                              | error                                  |
+| L6   | Detail soft caps (>80 lines/section)                                                                                                             | warning, surfaced as a badge in the UI |
 
 Budget numbers are config, expected to be tuned during the first week of real use.
 Known residual risk: vacuous summaries pass L2 (no deterministic fix without an LLM,
@@ -198,7 +198,7 @@ which the zero-cost invariant forbids server-side) — mitigated by the human co
 ### Core mechanism: the parked wait
 
 The agent never receives pushed events. It runs a **blocking CLI command through its
-ordinary Bash tool** and the command's stdout *is* the event. While the command blocks,
+ordinary Bash tool** and the command's stdout _is_ the event. While the command blocks,
 the model is suspended — no inference, no token spend.
 
 ```
@@ -227,16 +227,16 @@ the model is suspended — no inference, no token spend.
 
 ### CLI commands (agent-facing)
 
-| Command | Effect |
-|---|---|
-| `otacon start --title <t> [--quick]` | Mint session, register it, print review URL. Writes `.otacon/current-session` |
-| `otacon submit [plan.md] [--resolutions res.json]` | Lint → reject with errors, or store revision N, notify UI |
-| `otacon wait [--timeout 540] [--session <id>]` | Long-poll this session's queue; print next event as JSON |
-| `otacon ask --question "…" [--options "A\|B\|C"] [--recommend A] [--multi]` | Post agent question card to UI; answer arrives via `wait` |
-| `otacon answer <question-id> (--body "…" \| --file f.md)` | Answer a user question; no revision |
-| `otacon status [--all]` | Session state + undelivered event count (crash/resume entry point) |
-| `otacon open` | Print/open the review URL (human convenience) |
-| `otacon clean` | Archive/remove working state for ended sessions |
+| Command                                                                     | Effect                                                                        |
+| --------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `otacon start --title <t> [--quick]`                                        | Mint session, register it, print review URL. Writes `.otacon/current-session` |
+| `otacon submit [plan.md] [--resolutions res.json]`                          | Lint → reject with errors, or store revision N, notify UI                     |
+| `otacon wait [--timeout 540] [--session <id>]`                              | Long-poll this session's queue; print next event as JSON                      |
+| `otacon ask --question "…" [--options "A\|B\|C"] [--recommend A] [--multi]` | Post agent question card to UI; answer arrives via `wait`                     |
+| `otacon answer <question-id> (--body "…" \| --file f.md)`                   | Answer a user question; no revision                                           |
+| `otacon status [--all]`                                                     | Session state + undelivered event count (crash/resume entry point)            |
+| `otacon open`                                                               | Print/open the review URL (human convenience)                                 |
+| `otacon clean`                                                              | Archive/remove working state for ended sessions                               |
 
 ### Event types (stdout of `wait`)
 
@@ -340,11 +340,11 @@ Structural integration:
 
 **Three message types, three timings:**
 
-| Type | Default timing | Effect |
-|---|---|---|
-| User **question** | instant | Agent answers in-thread (`otacon answer`); plan untouched. One-tap **Promote to comment** after reading the answer |
-| User **comment** | batched in a drawer; per-comment "send now" override | Flushed batch → exactly one revision, one changelog |
-| **Agent question** | instant (during grill or anytime) | Card in UI; user answers with chips/text |
+| Type               | Default timing                                       | Effect                                                                                                             |
+| ------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| User **question**  | instant                                              | Agent answers in-thread (`otacon answer`); plan untouched. One-tap **Promote to comment** after reading the answer |
+| User **comment**   | batched in a drawer; per-comment "send now" override | Flushed batch → exactly one revision, one changelog                                                                |
+| **Agent question** | instant (during grill or anytime)                    | Card in UI; user answers with chips/text                                                                           |
 
 **Mixed flush:** questions answered first (answers may inform further review), then all
 comments applied as one revision. Keeps revisions chunky — the agent never thrashes on
@@ -397,7 +397,7 @@ activity, accent color. Tap → review screen.
 - Select text → floating toolbar: **Comment** (→ drawer) | **Ask** (fires immediately;
   thread shows "answering…" until the reply lands).
 - Drawer = bottom bar: review/edit/delete pending comments, **Send all**.
-- New revision → banner: *changelog / diff / dismiss*.
+- New revision → banner: _changelog / diff / dismiss_.
 - Agent questions: card queue pinned above the plan (chips + free text), session-colored.
 - Collapsed Details show size badges ("▸ 34 lines · 1 diagram · 2 code blocks") —
   skipping is a conscious choice. L6 warnings render here.
@@ -423,8 +423,8 @@ activity, accent color. Tap → review screen.
 ```
 
 - Selection-based anchoring is miserable on mobile, so anchoring goes coarser by
-  design: every section header has a `⋯` menu — *Comment on section / Ask about
-  section*. Long-press text selection still works for precision.
+  design: every section header has a `⋯` menu — _Comment on section / Ask about
+  section_. Long-press text selection still works for precision.
 - Threads open as bottom sheets. Sticky bar = whole control surface: pending
   questions, drawer + Send, Approve (confirm sheet: "Finalize r4 →
   docs/plans/2026-06-12-auth-refactor.md and end the session").
@@ -432,7 +432,7 @@ activity, accent color. Tap → review screen.
 
 ### Cross-cutting
 
-UI updates over SSE (watch status flip from *revising* to *new revision*, answers
+UI updates over SSE (watch status flip from _revising_ to _new revision_, answers
 stream into threads). Mobile-first CSS. Orphaned-comment tray reachable from the
 threads rail.
 
@@ -452,11 +452,11 @@ Operational requirement: the Mac stays awake while a plan is in review
 
 ## 12. Storage & lifecycle
 
-| Location | Contents | Git |
-|---|---|---|
-| `<repo>/.otacon/` | Working state: `current-session`, `plan.md`, revision snapshots `r1.md…rN.md`, threads, Q&A transcript, queues | **gitignored** |
-| `<repo>/docs/plans/YYYY-MM-DD-<slug>.md` | Final approved plan (`status: approved` frontmatter + grill transcript) | **committed** (by the agent, post-approve) |
-| `~/.otacon/registry.json` | Session registry: ID → repo, branch, title, status | n/a (global) |
+| Location                                 | Contents                                                                                                       | Git                                        |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `<repo>/.otacon/`                        | Working state: `current-session`, `plan.md`, revision snapshots `r1.md…rN.md`, threads, Q&A transcript, queues | **gitignored**                             |
+| `<repo>/docs/plans/YYYY-MM-DD-<slug>.md` | Final approved plan (`status: approved` frontmatter + grill transcript)                                        | **committed** (by the agent, post-approve) |
+| `~/.otacon/registry.json`                | Session registry: ID → repo, branch, title, status                                                             | n/a (global)                               |
 
 The committed plan is the contract `snake` consumes — any fresh session, worktree, or
 machine can find it. Review exhaust stays out of git. `otacon clean` archives ended
@@ -484,14 +484,14 @@ Session status machine: `draft → in_review ⇄ revising → approved`.
 
 ### Failure modes
 
-| Failure | Mitigation |
-|---|---|
-| Agent lazily ends its turn mid-review | Skill instruction ("never end your turn while the session is open") + **Claude Code Stop hook** (plain shell script): if an open session exists, block the stop with "plan session still active — run `otacon wait`". Codex/OpenCode start instruction-only; both have notify/plugin equivalents for later hardening |
-| Agent bypasses the remote channel with native AskUserQuestion | Skill forbids it; v1.5: PreToolUse hook blocks AskUserQuestion (and optionally Edit/Write outside `.otacon/`) while a plan session is active |
-| Session dies (crash, closed laptop, context compaction) | Agent is stateless; events queue on the daemon. Any new session: `otacon status` → open session, current revision, undelivered events → resume the loop |
-| Detail-tier smuggling (load-bearing content hidden in collapsed blocks) | Normative/informative contract + lint L4 heuristics + size badges + diff gutter markers on detail changes |
-| Budget gaming (vacuous summaries) | No deterministic fix; visible to the human, who comments "this says nothing." Accepted residual risk |
-| Occupied terminal during review | Inherent to the no-SDK constraint (the interactive session is the only allowed brain). Practice: open another tab/worktree for parallel work |
+| Failure                                                                 | Mitigation                                                                                                                                                                                                                                                                                                           |
+| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Agent lazily ends its turn mid-review                                   | Skill instruction ("never end your turn while the session is open") + **Claude Code Stop hook** (plain shell script): if an open session exists, block the stop with "plan session still active — run `otacon wait`". Codex/OpenCode start instruction-only; both have notify/plugin equivalents for later hardening |
+| Agent bypasses the remote channel with native AskUserQuestion           | Skill forbids it; v1.5: PreToolUse hook blocks AskUserQuestion (and optionally Edit/Write outside `.otacon/`) while a plan session is active                                                                                                                                                                         |
+| Session dies (crash, closed laptop, context compaction)                 | Agent is stateless; events queue on the daemon. Any new session: `otacon status` → open session, current revision, undelivered events → resume the loop                                                                                                                                                              |
+| Detail-tier smuggling (load-bearing content hidden in collapsed blocks) | Normative/informative contract + lint L4 heuristics + size badges + diff gutter markers on detail changes                                                                                                                                                                                                            |
+| Budget gaming (vacuous summaries)                                       | No deterministic fix; visible to the human, who comments "this says nothing." Accepted residual risk                                                                                                                                                                                                                 |
+| Occupied terminal during review                                         | Inherent to the no-SDK constraint (the interactive session is the only allowed brain). Practice: open another tab/worktree for parallel work                                                                                                                                                                         |
 
 ---
 
@@ -513,6 +513,53 @@ Session status machine: `draft → in_review ⇄ revising → approved`.
   implementation.
 - `snake` naming/design — separate document when its time comes.
 
+---
+
+## 16. Installation & per-repo usage (future-user UX)
+
+### One-time machine setup
+
+```sh
+npm install -g otacon        # one package: CLI + daemon (npm name verified free)
+                             # until published: npm i -g github:zeroliu/otacon
+otacon install --all         # write agent skill wrappers; or --agent claude|codex|opencode
+otacon doctor                # verify: daemon boots, port 4747 free, wrappers present, Tailscale status
+otacon expose                # optional, phone access: checks Tailscale login,
+                             # configures `tailscale serve`, prints the tailnet URL to bookmark
+```
+
+`otacon install` writes the thin protocol wrapper into each agent's skill location
+(Claude Code: `~/.claude/skills/otacon/SKILL.md`, plus an offer to register the Stop
+hook in `~/.claude/settings.json`; Codex and OpenCode: their skill/instructions
+equivalents). `otacond` is never installed or started by hand — any `otacon` command
+auto-spawns it if it isn't running, and the CLI restarts a stale daemon on version
+mismatch (version handshake on every call).
+
+### Per-repo setup
+
+**None.** Otacon works in any git repo with zero configuration. The first
+`otacon start` in a repo creates `.otacon/` and appends `.otacon/` to the repo's
+`.gitignore` if missing (with a notice). `docs/plans/` is created on first approve.
+Budgets/lint config is global (`~/.otacon/config.json`); a committed
+`otacon.config.json` at the repo root overrides it if present.
+
+### Daily flow
+
+1. In any agent session in the repo: *"plan \<feature\> with otacon"* (or `/otacon`).
+2. The agent researches, runs `otacon start`, and grills you one question at a time —
+   answer the cards in the browser (`otacon open`) or on your phone via the tailnet URL.
+3. The agent drafts, passes the linter, submits. You review: questions fire instantly,
+   comments stack in the drawer, **Send all** when done.
+4. Agent revises; you re-review via changelog + threads + diff-vs-last-reviewed. Repeat
+   until **Approve**.
+5. The approved plan lands in `docs/plans/YYYY-MM-DD-<slug>.md`, committed by the
+   agent. The planning session ends; hand the file to your implementer (future: `snake`).
+
+### Updating
+
+`npm update -g otacon` — the version handshake restarts the daemon on next use; no
+other steps.
+
 ## Implementation milestones (no code yet — sequencing only)
 
 1. **M1:** `otacond` + CLI skeleton: sessions, registry, submit + linter, wait/event
@@ -520,7 +567,7 @@ Session status machine: `draft → in_review ⇄ revising → approved`.
 2. **M2:** Web UI core: index, plan rendering (mermaid/code/ASCII), SSE, desktop
    comment/question flow, drawer + batch send.
 3. **M3:** Revisions: diff vs last-reviewed, gutter markers, changelog banner, threads
-   + resolutions (L5), orphan tray.
+   - resolutions (L5), orphan tray.
 4. **M4:** Grill phase: ask/answer cards, transcript panel, traceability lint (L3),
    approve flow + artifact write-out.
 5. **M5:** Phone polish (section-menu anchoring, sticky bar, switcher), Tailscale docs,
