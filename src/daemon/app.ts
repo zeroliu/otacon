@@ -107,7 +107,10 @@ function parseResolutions(raw: unknown): Resolutions | undefined {
     if (key === "changelog" && typeof value === "string") {
       out.changelog = value;
     } else if (key === "threads" && typeof value === "object" && value !== null && !Array.isArray(value)) {
-      const threads: Record<string, string> = {};
+      // Null-prototype: JSON.parse can hand us an own "__proto__" key, and
+      // assigning it onto a plain object silently drops it — the strict shape
+      // must surface it to L5 (E_UNKNOWN_THREAD) instead.
+      const threads: Record<string, string> = Object.create(null) as Record<string, string>;
       for (const [id, reply] of Object.entries(value as Record<string, unknown>)) {
         if (typeof reply !== "string") return undefined;
         threads[id] = reply;

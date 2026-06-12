@@ -108,10 +108,15 @@ function disambiguate(
  * Re-locate one anchor in a (linted, stored) plan revision. Anchors without a
  * quote only need their section to still exist; quoted anchors walk the
  * match ladder. A normalized (fuzzy) match rewrites the anchor to the new
- * revision's raw text so the quote tracks the plan.
+ * revision's raw text so the quote tracks the plan. Callers re-locating many
+ * anchors in the same plan pass the segmented `units` once instead of paying
+ * a full plan parse per anchor.
  */
-export function relocateAnchor(anchor: Anchor, plan: string): RelocateResult {
-  const units = segmentPlan(plan);
+export function relocateAnchor(
+  anchor: Anchor,
+  plan: string,
+  units: PlanUnit[] = segmentPlan(plan),
+): RelocateResult {
   const exact = anchor.exact ?? "";
   if (exact.trim() === "") {
     return units.some((u) => u.id === anchor.section)

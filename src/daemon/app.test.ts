@@ -222,6 +222,19 @@ describe("submit", () => {
     }
   });
 
+  test('a "__proto__" reply key surfaces as an unknown thread, never a silent drop', async () => {
+    // JSON.parse creates it as an own key; a plain-object copy would eat the
+    // assignment and the strict resolutions shape would leak a typo through.
+    const session = mintSession();
+    const res = await postJson(`/api/sessions/${session.id}/submit`, {
+      plan: validPlanFor(session.id),
+      resolutions: { threads: JSON.parse('{"__proto__": "x"}') as Record<string, string> },
+    });
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { errors: { code: string; thread?: string }[] };
+    expect(body.errors.some((e) => e.code === "E_UNKNOWN_THREAD" && e.thread === "__proto__")).toBe(true);
+  });
+
   test("a resubmit with a stale frontmatter revision passes with a warning", async () => {
     const session = mintSession();
     const plan = validPlanFor(session.id);

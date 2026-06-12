@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Anchor } from "../shared/types.js";
 import { normalize, relocateAnchor } from "./anchor.js";
+import { segmentPlan } from "./diff.js";
 
 const plan = (body: string): string => `---
 title: t
@@ -84,6 +85,13 @@ describe("relocateAnchor: exact matches", () => {
       state: "anchored",
       anchor: anchor("decisions", "RS256 over HS256"),
     });
+  });
+
+  test("pre-segmented units give the same answer as the per-call parse", () => {
+    // applyRevisionToThreads segments the plan once for a whole rail of threads.
+    const units = segmentPlan(BASE);
+    const a = anchor("decisions", "RS256 over HS256");
+    expect(relocateAnchor(a, BASE, units)).toEqual(relocateAnchor(a, BASE));
   });
 
   test("moved text re-anchors to its new section", () => {

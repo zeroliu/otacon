@@ -8,6 +8,8 @@
 import { existsSync } from "node:fs";
 import type { Anchor, Thread, ThreadsFile } from "../shared/types.js";
 import { relocateAnchor } from "./anchor.js";
+import type { PlanUnit } from "./diff.js";
+import { segmentPlan } from "./diff.js";
 import { quarantineCorruptFile, readJsonOr, stringify, writeFileAtomic } from "./store.js";
 
 type CommentThread = Extract<Thread, { kind: "comment" }>;
@@ -118,6 +120,9 @@ export function applyRevisionToThreads(
   if (threads.length === 0) return [];
   const changed = new Map<string, Thread>();
   const resolvedAt = new Date().toISOString();
+  // Segment the new plan once for the whole pass (lazily — a rail of
+  // whole-plan threads never needs it), not per anchored thread.
+  let units: PlanUnit[] | undefined;
 
   for (const thread of threads) {
     if (thread.kind === "comment" && opts.replies[thread.id] !== undefined) {
@@ -129,7 +134,7 @@ export function applyRevisionToThreads(
       changed.set(thread.id, thread);
     }
     if (thread.anchor === null) continue; // whole-plan threads have no place to lose
-    const result = relocateAnchor(thread.anchor, opts.plan);
+    const result = relocateAnchor(thread.anchor, opts.plan, (units ??= segmentPlan(opts.plan)));
     if (result.state === "orphaned") {
       if (thread.anchorState !== "orphaned") {
         thread.anchorState = "orphaned";

@@ -331,6 +331,29 @@ describe("markReviewed and changelog persistence (M3)", () => {
     expect(readdirSync(sessionDir(repo, id)).some((f) => f.includes(".corrupt-"))).toBe(false);
   });
 
+  test("a hand-edited lastReviewedRevision is clamped into 0..revision, not trusted", () => {
+    // Out of range it would poison the diff endpoint's default baseline:
+    // beyond the revision 400s a parameterless GET /diff, a non-integer 500s
+    // via readRevision(1.5).
+    const store = new Store();
+    const { id } = store.createSession({ title: "t", repo });
+    store.saveRevision(id, "# v1\n");
+    store.saveRevision(id, "# v2\n");
+    const statePath = join(sessionDir(repo, id), "session.json");
+    const tamper = (value: unknown): void => {
+      const state = JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>;
+      state.lastReviewedRevision = value;
+      writeFileSync(statePath, JSON.stringify(state));
+    };
+    tamper(99); // beyond what exists → clamp to the current revision
+    expect(store.readState(id).lastReviewedRevision).toBe(2);
+    tamper(1.5); // not an integer → restart at 0
+    expect(store.readState(id).lastReviewedRevision).toBe(0);
+    tamper(-3); // negative → restart at 0
+    expect(store.readState(id).lastReviewedRevision).toBe(0);
+    expect(readdirSync(sessionDir(repo, id)).some((f) => f.includes(".corrupt-"))).toBe(false);
+  });
+
   test("saveRevision stores the changelog; readRevisionChangelog returns null when none", () => {
     const store = new Store();
     const { id } = store.createSession({ title: "t", repo });

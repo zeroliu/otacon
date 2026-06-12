@@ -91,8 +91,15 @@ function parseState(raw: unknown): SessionStateFile | undefined {
     typeof counters.question === "number" &&
     typeof counters.eventSeq === "number";
   if (!valid) return undefined;
-  // Pre-M3 state files lack the field; defaulting beats quarantining them.
-  if (typeof file.lastReviewedRevision !== "number") file.lastReviewedRevision = 0;
+  // Pre-M3 state files lack the field; a hand-edited/restored file may carry a
+  // non-integer or a value beyond the current revision, which would poison the
+  // diff endpoint's default baseline (400 on a parameterless GET, or a 500 via
+  // readRevision(1.5)). Defaulting/clamping beats quarantining either way.
+  const reviewed = file.lastReviewedRevision as unknown;
+  file.lastReviewedRevision =
+    typeof reviewed === "number" && Number.isInteger(reviewed) && reviewed > 0
+      ? Math.min(reviewed, file.revision)
+      : 0;
   return file;
 }
 
