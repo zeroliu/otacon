@@ -3,7 +3,13 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Thread } from "../shared/types.js";
-import { answerQuestion, appendThreads, readThreads } from "./threads.js";
+import {
+  answerQuestion,
+  appendThreads,
+  applyRevisionToThreads,
+  commentThreadStates,
+  readThreads,
+} from "./threads.js";
 
 let dir: string;
 let path: string;
@@ -117,5 +123,145 @@ describe("answerQuestion", () => {
     answerQuestion(path, "q1", "first");
     const updated = answerQuestion(path, "q1", "second");
     expect(updated?.kind === "question" && updated.answer?.body).toBe("second");
+  });
+});
+
+const PLAN = `---
+title: t
+session: otc_test01
+revision: 2
+status: in_review
+created: 2026-06-13
+---
+
+## Summary
+
+Ship it.
+
+## Decisions
+
+- D1: RS256 over HS256 ← q1
+
+## Phases
+
+### Phase 1 — Build
+
+Goal: Use RS256 for signing.
+Files:
+- a.ts
+Verification: tests
+
+## Risks
+
+- r1
+
+## Open Questions
+`;
+
+describe("applyRevisionToThreads", () => {
+  test("records resolutions on comment threads and reports them changed", () => {
+    appendThreads(path, [comment("t1"), comment("t2"), question("q1")]);
+    const changed = applyRevisionToThreads(path, {
+      plan: PLAN,
+      replies: { t1: "tightened the goal" },
+      revision: 2,
+    });
+    expect(changed.map((t) => t.id)).toContain("t1");
+    const t1 = readThreads(path).find((t) => t.id === "t1");
+    expect(t1?.kind === "comment" && t1.resolution).toMatchObject({
+      body: "tightened the goal",
+      revision: 2,
+    });
+    // t2 has no reply and its anchor still resolves — untouched on disk.
+    const t2 = readThreads(path).find((t) => t.id === "t2");
+    expect(t2?.kind === "comment" && t2.resolution).toBeUndefined();
+    expect(t2?.anchorState).toBeUndefined();
+  });
+
+  test("re-resolving overwrites the reply (at-least-once duplicates)", () => {
+    appendThreads(path, [comment("t1")]);
+    applyRevisionToThreads(path, { plan: PLAN, replies: { t1: "first" }, revision: 2 });
+    applyRevisionToThreads(path, { plan: PLAN, replies: { t1: "second" }, revision: 3 });
+    const t1 = readThreads(path).find((t) => t.id === "t1");
+    expect(t1?.kind === "comment" && t1.resolution).toMatchObject({ body: "second", revision: 3 });
+  });
+
+  test("a lost quote orphans the thread; a reappearing one recovers it", () => {
+    appendThreads(path, [comment("t1")]); // quotes "RS256" in phase-1
+    const withoutQuote = PLAN.replaceAll("RS256", "ES256");
+    let changed = applyRevisionToThreads(path, { plan: withoutQuote, replies: {}, revision: 2 });
+    expect(changed.map((t) => t.id)).toEqual(["t1"]);
+    expect(readThreads(path)[0]?.anchorState).toBe("orphaned");
+
+    // The next revision restores the text — the thread leaves the tray.
+    changed = applyRevisionToThreads(path, { plan: PLAN, replies: {}, revision: 3 });
+    expect(changed.map((t) => t.id)).toEqual(["t1"]);
+    expect(readThreads(path)[0]?.anchorState).toBeUndefined();
+  });
+
+  test("question threads re-anchor too; whole-plan threads never orphan", () => {
+    appendThreads(path, [
+      { ...question("q1"), anchor: { section: "phase-1", exact: "RS256" } },
+      question("q2"), // anchor: null
+    ]);
+    const changed = applyRevisionToThreads(path, {
+      plan: PLAN.replaceAll("RS256", "ES256"),
+      replies: {},
+      revision: 2,
+    });
+    expect(changed.map((t) => t.id)).toEqual(["q1"]);
+    expect(readThreads(path).find((t) => t.id === "q1")?.anchorState).toBe("orphaned");
+    expect(readThreads(path).find((t) => t.id === "q2")?.anchorState).toBeUndefined();
+  });
+
+  test("a moved quote rewrites the anchor's section and reports the thread", () => {
+    appendThreads(path, [comment("t1")]); // anchored in phase-1, quotes "RS256"
+    const moved = PLAN.replace("Goal: Use RS256 for signing.", "Goal: Use Ed25519 for signing.");
+    const changed = applyRevisionToThreads(path, { plan: moved, replies: {}, revision: 2 });
+    expect(changed.map((t) => t.id)).toEqual(["t1"]);
+    const t1 = readThreads(path).find((t) => t.id === "t1");
+    expect(t1?.anchor?.section).toBe("decisions"); // the only remaining "RS256"
+    expect(t1?.anchorState).toBeUndefined();
+  });
+
+  test("no threads, or nothing changed: no write, empty result", () => {
+    expect(applyRevisionToThreads(path, { plan: PLAN, replies: {}, revision: 2 })).toEqual([]);
+    appendThreads(path, [comment("t1")]);
+    const before = readFileSync(path, "utf8");
+    expect(applyRevisionToThreads(path, { plan: PLAN, replies: {}, revision: 2 })).toEqual([]);
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+});
+
+describe("commentThreadStates", () => {
+  test("lists comment threads with resolved flags; questions excluded", () => {
+    appendThreads(path, [comment("t1"), comment("t2"), question("q1")]);
+    applyRevisionToThreads(path, { plan: PLAN, replies: { t2: "done" }, revision: 2 });
+    expect(commentThreadStates(path)).toEqual([
+      { id: "t1", resolved: false },
+      { id: "t2", resolved: true },
+    ]);
+    expect(commentThreadStates(join(dir, "missing.json"))).toEqual([]);
+  });
+});
+
+describe("thread validation of M3 fields", () => {
+  test("resolution and anchorState round-trip; bad shapes quarantine", () => {
+    const resolved: Thread = {
+      ...(comment("t1") as Extract<Thread, { kind: "comment" }>),
+      anchorState: "orphaned",
+      resolution: { body: "done", revision: 2, resolvedAt: "2026-06-13T00:00:00.000Z" },
+    };
+    writeFileSync(path, JSON.stringify({ version: 1, threads: [resolved] }));
+    expect(readThreads(path)).toEqual([resolved]);
+
+    for (const bad of [
+      { ...comment("t1"), anchorState: "lost" },
+      { ...comment("t1"), resolution: { body: "done" } },
+      { ...comment("t1"), resolution: { body: 7, revision: 2, resolvedAt: "x" } },
+    ]) {
+      writeFileSync(path, JSON.stringify({ version: 1, threads: [bad] }));
+      expect(readThreads(path)).toEqual([]);
+    }
   });
 });

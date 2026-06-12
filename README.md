@@ -23,7 +23,7 @@ an LLM.
 - **M2 — web UI core** (index, plan rendering, SSE, desktop comment/question flow,
   batch send) — **done**
 - **M3 — revisions** (diff vs last-reviewed, gutter markers, changelog, threads +
-  resolutions, orphan tray)
+  resolutions, orphan tray) — **in progress**
 - **M4 — grill + approve** (ask/answer cards, transcript panel, traceability lint,
   approve flow + artifact write-out)
 - **M5 — phone polish + agent wrappers** (section-menu anchoring, sticky bar, Tailscale

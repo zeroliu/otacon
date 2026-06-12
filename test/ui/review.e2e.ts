@@ -14,8 +14,13 @@ const submitRichPlan = (
   revision = 1,
   mutate: (plan: string) => string = (plan) => plan,
 ) =>
-  submitFixturePlan(request, id, "rich-plan.md", (plan) =>
-    mutate(plan.replace("revision: 1", `revision: ${revision}`)),
+  submitFixturePlan(
+    request,
+    id,
+    "rich-plan.md",
+    (plan) => mutate(plan.replace("revision: 1", `revision: ${revision}`)),
+    // Revisions ≥ 2 must carry a changelog (lint L5, M3).
+    revision >= 2 ? { changelog: `revision ${revision} for the e2e suite` } : undefined,
   );
 
 const SLUG_IDS = [

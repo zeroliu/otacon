@@ -324,6 +324,70 @@ export function checkL6(plan: ParsedPlan, budgets: Budgets): LintIssue[] {
   return issues;
 }
 
+/**
+ * Everything L5 needs, composed by the daemon (the linter stays pure — rules
+ * never touch disk; threads.json is read in app.ts and handed in here).
+ */
+export interface ResolutionContext {
+  /** This submit creates revision N (the daemon's count, not frontmatter's). */
+  revision: number;
+  /** Comment threads existing at submit time, with their resolved state. */
+  commentThreads: { id: string; resolved: boolean }[];
+  /** thread id → resolution reply provided with this submit. */
+  replies: Record<string, string>;
+  /** The agent's changelog provided with this submit. */
+  changelog?: string;
+}
+
+/**
+ * L5 (DESIGN.md §5, §9): a resubmit must resolve every unresolved comment
+ * thread, and every revision ≥ 2 must carry a changelog. Unknown thread ids
+ * (typos, question ids — questions are answered via `otacon answer`, never
+ * resolved) are errors; re-resolving an already-resolved thread is allowed
+ * because at-least-once delivery makes duplicate submits legitimate.
+ */
+export function checkL5(ctx: ResolutionContext): LintIssue[] {
+  const issues: LintIssue[] = [];
+  const known = new Set(ctx.commentThreads.map((t) => t.id));
+  for (const [thread, reply] of Object.entries(ctx.replies)) {
+    if (!known.has(thread)) {
+      issues.push(
+        issue("L5", "E_UNKNOWN_THREAD", "error", `Resolution targets unknown comment thread "${thread}"`, { thread }),
+      );
+    } else if (reply.trim() === "") {
+      issues.push(
+        issue("L5", "E_EMPTY_RESOLUTION", "error", `Resolution reply for thread "${thread}" is empty`, { thread }),
+      );
+    }
+  }
+  for (const { id, resolved } of ctx.commentThreads) {
+    if (resolved) continue;
+    const reply = ctx.replies[id];
+    if (reply === undefined) {
+      issues.push(
+        issue(
+          "L5",
+          "E_THREAD_UNRESOLVED",
+          "error",
+          `Comment thread "${id}" has no resolution reply — every open thread needs one (submit --resolutions)`,
+          { thread: id },
+        ),
+      );
+    }
+  }
+  if (ctx.revision >= 2 && (ctx.changelog ?? "").trim() === "") {
+    issues.push(
+      issue(
+        "L5",
+        "E_CHANGELOG_MISSING",
+        "error",
+        `Revision ${ctx.revision} needs a changelog summarizing what changed (resolutions.json "changelog")`,
+      ),
+    );
+  }
+  return issues;
+}
+
 export interface FrontmatterExpectations {
   expectedRevision?: number;
   expectedStatus?: string;

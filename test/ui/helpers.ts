@@ -32,20 +32,27 @@ export async function createSession(
   return (await res.json()) as Session;
 }
 
-/** Submit a fixture plan (session id substituted) through the real endpoint. */
+/**
+ * Submit a fixture plan (session id substituted) through the real endpoint.
+ * Pass `resolutions` ({changelog, threads}) on revisions ≥ 2 — lint L5
+ * requires a changelog there, exactly like production.
+ */
 export async function submitFixturePlan(
   request: APIRequestContext,
   id: string,
   fixture: string,
   mutate: (plan: string) => string = (plan) => plan,
+  resolutions?: { changelog?: string; threads?: Record<string, string> },
 ): Promise<void> {
   const plan = mutate(
     readFileSync(join(fixturesDir, fixture), "utf8").replace("otc_test01", id),
   );
-  const res = await request.post(`/api/sessions/${id}/submit`, {
-    headers: { "content-type": "text/markdown" },
-    data: plan,
-  });
+  const res = resolutions
+    ? await request.post(`/api/sessions/${id}/submit`, { data: { plan, resolutions } })
+    : await request.post(`/api/sessions/${id}/submit`, {
+        headers: { "content-type": "text/markdown" },
+        data: plan,
+      });
   expect(res.ok()).toBeTruthy();
 }
 

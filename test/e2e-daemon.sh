@@ -105,8 +105,17 @@ grep -q '"rule":"L1"' "$TMP/lint-fail.json" || fail "lint reject carried no mach
 ok "invalid plan rejected 422 with lint issues"
 
 sed "s/otc_test01/$SID/" "$ROOT/test/fixtures/valid-plan.md" > "$TMP/plan.md"
+# The queue checks above left four open comment threads, so this submit must
+# carry resolutions (lint L5, M3) — the JSON body is the CLI's wire shape.
+node -e '
+const fs = require("fs");
+const plan = fs.readFileSync(process.argv[1], "utf8");
+const threads = Object.fromEntries(["t1", "t2", "t3", "t4"].map((t) => [t, "noted"]));
+fs.writeFileSync(process.argv[2], JSON.stringify({ plan, resolutions: { threads } }));
+' "$TMP/plan.md" "$TMP/submit-body.json"
 HTTP=$(curl -s -o "$TMP/submit.json" -w '%{http_code}' \
-  -X POST "$BASE/api/sessions/$SID/submit" --data-binary "@$TMP/plan.md")
+  -X POST "$BASE/api/sessions/$SID/submit" -H 'content-type: application/json' \
+  --data-binary "@$TMP/submit-body.json")
 [ "$HTTP" = "200" ] || { cat "$TMP/submit.json" >&2; fail "valid plan did not pass (got $HTTP)"; }
 [ "$(json_field revision "$TMP/submit.json")" = "1" ] || fail "expected revision 1"
 [ -f "$REPO/.otacon/$SID/r1.md" ] || fail "r1.md not stored on disk"

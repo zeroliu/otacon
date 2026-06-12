@@ -5,13 +5,19 @@ import {
   checkFrontmatterAuthority,
   checkL1,
   checkL2,
+  checkL5,
   checkL6,
   type FrontmatterExpectations,
+  type ResolutionContext,
 } from "./rules.js";
+
+export type { ResolutionContext } from "./rules.js";
 
 export interface LintOptions extends FrontmatterExpectations {
   /** Target session id; mismatching frontmatter.session is a hard error. */
   session?: string;
+  /** L5 context, composed by the daemon (the linter itself never reads state). */
+  resolutions?: ResolutionContext;
 }
 
 export function lint(
@@ -24,6 +30,7 @@ export function lint(
     ...plan.parseErrors,
     ...checkL1(plan, options.session),
     ...checkL2(plan, config.budgets),
+    ...(options.resolutions ? checkL5(options.resolutions) : []),
     ...checkL6(plan, config.budgets),
     ...checkFrontmatterAuthority(plan, options),
   ];

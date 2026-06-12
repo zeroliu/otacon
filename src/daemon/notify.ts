@@ -14,7 +14,11 @@ import type { SessionSummary, Thread } from "../shared/types.js";
  */
 export type UiEvent =
   | { type: "session"; session: string; data: { session: SessionSummary } }
-  | { type: "revision"; session: string; data: { session: string; revision: number } }
+  | {
+      type: "revision";
+      session: string;
+      data: { session: string; revision: number; changelog: string | null };
+    }
   | { type: "queue"; session: string; data: { session: string; pending: number } }
   | { type: "thread"; session: string; data: { session: string; thread: Thread } };
 

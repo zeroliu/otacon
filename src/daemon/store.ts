@@ -90,7 +90,10 @@ function parseState(raw: unknown): SessionStateFile | undefined {
     typeof counters.thread === "number" &&
     typeof counters.question === "number" &&
     typeof counters.eventSeq === "number";
-  return valid ? file : undefined;
+  if (!valid) return undefined;
+  // Pre-M3 state files lack the field; defaulting beats quarantining them.
+  if (typeof file.lastReviewedRevision !== "number") file.lastReviewedRevision = 0;
+  return file;
 }
 
 /** Highest r<N>.md snapshot on disk — the revision counter's source of truth. */
@@ -105,6 +108,41 @@ function recoverRevision(repo: string, id: string): number {
     // no session dir yet — revision 0
   }
   return max;
+}
+
+/**
+ * High-water scan of threads.json and events.json so rebuilt counters never
+ * re-mint a live id (DECISIONS.md "Quarantine counter recovery") — duplicate
+ * thread ids would cross-wire resolutions now that threads carry state. Reads
+ * loosely (no thread validation): a half-corrupt file should still surrender
+ * every id it can.
+ */
+function recoverCounters(repo: string, id: string): SessionStateFile["counters"] {
+  const counters = { batch: 0, thread: 0, question: 0, eventSeq: 0 };
+  const see = (key: keyof typeof counters, raw: unknown, re: RegExp): void => {
+    const match = typeof raw === "string" ? re.exec(raw) : null;
+    if (match) counters[key] = Math.max(counters[key], Number(match[1]));
+  };
+  const threadsRaw = readJsonOr(paths.threadsPath(repo, id)) as { threads?: unknown[] } | undefined;
+  for (const t of Array.isArray(threadsRaw?.threads) ? threadsRaw.threads : []) {
+    const thread = t as { id?: unknown; batch?: unknown };
+    see("thread", thread?.id, /^t(\d+)$/);
+    see("question", thread?.id, /^q(\d+)$/);
+    see("batch", thread?.batch, /^b(\d+)$/);
+  }
+  const eventsRaw = readJsonOr(paths.eventsPath(repo, id)) as { events?: unknown[] } | undefined;
+  for (const e of Array.isArray(eventsRaw?.events) ? eventsRaw.events : []) {
+    const event = e as { seq?: unknown; payload?: { batch?: unknown; id?: unknown; items?: unknown[] } };
+    if (typeof event?.seq === "number") {
+      counters.eventSeq = Math.max(counters.eventSeq, event.seq);
+    }
+    see("batch", event?.payload?.batch, /^b(\d+)$/);
+    see("question", event?.payload?.id, /^q(\d+)$/);
+    for (const item of Array.isArray(event?.payload?.items) ? event.payload.items : []) {
+      see("thread", (item as { thread?: unknown })?.thread, /^t(\d+)$/);
+    }
+  }
+  return counters;
 }
 
 const BASE36 = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -172,6 +210,7 @@ export class Store {
     const state: SessionStateFile = {
       id,
       revision: 0,
+      lastReviewedRevision: 0,
       counters: { batch: 0, thread: 0, question: 0, eventSeq: 0 },
     };
     writeFileAtomic(paths.sessionStatePath(input.repo, id), stringify(state));
@@ -201,17 +240,34 @@ export class Store {
       quarantineCorruptFile(path, `session state for ${id}`);
     }
     // Rebuild: revision comes from the r<N>.md snapshots (they are the actual
-    // plan history — restarting at r1 would overwrite them); counters restart
-    // at 0, so post-quarantine b/t/q ids and seqs can repeat — detectable
-    // duplicates, per the at-least-once contract (DECISIONS.md "Corrupt state
-    // files are quarantined, not fatal").
+    // plan history — restarting at r1 would overwrite them); counters from a
+    // high-water scan of threads.json and events.json, so rebuilt counters
+    // cannot mint duplicate live ids (DECISIONS.md "Quarantine counter
+    // recovery"). lastReviewedRevision restarts at 0 — the diff baseline
+    // degrades to "previous revision", which the user can re-select.
     const state: SessionStateFile = {
       id,
       revision: recoverRevision(session.repo, id),
-      counters: { batch: 0, thread: 0, question: 0, eventSeq: 0 },
+      lastReviewedRevision: 0,
+      counters: recoverCounters(session.repo, id),
     };
     writeFileAtomic(path, stringify(state));
     return state;
+  }
+
+  /**
+   * Record that the user has reviewed revision n (a comment-batch flush, or
+   * the UI's explicit mark-reviewed). Monotonic: the stored value never moves
+   * backwards — older baselines stay reachable via the diff endpoint's ?from=.
+   */
+  markReviewed(id: string, n: number): number {
+    const session = this.require(id);
+    const state = this.readState(id);
+    if (n > state.lastReviewedRevision) {
+      state.lastReviewedRevision = Math.min(n, state.revision);
+      writeFileAtomic(paths.sessionStatePath(session.repo, id), stringify(state));
+    }
+    return state.lastReviewedRevision;
   }
 
   /** Increment one daemon-owned counter (DESIGN.md §6 stable ids) and persist it. */
@@ -239,10 +295,16 @@ export class Store {
 
   /**
    * Store the next revision snapshot r<N>.md plus the lint warnings it was
-   * accepted with (r<N>.warnings.json — the UI's L6 badges; DESIGN.md §12);
+   * accepted with (r<N>.warnings.json — the UI's L6 badges; DESIGN.md §12)
+   * and the agent's changelog when one accompanied it (r<N>.changelog.md);
    * returns N.
    */
-  saveRevision(id: string, content: string, warnings: LintIssue[] = []): number {
+  saveRevision(
+    id: string,
+    content: string,
+    warnings: LintIssue[] = [],
+    changelog?: string,
+  ): number {
     const session = this.require(id);
     const state = this.readState(id);
     state.revision += 1;
@@ -251,6 +313,9 @@ export class Store {
       paths.revisionWarningsPath(session.repo, id, state.revision),
       stringify(warnings),
     );
+    if (changelog !== undefined && changelog.trim() !== "") {
+      writeFileAtomic(paths.revisionChangelogPath(session.repo, id, state.revision), changelog);
+    }
     writeFileAtomic(paths.sessionStatePath(session.repo, id), stringify(state));
     session.updatedAt = new Date().toISOString();
     this.flushRegistry();
@@ -260,6 +325,16 @@ export class Store {
   readRevision(id: string, n: number): string {
     const session = this.require(id);
     return readFileSync(paths.revisionPath(session.repo, id, n), "utf8");
+  }
+
+  /** The changelog submitted with r<n>.md; null when none was (r1, typically). */
+  readRevisionChangelog(id: string, n: number): string | null {
+    const session = this.require(id);
+    try {
+      return readFileSync(paths.revisionChangelogPath(session.repo, id, n), "utf8");
+    } catch {
+      return null;
+    }
   }
 
   /**

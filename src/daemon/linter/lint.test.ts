@@ -298,3 +298,71 @@ describe("frontmatter authority warnings", () => {
     expect(codes(result)).toEqual([]);
   });
 });
+
+describe("L5 thread resolutions and changelog", () => {
+  const l5 = (
+    ctx: Partial<NonNullable<LintOptions["resolutions"]>> = {},
+  ): LintResult =>
+    run(doc(), {
+      session: SESSION,
+      resolutions: { revision: 2, commentThreads: [], replies: {}, ...ctx },
+    });
+
+  test("no threads, with a changelog: clean", () => {
+    expect(l5({ changelog: "tightened phase 1" }).ok).toBeTrue();
+  });
+
+  test("L5 never runs without a daemon-composed context", () => {
+    // Raw lint() of a resubmittable doc stays L5-silent (e.g. unit callers).
+    expect(run(doc()).ok).toBeTrue();
+  });
+
+  test("every open comment thread needs a reply; resolved ones do not", () => {
+    const result = l5({
+      changelog: "c",
+      commentThreads: [
+        { id: "t1", resolved: false },
+        { id: "t2", resolved: true },
+        { id: "t3", resolved: false },
+      ],
+      replies: { t1: "moved to phase 2" },
+    });
+    expect(result.ok).toBeFalse();
+    const unresolved = result.errors.filter((e) => e.code === "E_THREAD_UNRESOLVED");
+    expect(unresolved.map((e) => e.thread)).toEqual(["t3"]);
+    expect(unresolved[0]?.rule).toBe("L5");
+  });
+
+  test("unknown thread ids and blank replies are errors", () => {
+    const result = l5({
+      changelog: "c",
+      commentThreads: [{ id: "t1", resolved: false }],
+      replies: { t1: "  ", t9: "ghost", q1: "questions are answered, not resolved" },
+    });
+    expect(result.errors.map((e) => e.code).sort()).toEqual([
+      "E_EMPTY_RESOLUTION",
+      "E_UNKNOWN_THREAD",
+      "E_UNKNOWN_THREAD",
+    ]);
+  });
+
+  test("re-resolving an already-resolved thread is allowed (at-least-once)", () => {
+    const result = l5({
+      changelog: "c",
+      commentThreads: [{ id: "t1", resolved: true }],
+      replies: { t1: "same reply, retried submit" },
+    });
+    expect(result.ok).toBeTrue();
+  });
+
+  test("revisions ≥ 2 need a changelog; r1 and whitespace-only do not pass it off", () => {
+    expect(l5().errors.map((e) => e.code)).toEqual(["E_CHANGELOG_MISSING"]);
+    expect(l5({ changelog: "  \n" }).errors.map((e) => e.code)).toEqual(["E_CHANGELOG_MISSING"]);
+    expect(
+      run(doc(), {
+        session: SESSION,
+        resolutions: { revision: 1, commentThreads: [], replies: {} },
+      }).ok,
+    ).toBeTrue();
+  });
+});

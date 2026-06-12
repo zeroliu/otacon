@@ -1,7 +1,10 @@
 // otacon submit [plan.md] [--resolutions res.json] [--session id] — read the
 // plan (default: .otacon/<session>/plan.md in the session's repo, DESIGN.md
 // §4) and POST it for linting. A 422 prints the daemon's lint issues JSON and
-// exits 1 so the agent fixes and resubmits (DESIGN.md §5).
+// exits 1 so the agent fixes and resubmits (DESIGN.md §5). The resolutions
+// file is the revision-accompaniment document (DESIGN.md §6):
+// {"changelog": "...", "threads": {"t1": "reply", ...}} — required by L5 on
+// resubmits after comment batches and on every revision ≥ 2.
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -45,6 +48,11 @@ export async function submitCommand(argv: string[]): Promise<number> {
     // 200: {ok,session,revision,status,warnings}. 422: {ok:false,errors,warnings}.
     printJson(response.body);
     return response.status === 200 ? 0 : 1;
+  }
+  if (response.status === 400) {
+    // A malformed resolutions shape (or empty plan) — the agent fixes its file.
+    const message = (response.body as { error?: { message?: string } })?.error?.message;
+    fail("E_BAD_RESOLUTIONS", message ?? "daemon rejected the submit body");
   }
   if (response.status === 404) {
     // The session vanished between resolution and submit — actionable, not internal.

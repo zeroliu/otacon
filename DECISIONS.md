@@ -330,6 +330,8 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   forces consumers to treat duplicates as a handled condition.
 - **Revisit when:** Threads/resolutions (M3) make repeated thread ids actively harmful —
   then recover counters from a high-water scan of snapshots and the queue, too.
+  *(Happened in M3a — see "Quarantine counter recovery high-water scans threads and
+  events".)*
 
 ## Stale-daemon restart: bounded attempts, identity re-check before shutdown
 
@@ -516,7 +518,9 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   itself.
 - **Revisit when:** M3 resolutions need per-thread state transitions (then threads
   likely want ids beyond t/q and a real update API), or thread counts make
-  whole-file rewrites notable.
+  whole-file rewrites notable. *(Resolved in M3a without new ids or an update API:
+  resolution and anchor-state transitions ride the submit path —
+  `applyRevisionToThreads` — and SSE `thread` upserts carry them out.)*
 
 ## Review-loop drafts live in the browser, not the daemon
 
@@ -596,3 +600,127 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   around the dossier). *(Happened: M2c shipped the toolbar, drawer, and threads
   rail. The principle stands for what remains — no Approve/Diff/Changelog chrome
   until M3+ gives those verbs life.)*
+
+## Resolutions file: one revision-accompaniment document
+
+- **Decision:** `resolutions.json` (and the `resolutions` field of the submit JSON)
+  is `{"changelog": string, "threads": {"t<n>": "reply"}}` — both the thread replies
+  and the revision changelog ride one document. The daemon validates the shape
+  strictly (unknown top-level keys, non-string replies → 400 before linting).
+- **Why:** DESIGN.md §6 had it underspecified ("thread → reply"). The changelog and
+  the resolutions are both "what this revision did about the feedback" — one file
+  the agent writes per revision beats a CLI flag holding multi-line shell-quoted
+  prose. Strict shape validation because a typo'd key (`thread` for `threads`)
+  would otherwise silently drop every resolution and bounce the agent off a
+  confusing L5 error instead of the real mistake.
+- **Revisit when:** Resolutions need per-thread structure beyond a reply string
+  (e.g. disposition: accepted/rejected), or a second accompaniment field appears.
+
+## L5 scope: every unresolved comment thread at submit time
+
+- **Decision:** L5 requires a resolution reply for every comment thread that has no
+  stored resolution when the submit arrives — not just the latest batch. Unknown
+  thread ids and question ids in `threads` are errors (questions are answered via
+  `otacon answer`, never resolved); blank replies are errors; re-resolving an
+  already-resolved thread is allowed and overwrites.
+- **Why:** Under normal operation the two scopes are identical — each accepted
+  revision resolves everything open, so what is open at the next submit is exactly
+  the batches delivered since the last accepted revision (DESIGN.md §9). The
+  "every open thread" formulation is what makes that invariant *self-healing*:
+  after a quarantine, a crash between writes, or a hand-edited threads.json, stray
+  open threads block the next submit instead of silently rotting. Overwrite-on-
+  re-resolve mirrors answerQuestion: at-least-once delivery makes duplicate submits
+  legitimate.
+- **Revisit when:** Threads gain a user-side "withdraw comment" verb (an open
+  thread the agent *cannot* resolve would deadlock submits).
+
+## Changelog requirement is a lint error, not a 4xx
+
+- **Decision:** A missing/blank changelog on revisions ≥ 2 is `E_CHANGELOG_MISSING`,
+  severity error, rule L5, in the 422 lint payload. r1 needs none. The daemon
+  composes L5's context (open threads from threads.json, the submitted replies,
+  the next revision number) and passes it to the pure `checkL5(ctx)` rule; the
+  linter itself never touches disk.
+- **Why:** The agent already has exactly one fix-and-resubmit loop — the 422 with
+  machine-readable issues (DESIGN.md §5). A second rejection channel (400) for
+  what is semantically the same class of problem ("your submission is incomplete")
+  would force every wrapper to handle two shapes. 400 stays reserved for
+  *malformed* bodies. The context-arg seam keeps the linter pure and the rule unit-
+  testable without a store.
+- **Revisit when:** L5 needs data the daemon cannot cheaply compose ahead of the
+  lint call.
+
+## Diff engine: hand-rolled LCS over slug-segmented plan units
+
+- **Decision:** `GET /diff` segments both revisions into the slugs the UI renders
+  (summary, decisions, phases preamble, phase-<n>, risks, open-questions — reusing
+  the linter's pure parser), excludes frontmatter, and runs a hand-rolled
+  common-affix-trimmed LCS line diff per unit, grouped into unified-style hunks
+  (3 context lines). Response: `{sections: [{id, title, status, hunks}]}`, statuses
+  added/removed/changed/unchanged; unchanged units carry no hunks, added/removed
+  carry their whole body. No diff dependency.
+- **Why:** The gutter markers (DESIGN.md §9-10) need per-unit verdicts, which a
+  whole-document diff cannot give without re-deriving section boundaries the parser
+  already computes; per-unit diffing also makes moved-section noise impossible to
+  bleed across units. Plan units are budget-bounded small (§5), so quadratic LCS is
+  microseconds and a Myers implementation or a dependency buys nothing. Frontmatter
+  is excluded because the daemon-owned revision counter changes every submit —
+  every diff would open with a guaranteed-noise hunk.
+- **Revisit when:** Plans grow units big enough that LCS DP tables matter, or the
+  UI needs intra-line (word-level) diffs.
+
+## Re-anchoring ladder: raw match → context-scored → normalized; unique or orphaned
+
+- **Decision:** On every accepted revision the daemon re-locates every thread's
+  anchor (resolved ones included; whole-plan anchors skip). Quoted anchors walk:
+  (1) raw `exact` occurrences anywhere in the plan; (2) if several, the candidate
+  with the strictly best prefix/suffix context score, else a single candidate in
+  the original section; (3) if none, the same search over normalized text
+  (whitespace runs collapsed, `*` `` ` `` `_` stripped) — a unique normalized match
+  rewrites the anchor to the new revision's raw span and regenerates context.
+  Anything still missing or ambiguous sets `anchorState: "orphaned"` (the thread
+  and its original anchor are kept verbatim); a later revision that restores the
+  text un-orphans it. Section-only anchors just require the slug to exist.
+- **Why:** Quotes are captured from *rendered* text but matched against markdown
+  source — emphasis markers and reflowed whitespace are the two systematic
+  mismatches, which is exactly what the normalization forgives; anything beyond
+  that (edited words, case changes) means the text the user discussed is gone, and
+  §4 says that must surface in the tray, never be guessed at. Ambiguity orphans
+  because a wrong anchor silently misdirects review — strictly worse than an honest
+  "lost it". Resolved threads re-anchor too so the rail's click-to-flash keeps
+  working on old conversation.
+- **Revisit when:** Real plans show systematic mismatches the ladder misses (e.g.
+  link syntax `[text](url)`), or orphan rates suggest the context scorer needs to
+  become a real similarity metric (diff-match-patch style).
+
+## lastReviewedRevision is daemon state, set implicitly and explicitly, monotonic
+
+- **Decision:** `session.json` carries `lastReviewedRevision` (0 = never). It moves
+  on a comment-batch flush (to the revision being commented on) and on
+  `POST /:id/reviewed` (UI mark-reviewed/banner-dismiss; defaults to latest); it
+  only ever increases, clamped to the current revision. It is the diff endpoint's
+  default `from`; `?from=` overrides per request without touching the stored value.
+  Pre-M3 session.json files missing the key read as 0 instead of quarantining.
+- **Why:** Unlike the index's unread badges (browser localStorage, presentation
+  state), the diff baseline is protocol state: §9's "diff vs what you last actually
+  reviewed" must mean the same thing on the phone and the desktop, so the daemon
+  owns it. Monotonic because "reviewed" is knowledge, not a cursor — looking
+  backwards is a per-request baseline choice, not an un-knowing. Commenting implies
+  reviewing (§9: comments are revision requests on what was read).
+- **Revisit when:** Multi-reader sessions appear (per-device baselines), or
+  marking individual sections reviewed becomes a thing.
+
+## Quarantine counter recovery high-water scans threads and events
+
+- **Decision:** When session.json is rebuilt after quarantine (or deletion), the
+  b/t/q/eventSeq counters recover from a loose scan of threads.json (thread ids,
+  batch ids) and events.json (seqs, payload batch/thread/question ids) instead of
+  restarting at 0. The scan is deliberately unvalidating — a half-corrupt file
+  still surrenders every id it can parse. `lastReviewedRevision` restarts at 0.
+- **Why:** The M2c handoff flagged it: once threads carry resolutions, a re-minted
+  `t1` would cross-wire a new comment with an old thread's resolution state —
+  duplicates stopped being "a shrug" the moment threads got state. Events are
+  scanned too because threads.json itself may be the casualty being recovered
+  around. The reviewed pointer merely degrades the default diff baseline, which
+  the user can re-select in one tap — not worth a recovery source.
+- **Revisit when:** Any new id-bearing state file appears (add it to the scan).

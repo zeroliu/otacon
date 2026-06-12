@@ -32,6 +32,7 @@ export interface RegistryFile {
 /** Registry entry plus live detail — what the web UI renders (SSE snapshot/session frames). */
 export interface SessionSummary extends RegistrySession {
   revision: number;
+  lastReviewedRevision: number;
   pendingEvents: number;
 }
 
@@ -61,8 +62,11 @@ export type EventPayload =
 
 /**
  * One review thread, persisted in .otacon/<id>/threads.json (DESIGN.md §9).
- * Comment threads come from comment batches (one per item); question threads
- * gain an `answer` when the agent runs `otacon answer`.
+ * Comment threads come from comment batches (one per item) and gain a
+ * `resolution` from the agent's resolutions on resubmit (lint L5); question
+ * threads gain an `answer` when the agent runs `otacon answer`. `anchorState`
+ * "orphaned" means re-anchoring lost the quote in the current revision
+ * (DESIGN.md §4 orphaned tray); absent = anchored.
  */
 export type Thread =
   | {
@@ -70,17 +74,31 @@ export type Thread =
       kind: "comment";
       batch: string; // b<n>
       anchor: Anchor | null;
+      anchorState?: "orphaned";
       body: string;
       createdAt: string;
+      resolution?: { body: string; revision: number; resolvedAt: string };
     }
   | {
       id: string; // q<n>
       kind: "question";
       anchor: Anchor | null;
+      anchorState?: "orphaned";
       body: string;
       createdAt: string;
       answer?: { body: string; answeredAt: string };
     };
+
+/**
+ * The agent-written revision-accompaniment document (resolutions.json,
+ * DESIGN.md §6): `threads` maps comment-thread ids to resolution replies
+ * (lint L5); `changelog` is the agent's summary of the revision (required on
+ * revisions ≥ 2, DESIGN.md §9 layer 1).
+ */
+export interface Resolutions {
+  changelog?: string;
+  threads?: Record<string, string>;
+}
 
 export interface ThreadsFile {
   version: 1;
@@ -103,13 +121,19 @@ export interface EventsFile {
 export interface SessionStateFile {
   id: string;
   revision: number;
+  /**
+   * Highest revision the user has actually reviewed (0 = never): set when a
+   * comment batch is flushed and via POST /reviewed; the diff endpoint's
+   * default baseline (DESIGN.md §9 layer 3). Monotonic.
+   */
+  lastReviewedRevision: number;
   counters: { batch: number; thread: number; question: number; eventSeq: number };
 }
 
 export type LintSeverity = "error" | "warning";
 
 export interface LintIssue {
-  rule: "L1" | "L2" | "L6";
+  rule: "L1" | "L2" | "L5" | "L6";
   code: string;
   severity: LintSeverity;
   message: string;
@@ -117,6 +141,8 @@ export interface LintIssue {
   line?: number;
   /** Section slug or "phase-<n>". */
   section?: string;
+  /** Thread id an L5 issue is about. */
+  thread?: string;
   budget?: number;
   actual?: number;
 }
@@ -137,4 +163,41 @@ export interface RevisionPayload {
   revision: number;
   markdown: string;
   warnings: LintIssue[];
+  /** The agent's changelog for this revision (DESIGN.md §9 layer 1); null on r1. */
+  changelog: string | null;
+}
+
+/** One line of a diff hunk. */
+export interface DiffLine {
+  op: "context" | "add" | "del";
+  text: string;
+}
+
+/** Unified-diff-style hunk; line numbers are 1-based within the section unit. */
+export interface DiffHunk {
+  fromStart: number;
+  fromCount: number;
+  toStart: number;
+  toCount: number;
+  lines: DiffLine[];
+}
+
+/**
+ * Diff status for one plan unit (section slug or "phase-<n>"). Unchanged
+ * sections carry no hunks; added/removed ones carry their full body as
+ * add/del lines so the UI renders every status uniformly.
+ */
+export interface SectionDiff {
+  id: string;
+  title: string;
+  status: "added" | "removed" | "changed" | "unchanged";
+  hunks: DiffHunk[];
+}
+
+/** GET /api/sessions/:id/diff?from=&to= (DESIGN.md §6). from=0 = empty plan. */
+export interface DiffPayload {
+  session: string;
+  from: number;
+  to: number;
+  sections: SectionDiff[];
 }

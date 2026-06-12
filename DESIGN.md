@@ -178,9 +178,14 @@ ordinary fence. The plan stays plain renderable markdown everywhere else.
 
 Comments anchor to **section ID + text quote** (exact text + prefix/suffix context),
 W3C-annotation style. Section IDs derive from heading slugs (`phase-2`, `decisions`).
-Fuzzy re-anchoring across revisions; if the quoted text disappears, the thread lands
-in an **orphaned tray** — never silently dropped. Whole-plan (non-anchored) comments
-are also supported.
+Fuzzy re-anchoring across revisions: on every accepted revision the daemon re-locates
+each thread's quote — exact match first, then prefix/suffix-disambiguated, then a
+normalized match (whitespace collapsed, markdown emphasis markers ignored) that
+rewrites the stored quote to the new revision's text. A unique match re-anchors
+(following moved text across sections); no match or an ambiguous one sets the thread's
+`anchorState` to **orphaned** and it lands in the **orphaned tray** — never silently
+dropped, and automatically recovered if a later revision restores the text. Whole-plan
+(non-anchored) comments are also supported and never orphan.
 
 ---
 
@@ -195,7 +200,7 @@ errors on stdout; the agent fixes and resubmits. Invalid revisions never reach t
 | L2   | Read-path budgets (Summary ≤5 lines, Goal ≤3, etc.)                                                                                              | error                                  |
 | L3   | Decision traceability: every `D<n>` cites a `q<n>` or `[assumed]`                                                                                | error (warning in `--quick` sessions)  |
 | L4   | Detail containment heuristics: file paths in Details must appear in that phase's Files; new dependency names in Details must appear in Decisions | warning                                |
-| L5   | Thread resolutions: a resubmit after a comment batch must include a resolution reply for every thread in that batch                              | error                                  |
+| L5   | Revision accompaniment: a submit must include a resolution reply for every open comment thread, and every revision ≥ 2 must carry a changelog    | error                                  |
 | L6   | Detail soft caps (>80 lines/section)                                                                                                             | warning, surfaced as a badge in the UI |
 
 Budget numbers are config, expected to be tuned during the first week of real use.
@@ -250,6 +255,23 @@ the model is suspended — no inference, no token spend.
 | `otacon open`                                                               | Print/open the review URL (human convenience)                                 |
 | `otacon clean`                                                              | Archive/remove working state for ended sessions                               |
 
+The `--resolutions` file is the revision-accompaniment document:
+
+```json
+{
+  "changelog": "Kept RS256; moved the table drop to phase 3 as asked.",
+  "threads": { "t1": "Moved to phase 3.", "t2": "Kept — see the new D4." }
+}
+```
+
+`threads` maps comment-thread ids to resolution replies — lint L5 requires one per
+open comment thread; accepted replies land on the threads and mark them resolved
+(re-resolving overwrites). `changelog` is the agent's summary of the revision,
+required on every revision ≥ 2, stored per revision, and shown in the UI's revision
+banner (§9). The CLI sends the file's content as the `resolutions` field of the
+submit JSON: `{"plan": "...", "resolutions": {...}}`; unknown keys or non-string
+replies are refused 400 before linting.
+
 ### Event types (stdout of `wait`)
 
 ```json
@@ -281,15 +303,37 @@ POST /api/sessions/:id/questions/:qid/answer  agent's answer to a user question
 GET  /api/sessions/:id/threads              comment + question threads (the UI's rail)
 POST /api/sessions/:id/answers              answer to an agent question
 POST /api/sessions/:id/approve              approve (daemon writes final artifact)
+POST /api/sessions/:id/reviewed             mark a revision reviewed ({revision},
+                                            default: latest) — the diff baseline;
+                                            monotonic, also set by a comment flush
 GET  /api/sessions/:id/revisions/:n         raw revision markdown; with Accept:
-                                            application/json, {markdown, warnings}
-                                            (the lint warnings it was accepted with)
-GET  /api/sessions/:id/diff?from=&to=       computed diff
+                                            application/json, {markdown, warnings,
+                                            changelog} (lint warnings + the agent
+                                            changelog it was accepted with)
+GET  /api/sessions/:id/diff?from=&to=       computed structural diff (below)
 GET  /api/sessions/:id/stream               SSE for the UI (one session)
 GET  /api/stream                            SSE for the index (all sessions)
 GET  /                                      index page (the SPA)
 GET  /s/:id                                 review page for a session (same SPA)
 ```
+
+The diff endpoint computes a structural diff between two stored revisions, segmented
+into the same slug units the review screen renders (frontmatter excluded). `to`
+defaults to the latest revision; `from` defaults to the last-reviewed one (0 = the
+empty plan, so a never-reviewed session diffs as all-new; any `?from=` selects another
+baseline). Unchanged units carry no hunks; added/removed ones carry their full body:
+
+```json
+{"session":"otc_a1b2c3","from":2,"to":4,"sections":[
+  {"id":"phase-2","title":"Middleware","status":"changed","hunks":[
+    {"fromStart":3,"fromCount":4,"toStart":3,"toCount":5,"lines":[
+      {"op":"context","text":"Files:"},{"op":"del","text":"- src/auth.ts"},
+      {"op":"add","text":"- src/middleware/jwt.ts"}]}]},
+  {"id":"summary","title":"Summary","status":"unchanged","hunks":[]}]}
+```
+
+`status` is `added | removed | changed | unchanged` (the UI's gutter markers); hunk
+line numbers are 1-based within the unit.
 
 `/api` errors are machine-readable JSON — `{"error":{"code":…,"message":…}}` — except
 a failed submit, which returns 422 carrying the linter's `errors`/`warnings` arrays.
@@ -297,9 +341,12 @@ a failed submit, which returns 422 carrying the linter's `errors`/`warnings` arr
 session id renders as a client-side not-found state. Each SSE stream opens with a
 `snapshot` frame (the per-session stream's snapshot carries the thread list), then
 pushes `session` / `revision` / `queue` / `thread` frames as state changes — a
-`thread` frame is an upsert: a new comment/question thread, or an existing question
-thread gaining its answer — with a comment heartbeat to keep idle proxies from
-closing the stream.
+`revision` frame carries the revision number and its changelog; a `thread` frame is
+an upsert: a new comment/question thread, or an existing thread changing (a question
+gaining its answer, a comment gaining its resolution, an anchor re-anchoring or
+orphaning) — with a comment heartbeat to keep idle proxies from closing the stream.
+Session payloads (snapshot, `session` frames, session detail) carry
+`lastReviewedRevision` alongside `revision`.
 State-changing `/api` requests carrying
 a foreign `Origin` header are refused 403: the loopback bind alone does not stop a
 malicious webpage from firing `fetch()` at 127.0.0.1, and only browsers send `Origin`.
@@ -314,8 +361,9 @@ only after its response is fully written; a dropped connection requeues it.
 3. **Draft.** Agent writes `plan.md`, runs `otacon submit`; loops on lint errors until clean.
 4. **Review.** Agent parks in `wait`. User reads, fires instant questions
    (agent answers via `otacon answer`, returns to `wait`), stacks comments, taps Send.
-5. **Revise.** Agent edits `plan.md`, writes `resolutions.json` (thread → reply),
-   resubmits. Daemon computes diff vs the user's last-reviewed revision, pushes
+5. **Revise.** Agent edits `plan.md`, writes `resolutions.json` (changelog + thread →
+   reply), resubmits. Daemon resolves the threads, re-anchors every quote in the new
+   text (§4), computes diff vs the user's last-reviewed revision, pushes the
    changelog banner. Repeat 4–5.
 6. **Approve.** User taps Approve (warned if unresolved threads exist). The **daemon**
    writes `docs/plans/YYYY-MM-DD-<slug>.md` with `status: approved` + the grill
@@ -395,13 +443,21 @@ every keystroke.
 
 **Re-review (3 layers):**
 
-1. **Changelog** — agent-written summary at the top of each revision banner.
+1. **Changelog** — agent-written summary at the top of each revision banner. Submitted
+   in the resolutions document (§6), required on every revision ≥ 2 (lint L5), stored
+   per revision.
 2. **Threads** — every comment becomes a thread the agent MUST resolve with a reply
    (lint L5); unresolved threads are visible at a glance and warned on Approve.
 3. **Diff** — toggle between clean-latest and inline diff **vs the revision the user
    last actually reviewed** (not merely the previous one; baseline selectable). Changed
    sections carry gutter markers even in clean view, so unprompted changes to sections
    the user never commented on still surface.
+
+**Last-reviewed tracking:** the daemon keeps a per-session `lastReviewedRevision` —
+the default diff baseline. It moves when the user flushes a comment batch on a
+revision (commenting is reviewing) and when the UI explicitly marks a revision
+reviewed (`POST /reviewed`, e.g. dismissing the new-revision banner). It is monotonic;
+older baselines stay reachable through the diff endpoint's `?from=`.
 
 ---
 
@@ -504,7 +560,7 @@ Operational requirement: the Mac stays awake while a plan is in review
 
 | Location                                 | Contents                                                                                                       | Git                                        |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `<repo>/.otacon/`                        | Working state: `current-session`, `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`), threads (`threads.json`: comment + question threads with answers inline), Q&A transcript, queues | **gitignored**                             |
+| `<repo>/.otacon/`                        | Working state: `current-session`, `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), threads (`threads.json`: comment + question threads with answers, resolutions, and anchor states inline), Q&A transcript, queues | **gitignored**                             |
 | `<repo>/docs/plans/YYYY-MM-DD-<slug>.md` | Final approved plan (`status: approved` frontmatter + grill transcript)                                        | **committed** (by the agent, post-approve) |
 | `~/.otacon/registry.json`                | Session registry: ID → repo, branch, title, status                                                             | n/a (global)                               |
 

@@ -201,18 +201,34 @@ describe("submit", () => {
     const session = mintSession();
     const res = await postJson(`/api/sessions/${session.id}/submit`, {
       plan: validPlanFor(session.id),
-      resolutions: { t1: "done" },
+      resolutions: {},
     });
     expect(res.status).toBe(200);
+  });
+
+  test("a malformed resolutions shape is a 400, not a lint run", async () => {
+    const session = mintSession();
+    for (const resolutions of [
+      { t1: "done" }, // pre-M3 flat map: unknown top-level key
+      { threads: { t1: 7 } }, // reply must be a string
+      { changelog: 7 },
+      "done",
+    ]) {
+      const res = await postJson(`/api/sessions/${session.id}/submit`, {
+        plan: validPlanFor(session.id),
+        resolutions,
+      });
+      expect(res.status).toBe(400);
+    }
   });
 
   test("a resubmit with a stale frontmatter revision passes with a warning", async () => {
     const session = mintSession();
     const plan = validPlanFor(session.id);
     await app.request(`/api/sessions/${session.id}/submit`, { method: "POST", body: plan });
-    const res = await app.request(`/api/sessions/${session.id}/submit`, {
-      method: "POST",
-      body: plan, // still says revision: 1; daemon is at 2 now
+    const res = await postJson(`/api/sessions/${session.id}/submit`, {
+      plan, // still says revision: 1; daemon is at 2 now
+      resolutions: { changelog: "tightened phase 2" },
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { revision: number; warnings: { code: string }[] };
@@ -591,7 +607,7 @@ describe("UI SSE streams", () => {
     expect((updated.data as { session: { status: string } }).session.status).toBe("in_review");
     expect(await reader.next()).toEqual({
       event: "revision",
-      data: { session: created.id, revision: 1 },
+      data: { session: created.id, revision: 1, changelog: null },
     });
     await reader.cancel();
   });
@@ -765,5 +781,175 @@ describe("counter integrity on rejected batches", () => {
     });
     const accepted = await postJson(url, { items: [{ body: "valid" }] });
     expect(await accepted.json()).toEqual({ ok: true, batch: "b1", threads: ["t1"], seq: 1 });
+  });
+});
+
+describe("the revise loop: L5, resolutions, changelog, re-anchoring (M3)", () => {
+  /** Submit r1, flush one comment batch (t1 quotes RS256 in phase-1). */
+  async function reviewedR1(sessionId: string): Promise<void> {
+    await postJson(`/api/sessions/${sessionId}/submit`, { plan: validPlanFor(sessionId) });
+    await postJson(`/api/sessions/${sessionId}/comments`, {
+      items: [
+        {
+          anchor: { section: "phase-1", exact: "RS256 JWTs from the auth service" },
+          body: "why not ES256?",
+        },
+      ],
+    });
+  }
+
+  test("a resubmit without resolutions is a 422 carrying the L5 errors", async () => {
+    const session = mintSession();
+    await reviewedR1(session.id);
+    const res = await postJson(`/api/sessions/${session.id}/submit`, {
+      plan: validPlanFor(session.id),
+    });
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { errors: { rule: string; code: string; thread?: string }[] };
+    const codes = body.errors.map((e) => e.code);
+    expect(codes).toContain("E_THREAD_UNRESOLVED");
+    expect(codes).toContain("E_CHANGELOG_MISSING");
+    expect(body.errors.find((e) => e.code === "E_THREAD_UNRESOLVED")?.thread).toBe("t1");
+    expect(body.errors.every((e) => e.code.startsWith("E_CHANGELOG") || e.code.startsWith("E_THREAD") ? e.rule === "L5" : true)).toBe(true);
+    expect(store.readState(session.id).revision).toBe(1); // nothing stored
+  });
+
+  test("a resubmit with resolutions + changelog resolves the thread and stores r2", async () => {
+    const session = mintSession();
+    await reviewedR1(session.id);
+    const res = await postJson(`/api/sessions/${session.id}/submit`, {
+      plan: validPlanFor(session.id),
+      resolutions: { changelog: "Kept RS256; explained why in Decisions.", threads: { t1: "RS256 verifiers only need the public key." } },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { revision: number; resolved: string[] };
+    expect(body.revision).toBe(2);
+    expect(body.resolved).toEqual(["t1"]);
+
+    const threads = (await (await app.request(`/api/sessions/${session.id}/threads`)).json()) as {
+      threads: { id: string; resolution?: { body: string; revision: number } }[];
+    };
+    expect(threads.threads[0]?.resolution).toMatchObject({
+      body: "RS256 verifiers only need the public key.",
+      revision: 2,
+    });
+
+    // The changelog rides the JSON revision read.
+    const rev = await app.request(`/api/sessions/${session.id}/revisions/2`, {
+      headers: { accept: "application/json" },
+    });
+    expect(((await rev.json()) as { changelog: string }).changelog).toBe(
+      "Kept RS256; explained why in Decisions.",
+    );
+  });
+
+  test("deleting the quoted text in r2 orphans the thread, visibly over SSE", async () => {
+    const session = mintSession();
+    await reviewedR1(session.id);
+    const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
+    await reader.next(); // snapshot
+
+    const r2 = validPlanFor(session.id).replaceAll("RS256", "ES256");
+    const res = await postJson(`/api/sessions/${session.id}/submit`, {
+      plan: r2,
+      resolutions: { changelog: "Switched to ES256 everywhere.", threads: { t1: "Switched as asked." } },
+    });
+    expect(res.status).toBe(200);
+
+    const threads = (await (await app.request(`/api/sessions/${session.id}/threads`)).json()) as {
+      threads: { id: string; anchorState?: string }[];
+    };
+    expect(threads.threads[0]?.anchorState).toBe("orphaned");
+
+    // session frame, then the revision frame with changelog, then the thread upsert.
+    expect((await reader.next()).event).toBe("session");
+    expect(await reader.next()).toEqual({
+      event: "revision",
+      data: { session: session.id, revision: 2, changelog: "Switched to ES256 everywhere." },
+    });
+    const threadFrame = await reader.next();
+    expect(threadFrame.event).toBe("thread");
+    expect((threadFrame.data as { thread: { id: string; anchorState?: string } }).thread).toMatchObject({
+      id: "t1",
+      anchorState: "orphaned",
+    });
+    await reader.cancel();
+  });
+});
+
+describe("last-reviewed tracking and the diff endpoint (M3)", () => {
+  test("a comment flush marks the current revision reviewed", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/submit`, { plan: validPlanFor(session.id) });
+    expect(store.readState(session.id).lastReviewedRevision).toBe(0);
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ body: "x" }] });
+    expect(store.readState(session.id).lastReviewedRevision).toBe(1);
+    const detail = (await (await app.request(`/api/sessions/${session.id}`)).json()) as {
+      lastReviewedRevision: number;
+    };
+    expect(detail.lastReviewedRevision).toBe(1);
+  });
+
+  test("POST /reviewed validates and is monotonic; the session frame carries it", async () => {
+    const session = mintSession();
+    expect((await postJson(`/api/sessions/${session.id}/reviewed`, {})).status).toBe(400);
+    await postJson(`/api/sessions/${session.id}/submit`, { plan: validPlanFor(session.id) });
+
+    const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
+    await reader.next(); // snapshot
+    const ok = await postJson(`/api/sessions/${session.id}/reviewed`, {});
+    expect(await ok.json()).toEqual({ ok: true, session: session.id, lastReviewedRevision: 1 });
+    const frame = await reader.next();
+    expect(frame.event).toBe("session");
+    expect((frame.data as { session: { lastReviewedRevision: number } }).session.lastReviewedRevision).toBe(1);
+    await reader.cancel();
+
+    expect((await postJson(`/api/sessions/${session.id}/reviewed`, { revision: 2 })).status).toBe(400);
+    expect((await postJson(`/api/sessions/${session.id}/reviewed`, { revision: 0.5 })).status).toBe(400);
+  });
+
+  test("GET /diff defaults to last-reviewed → latest; ?from= selects the baseline", async () => {
+    const session = mintSession();
+    const r1 = validPlanFor(session.id);
+    await postJson(`/api/sessions/${session.id}/submit`, { plan: r1 });
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ body: "x" }] }); // reviews r1
+    await postJson(`/api/sessions/${session.id}/submit`, {
+      plan: r1.replace("Goal: Issue RS256 JWTs from the auth service.", "Goal: Issue and rotate RS256 JWTs."),
+      resolutions: { changelog: "c", threads: { t1: "done" } },
+    });
+
+    const res = await app.request(`/api/sessions/${session.id}/diff`);
+    const diff = (await res.json()) as {
+      from: number;
+      to: number;
+      sections: { id: string; status: string; hunks: unknown[] }[];
+    };
+    expect(diff.from).toBe(1);
+    expect(diff.to).toBe(2);
+    const byId = new Map(diff.sections.map((s) => [s.id, s]));
+    expect(byId.get("phase-1")?.status).toBe("changed");
+    expect(byId.get("phase-1")?.hunks.length).toBeGreaterThan(0);
+    expect(byId.get("summary")?.status).toBe("unchanged");
+    expect(byId.get("summary")?.hunks).toEqual([]);
+
+    // Explicit baseline: r2 vs r2 is all unchanged; from=0 is all added.
+    const same = (await (await app.request(`/api/sessions/${session.id}/diff?from=2&to=2`)).json()) as {
+      sections: { status: string }[];
+    };
+    expect(same.sections.every((s) => s.status === "unchanged")).toBe(true);
+    const fresh = (await (await app.request(`/api/sessions/${session.id}/diff?from=0`)).json()) as {
+      sections: { status: string }[];
+    };
+    expect(fresh.sections.every((s) => s.status === "added")).toBe(true);
+  });
+
+  test("diff validation: no revisions is 404; out-of-range from/to are 400", async () => {
+    const session = mintSession();
+    expect((await app.request(`/api/sessions/${session.id}/diff`)).status).toBe(404);
+    await postJson(`/api/sessions/${session.id}/submit`, { plan: validPlanFor(session.id) });
+    expect((await app.request(`/api/sessions/${session.id}/diff?to=2`)).status).toBe(400);
+    expect((await app.request(`/api/sessions/${session.id}/diff?from=9`)).status).toBe(400);
+    expect((await app.request(`/api/sessions/${session.id}/diff?from=x`)).status).toBe(400);
+    expect((await app.request(`/api/sessions/otc_zzzzzz/diff`)).status).toBe(404);
   });
 });

@@ -18,20 +18,29 @@ import { loadConfig } from "../shared/config.js";
 import type {
   Anchor,
   CommentItem,
+  DiffPayload,
   EventPayload,
   QueuedEvent,
   RegistrySession,
+  Resolutions,
   RevisionPayload,
   SessionSummary,
   Thread,
 } from "../shared/types.js";
 import { VERSION } from "../shared/version.js";
+import { diffPlans } from "./diff.js";
 import { lint } from "./linter/index.js";
 import { Notifier } from "./notify.js";
 import type { ParkHandle } from "./queue.js";
 import { SessionQueue } from "./queue.js";
 import type { Store } from "./store.js";
-import { answerQuestion, appendThreads, readThreads } from "./threads.js";
+import {
+  answerQuestion,
+  appendThreads,
+  applyRevisionToThreads,
+  commentThreadStates,
+  readThreads,
+} from "./threads.js";
 import { registerUiRoutes } from "./ui.js";
 
 /** Provided by @hono/node-server; absent under app.request() in tests. */
@@ -84,6 +93,33 @@ function parseAnchor(raw: unknown): Anchor | null | undefined {
   return anchor;
 }
 
+/**
+ * Validate the submit body's `resolutions` (DESIGN.md §6): an object with
+ * only `changelog` (string) and `threads` (string → string). Strict — an
+ * unknown key is a typo that would silently drop resolutions, so it refuses.
+ * undefined/null = none provided ({}); any other bad shape = undefined.
+ */
+function parseResolutions(raw: unknown): Resolutions | undefined {
+  if (raw === undefined || raw === null) return {};
+  if (typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const out: Resolutions = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (key === "changelog" && typeof value === "string") {
+      out.changelog = value;
+    } else if (key === "threads" && typeof value === "object" && value !== null && !Array.isArray(value)) {
+      const threads: Record<string, string> = {};
+      for (const [id, reply] of Object.entries(value as Record<string, unknown>)) {
+        if (typeof reply !== "string") return undefined;
+        threads[id] = reply;
+      }
+      out.threads = threads;
+    } else {
+      return undefined;
+    }
+  }
+  return out;
+}
+
 /** True when the Origin header names this daemon itself (the M2 web UI). */
 function sameOrigin(origin: string, host: string | undefined): boolean {
   try {
@@ -115,11 +151,15 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   // UI pub/sub (DECISIONS.md "UI live updates"): every state mutation below
   // publishes, and the SSE routes in ui.ts fan the events out to browsers.
   const notifier = new Notifier();
-  const summarize = (session: RegistrySession): SessionSummary => ({
-    ...session,
-    revision: store.readState(session.id).revision,
-    pendingEvents: queueFor(session.id).size,
-  });
+  const summarize = (session: RegistrySession): SessionSummary => {
+    const state = store.readState(session.id);
+    return {
+      ...session,
+      revision: state.revision,
+      lastReviewedRevision: state.lastReviewedRevision,
+      pendingEvents: queueFor(session.id).size,
+    };
+  };
   const publishSession = (session: RegistrySession): void =>
     notifier.publish({ type: "session", session: session.id, data: { session: summarize(session) } });
   const publishQueue = (id: string, pending: number): void =>
@@ -219,12 +259,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.get("/api/sessions/:id", (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
-    const state = store.readState(session.id);
-    return c.json({
-      ...session,
-      revision: state.revision,
-      pendingEvents: queueFor(session.id).size,
-    });
+    return c.json(summarize(session));
   });
 
   app.get("/api/sessions/:id/events", (c) => {
@@ -274,41 +309,130 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/submit", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
-    // Raw markdown body, or {"plan": "..."} JSON (the CLI's --resolutions ride
-    // along there once L5 lands in M3; ignored until then).
+    // Raw markdown body, or {"plan": "...", "resolutions": {...}} JSON — the
+    // CLI sends resolutions.json's content along (DESIGN.md §6). The raw path
+    // carries no resolutions, so L5 still rejects it when threads are open.
     let content = await c.req.text();
+    let resolutions: Resolutions = {};
     if (c.req.header("content-type")?.includes("json")) {
-      let plan: unknown;
+      let body: unknown;
       try {
-        plan = (JSON.parse(content) as Record<string, unknown>).plan;
+        body = JSON.parse(content);
       } catch {
-        plan = undefined;
+        body = undefined;
       }
+      const plan = (body as Record<string, unknown> | undefined)?.plan;
       if (typeof plan !== "string") return badRequest(c, "JSON body must carry a string plan");
+      const parsed = parseResolutions((body as Record<string, unknown>).resolutions);
+      if (!parsed) {
+        return badRequest(
+          c,
+          'resolutions must be {"changelog"?: string, "threads"?: {"t<n>": "reply"}}',
+        );
+      }
       content = plan;
+      resolutions = parsed;
     }
     if (content.trim() === "") return badRequest(c, "request body must be the plan markdown");
 
     const state = store.readState(session.id);
+    const replies = resolutions.threads ?? {};
     const result = lint(content, loadConfig(session.repo), {
       session: session.id,
       expectedRevision: state.revision + 1,
       expectedStatus: "in_review",
+      // L5's context is composed here: rules stay pure, the daemon does the I/O.
+      resolutions: {
+        revision: state.revision + 1,
+        commentThreads: commentThreadStates(store.threadsPath(session.id)),
+        replies,
+        changelog: resolutions.changelog,
+      },
     });
     if (!result.ok) {
       return c.json({ ok: false, errors: result.errors, warnings: result.warnings }, 422);
     }
-    const revision = store.saveRevision(session.id, content, result.warnings);
+    const changelog = (resolutions.changelog ?? "").trim() === "" ? null : (resolutions.changelog as string);
+    const revision = store.saveRevision(session.id, content, result.warnings, changelog ?? undefined);
+    // The accepted revision settles its threads: resolutions land on their
+    // threads, every anchor is re-located in the new text, lost ones orphan
+    // (DESIGN.md §4, §9). SSE upserts keep the rail live.
+    const changedThreads = applyRevisionToThreads(store.threadsPath(session.id), {
+      plan: content,
+      replies,
+      revision,
+    });
     const updated = store.updateSession(session.id, { status: "in_review" });
     publishSession(updated);
-    notifier.publish({ type: "revision", session: session.id, data: { session: session.id, revision } });
+    notifier.publish({
+      type: "revision",
+      session: session.id,
+      data: { session: session.id, revision, changelog },
+    });
+    for (const thread of changedThreads) publishThread(session.id, thread);
     return c.json({
       ok: true,
       session: session.id,
       revision,
       status: "in_review",
       warnings: result.warnings,
+      resolved: Object.keys(replies),
     });
+  });
+
+  // The user's side of re-review bookkeeping (DESIGN.md §9 layer 3): the UI's
+  // "mark reviewed" / banner-dismiss POSTs here; comment flushes mark it
+  // implicitly. Monotonic — see Store.markReviewed.
+  app.post("/api/sessions/:id/reviewed", async (c) => {
+    const session = sessionFor(c);
+    if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    const state = store.readState(session.id);
+    if (state.revision === 0) {
+      return badRequest(c, "session has no revisions to mark reviewed");
+    }
+    const body = (await readJsonBody(c)) ?? {};
+    const revision = body.revision ?? state.revision;
+    if (typeof revision !== "number" || !Number.isInteger(revision) || revision < 1 || revision > state.revision) {
+      return badRequest(c, `revision must be an integer 1..${state.revision}`);
+    }
+    const lastReviewedRevision = store.markReviewed(session.id, revision);
+    publishSession(session); // summary re-reads state, so the frame carries it
+    return c.json({ ok: true, session: session.id, lastReviewedRevision });
+  });
+
+  // Structural diff between two stored revisions (DESIGN.md §6, §9 layer 3).
+  // Defaults: to = latest, from = last-reviewed (?from= selects any other
+  // baseline; 0 = the empty plan, so a never-reviewed session shows all-new).
+  app.get("/api/sessions/:id/diff", (c) => {
+    const session = sessionFor(c);
+    if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    const state = store.readState(session.id);
+    if (state.revision === 0) {
+      return notFound(c, `session ${session.id} has no revisions to diff`);
+    }
+    const parseRev = (raw: string | undefined, fallback: number): number | undefined => {
+      if (raw === undefined || raw === "") return fallback;
+      const n = Number(raw);
+      return Number.isInteger(n) ? n : undefined;
+    };
+    const to = parseRev(c.req.query("to"), state.revision);
+    const from = parseRev(c.req.query("from"), state.lastReviewedRevision);
+    if (to === undefined || to < 1 || to > state.revision) {
+      return badRequest(c, `to must be a revision number 1..${state.revision}`);
+    }
+    if (from === undefined || from < 0 || from > state.revision) {
+      return badRequest(c, `from must be a revision number 0..${state.revision} (0 = empty plan)`);
+    }
+    const payload: DiffPayload = {
+      session: session.id,
+      from,
+      to,
+      sections: diffPlans(
+        from === 0 ? "" : store.readRevision(session.id, from),
+        store.readRevision(session.id, to),
+      ),
+    };
+    return c.json(payload);
   });
 
   app.post("/api/sessions/:id/comments", async (c) => {
@@ -353,6 +477,9 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       createdAt,
     }));
     appendThreads(store.threadsPath(session.id), threads);
+    // Flushing a batch is the implicit "I reviewed this revision" signal
+    // (DESIGN.md §9 layer 3) — the diff baseline moves with it.
+    store.markReviewed(session.id, store.readState(session.id).revision);
     // Comments are revision requests (DECISIONS.md "Status transitions"); flip
     // status before the enqueue wakes a parked agent.
     const updated = store.updateSession(session.id, { status: "revising" });
@@ -456,6 +583,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
         revision: n,
         markdown: store.readRevision(session.id, n),
         warnings: store.readRevisionWarnings(session.id, n),
+        changelog: store.readRevisionChangelog(session.id, n),
       };
       return c.json(payload);
     }

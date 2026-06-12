@@ -72,6 +72,7 @@ describe("Store session CRUD", () => {
     const dir = sessionDir(repo, id);
     const state = JSON.parse(readFileSync(join(dir, "session.json"), "utf8"));
     expect(state).toEqual({
+      lastReviewedRevision: 0,
       id,
       revision: 0,
       counters: { batch: 0, thread: 0, question: 0, eventSeq: 0 },
@@ -224,6 +225,7 @@ describe("Store counters and revisions", () => {
     expect(store.readState(id)).toEqual({
       id,
       revision: 1,
+      lastReviewedRevision: 0,
       counters: { batch: 0, thread: 0, question: 0, eventSeq: 0 },
     });
   });
@@ -301,5 +303,111 @@ describe("end to end: store + queue across instances", () => {
     expect(second?.seq).toBe(2);
     expect(second?.payload).toMatchObject({ event: "comments", batch: "b1" });
     expect(store3.bumpCounter(session.id, "eventSeq")).toBe(3);
+  });
+});
+
+describe("markReviewed and changelog persistence (M3)", () => {
+  test("markReviewed is monotonic and clamped to the current revision", () => {
+    const store = new Store();
+    const { id } = store.createSession({ title: "t", repo });
+    store.saveRevision(id, "# v1\n");
+    store.saveRevision(id, "# v2\n");
+    expect(store.markReviewed(id, 1)).toBe(1);
+    expect(store.markReviewed(id, 2)).toBe(2);
+    expect(store.markReviewed(id, 1)).toBe(2); // never moves backwards
+    expect(store.markReviewed(id, 99)).toBe(2); // never beyond what exists
+    // Persisted: a fresh Store sees it.
+    expect(new Store().readState(id).lastReviewedRevision).toBe(2);
+  });
+
+  test("a pre-M3 session.json without lastReviewedRevision reads as 0, not corrupt", () => {
+    const store = new Store();
+    const { id } = store.createSession({ title: "t", repo });
+    const statePath = join(sessionDir(repo, id), "session.json");
+    const state = JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>;
+    delete state.lastReviewedRevision;
+    writeFileSync(statePath, JSON.stringify(state));
+    expect(store.readState(id).lastReviewedRevision).toBe(0);
+    expect(readdirSync(sessionDir(repo, id)).some((f) => f.includes(".corrupt-"))).toBe(false);
+  });
+
+  test("saveRevision stores the changelog; readRevisionChangelog returns null when none", () => {
+    const store = new Store();
+    const { id } = store.createSession({ title: "t", repo });
+    store.saveRevision(id, "# v1\n");
+    store.saveRevision(id, "# v2\n", [], "Tightened phase 1 per t1; dropped the cache idea.");
+    expect(store.readRevisionChangelog(id, 1)).toBeNull();
+    expect(store.readRevisionChangelog(id, 2)).toBe(
+      "Tightened phase 1 per t1; dropped the cache idea.",
+    );
+    expect(existsSync(join(sessionDir(repo, id), "r2.changelog.md"))).toBe(true);
+    // Blank changelogs are not written.
+    store.saveRevision(id, "# v3\n", [], "   ");
+    expect(store.readRevisionChangelog(id, 3)).toBeNull();
+  });
+});
+
+describe("counter recovery high-water scans threads and events (M3)", () => {
+  test("rebuilt counters never re-mint ids present in threads.json or events.json", () => {
+    const store = new Store();
+    const { id } = store.createSession({ title: "t", repo });
+    const dir = sessionDir(repo, id);
+    writeFileSync(
+      join(dir, "threads.json"),
+      JSON.stringify({
+        version: 1,
+        threads: [
+          { id: "t3", kind: "comment", batch: "b2", anchor: null, body: "x", createdAt: "2026-06-13" },
+          { id: "q2", kind: "question", anchor: null, body: "y", createdAt: "2026-06-13" },
+        ],
+      }),
+    );
+    writeFileSync(
+      join(dir, "events.json"),
+      JSON.stringify({
+        version: 1,
+        events: [
+          {
+            seq: 7,
+            queuedAt: "2026-06-13",
+            payload: {
+              event: "comments",
+              session: id,
+              batch: "b4",
+              items: [{ thread: "t5", anchor: null, body: "z" }],
+            },
+          },
+          { seq: 8, queuedAt: "2026-06-13", payload: { event: "question", session: id, id: "q9", anchor: null, body: "w" } },
+        ],
+      }),
+    );
+    writeFileSync(join(dir, "session.json"), "{nope");
+    expect(store.readState(id).counters).toEqual({
+      batch: 4,
+      thread: 5,
+      question: 9,
+      eventSeq: 8,
+    });
+    // The next minted ids are fresh: t6 / q10 / b5.
+    expect(store.bumpCounters(id, { thread: 1, question: 1, batch: 1 })).toMatchObject({
+      thread: 6,
+      question: 10,
+      batch: 5,
+    });
+  });
+
+  test("corrupt or missing scan sources degrade to zeros, never throw", () => {
+    const store = new Store();
+    const { id } = store.createSession({ title: "t", repo });
+    const dir = sessionDir(repo, id);
+    writeFileSync(join(dir, "threads.json"), "{nope");
+    writeFileSync(join(dir, "events.json"), JSON.stringify({ version: 1, events: "x" }));
+    writeFileSync(join(dir, "session.json"), "{nope");
+    expect(store.readState(id).counters).toEqual({
+      batch: 0,
+      thread: 0,
+      question: 0,
+      eventSeq: 0,
+    });
   });
 });

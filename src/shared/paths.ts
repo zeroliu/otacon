@@ -67,3 +67,8 @@ export function revisionPath(repoRoot: string, id: string, n: number): string {
 export function revisionWarningsPath(repoRoot: string, id: string, n: number): string {
   return join(sessionDir(repoRoot, id), `r${n}.warnings.json`);
 }
+
+/** The agent's changelog submitted with r<n>.md (DESIGN.md §9 layer 1). */
+export function revisionChangelogPath(repoRoot: string, id: string, n: number): string {
+  return join(sessionDir(repoRoot, id), `r${n}.changelog.md`);
+}
