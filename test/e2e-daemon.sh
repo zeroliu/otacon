@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # End-to-end exercise of the real otacond daemon (M1f) over curl: long-poll
 # delivery, queue persistence, kill -9 at-least-once survival, lint reject and
-# accept, placeholder page, port-squatter refusal, clean shutdown. Hermetic:
-# temp OTACON_HOME, temp repo, ephemeral ports.
+# accept, placeholder page, port-squatter refusal, cross-origin refusal, clean
+# shutdown. Hermetic: temp OTACON_HOME, temp repo, ephemeral ports.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -13,10 +13,12 @@ mkdir -p "$HOME_DIR" "$REPO"
 
 DAEMON_PID=""
 SQUAT_PID=""
+PARKED_PID=""
 PASS=0
 cleanup() {
   [ -n "$DAEMON_PID" ] && kill -9 "$DAEMON_PID" 2>/dev/null || true
   [ -n "$SQUAT_PID" ] && kill -9 "$SQUAT_PID" 2>/dev/null || true
+  [ -n "$PARKED_PID" ] && kill -9 "$PARKED_PID" 2>/dev/null || true
   rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -57,11 +59,12 @@ ok "POST /api/sessions minted $SID"
 
 # --- parked long-poll woken by a comment -----------------------------------
 curl -s "$BASE/api/sessions/$SID/events?wait=10" > "$TMP/parked.json" &
-PARKED=$!
+PARKED_PID=$!
 sleep 0.5
 curl -s -X POST "$BASE/api/sessions/$SID/comments" -H 'content-type: application/json' \
   -d '{"items":[{"anchor":{"section":"phase-1"},"body":"tighten the goal"}]}' > /dev/null
-wait "$PARKED"
+wait "$PARKED_PID"
+PARKED_PID=""
 [ "$(json_field event "$TMP/parked.json")" = "comments" ] || fail "parked poll did not get the comments event"
 [ "$(json_field batch "$TMP/parked.json")" = "b1" ] || fail "expected batch b1"
 [ "$(json_field session "$TMP/parked.json")" = "$SID" ] || fail "event payload missing session field"
@@ -134,6 +137,13 @@ OTACON_HOME="$HOME_DIR" OTACON_PORT="$PORT" node "$ROOT/dist/daemon/main.js" > "
   || fail "second otacond on the same port should exit 0"
 grep -q "already running" "$TMP/loser.json" || fail "missing already-running note"
 ok "second otacond on the same port defers and exits 0"
+
+# --- cross-origin state changes are refused ----------------------------------
+HTTP=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/shutdown" \
+  -H 'Origin: http://evil.example')
+[ "$HTTP" = "403" ] || fail "cross-origin shutdown was not refused (got $HTTP)"
+curl -sf --max-time 1 "$BASE/api/health" > /dev/null || fail "daemon died on a refused cross-origin shutdown"
+ok "cross-origin POST /api/shutdown is refused 403 and the daemon stays up"
 
 # --- clean shutdown -----------------------------------------------------------
 curl -s -X POST "$BASE/api/shutdown" | grep -q '"ok":true' || fail "shutdown did not respond ok"

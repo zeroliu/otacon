@@ -13,8 +13,9 @@ const port = otaconPort();
 
 const app = createApp({
   store: new Store(),
-  // Let the /api/shutdown response flush before exiting.
-  onShutdown: () => setTimeout(() => process.exit(0), 100),
+  // The shutdown route invokes this only after its response is written
+  // (or the client is gone), so exiting immediately is safe.
+  onShutdown: () => process.exit(0),
 });
 
 const server = serve({ fetch: app.fetch, hostname: HOST, port }, (info) => {

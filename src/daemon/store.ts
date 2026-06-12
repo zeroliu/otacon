@@ -149,11 +149,25 @@ export class Store {
 
   /** Increment one daemon-owned counter (DESIGN.md §6 stable ids) and persist it. */
   bumpCounter(id: string, key: keyof SessionStateFile["counters"]): number {
+    return this.bumpCounters(id, { [key]: 1 })[key];
+  }
+
+  /**
+   * Increment several counters in one read + one atomic write (a comment batch
+   * mints N thread ids, a batch id, and an event seq together); returns the
+   * updated counter values.
+   */
+  bumpCounters(
+    id: string,
+    by: Partial<Record<keyof SessionStateFile["counters"], number>>,
+  ): SessionStateFile["counters"] {
     const session = this.require(id);
     const state = this.readState(id);
-    state.counters[key] += 1;
+    for (const key of Object.keys(by) as (keyof SessionStateFile["counters"])[]) {
+      state.counters[key] += by[key] ?? 0;
+    }
     writeFileAtomic(paths.sessionStatePath(session.repo, id), stringify(state));
-    return state.counters[key];
+    return { ...state.counters };
   }
 
   /** Store the next revision snapshot r<N>.md (DESIGN.md §12); returns N. */

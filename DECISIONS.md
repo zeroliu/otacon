@@ -204,7 +204,25 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   at-least-once literal: a crash or client abort inside the dequeue→respond window
   re-delivers instead of losing the event.
 - **Revisit when:** @hono/node-server changes its bindings or abort contract, or
-  the daemon moves off Node's http server.
+  the daemon moves off Node's http server. One caveat baked into the code: that
+  AbortController only aborts if it already existed when `"close"` fired, and a
+  `"close"` listener added after the fact never runs — so the park and ack paths
+  also check `outgoing.destroyed`/`outgoing.closed` up front instead of trusting
+  the signal alone.
+
+## Foreign-Origin requests are refused, not authenticated
+
+- **Decision:** Non-GET `/api` requests carrying an `Origin` header whose host is
+  not the daemon's own `Host` get a 403. No tokens, no auth.
+- **Why:** Binding 127.0.0.1 does not stop a malicious webpage in the user's
+  browser from delivering a `no-cors` POST to loopback (`/api/shutdown` needs no
+  guessable id), and browser private-network blocking is not universal. Browsers
+  always attach `Origin` to cross-origin POSTs; the CLI and curl never send one,
+  and the M2 web UI is same-origin — so the header alone cleanly separates the
+  one hostile caller class from every legitimate one.
+- **Revisit when:** anything other than the CLI or the same-origin UI must POST
+  (e.g. a packaged app with an `app://` origin), or remote access stops being
+  Tailscale-shaped.
 
 ## One SessionQueue instance per session, for the daemon's lifetime
 

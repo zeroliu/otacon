@@ -29,7 +29,7 @@ export interface NodeBindings {
 
 export interface AppOptions {
   store: Store;
-  /** Invoked by POST /api/shutdown; main.ts flushes the response, then exits. */
+  /** Invoked once POST /api/shutdown's response is out; main.ts exits in it. */
   onShutdown?: () => void;
 }
 
@@ -71,6 +71,15 @@ function parseAnchor(raw: unknown): Anchor | null | undefined {
 const escapeHtml = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+/** True when the Origin header names this daemon itself (the M2 web UI). */
+function sameOrigin(origin: string, host: string | undefined): boolean {
+  try {
+    return host !== undefined && new URL(origin).host === host;
+  } catch {
+    return false; // opaque origins ("null") and garbage are foreign
+  }
+}
+
 export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }> {
   const { store } = options;
 
@@ -95,8 +104,11 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     const outgoing = c.env?.outgoing;
     if (!outgoing) {
       queue.flush(event); // app.request() test path: no socket to wait on
-    } else if (outgoing.destroyed) {
-      queue.requeue(event); // client vanished before we even built the response
+    } else if (outgoing.destroyed || outgoing.closed) {
+      // Client vanished before we built the response. The closed check matters:
+      // once "close" has fired, a listener added below would never run and the
+      // event would sit unacked-unrequeued in the in-flight list until restart.
+      queue.requeue(event);
     } else {
       outgoing.once("close", () => {
         if (outgoing.writableFinished) queue.flush(event);
@@ -107,6 +119,22 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   }
 
   const app = new Hono<{ Bindings: NodeBindings }>();
+
+  // Loopback binding doesn't stop a malicious webpage from firing fetch() at
+  // 127.0.0.1 (no-cors requests are delivered even though the response is
+  // opaque). Browsers always attach Origin to cross-origin POSTs; the CLI and
+  // curl send none, and the M2 web UI is same-origin — so a foreign Origin on
+  // a state-changing call is refused (DECISIONS.md "Foreign-Origin requests").
+  app.use("/api/*", async (c, next) => {
+    const origin = c.req.header("origin");
+    if (c.req.method !== "GET" && origin !== undefined && !sameOrigin(origin, c.req.header("host"))) {
+      return c.json(
+        { error: { code: "E_FORBIDDEN", message: "cross-origin requests are refused" } },
+        403,
+      );
+    }
+    await next();
+  });
 
   app.onError((error, c) =>
     c.json({ error: { code: "E_INTERNAL", message: error.message } }, 500),
@@ -123,7 +151,15 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   );
 
   app.post("/api/shutdown", (c) => {
-    options.onShutdown?.();
+    // Fire the hook only once the response is out (or the client is already
+    // gone): main.ts exits the process in it, and a timing guess would race
+    // the response flush.
+    const outgoing = c.env?.outgoing;
+    if (outgoing && !outgoing.destroyed && !outgoing.closed) {
+      outgoing.once("close", () => options.onShutdown?.());
+    } else {
+      options.onShutdown?.();
+    }
     return c.json({ ok: true });
   });
 
@@ -174,6 +210,11 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     if (waitSeconds === 0) return timeoutEvent(c);
 
     const signal = c.req.raw.signal; // materializes node-server's AbortController
+    // node-server only aborts that controller if it existed when the socket's
+    // "close" fired. A client that vanished before this handler ran would
+    // otherwise park a zombie waiter for the full wait window.
+    const outgoing = c.env?.outgoing;
+    if (signal.aborted || outgoing?.destroyed || outgoing?.closed) return timeoutEvent(c);
     return new Promise<Response>((resolve) => {
       let settled = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -238,38 +279,55 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/comments", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    const queue = queueFor(session.id); // before any state write: can throw on a corrupt file
     const body = (await readJsonBody(c)) ?? {};
     const rawItems = body.items;
     if (!Array.isArray(rawItems) || rawItems.length === 0) {
       return badRequest(c, "items must be a non-empty array");
     }
-    const items: CommentItem[] = [];
+    const drafts: { anchor: Anchor | null; body: string }[] = [];
     for (const raw of rawItems as Record<string, unknown>[]) {
       const anchor = parseAnchor(raw?.anchor);
       if (typeof raw?.body !== "string" || raw.body.trim() === "" || anchor === undefined) {
         return badRequest(c, "each item needs a non-empty body and a valid anchor (or null)");
       }
-      items.push({ thread: `t${store.bumpCounter(session.id, "thread")}`, anchor, body: raw.body });
+      drafts.push({ anchor, body: raw.body });
     }
-    const batch = `b${store.bumpCounter(session.id, "batch")}`;
+    // Ids are minted only after the whole batch validates, in one counter
+    // write — a rejected batch burns neither ids nor disk writes.
+    const counters = store.bumpCounters(session.id, {
+      thread: drafts.length,
+      batch: 1,
+      eventSeq: 1,
+    });
+    const firstThread = counters.thread - drafts.length;
+    const items: CommentItem[] = drafts.map((draft, i) => ({
+      thread: `t${firstThread + i + 1}`,
+      ...draft,
+    }));
+    const batch = `b${counters.batch}`;
     // Comments are revision requests (DECISIONS.md "Status transitions"); flip
     // status before the enqueue wakes a parked agent.
     store.updateSession(session.id, { status: "revising" });
     const payload: EventPayload = { event: "comments", session: session.id, batch, items };
-    const seq = store.bumpCounter(session.id, "eventSeq");
-    queueFor(session.id).enqueue(payload, seq);
-    return c.json({ ok: true, batch, threads: items.map((i) => i.thread), seq }, 202);
+    queue.enqueue(payload, counters.eventSeq);
+    return c.json(
+      { ok: true, batch, threads: items.map((i) => i.thread), seq: counters.eventSeq },
+      202,
+    );
   });
 
   app.post("/api/sessions/:id/questions", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    const queue = queueFor(session.id); // before any state write: can throw on a corrupt file
     const body = (await readJsonBody(c)) ?? {};
     const anchor = parseAnchor(body.anchor);
     if (typeof body.body !== "string" || body.body.trim() === "" || anchor === undefined) {
       return badRequest(c, "question needs a non-empty body and a valid anchor (or null)");
     }
-    const id = `q${store.bumpCounter(session.id, "question")}`;
+    const counters = store.bumpCounters(session.id, { question: 1, eventSeq: 1 });
+    const id = `q${counters.question}`;
     // Questions leave the plan — and the status — untouched (DESIGN.md §9).
     const payload: EventPayload = {
       event: "question",
@@ -278,9 +336,8 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       anchor,
       body: body.body,
     };
-    const seq = store.bumpCounter(session.id, "eventSeq");
-    queueFor(session.id).enqueue(payload, seq);
-    return c.json({ ok: true, id, seq }, 202);
+    queue.enqueue(payload, counters.eventSeq);
+    return c.json({ ok: true, id, seq: counters.eventSeq }, 202);
   });
 
   app.get("/api/sessions/:id/revisions/:n", (c) => {

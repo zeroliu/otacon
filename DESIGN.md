@@ -278,8 +278,11 @@ GET  /api/sessions/:id/stream               SSE for the UI
 GET  /s/:id                                 review page for a session
 ```
 
-Errors are machine-readable JSON — `{"error":{"code":…,"message":…}}` — except a
-failed submit, which returns 422 carrying the linter's `errors`/`warnings` arrays.
+`/api` errors are machine-readable JSON — `{"error":{"code":…,"message":…}}` — except
+a failed submit, which returns 422 carrying the linter's `errors`/`warnings` arrays
+(`/s/:id` is a browser page and 404s as text). State-changing `/api` requests carrying
+a foreign `Origin` header are refused 403: the loopback bind alone does not stop a
+malicious webpage from firing `fetch()` at 127.0.0.1, and only browsers send `Origin`.
 Event delivery over `/events` is at-least-once: an event is removed from the queue
 only after its response is fully written; a dropped connection requeues it.
 

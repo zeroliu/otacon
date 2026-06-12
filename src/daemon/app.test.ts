@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hono } from "hono";
@@ -54,6 +56,29 @@ function validPlanFor(id: string): string {
     "utf8",
   );
   return fixture.replace("otc_test01", id);
+}
+
+type FakeOutgoing = Omit<ServerResponse, "writableFinished"> & {
+  destroyed: boolean;
+  closed: boolean;
+  writableFinished: boolean;
+};
+
+/** Just enough of a Node ServerResponse for the ack/abort paths: state flags + "close". */
+function fakeOutgoing(
+  overrides: Partial<Pick<ServerResponse, "destroyed" | "closed" | "writableFinished">> = {},
+): FakeOutgoing {
+  const emitter = new EventEmitter();
+  return Object.assign(emitter, {
+    destroyed: false,
+    closed: false,
+    writableFinished: false,
+    ...overrides,
+  }) as unknown as FakeOutgoing;
+}
+
+function eventsOnDisk(id: string): unknown[] {
+  return (JSON.parse(readFileSync(eventsPath(repo, id), "utf8")) as { events: unknown[] }).events;
 }
 
 describe("health and shutdown", () => {
@@ -357,5 +382,128 @@ describe("revisions and placeholder page", () => {
     const text = await (await app.request(`/s/${session.id}`)).text();
     expect(text).not.toContain("<script>");
     expect(text).toContain("&lt;script&gt;");
+  });
+});
+
+describe("socket-bound delivery (fake outgoing)", () => {
+  test("an event is acked only once the response 'close' reports it fully written", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/questions`, { body: "q" });
+    const outgoing = fakeOutgoing();
+    const res = await app.request(`/api/sessions/${session.id}/events`, {}, { outgoing });
+    expect(((await res.json()) as { event: string }).event).toBe("question");
+    // Delivered but unacked: still durable on disk.
+    expect(eventsOnDisk(session.id)).toHaveLength(1);
+    outgoing.writableFinished = true;
+    outgoing.emit("close");
+    expect(eventsOnDisk(session.id)).toEqual([]);
+  });
+
+  test("a client abort mid-write requeues the event for the next poll", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/questions`, { body: "q" });
+    const outgoing = fakeOutgoing();
+    await app.request(`/api/sessions/${session.id}/events`, {}, { outgoing });
+    outgoing.emit("close"); // writableFinished still false: aborted
+    expect(eventsOnDisk(session.id)).toHaveLength(1);
+    const retry = await app.request(`/api/sessions/${session.id}/events`);
+    expect(((await retry.json()) as { id: string }).id).toBe("q1");
+  });
+
+  test("a response whose socket already closed requeues instead of arming a dead listener", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/questions`, { body: "q" });
+    // "close" already fired: a once("close") ack listener would never run.
+    const outgoing = fakeOutgoing({ closed: true });
+    await app.request(`/api/sessions/${session.id}/events`, {}, { outgoing });
+    expect(eventsOnDisk(session.id)).toHaveLength(1);
+    const retry = await app.request(`/api/sessions/${session.id}/events`);
+    expect(((await retry.json()) as { id: string }).id).toBe("q1");
+  });
+
+  test("a poll whose client is already gone times out instead of parking a zombie waiter", async () => {
+    const session = mintSession();
+    const started = Date.now();
+    const res = await app.request(
+      `/api/sessions/${session.id}/events?wait=540`,
+      {},
+      { outgoing: fakeOutgoing({ closed: true }) },
+    );
+    expect(await res.json()).toEqual({ event: "timeout" });
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  test("shutdown hook fires only after the response is out", async () => {
+    const outgoing = fakeOutgoing();
+    const res = await app.request("/api/shutdown", { method: "POST" }, { outgoing });
+    expect(await res.json()).toEqual({ ok: true });
+    expect(shutdowns).toBe(0);
+    outgoing.writableFinished = true;
+    outgoing.emit("close");
+    expect(shutdowns).toBe(1);
+  });
+});
+
+describe("cross-origin guard", () => {
+  test("state-changing API calls with a foreign Origin are refused 403", async () => {
+    const res = await app.request("/api/shutdown", {
+      method: "POST",
+      headers: { origin: "http://evil.example" },
+    });
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("E_FORBIDDEN");
+    expect(shutdowns).toBe(0);
+
+    const session = mintSession();
+    const comment = await app.request(`/api/sessions/${session.id}/comments`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://evil.example" },
+      body: JSON.stringify({ items: [{ body: "x" }] }),
+    });
+    expect(comment.status).toBe(403);
+  });
+
+  test("an opaque 'null' Origin is foreign too", async () => {
+    const res = await app.request("/api/shutdown", {
+      method: "POST",
+      headers: { origin: "null" },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("same-origin (the M2 web UI) and origin-less (the CLI) requests pass", async () => {
+    const sameOriginRes = await app.request("/api/shutdown", {
+      method: "POST",
+      headers: { origin: "http://127.0.0.1:4747", host: "127.0.0.1:4747" },
+    });
+    expect(sameOriginRes.status).toBe(200);
+    const cliRes = await app.request("/api/shutdown", { method: "POST" });
+    expect(cliRes.status).toBe(200);
+    expect(shutdowns).toBe(2);
+  });
+
+  test("GETs with a foreign Origin still pass (no state change to protect)", async () => {
+    const res = await app.request("/api/health", {
+      headers: { origin: "http://evil.example" },
+    });
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("counter integrity on rejected batches", () => {
+  test("a 400 comment batch mints no ids: the next valid batch starts at t1/b1/seq 1", async () => {
+    const session = mintSession();
+    const url = `/api/sessions/${session.id}/comments`;
+    const rejected = await postJson(url, { items: [{ body: "fine" }, { body: "" }] });
+    expect(rejected.status).toBe(400);
+    expect(store.readState(session.id).counters).toEqual({
+      batch: 0,
+      thread: 0,
+      question: 0,
+      eventSeq: 0,
+    });
+    const accepted = await postJson(url, { items: [{ body: "valid" }] });
+    expect(await accepted.json()).toEqual({ ok: true, batch: "b1", threads: ["t1"], seq: 1 });
   });
 });

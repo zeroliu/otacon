@@ -133,6 +133,24 @@ describe("Store counters and revisions", () => {
     });
   });
 
+  test("bumpCounters mints several counters in one persisted write", () => {
+    const store = new Store();
+    const { id } = store.createSession({ title: "t", repo });
+    expect(store.bumpCounters(id, { thread: 3, batch: 1, eventSeq: 1 })).toEqual({
+      batch: 1,
+      thread: 3,
+      question: 0,
+      eventSeq: 1,
+    });
+    expect(new Store().readState(id).counters).toEqual({
+      batch: 1,
+      thread: 3,
+      question: 0,
+      eventSeq: 1,
+    });
+    expect(store.bumpCounter(id, "thread")).toBe(4);
+  });
+
   test("a corrupt session.json shape throws instead of silently corrupting counters", () => {
     const store = new Store();
     const { id } = store.createSession({ title: "t", repo });
