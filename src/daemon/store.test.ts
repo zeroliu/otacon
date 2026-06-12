@@ -109,11 +109,25 @@ describe("Store session CRUD", () => {
     expect(new Store().getSession(created.id)?.status).toBe("in_review");
   });
 
-  test("a corrupt registry throws instead of silently starting empty", () => {
+  test("a corrupt registry is quarantined and the store starts fresh", () => {
     writeFileSync(registryPath(), "{nope");
-    expect(() => new Store()).toThrow(/corrupt registry/);
+    const store = new Store();
+    expect(store.listSessions()).toEqual([]);
+    const aside = readdirSync(home).filter((f) => f.startsWith("registry.json.corrupt-"));
+    expect(aside).toHaveLength(1);
+    expect(readFileSync(join(home, aside[0] as string), "utf8")).toBe("{nope");
+    // the fresh registry is persisted immediately and works
+    expect(JSON.parse(readFileSync(registryPath(), "utf8"))).toEqual({
+      version: 1,
+      sessions: {},
+    });
+    expect(store.createSession({ title: "t", repo }).id).toMatch(/^otc_/);
+  });
+
+  test("a wrong-shape registry is quarantined the same way", () => {
     writeFileSync(registryPath(), JSON.stringify({ version: 9, sessions: {} }));
-    expect(() => new Store()).toThrow(/corrupt registry/);
+    expect(new Store().listSessions()).toEqual([]);
+    expect(readdirSync(home).some((f) => f.startsWith("registry.json.corrupt-"))).toBe(true);
   });
 });
 
@@ -151,15 +165,58 @@ describe("Store counters and revisions", () => {
     expect(store.bumpCounter(id, "thread")).toBe(4);
   });
 
-  test("a corrupt session.json shape throws instead of silently corrupting counters", () => {
+  test("a corrupt session.json is quarantined; revision recovers from snapshots", () => {
+    const store = new Store();
+    const { id } = store.createSession({ title: "t", repo });
+    store.saveRevision(id, "# v1\n");
+    store.saveRevision(id, "# v2\n");
+    const statePath = join(sessionDir(repo, id), "session.json");
+    writeFileSync(statePath, "{nope");
+    const state = store.readState(id);
+    // revision comes back from r2.md — restarting at 0 would overwrite history
+    expect(state.revision).toBe(2);
+    expect(state.counters).toEqual({ batch: 0, thread: 0, question: 0, eventSeq: 0 });
+    const names = readdirSync(sessionDir(repo, id));
+    expect(names.some((f) => f.startsWith("session.json.corrupt-"))).toBe(true);
+    // the rebuilt state is persisted and keeps working
+    expect(JSON.parse(readFileSync(statePath, "utf8")).revision).toBe(2);
+    expect(store.bumpCounter(id, "eventSeq")).toBe(1);
+    expect(store.saveRevision(id, "# v3\n")).toBe(3);
+  });
+
+  test("wrong-shape and wrong-id session.json are quarantined too", () => {
     const store = new Store();
     const { id } = store.createSession({ title: "t", repo });
     const statePath = join(sessionDir(repo, id), "session.json");
     writeFileSync(statePath, JSON.stringify({ id })); // missing revision + counters
-    expect(() => store.readState(id)).toThrow(/corrupt session state/);
-    expect(() => store.bumpCounter(id, "eventSeq")).toThrow(/corrupt session state/);
+    expect(store.readState(id).revision).toBe(0);
     writeFileSync(statePath, JSON.stringify({ id, revision: 0, counters: {} }));
-    expect(() => store.bumpCounter(id, "eventSeq")).toThrow(/corrupt session state/);
+    expect(store.bumpCounter(id, "eventSeq")).toBe(1);
+    // a valid-shaped file for a different session is corruption as well
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        id: "otc_other1",
+        revision: 5,
+        counters: { batch: 9, thread: 9, question: 9, eventSeq: 9 },
+      }),
+    );
+    expect(store.readState(id).id).toBe(id);
+    expect(
+      readdirSync(sessionDir(repo, id)).filter((f) => f.startsWith("session.json.corrupt-")),
+    ).toHaveLength(3);
+  });
+
+  test("a deleted session.json is rebuilt instead of wedging", () => {
+    const store = new Store();
+    const { id } = store.createSession({ title: "t", repo });
+    store.saveRevision(id, "# v1\n");
+    rmSync(join(sessionDir(repo, id), "session.json"));
+    expect(store.readState(id)).toEqual({
+      id,
+      revision: 1,
+      counters: { batch: 0, thread: 0, question: 0, eventSeq: 0 },
+    });
   });
 
   test("saveRevision writes r<N>.md snapshots and bumps revision", () => {

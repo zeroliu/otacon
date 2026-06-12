@@ -303,6 +303,41 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** The CLI adopts an HTTP client with configurable timeouts, or
   agents' Bash caps move and the slice math deserves retuning.
 
+## Corrupt state files are quarantined, not fatal
+
+- **Decision:** A corrupt `registry.json`, `session.json`, or `events.json` (unparseable
+  or wrong shape) is atomically renamed to `<name>.corrupt-<timestamp>-<serial>`, logged
+  to stderr, and the daemon continues with a fresh structure instead of throwing. The
+  rebuilt session state recovers `revision` from the highest `r<N>.md` snapshot on disk
+  (the snapshots are the actual plan history — restarting at r1 would overwrite them);
+  counters restart at 0, so post-quarantine `b`/`t`/`q` ids and event seqs can repeat. A
+  quarantined registry forgets its sessions (their `.otacon/` dirs survive for manual
+  re-registration via a new `otacon start`).
+- **Why:** The old throw-on-corrupt behavior wedged the daemon permanently — every boot
+  (registry) or every touch of the session (state/events) re-threw forever, with no
+  recovery path short of hand-editing files. Atomic writes already make corruption an
+  exceptional, externally-caused event; preserving the bad file beats both losing it and
+  refusing to run. Repeated ids are acceptable because at-least-once delivery already
+  forces consumers to treat duplicates as a handled condition.
+- **Revisit when:** Threads/resolutions (M3) make repeated thread ids actively harmful —
+  then recover counters from a high-water scan of snapshots and the queue, too.
+
+## Stale-daemon restart: bounded attempts, identity re-check before shutdown
+
+- **Decision:** `ensureDaemon` runs at most 3 probe→shutdown→respawn cycles before
+  failing `E_VERSION_MISMATCH`. `shutdownStaleDaemon` re-probes the daemon immediately
+  before POSTing `/api/shutdown` and skips the kill if it is already the current version
+  (or gone); the post-shutdown poll likewise accepts a current-version daemon appearing
+  in the gap.
+- **Why:** Peer CLIs race restarts. Without the pre-shutdown re-check, a CLI that probed
+  a stale daemon could kill the healthy current daemon a peer spawned in the meantime
+  (the probe→shutdown TOCTOU), dropping its parked waiters; the re-check shrinks that
+  window to one round trip. Without the bound, two CLI versions sharing one port would
+  ping-pong shutdown/respawn forever; three attempts absorbs transient races but turns a
+  genuine version fight into an actionable error.
+- **Revisit when:** `/api/shutdown` grows a conditional "only if you are version X"
+  parameter, which would close the remaining race window entirely.
+
 ## M1 scope: CLI surface is `start`/`submit`/`wait`/`status` only
 
 - **Decision:** M1 ships sessions, registry, submit + linter (L1/L2/L6), event queues,

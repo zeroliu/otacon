@@ -14,7 +14,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import type { EventPayload, EventsFile, QueuedEvent } from "../shared/types.js";
-import { stringify, writeFileAtomic } from "./store.js";
+import { quarantineCorruptFile, stringify, writeFileAtomic } from "./store.js";
 
 export type Waiter = (event: QueuedEvent) => void;
 
@@ -34,12 +34,18 @@ export class SessionQueue {
     let raw: unknown;
     try {
       raw = JSON.parse(readFileSync(filePath, "utf8"));
-    } catch (cause) {
-      throw new Error(`corrupt events file: ${filePath}`, { cause });
+    } catch {
+      raw = undefined;
     }
-    const file = raw as EventsFile;
+    const file = raw as EventsFile | undefined;
     if (file?.version !== 1 || !Array.isArray(file.events)) {
-      throw new Error(`corrupt events file: ${filePath}`);
+      // Quarantine, never wedge (DECISIONS.md "Corrupt state files are
+      // quarantined, not fatal"): pending events are preserved in the
+      // quarantined file for manual recovery, and the session keeps working
+      // instead of every events call throwing forever.
+      quarantineCorruptFile(filePath, "events queue");
+      this.flush(); // re-seed an empty file so the next instance reads clean
+      return;
     }
     this.events = file.events;
   }

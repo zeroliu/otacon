@@ -246,13 +246,25 @@ describe("SessionQueue persistence", () => {
     expect(q.take()).toBeUndefined();
   });
 
-  test("a corrupt events file throws instead of silently dropping events", () => {
+  test("a corrupt events file is quarantined and the queue starts empty", () => {
     writeFileSync(file, "{not json");
-    expect(() => new SessionQueue(file)).toThrow(/corrupt events file/);
+    const q = new SessionQueue(file);
+    expect(q.size).toBe(0);
+    const aside = readdirSync(dir).filter((f) => f.startsWith("events.json.corrupt-"));
+    expect(aside).toHaveLength(1);
+    expect(readFileSync(join(dir, aside[0] as string), "utf8")).toBe("{not json");
+    // an empty file was re-seeded; the queue keeps working across instances
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ version: 1, events: [] });
+    q.enqueue(payload(1), 1);
+    expect(new SessionQueue(file).size).toBe(1);
+  });
+
+  test("wrong-shape events files are quarantined too", () => {
     writeFileSync(file, JSON.stringify({ version: 2, events: [] }));
-    expect(() => new SessionQueue(file)).toThrow(/corrupt events file/);
+    expect(new SessionQueue(file).size).toBe(0);
     writeFileSync(file, JSON.stringify({ version: 1 }));
-    expect(() => new SessionQueue(file)).toThrow(/corrupt events file/);
+    expect(new SessionQueue(file).size).toBe(0);
+    expect(readdirSync(dir).filter((f) => f.startsWith("events.json.corrupt-"))).toHaveLength(2);
   });
 
   test("flush writes atomically and leaves no temp files behind", () => {

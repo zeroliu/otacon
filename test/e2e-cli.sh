@@ -15,11 +15,13 @@ mkdir -p "$OTACON_HOME" "$REPO"
 BASE="" # set once the port is picked; the trap may fire before that (set -u)
 DAEMON_PID=""
 WAIT_PID=""
+STALE_PID=""
 PASS=0
 cleanup() {
   [ -n "$BASE" ] && curl -s -X POST "$BASE/api/shutdown" > /dev/null 2>&1 || true
   [ -n "$DAEMON_PID" ] && kill -9 "$DAEMON_PID" 2>/dev/null || true
   [ -n "$WAIT_PID" ] && kill -9 "$WAIT_PID" 2>/dev/null || true
+  [ -n "$STALE_PID" ] && kill -9 "$STALE_PID" 2>/dev/null || true
   rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -144,5 +146,42 @@ set -e
 grep -q "$SID" "$TMP/ambiguous.json" || fail "refusal list missing $SID"
 grep -q "$SID2" "$TMP/ambiguous.json" || fail "refusal list missing $SID2"
 ok "two active sessions without a pointer: refused with the candidate list"
+
+# --- 7. version mismatch: stale otacond restarted in place --------------------
+# Replace the real daemon with a fake stale otacond (health says 0.0.1, exits
+# on POST /api/shutdown); any CLI command must restart it to the CLI's version.
+curl -s -X POST "$BASE/api/shutdown" > /dev/null
+for _ in $(seq 1 50); do
+  kill -0 "$DAEMON_PID" 2>/dev/null || { DAEMON_PID=""; break; }
+  sleep 0.1
+done
+[ -z "$DAEMON_PID" ] || fail "daemon did not exit before the stale-restart check"
+node -e '
+const http = require("http");
+const srv = http.createServer((req, res) => {
+  res.setHeader("content-type", "application/json");
+  if (req.url === "/api/health")
+    return res.end(JSON.stringify({ app: "otacond", version: "0.0.1", pid: process.pid }));
+  if (req.method === "POST" && req.url === "/api/shutdown") {
+    res.end(JSON.stringify({ ok: true }));
+    return setTimeout(() => process.exit(0), 50);
+  }
+  res.statusCode = 404; res.end("{}");
+});
+srv.listen(Number(process.env.OTACON_PORT), "127.0.0.1");
+' &
+STALE_PID=$!
+sleep 0.5
+otacon status > "$TMP/status-restart.json" 2> "$TMP/restart.err" \
+  || fail "status exited nonzero across the stale-daemon restart ($(cat "$TMP/restart.err"))"
+grep -q "restarting stale otacond 0.0.1" "$TMP/restart.err" || fail "no restart notice on stderr"
+NEWV="$(json_field daemon.version "$TMP/status-restart.json")"
+[ "$NEWV" != "0.0.1" ] || fail "status still talked to the stale daemon"
+curl -sf "$BASE/api/health" > "$TMP/health3.json" || fail "no daemon up after the restart"
+[ "$(json_field version "$TMP/health3.json")" = "$NEWV" ] || fail "spawned daemon version mismatch"
+DAEMON_PID="$(json_field pid "$TMP/health3.json")"
+if kill -0 "$STALE_PID" 2>/dev/null; then fail "stale daemon survived the restart"; fi
+STALE_PID=""
+ok "stale otacond 0.0.1 was shut down and $NEWV spawned in its place"
 
 echo "# e2e-cli: all $PASS checks passed"

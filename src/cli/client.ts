@@ -154,6 +154,14 @@ async function spawnAndAwaitHealth(): Promise<DaemonHealth> {
 }
 
 async function shutdownStaleDaemon(): Promise<void> {
+  // Re-check identity and version immediately before firing the shutdown: the
+  // caller probed moments ago, but a peer CLI may have completed the same
+  // restart in between — killing the healthy current-version daemon it just
+  // spawned would drop parked waiters for nothing (the probe→shutdown TOCTOU).
+  const recheck = await probe();
+  if (recheck.state === "down") return;
+  if (recheck.state === "foreign") portConflict();
+  if (recheck.health.version === VERSION) return;
   try {
     await api("POST", "/api/shutdown");
   } catch {
@@ -172,29 +180,33 @@ async function shutdownStaleDaemon(): Promise<void> {
   fail("E_DAEMON_RESTART", "stale otacond did not exit after POST /api/shutdown");
 }
 
+/** Whole probe→shutdown→respawn cycles before giving up on a version fight. */
+const RESTART_ATTEMPTS = 3;
+
 /**
  * Health probe → spawn if down → exact-version handshake, restarting a stale
  * daemon via POST /api/shutdown (DESIGN.md §16). Refuses a port held by a
- * non-otacond process. Basic restart flow — M1i hardens the failure paths.
+ * non-otacond process. The restart cycle is bounded (peer CLIs of different
+ * versions could otherwise ping-pong restarts forever), and the shutdown
+ * re-checks the daemon's version right before firing, so a peer's completed
+ * restart is adopted instead of killed (DECISIONS.md "Stale-daemon restart").
  */
 export async function ensureDaemon(): Promise<DaemonHealth> {
-  const first = await probe();
-  if (first.state === "foreign") portConflict();
-  if (first.state === "up") {
-    if (first.health.version === VERSION) return first.health;
-    notice(`restarting stale otacond ${first.health.version} → ${VERSION}`);
-    await shutdownStaleDaemon();
-    const after = await probe(); // a peer CLI may have respawned already
-    if (after.state === "foreign") portConflict();
-    if (after.state === "up" && after.health.version === VERSION) return after.health;
+  for (let attempt = 0; attempt < RESTART_ATTEMPTS; attempt++) {
+    const current = await probe();
+    if (current.state === "foreign") portConflict();
+    if (current.state === "up") {
+      if (current.health.version === VERSION) return current.health;
+      notice(`restarting stale otacond ${current.health.version} → ${VERSION}`);
+      await shutdownStaleDaemon();
+      continue; // re-probe: a peer may have respawned the current version
+    }
+    const health = await spawnAndAwaitHealth();
+    if (health.version === VERSION) return health;
+    // An older CLI won the respawn race; loop to shut its daemon down too.
   }
-  const health = await spawnAndAwaitHealth();
-  if (health.version !== VERSION) {
-    // Plausible only if an older CLI won the respawn race.
-    fail(
-      "E_VERSION_MISMATCH",
-      `daemon on port ${otaconPort()} runs ${health.version} but this CLI is ${VERSION}; retry`,
-    );
-  }
-  return health;
+  fail(
+    "E_VERSION_MISMATCH",
+    `daemon on port ${otaconPort()} still runs another version after ${RESTART_ATTEMPTS} restart attempts — a CLI of a different version keeps respawning it; retry`,
+  );
 }

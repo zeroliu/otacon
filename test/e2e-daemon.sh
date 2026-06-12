@@ -154,4 +154,16 @@ done
 [ -z "$DAEMON_PID" ] || fail "daemon still alive after /api/shutdown"
 ok "POST /api/shutdown exits the daemon"
 
+# --- corrupt session.json while stopped: quarantined on restart, never wedged --
+printf '{nope' > "$REPO/.otacon/$SID/session.json"
+start_daemon
+curl -sf "$BASE/api/sessions/$SID" > "$TMP/recovered.json" \
+  || fail "corrupt session.json wedged the restarted daemon"
+[ "$(json_field revision "$TMP/recovered.json")" = "1" ] \
+  || fail "revision was not recovered from the r1.md snapshot"
+ls "$REPO/.otacon/$SID/"session.json.corrupt-* > /dev/null 2>&1 \
+  || fail "corrupt session.json was not quarantined aside"
+ok "corrupt session.json quarantined on restart; revision recovered from snapshots"
+curl -s -X POST "$BASE/api/shutdown" > /dev/null
+
 echo "# e2e-daemon: all $PASS checks passed"
