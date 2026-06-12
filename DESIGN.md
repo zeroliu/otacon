@@ -4,8 +4,12 @@
 > helping him think it through. This tool plays Otacon to your coding agents:
 > it owns the planning conversation so the agent does the job right.
 
-**Status:** design approved, no code yet.
+**Status:** design approved; implementation in progress (milestone overview: Roadmap in [README.md](README.md)).
 **Owner:** Zero (personal tool, optimized for one user's workflow, freely customizable).
+
+This document describes product behavior — what otacon is and how it behaves. It carries
+no implementation sequencing. Tradeoff rationale lives in [DECISIONS.md](DECISIONS.md);
+working conventions for agent sessions in [AGENTS.md](AGENTS.md).
 
 ---
 
@@ -51,6 +55,8 @@ Every decision below was resolved deliberately; rationale follows in the relevan
 | 15  | Multi-session     | One daemon, many concurrent sessions; per-session event queues; UI session switcher                                                                                               |
 | 16  | Grilling          | grill-me discipline is a mandatory protocol phase before drafting; decisions must trace to grill answers (linted)                                                                 |
 | 17  | Name              | CLI `otacon`, daemon `otacond`. Future implementer: `snake` (suggestion, not locked)                                                                                              |
+| 18  | Storage format    | Plain JSON files, written atomically; SQLite rejected (native dep, opaque state)                                                                                                  |
+| 19  | Dev tooling       | bun for dev (installs + `bun test`); shipped artifact builds with `tsc` and runs on plain Node                                                                                    |
 
 ---
 
@@ -94,9 +100,10 @@ Three principles:
 ### Stack
 
 TypeScript throughout. Node + Hono single process serving API and static UI. React +
-Vite viewer, mobile-first CSS (the phone is a primary client). State as JSON/SQLite
-under `.otacon/`. System fonts, light/dark via media query. ~720px max-width reading
-column on desktop.
+Vite viewer, mobile-first CSS (the phone is a primary client). State as plain JSON
+files under `.otacon/`. System fonts, light/dark via media query. ~720px max-width
+reading column on desktop. Dev tooling is bun (installs, tests); the shipped artifact
+builds with `tsc` and runs on plain Node.
 
 ---
 
@@ -559,16 +566,3 @@ Budgets/lint config is global (`~/.otacon/config.json`); a committed
 
 `npm update -g otacon` — the version handshake restarts the daemon on next use; no
 other steps.
-
-## Implementation milestones (no code yet — sequencing only)
-
-1. **M1:** `otacond` + CLI skeleton: sessions, registry, submit + linter, wait/event
-   queues, status. Testable entirely via curl/CLI.
-2. **M2:** Web UI core: index, plan rendering (mermaid/code/ASCII), SSE, desktop
-   comment/question flow, drawer + batch send.
-3. **M3:** Revisions: diff vs last-reviewed, gutter markers, changelog banner, threads
-   - resolutions (L5), orphan tray.
-4. **M4:** Grill phase: ask/answer cards, transcript panel, traceability lint (L3),
-   approve flow + artifact write-out.
-5. **M5:** Phone polish (section-menu anchoring, sticky bar, switcher), Tailscale docs,
-   Claude Code skill wrapper + Stop hook; Codex/OpenCode wrappers.
