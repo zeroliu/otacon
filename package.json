@@ -20,6 +20,7 @@
     "test": "bun test",
     "dev:daemon": "bun run src/daemon/main.ts",
     "e2e": "bash test/e2e-daemon.sh",
+    "e2e:cli": "bash test/e2e-cli.sh",
     "smoke": "bash test/smoke.sh"
   },
   "dependencies": {

@@ -235,6 +235,36 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** `otacon clean` archives sessions while the daemon runs —
   eviction must then drain in-flight events first.
 
+## Daemon spawn: health re-probe, not the boot line
+
+- **Decision:** `ensureDaemon` spawns otacond fully detached with stdout/stderr
+  appended to `$OTACON_HOME/daemon.log`, then polls `/api/health` while watching the
+  child's exit code — it never reads the boot line. Child exit 0 before health means
+  it lost the spawn race to another otacond (keep polling the winner); any other exit
+  fails with a pointer at the log. A port answering HTTP as something other than
+  otacond is refused before spawning (`E_PORT_CONFLICT`); a non-HTTP squatter is
+  caught after the fact via the spawned daemon's own exit-1 refusal.
+- **Why:** Reading the boot line means holding a pipe to a process that must outlive
+  the CLI — close it too early and the line races, too late and the CLI hangs. The
+  health probe is the same check every other caller already performs, and "the port
+  is the lock" already makes exit-0-without-health a defined success path. The log
+  file keeps the boot line inspectable for humans.
+- **Revisit when:** Spawn failures need richer diagnostics than the log tail.
+
+## CLI exit codes: 0 success, 1 actionable failure, 2 usage/internal
+
+- **Decision:** Exit 0 covers every protocol-normal outcome including
+  `{"event":"timeout"}`; exit 1 is an expected failure the agent can act on (lint
+  reject, no/ambiguous/unknown session, port conflict, daemon won't start); exit 2 is
+  bad flags or an internal error. Always exactly one JSON line on stdout; notices on
+  stderr.
+- **Why:** Agents branch on exit codes before parsing: 1 means "fix your input or
+  environment and retry", 2 means "you invoked the tool wrong or it is broken — stop
+  and report". Timeout exits 0 because re-parking is the normal loop (DESIGN.md §6),
+  not a failure.
+- **Revisit when:** A consumer needs finer-grained codes than the JSON `error.code`
+  already provides.
+
 ## M1 scope: CLI surface is `start`/`submit`/`wait`/`status` only
 
 - **Decision:** M1 ships sessions, registry, submit + linter (L1/L2/L6), event queues,
