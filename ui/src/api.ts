@@ -75,34 +75,47 @@ export function useSession(id: string): SessionDetail {
     setMissing(false);
     setConnected(false);
     let source: EventSource | undefined;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     let disposed = false;
-    // Probe first: an unknown id should say so instead of retrying a 404 stream forever.
-    fetch(`/api/sessions/${id}`)
-      .then((res) => {
-        if (disposed) return;
-        if (res.status === 404) {
-          setMissing(true);
-          return;
-        }
-        source = new EventSource(`/api/sessions/${id}/stream`);
-        source.onopen = () => setConnected(true);
-        source.onerror = () => setConnected(false);
-        on<{ session: SessionSummary }>(source, "snapshot", (data) => setSession(data.session));
-        on<{ session: SessionSummary }>(source, "session", (data) =>
-          setSession({ ...data.session, changedAt: Date.now() }),
-        );
-        on<{ session: string; revision: number }>(source, "revision", (data) =>
-          setSession((prev) => (prev ? { ...prev, revision: data.revision, changedAt: Date.now() } : prev)),
-        );
-        on<{ session: string; pending: number }>(source, "queue", (data) =>
-          setSession((prev) => (prev ? { ...prev, pendingEvents: data.pending } : prev)),
-        );
-      })
-      .catch(() => {
-        // daemon unreachable: stay in the "connecting" state
-      });
+    // Probe first: an unknown id should say so instead of retrying a 404 stream
+    // forever. A failed probe retries — fetch() has no EventSource-style
+    // auto-reconnect, and without one a daemon restart would strand this
+    // screen on "connecting…" until a manual reload.
+    const probe = (): void => {
+      fetch(`/api/sessions/${id}`)
+        .then((res) => {
+          if (disposed) return;
+          if (res.status === 404) {
+            setMissing(true);
+            return;
+          }
+          if (!res.ok) {
+            retry = setTimeout(probe, 2000);
+            return;
+          }
+          source = new EventSource(`/api/sessions/${id}/stream`);
+          source.onopen = () => setConnected(true);
+          source.onerror = () => setConnected(false);
+          on<{ session: SessionSummary }>(source, "snapshot", (data) => setSession(data.session));
+          on<{ session: SessionSummary }>(source, "session", (data) =>
+            setSession({ ...data.session, changedAt: Date.now() }),
+          );
+          on<{ session: string; revision: number }>(source, "revision", (data) =>
+            setSession((prev) => (prev ? { ...prev, revision: data.revision, changedAt: Date.now() } : prev)),
+          );
+          on<{ session: string; pending: number }>(source, "queue", (data) =>
+            setSession((prev) => (prev ? { ...prev, pendingEvents: data.pending } : prev)),
+          );
+        })
+        .catch(() => {
+          // daemon unreachable: keep probing so recovery is automatic
+          if (!disposed) retry = setTimeout(probe, 2000);
+        });
+    };
+    probe();
     return () => {
       disposed = true;
+      if (retry !== undefined) clearTimeout(retry);
       source?.close();
     };
   }, [id]);

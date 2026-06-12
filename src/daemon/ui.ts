@@ -79,6 +79,10 @@ function sse(
   };
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
+      // Built before any resource exists: if snapshot() throws (a session read
+      // gone wrong), the error propagates out of sse() into app.onError with
+      // no subscription or heartbeat left behind to leak.
+      const snapshotFrame = frame("snapshot", snapshot());
       const close = () => {
         dispose();
         try {
@@ -109,7 +113,7 @@ function sse(
         clearInterval(heartbeat);
         signal.removeEventListener("abort", onAbort);
       };
-      send(frame("snapshot", snapshot()));
+      send(snapshotFrame);
       if (signal.aborted) close();
       else signal.addEventListener("abort", onAbort);
     },
