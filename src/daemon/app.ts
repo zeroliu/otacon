@@ -75,7 +75,9 @@ const notFound = (c: AppContext, message: string) =>
 const timeoutEvent = (c: AppContext) => c.json({ event: "timeout" });
 // Approved sessions are over (DESIGN.md §6, §12 status machine): every
 // state-mutating verb refuses — the CLI's pointer rules guard its side, but
-// curl/UI/--session calls must hit the same wall.
+// curl/UI/--session calls must hit the same wall. Each route checks *after*
+// its body await (see sessionEnded in createApp): a pre-await snapshot goes
+// stale when a concurrent approve lands while the bytes stream in.
 const sessionOver = (c: AppContext, id: string) =>
   c.json(
     { error: { code: "E_SESSION_OVER", message: `session ${id} is approved — the session is over` } },
@@ -163,6 +165,13 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   };
 
   const sessionFor = (c: AppContext) => store.getSession(c.req.param("id") ?? "");
+
+  // Mutating routes call this after their last await: reading the request
+  // body yields, and a concurrent approve can flip the session mid-read — a
+  // status captured before the await would let the stale handler mutate (or
+  // re-approve) an ended session. Everything from this re-check to the state
+  // writes is synchronous, so the answer cannot rot again.
+  const sessionEnded = (id: string): boolean => store.getSession(id)?.status === "approved";
 
   // UI pub/sub (DECISIONS.md "UI live updates"): every state mutation below
   // publishes, and the SSE routes in ui.ts fan the events out to browsers.
@@ -327,11 +336,11 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/submit", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
-    if (session.status === "approved") return sessionOver(c, session.id);
     // Raw markdown body, or {"plan": "...", "resolutions": {...}} JSON — the
     // CLI sends resolutions.json's content along (DESIGN.md §6). The raw path
     // carries no resolutions, so L5 still rejects it when threads are open.
     let content = await c.req.text();
+    if (sessionEnded(session.id)) return sessionOver(c, session.id);
     let resolutions: Resolutions = {};
     if (c.req.header("content-type")?.includes("json")) {
       let body: unknown;
@@ -461,9 +470,9 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/comments", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
-    if (session.status === "approved") return sessionOver(c, session.id);
     const queue = queueFor(session.id); // before any state write: can throw on a corrupt file
     const body = (await readJsonBody(c)) ?? {};
+    if (sessionEnded(session.id)) return sessionOver(c, session.id);
     const rawItems = body.items;
     if (!Array.isArray(rawItems) || rawItems.length === 0) {
       return badRequest(c, "items must be a non-empty array");
@@ -520,9 +529,9 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/questions", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
-    if (session.status === "approved") return sessionOver(c, session.id);
     const queue = queueFor(session.id); // before any state write: can throw on a corrupt file
     const body = (await readJsonBody(c)) ?? {};
+    if (sessionEnded(session.id)) return sessionOver(c, session.id);
     const anchor = parseAnchor(body.anchor);
     if (typeof body.body !== "string" || body.body.trim() === "" || anchor === undefined) {
       return badRequest(c, "question needs a non-empty body and a valid anchor (or null)");
@@ -557,8 +566,8 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/questions/:qid/answer", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
-    if (session.status === "approved") return sessionOver(c, session.id);
     const body = (await readJsonBody(c)) ?? {};
+    if (sessionEnded(session.id)) return sessionOver(c, session.id);
     if (typeof body.body !== "string" || body.body.trim() === "") {
       return badRequest(c, "answer needs a non-empty body");
     }
@@ -596,8 +605,8 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/ask", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
-    if (session.status === "approved") return sessionOver(c, session.id);
     const body = (await readJsonBody(c)) ?? {};
+    if (sessionEnded(session.id)) return sessionOver(c, session.id);
     const { question, options, recommend, multi } = body;
     if (typeof question !== "string" || question.trim() === "") {
       return badRequest(c, "question must be a non-empty string");
@@ -637,9 +646,9 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/answers", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
-    if (session.status === "approved") return sessionOver(c, session.id);
     const queue = queueFor(session.id); // before any state write: can throw on a corrupt file
     const body = (await readJsonBody(c)) ?? {};
+    if (sessionEnded(session.id)) return sessionOver(c, session.id);
     const { question, choice, choices, text } = body;
     if (typeof question !== "string" || question === "") {
       return badRequest(c, "question must name a transcript question id (q<n>)");
@@ -725,9 +734,12 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/approve", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
-    if (session.status === "approved") return sessionOver(c, session.id);
     const queue = queueFor(session.id); // before any state write: can throw on a corrupt file
     const body = (await readJsonBody(c)) ?? {};
+    // Doubles as the double-approve guard: two concurrent approves both
+    // snapshot in_review, but the loser re-checks here after its body await
+    // and refuses instead of writing a second (-2 suffixed) artifact.
+    if (sessionEnded(session.id)) return sessionOver(c, session.id);
     if (body.force !== undefined && typeof body.force !== "boolean") {
       return badRequest(c, "force must be a boolean");
     }

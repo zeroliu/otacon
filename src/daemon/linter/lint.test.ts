@@ -413,6 +413,12 @@ describe("L3 decision traceability", () => {
     ]);
   });
 
+  test("every citation clause in an entry is validated, not just the first", () => {
+    const result = l3("## Decisions\n\n- D1: choice ← q1; revisit later ← q9\n");
+    expect(result.errors.map((e) => e.code)).toEqual(["E_UNKNOWN_QUESTION_CITED"]);
+    expect(result.errors[0]?.message).toContain("q9");
+  });
+
   test("--quick downgrades every L3 issue to a warning", () => {
     const result = l3("## Decisions\n\n- D1: untraced\n- D2: ghost ← q9\n", { quick: true });
     expect(result.ok).toBeTrue();

@@ -337,8 +337,11 @@ export interface GrillContext {
 
 const DECISION_RE = /^[-*+]\s+(D\d+):/;
 // "← q7" or "← q7, q9"; "<-" accepted alongside "←" (models emit both arrows,
-// same accommodation as the —/- phase-heading dashes).
-const CITATION_RE = /(?:←|<-)\s*(q\d+(?:\s*,\s*q\d+)*)/;
+// same accommodation as the —/- phase-heading dashes). Global: an entry can
+// carry several citation clauses ("… ← q1; revisit ← q9"), and every cited id
+// must be checked — validating only the first would let a fabricated later
+// clause game traceability invisibly.
+const CITATION_RE = /(?:←|<-)\s*(q\d+(?:\s*,\s*q\d+)*)/g;
 
 /**
  * L3 (DESIGN.md §4, §5, §8): every `- D<n>:` decision entry must cite the
@@ -354,8 +357,10 @@ export function checkL3(plan: ParsedPlan, ctx: GrillContext): LintIssue[] {
   for (const item of decisions?.listItems ?? []) {
     const label = DECISION_RE.exec(item.text)?.[1];
     if (label === undefined) continue; // non-D entries are not L3's business
-    const cited = CITATION_RE.exec(item.text)?.[1];
-    if (cited === undefined && !item.text.includes("[assumed]")) {
+    const cited = [...item.text.matchAll(CITATION_RE)].flatMap((m) =>
+      (m[1] as string).split(",").map((q) => q.trim()),
+    );
+    if (cited.length === 0 && !item.text.includes("[assumed]")) {
       issues.push(
         issue(
           "L3",
@@ -367,7 +372,7 @@ export function checkL3(plan: ParsedPlan, ctx: GrillContext): LintIssue[] {
       );
       continue;
     }
-    for (const qid of cited === undefined ? [] : cited.split(",").map((q) => q.trim())) {
+    for (const qid of cited) {
       if (!known.has(qid)) {
         issues.push(
           issue(

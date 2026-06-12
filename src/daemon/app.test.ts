@@ -1226,6 +1226,72 @@ describe("approve and the status machine (M4)", () => {
     expect(readFileSync(join(repo, b.path), "utf8")).toContain(second.id);
   });
 
+  /** A body whose bytes arrive only when released — parks a handler on its body await. */
+  const gatedBody = (content: string): { body: ReadableStream<Uint8Array>; release: () => void } => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const body = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        await gate;
+        controller.enqueue(new TextEncoder().encode(content));
+        controller.close();
+      },
+    });
+    return { body, release };
+  };
+
+  test("a submit whose body is still streaming when approve lands is refused", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    // The submit passes its 404 lookup, then parks on the body read; approve
+    // completes in that window. The pre-await status snapshot must not be
+    // trusted — without the post-await re-check this submit would save r2 and
+    // flip the approved session back to in_review.
+    const { body, release } = gatedBody(validPlanFor(session.id));
+    const racing = app.request(`/api/sessions/${session.id}/submit`, {
+      method: "POST",
+      body,
+      duplex: "half",
+    } as RequestInit);
+    await sleep(10); // let the handler reach its body await
+    expect((await approve(session.id)).status).toBe(200);
+    release();
+    const res = await racing;
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("E_SESSION_OVER");
+    // The race wrote nothing: no r2 snapshot, and the session stayed approved.
+    expect(store.getSession(session.id)?.status).toBe("approved");
+    expect(existsSync(revisionPath(repo, session.id, 2))).toBeFalse();
+  });
+
+  test("the slower of two racing approves refuses instead of writing a twin artifact", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    const { body, release } = gatedBody("{}");
+    const racing = app.request(`/api/sessions/${session.id}/approve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+      duplex: "half",
+    } as RequestInit);
+    await sleep(10);
+    const winner = (await (await approve(session.id)).json()) as { path: string };
+    release();
+    const res = await racing;
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("E_SESSION_OVER");
+    // Exactly one artifact: the loser never minted the -2 suffixed twin.
+    expect(existsSync(join(repo, winner.path))).toBeTrue();
+    expect(existsSync(join(repo, winner.path.replace(/\.md$/, "-2.md")))).toBeFalse();
+    // And only one approved event sits in the queue.
+    const event = await app.request(`/api/sessions/${session.id}/events`);
+    expect(((await event.json()) as { event: string }).event).toBe("approved");
+    const drained = await app.request(`/api/sessions/${session.id}/events`);
+    expect(((await drained.json()) as { event: string }).event).toBe("timeout");
+  });
+
   test("every mutating verb refuses an approved session with E_SESSION_OVER", async () => {
     const session = mintSession();
     await submitValid(session.id);
