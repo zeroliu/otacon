@@ -438,7 +438,10 @@ unread-change badge, last activity, accent color. Tap → review screen.
 ```
 
 - Select text → floating toolbar: **Comment** (→ drawer) | **Ask** (fires immediately;
-  thread shows "answering…" until the reply lands).
+  thread shows "answering…" until the reply lands). The toolbar only appears where the
+  anchor can survive: selections touching renderer chrome (mermaid SVG labels, fence
+  captions, slug anchors, size badges — text that exists only in the rendered DOM,
+  never in the plan markdown the agent reads) get no toolbar.
 - Drawer = bottom bar: review/edit/delete pending comments, per-comment **send now**,
   **Send all**; when nothing is pending it shrinks to the whole-plan comment
   affordance alone.

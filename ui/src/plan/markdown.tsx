@@ -9,15 +9,16 @@ import { memo, useMemo } from "react";
 
 marked.use({ gfm: true });
 
-// memo matters here beyond performance: React re-applies
-// dangerouslySetInnerHTML whenever the component re-renders (the {__html}
-// wrapper object is new each time), which rebuilds the text nodes and
-// collapses any user selection inside them — the review loop anchors
-// selections to exactly these nodes (ui/src/review/anchor.ts).
+// The {__html} wrapper identity is what matters here: react-dom re-assigns
+// innerHTML whenever the wrapper object is new, which rebuilds the text nodes
+// and collapses any user selection inside them — the review loop anchors
+// selections to exactly these nodes (ui/src/review/anchor.ts). The useMemo
+// keeps the wrapper stable across re-renders at the mechanism level; memo on
+// top skips the re-render entirely.
 export const Markdown = memo(function Markdown({ source }: { source: string }) {
-  const html = useMemo(
-    () =>
-      DOMPurify.sanitize(marked.parse(source, { async: false }), {
+  const markup = useMemo(
+    () => ({
+      __html: DOMPurify.sanitize(marked.parse(source, { async: false }), {
         USE_PROFILES: { html: true },
         // The html profile still permits <form>/<style>/inline style — plan
         // prose never needs them, and they are the remaining phishing-form
@@ -27,8 +28,9 @@ export const Markdown = memo(function Markdown({ source }: { source: string }) {
         FORBID_TAGS: ["form", "style"],
         FORBID_ATTR: ["style"],
       }),
+    }),
     [source],
   );
   // eslint-disable-next-line react/no-danger — sanitized above
-  return <div className="md" dangerouslySetInnerHTML={{ __html: html }} />;
+  return <div className="md" dangerouslySetInnerHTML={markup} />;
 });

@@ -24,6 +24,26 @@ function enclosingSection(node: Node): HTMLElement | null {
   return element?.closest<HTMLElement>("section[id]") ?? null;
 }
 
+/** The thread/composer target label for an anchor (null = whole plan). */
+export function anchorLabel(anchor: Anchor | null): string {
+  return anchor ? `#${anchor.section}` : "whole plan";
+}
+
+// Renderer chrome whose text exists only in the rendered DOM, never in the
+// plan markdown the agent reads: mermaid SVG labels, fence captions, slug
+// anchors, phase numbers, Details size badges, the diagram-pending notice.
+// An `exact` captured from these could never be re-located — by the agent
+// grepping the source, or by findExactRange after a re-render — so the
+// toolbar must not offer to anchor there.
+const CHROME_SELECTOR = "svg, .fence-head, .anchor-slug, .phase-n, .details-summary, .diagram-pending";
+
+function touchesChrome(range: Range, section: HTMLElement): boolean {
+  for (const el of section.querySelectorAll(CHROME_SELECTOR)) {
+    if (range.intersectsNode(el)) return true;
+  }
+  return false;
+}
+
 /**
  * The current document selection as an anchor, when it is non-empty and starts
  * inside a slug-ID section of `container`; null otherwise (toolbar hidden).
@@ -36,6 +56,7 @@ export function captureSelection(container: HTMLElement): CapturedSelection | nu
   if (exact.trim() === "") return null;
   const section = enclosingSection(range.startContainer);
   if (!section || !container.contains(section)) return null;
+  if (touchesChrome(range, section)) return null; // anchor could not survive
 
   // Context = the text between the section edge and the selection edge,
   // measured through Ranges so it matches what the user actually sees.
@@ -130,6 +151,10 @@ export function flashAnchor(container: HTMLElement, anchor: Anchor): void {
   section.classList.add("anchor-hit");
 
   const supportsHighlight = typeof Highlight !== "undefined" && CSS.highlights !== undefined;
+  // Always drop the previous flash's highlight first: when this anchor has no
+  // re-locatable quote, a still-painted entry from the last click would
+  // otherwise linger on the wrong thread's text for the new flash's duration.
+  if (supportsHighlight) CSS.highlights.delete("otacon-flash");
   const range = anchor.exact ? findExactRange(section, anchor.exact, anchor.prefix) : null;
   if (range && supportsHighlight) {
     CSS.highlights.set("otacon-flash", new Highlight(range));

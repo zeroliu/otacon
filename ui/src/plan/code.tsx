@@ -26,17 +26,22 @@ export function CodeFence({
   // Memoized: the dossier re-renders on every SSE frame (queue ticks
   // included), and re-highlighting every fence each time is pure waste —
   // parsePlan is memoized upstream, so fence identity is stable per revision.
-  const html = useMemo(() => {
+  // The memo also keeps the {__html} wrapper's identity stable: a fresh
+  // wrapper makes react-dom rewrite innerHTML, collapsing any selection
+  // being anchored inside the fence (see markdown.tsx).
+  const markup = useMemo(() => {
     const language = fence.lang !== "" && hljs.getLanguage(fence.lang) ? fence.lang : undefined;
-    return language
-      ? hljs.highlight(fence.code, { language, ignoreIllegals: true }).value
-      : escapeHtml(fence.code);
+    return {
+      __html: language
+        ? hljs.highlight(fence.code, { language, ignoreIllegals: true }).value
+        : escapeHtml(fence.code),
+    };
   }, [fence]);
   return (
     <figure className={className ? `fence ${className}` : "fence"}>
       <figcaption className="fence-head">{label ?? (fence.lang || "text")}</figcaption>
       <pre>
-        <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} />
+        <code className="hljs" dangerouslySetInnerHTML={markup} />
       </pre>
     </figure>
   );
@@ -91,6 +96,8 @@ let renderSeq = 0;
 export function MermaidFigure({ code }: { code: string }) {
   const [svg, setSvg] = useState<string>();
   const [failed, setFailed] = useState(false);
+  // Stable {__html} wrapper — same selection-collapse mechanism as CodeFence.
+  const markup = useMemo(() => (svg === undefined ? undefined : { __html: svg }), [svg]);
 
   useEffect(() => {
     let live = true;
@@ -130,10 +137,10 @@ export function MermaidFigure({ code }: { code: string }) {
   return (
     <figure className="fence diagram">
       <figcaption className="fence-head">diagram</figcaption>
-      {svg === undefined ? (
+      {markup === undefined ? (
         <div className="diagram-body diagram-pending">rendering diagram…</div>
       ) : (
-        <div className="diagram-body" dangerouslySetInnerHTML={{ __html: svg }} />
+        <div className="diagram-body" dangerouslySetInnerHTML={markup} />
       )}
     </figure>
   );

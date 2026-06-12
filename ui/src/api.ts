@@ -154,13 +154,13 @@ export interface CommentDraft {
   body: string;
 }
 
-/** Flush comment drafts as one batch; resolves false when the POST failed. */
-export async function postComments(id: string, items: CommentDraft[]): Promise<boolean> {
+/** POST a JSON payload; resolves true only on the daemon's 202 accept. */
+async function post202(path: string, payload: unknown): Promise<boolean> {
   try {
-    const res = await fetch(`/api/sessions/${id}/comments`, {
+    const res = await fetch(path, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ items }),
+      body: JSON.stringify(payload),
     });
     return res.status === 202;
   } catch {
@@ -168,22 +168,14 @@ export async function postComments(id: string, items: CommentDraft[]): Promise<b
   }
 }
 
+/** Flush comment drafts as one batch; resolves false when the POST failed. */
+export function postComments(id: string, items: CommentDraft[]): Promise<boolean> {
+  return post202(`/api/sessions/${id}/comments`, { items });
+}
+
 /** Fire a question instantly (DESIGN.md §9); the answer arrives as a thread frame. */
-export async function postQuestion(
-  id: string,
-  anchor: Anchor | null,
-  body: string,
-): Promise<boolean> {
-  try {
-    const res = await fetch(`/api/sessions/${id}/questions`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ anchor, body }),
-    });
-    return res.status === 202;
-  } catch {
-    return false;
-  }
+export function postQuestion(id: string, anchor: Anchor | null, body: string): Promise<boolean> {
+  return post202(`/api/sessions/${id}/questions`, { anchor, body });
 }
 
 /**

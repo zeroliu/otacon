@@ -5,16 +5,20 @@
 // thread frame. Resolution states arrive with M3.
 
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import { memo, useMemo } from "react";
 import type { Anchor, Thread } from "../api";
+import { anchorLabel } from "./anchor";
 
-export function ThreadsRail({
+// memo'd: the parent review loop re-renders per selection tick and drawer
+// keystroke, while `threads` only gets a new identity on an SSE frame.
+export const ThreadsRail = memo(function ThreadsRail({
   threads,
   onJump,
 }: {
   threads: Thread[];
   onJump: (anchor: Anchor) => void;
 }) {
-  const newestFirst = [...threads].reverse();
+  const newestFirst = useMemo(() => [...threads].reverse(), [threads]);
   return (
     <aside className="rail" aria-label="threads">
       <div className="rail-top">
@@ -28,7 +32,7 @@ export function ThreadsRail({
       )}
     </aside>
   );
-}
+});
 
 function ThreadCard({ thread, onJump }: { thread: Thread; onJump: (anchor: Anchor) => void }) {
   const { anchor } = thread;
@@ -54,7 +58,7 @@ function ThreadCard({ thread, onJump }: { thread: Thread; onJump: (anchor: Ancho
           {thread.kind === "question" ? "?" : "◆"}
         </span>
         <span className="thread-id">{thread.id}</span>
-        <span className="thread-where">{anchor ? `#${anchor.section}` : "whole plan"}</span>
+        <span className="thread-where">{anchorLabel(anchor)}</span>
       </div>
       {anchor?.exact !== undefined && <blockquote className="thread-quote">{anchor.exact}</blockquote>}
       <p className="thread-body">{thread.body}</p>

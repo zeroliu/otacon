@@ -558,7 +558,27 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   payload's stable arrays, so shallow comparison is exact.
 - **Revisit when:** React's host-prop diffing compares `__html` by value (making the
   memo a pure perf optimization), or the renderer gains props that defeat shallow
-  equality.
+  equality. *(Hardened post-review: every `dangerouslySetInnerHTML` site now also
+  `useMemo`s its `{__html}` wrapper, so innerHTML survives re-renders even if a
+  future parent breaks prop identity — memo is the perf layer, the stable wrapper
+  the correctness layer.)*
+
+## Selection toolbar suppressed over renderer chrome
+
+- **Decision:** `captureSelection` rejects any selection whose range intersects
+  renderer chrome — mermaid SVG, fence captions, `#slug` anchors, phase numbers,
+  Details summaries, the diagram-pending notice — so the toolbar (and the `c`/`q`
+  shortcuts) simply do not offer to anchor there. Suppress, not degrade.
+- **Why:** Chrome text exists only in the rendered DOM, never in the plan markdown
+  the agent reads: an `exact` captured from it can never be grepped in the source
+  nor re-located by `findExactRange`, so the "anchored" comment would silently
+  behave as whole-plan. A toolbar that won't appear is honest; an anchor that
+  quietly stops meaning anything is not. Prefix/suffix may still absorb adjacent
+  chrome text — capture and re-locate concatenate the same text nodes, so the UI
+  stays self-consistent, and the agent treats context as a hint, not a contract.
+- **Revisit when:** plans grow selectable generated surfaces users legitimately
+  want to discuss (e.g. diagram nodes) — that calls for a different anchor type,
+  not a looser guard.
 
 ## Review screen: reading surface only until the verbs exist
 

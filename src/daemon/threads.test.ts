@@ -61,6 +61,31 @@ describe("readThreads / appendThreads", () => {
     expect(readThreads(path)).toEqual([]);
     expect(readdirSync(dir).some((f) => f.startsWith("threads.json.corrupt-"))).toBe(true);
   });
+
+  test("a JSON-valid file with a corrupt element is quarantined, not served", () => {
+    // The envelope parses fine — the elements must be validated too, or a
+    // null/garbage thread reaches answerQuestion (500) and the rail (crash).
+    writeFileSync(path, JSON.stringify({ version: 1, threads: [null] }));
+    expect(readThreads(path)).toEqual([]);
+    expect(readdirSync(dir).some((f) => f.startsWith("threads.json.corrupt-"))).toBe(true);
+  });
+
+  test("element validation rejects wrong field types and unknown kinds", () => {
+    const bad = [
+      { ...comment("t1"), body: 7 }, // body must be a string
+      { ...comment("t1"), kind: "review" }, // unknown kind
+      { ...question("q1"), answer: { body: "x" } }, // answer missing answeredAt
+      { ...comment("t1"), anchor: { exact: "x" } }, // anchor needs a section
+    ];
+    for (const thread of bad) {
+      writeFileSync(path, JSON.stringify({ version: 1, threads: [thread] }));
+      expect(readThreads(path)).toEqual([]);
+    }
+    // And a valid file with every shape passes untouched.
+    const good = [comment("t1"), question("q1"), { ...question("q2"), answer: { body: "a", answeredAt: "2026-06-13T00:00:00.000Z" } }];
+    writeFileSync(path, JSON.stringify({ version: 1, threads: good }));
+    expect(readThreads(path)).toEqual(good as Thread[]);
+  });
 });
 
 describe("answerQuestion", () => {

@@ -4,16 +4,18 @@
 // "answering" placeholder flips to the agent's `otacon answer` over SSE,
 // without a reload. Anchors are asserted byte-for-byte against the selection.
 
+import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
+import type { Session } from "./helpers.js";
+import { createSession, plantMarker, readMarker, submitFixturePlan, uniqueTitle } from "./helpers.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const fixturePath = join(here, "..", "fixtures", "valid-plan.md");
 const cliPath = join(here, "..", "..", "dist", "cli", "main.js");
 const port = Number(process.env.OTACON_E2E_PORT ?? "4790");
 // The CLI only touches its home when it has to spawn a daemon (it never
@@ -21,31 +23,14 @@ const port = Number(process.env.OTACON_E2E_PORT ?? "4790");
 // ever spilling into the real ~/.otacon.
 const cliHome = mkdtempSync(join(tmpdir(), "otacon-ui-e2e-cli-"));
 
-interface Session {
-  id: string;
-  title: string;
-}
-
-const uniqueTitle = (label: string) =>
-  `${label} ${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-
-async function createSession(request: APIRequestContext, title: string): Promise<Session> {
-  const repo = mkdtempSync(join(tmpdir(), "otacon-ui-e2e-repo-"));
-  const res = await request.post("/api/sessions", {
-    data: { title, repo, branch: "zero/prototype" },
-  });
-  expect(res.status()).toBe(201);
-  return (await res.json()) as Session;
-}
-
-async function submitPlan(request: APIRequestContext, id: string): Promise<void> {
-  const plan = readFileSync(fixturePath, "utf8").replace("otc_test01", id);
-  const res = await request.post(`/api/sessions/${id}/submit`, {
-    headers: { "content-type": "text/markdown" },
-    data: plan,
-  });
-  expect(res.ok()).toBeTruthy();
-}
+// A test that fails between spawning a parked `otacon wait` and awaiting it
+// would otherwise orphan the child to long-poll the daemon for up to 30s past
+// the failure; afterEach reaps whatever is still running.
+const liveChildren = new Set<ChildProcess>();
+test.afterEach(() => {
+  for (const child of liveChildren) child.kill("SIGKILL");
+  liveChildren.clear();
+});
 
 /** Run the REAL built CLI against the e2e daemon; resolves on exit. */
 function runCli(args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
@@ -58,12 +43,19 @@ function runCli(args: string[]): Promise<{ code: number | null; stdout: string; 
         NO_PROXY: "127.0.0.1,localhost",
       },
     });
+    liveChildren.add(child);
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
     child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
+    child.on("error", (error) => {
+      liveChildren.delete(child);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      liveChildren.delete(child);
+      resolve({ code, stdout, stderr });
+    });
   });
 }
 
@@ -96,14 +88,9 @@ async function selectText(page: Page, selector: string, needle: string): Promise
   expect(found, `could not select ${JSON.stringify(needle)} in ${selector}`).toBe(true);
 }
 
-// Marker that survives SPA updates but not a page reload (same trick as the
-// other specs) — proves SSE updated the screen without a navigation.
-const plantMarker = (page: Page) => page.evaluate("window.__otaconMarker = true");
-const readMarker = (page: Page) => page.evaluate("window.__otaconMarker === true");
-
 async function openReview(page: Page, request: APIRequestContext, label: string): Promise<Session> {
   const session = await createSession(request, uniqueTitle(label));
-  await submitPlan(request, session.id);
+  await submitFixturePlan(request, session.id, "valid-plan.md");
   await page.goto(`/s/${session.id}`);
   await expect(page.locator("#summary .md")).toBeVisible();
   return session;
@@ -286,6 +273,23 @@ test("whole-plan comment goes through the drawer affordance with a null anchor",
   await expect(thread).toHaveCount(1);
   await expect(thread.locator(".thread-where")).toHaveText("whole plan");
   await expect(thread.locator(".thread-quote")).toHaveCount(0);
+});
+
+test("renderer chrome never offers the toolbar — its text is not in the plan source", async ({
+  page,
+  request,
+}) => {
+  await openReview(page, request, "chrome-guard");
+
+  // Sanity: prose selections do get the toolbar…
+  await selectText(page, "#summary .md", "token issuance");
+  await expect(page.locator(".sel-toolbar")).toBeVisible();
+
+  // …but the section's #slug anchor exists only in the rendered DOM — an
+  // anchor captured from it could never be re-located, so no toolbar.
+  // (The slug renders as two text nodes, "#" + id; selecting the id is enough.)
+  await selectText(page, "#summary .anchor-slug", "summary");
+  await expect(page.locator(".sel-toolbar")).toHaveCount(0);
 });
 
 test("keyboard: c opens the comment composer, q the ask composer, on the selection", async ({

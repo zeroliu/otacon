@@ -6,6 +6,7 @@
 
 import { useState } from "react";
 import type { CommentDraft } from "../api";
+import { anchorLabel } from "./anchor";
 
 export interface PendingComment extends CommentDraft {
   /** Local identity for edit/delete; never leaves the browser. */
@@ -41,9 +42,7 @@ export function CommentDrawer({
           {pending.map((item) => (
             <article key={item.key} className="pending">
               <div className="pending-meta">
-                <span className="pending-slug">
-                  {item.anchor ? `#${item.anchor.section}` : "whole plan"}
-                </span>
+                <span className="pending-slug">{anchorLabel(item.anchor)}</span>
                 <button
                   type="button"
                   className="pending-act"
@@ -55,7 +54,7 @@ export function CommentDrawer({
                 <button
                   type="button"
                   className="pending-act pending-delete"
-                  aria-label={`delete comment on ${item.anchor ? `#${item.anchor.section}` : "whole plan"}`}
+                  aria-label={`delete comment on ${anchorLabel(item.anchor)}`}
                   onClick={() => onDelete(item.key)}
                 >
                   ✕
@@ -69,6 +68,10 @@ export function CommentDrawer({
                 aria-label="edit comment"
                 rows={2}
                 value={item.body}
+                // Frozen while a send is in flight: the daemon got the text
+                // as it was at click time, so a mid-flight edit would be
+                // silently dropped when the sent items clear.
+                disabled={busy}
                 onChange={(event) => onEdit(item.key, event.target.value)}
               />
             </article>

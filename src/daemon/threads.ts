@@ -5,30 +5,57 @@
 // daemon: atomic writes, corrupt files quarantined and rebuilt empty, never
 // fatal (DECISIONS.md "Threads: one threads.json per session").
 
-import { existsSync, readFileSync } from "node:fs";
-import type { Thread, ThreadsFile } from "../shared/types.js";
-import { quarantineCorruptFile, stringify, writeFileAtomic } from "./store.js";
+import { existsSync } from "node:fs";
+import type { Anchor, Thread, ThreadsFile } from "../shared/types.js";
+import { quarantineCorruptFile, readJsonOr, stringify, writeFileAtomic } from "./store.js";
 
+type QuestionThread = Extract<Thread, { kind: "question" }>;
+type AnsweredThread = QuestionThread & { answer: NonNullable<QuestionThread["answer"]> };
+
+function isAnchor(raw: unknown): raw is Anchor | null {
+  if (raw === null) return true;
+  const anchor = raw as Anchor;
+  return typeof anchor === "object" && typeof anchor.section === "string";
+}
+
+function isThread(raw: unknown): raw is Thread {
+  const thread = raw as Thread;
+  if (typeof thread !== "object" || thread === null) return false;
+  if (typeof thread.id !== "string" || typeof thread.body !== "string") return false;
+  if (typeof thread.createdAt !== "string" || !isAnchor(thread.anchor)) return false;
+  if (thread.kind === "comment") return typeof thread.batch === "string";
+  if (thread.kind === "question") {
+    const { answer } = thread;
+    if (answer === undefined) return true;
+    return (
+      typeof answer === "object" &&
+      answer !== null &&
+      typeof answer.body === "string" &&
+      typeof answer.answeredAt === "string"
+    );
+  }
+  return false;
+}
+
+// Every element is validated, not just the envelope: a JSON-valid file with a
+// corrupt element would otherwise flow a non-Thread into answerQuestion (500)
+// and the rail (render crash) — exactly the "never fatal" failures quarantine
+// exists to absorb.
 function parseThreads(raw: unknown): ThreadsFile | undefined {
   const file = raw as ThreadsFile;
   const valid =
     typeof file === "object" &&
     file !== null &&
     file.version === 1 &&
-    Array.isArray(file.threads);
+    Array.isArray(file.threads) &&
+    file.threads.every(isThread);
   return valid ? file : undefined;
 }
 
 /** All threads, oldest first. Missing file = no threads yet; corrupt = quarantined, []. */
 export function readThreads(path: string): Thread[] {
   if (!existsSync(path)) return [];
-  let raw: unknown;
-  try {
-    raw = JSON.parse(readFileSync(path, "utf8"));
-  } catch {
-    raw = undefined;
-  }
-  const file = parseThreads(raw);
+  const file = parseThreads(readJsonOr(path));
   if (!file) {
     quarantineCorruptFile(path, "threads file");
     return [];
@@ -49,11 +76,14 @@ export function appendThreads(path: string, threads: Thread[]): void {
  * overwrites: at-least-once delivery means the agent may legitimately answer
  * the same question twice, and the newer text is the better one.
  */
-export function answerQuestion(path: string, id: string, body: string): Thread | undefined {
+export function answerQuestion(path: string, id: string, body: string): AnsweredThread | undefined {
   const threads = readThreads(path);
-  const thread = threads.find((t) => t.id === id && t.kind === "question");
-  if (!thread || thread.kind !== "question") return undefined;
-  thread.answer = { body, answeredAt: new Date().toISOString() };
+  const thread = threads.find(
+    (t): t is QuestionThread => t.id === id && t.kind === "question",
+  );
+  if (!thread) return undefined;
+  const answer = { body, answeredAt: new Date().toISOString() };
+  thread.answer = answer;
   writeFileAtomic(path, stringify({ version: 1, threads } satisfies ThreadsFile));
-  return thread;
+  return { ...thread, answer };
 }

@@ -122,6 +122,10 @@ function ReviewLoop({
 }) {
   const planRef = useRef<HTMLElement | null>(null);
   const keyRef = useRef(0);
+  // Bumped on every composer open so the <Composer> remounts with an empty
+  // body: c/q and the whole-plan affordance can retarget an open composer,
+  // and a half-typed draft must never silently follow the new anchor.
+  const composerSeq = useRef(0);
   const [composer, setComposer] = useState<ComposerState | null>(null);
   const [pending, setPending] = useState<PendingComment[]>([]);
   const [busy, setBusy] = useState(false);
@@ -132,6 +136,7 @@ function ReviewLoop({
   const clearSelection = () => document.getSelection()?.removeAllRanges();
 
   const openComposer = useCallback((mode: "comment" | "ask", sel: CapturedSelection) => {
+    composerSeq.current += 1;
     if (window.innerWidth < 560) {
       // Selection popovers don't fit a phone; the composer becomes a sheet.
       setComposer({ mode, anchor: sel.anchor, at: null });
@@ -187,6 +192,9 @@ function ReviewLoop({
     clearSelection();
   };
 
+  // Drawer sends only: busy/failed are the drawer bar's state. The composer's
+  // own send paths (sendNow/ask below) render their own failure hint and must
+  // never light the drawer's "send failed — retry" over a batch they didn't touch.
   const sendItems = async (items: CommentDraft[]): Promise<boolean> => {
     setBusy(true);
     setFailed(false);
@@ -196,9 +204,9 @@ function ReviewLoop({
     return ok;
   };
 
-  const sendNow = async (body: string): Promise<boolean> => {
-    if (!composer) return false;
-    const ok = await sendItems([{ anchor: composer.anchor, body }]);
+  // Shared composer success protocol: close it and drop the selection.
+  const submitComposer = async (post: () => Promise<boolean>): Promise<boolean> => {
+    const ok = await post();
     if (ok) {
       setComposer(null);
       clearSelection();
@@ -206,20 +214,26 @@ function ReviewLoop({
     return ok;
   };
 
-  const ask = async (body: string): Promise<boolean> => {
-    if (!composer) return false;
-    const ok = await postQuestion(session.id, composer.anchor, body);
-    if (ok) {
-      setComposer(null);
-      clearSelection();
-    }
-    return ok;
-  };
+  const sendNow = (body: string): Promise<boolean> =>
+    composer
+      ? submitComposer(() => postComments(session.id, [{ anchor: composer.anchor, body }]))
+      : Promise.resolve(false);
+
+  const ask = (body: string): Promise<boolean> =>
+    composer
+      ? submitComposer(() => postQuestion(session.id, composer.anchor, body))
+      : Promise.resolve(false);
 
   const sendAll = async () => {
     if (pending.length === 0) return;
-    const ok = await sendItems(pending.map(({ anchor, body }) => ({ anchor, body })));
-    if (ok) setPending([]);
+    const batch = pending;
+    const ok = await sendItems(batch.map(({ anchor, body }) => ({ anchor, body })));
+    // Remove exactly what was sent: a draft stacked from the composer while
+    // the POST was in flight stays pending instead of being silently wiped.
+    if (ok) {
+      const sent = new Set(batch.map((item) => item.key));
+      setPending((prev) => prev.filter((entry) => !sent.has(entry.key)));
+    }
   };
 
   const sendOne = async (key: number) => {
@@ -268,6 +282,7 @@ function ReviewLoop({
           )}
           {composer !== null && (
             <Composer
+              key={composerSeq.current}
               state={composer}
               onClose={() => setComposer(null)}
               onStack={stack}
@@ -283,7 +298,10 @@ function ReviewLoop({
             onDelete={remove}
             onSendOne={sendOne}
             onSendAll={sendAll}
-            onWholePlan={() => setComposer({ mode: "comment", anchor: null, at: null })}
+            onWholePlan={() => {
+              composerSeq.current += 1;
+              setComposer({ mode: "comment", anchor: null, at: null });
+            }}
           />
         </>
       )}

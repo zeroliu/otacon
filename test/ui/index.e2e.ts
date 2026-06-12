@@ -3,40 +3,13 @@
 // Sessions are seeded through the real HTTP API; titles carry a unique suffix
 // so parallel tests never match each other's cards.
 
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
+import type { Session } from "./helpers.js";
+import { createSession, plantMarker, readMarker, submitFixturePlan, uniqueTitle } from "./helpers.js";
 
-const fixturePath = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "valid-plan.md");
-
-interface Session {
-  id: string;
-  title: string;
-}
-
-const uniqueTitle = (label: string) =>
-  `${label} ${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-
-async function createSession(request: APIRequestContext, title: string): Promise<Session> {
-  const repo = mkdtempSync(join(tmpdir(), "otacon-ui-e2e-repo-"));
-  const res = await request.post("/api/sessions", {
-    data: { title, repo, branch: "zero/prototype" },
-  });
-  expect(res.status()).toBe(201);
-  return (await res.json()) as Session;
-}
-
-async function submitPlan(request: APIRequestContext, id: string): Promise<void> {
-  const plan = readFileSync(fixturePath, "utf8").replace("otc_test01", id);
-  const res = await request.post(`/api/sessions/${id}/submit`, {
-    headers: { "content-type": "text/markdown" },
-    data: plan,
-  });
-  expect(res.ok()).toBeTruthy();
-}
+const submitPlan = (request: APIRequestContext, id: string) =>
+  submitFixturePlan(request, id, "valid-plan.md");
 
 async function postComment(request: APIRequestContext, id: string): Promise<void> {
   const res = await request.post(`/api/sessions/${id}/comments`, {
@@ -57,11 +30,6 @@ function expectedHue(sessionId: string): number {
 
 const cardFor = (page: Page, session: Session) =>
   page.locator(".card", { hasText: session.title });
-
-// Marker that survives SPA updates but not a page reload. String-expression
-// evaluate keeps browser globals out of the server tsconfig (no DOM lib).
-const plantMarker = (page: Page) => page.evaluate("window.__otaconMarker = true");
-const readMarker = (page: Page) => page.evaluate("window.__otaconMarker === true");
 
 test("index renders session cards with the correct status chips", async ({ page, request }) => {
   const drafting = await createSession(request, uniqueTitle("drafting"));

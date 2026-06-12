@@ -2,14 +2,15 @@
 // plan text — Comment stacks into the drawer, Ask fires instantly — and the
 // anchored composer both actions open. The toolbar is the UI's one inverted
 // surface (paper-on-ink): it floats above the page, so it reads as the codec
-// cursor, not part of the document. Both are fixed-position and re-derive
-// their spot from the live selection, so scrolling never strands them.
+// cursor, not part of the document. The toolbar re-derives its spot from the
+// live selection on scroll, so it never strands; the composer pins where it
+// opened — its anchor is already captured, so the selection no longer matters.
 
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, RefObject } from "react";
 import { useEffect, useRef, useState } from "react";
 import type { Anchor } from "../api";
 import type { CapturedSelection } from "./anchor";
-import { captureSelection } from "./anchor";
+import { anchorLabel, captureSelection } from "./anchor";
 
 /** Track the live selection inside `ref` while `enabled` (composer closed). */
 export function useSelection(
@@ -22,15 +23,24 @@ export function useSelection(
       setSelection(null);
       return;
     }
-    const update = () => {
+    let raf = 0;
+    const measure = () => {
+      raf = 0;
       const el = ref.current;
       setSelection(el ? captureSelection(el) : null);
     };
-    update();
+    // selectionchange fires per mousemove during a drag and capture-phase
+    // scroll per frame; coalescing to one capture per animation frame keeps
+    // the O(section text) prefix/suffix serialization off the input path.
+    const update = () => {
+      if (raf === 0) raf = requestAnimationFrame(measure);
+    };
+    measure();
     document.addEventListener("selectionchange", update);
     window.addEventListener("scroll", update, true); // reposition, don't strand
     window.addEventListener("resize", update);
     return () => {
+      if (raf !== 0) cancelAnimationFrame(raf);
       document.removeEventListener("selectionchange", update);
       window.removeEventListener("scroll", update, true);
       window.removeEventListener("resize", update);
@@ -140,9 +150,7 @@ export function Composer({
     >
       <div className="composer-head">
         <span className="composer-mode">{state.mode}</span>
-        <span className="composer-target">
-          → {state.anchor ? `#${state.anchor.section}` : "whole plan"}
-        </span>
+        <span className="composer-target">→ {anchorLabel(state.anchor)}</span>
         <button type="button" className="composer-close" onClick={onClose}>
           esc
         </button>

@@ -57,7 +57,7 @@ export function quarantineCorruptFile(path: string, what: string): string {
   return aside;
 }
 
-function readJsonOr(path: string): unknown {
+export function readJsonOr(path: string): unknown {
   try {
     return JSON.parse(readFileSync(path, "utf8"));
   } catch {

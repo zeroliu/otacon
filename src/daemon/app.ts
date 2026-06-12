@@ -411,7 +411,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     }
     const qid = c.req.param("qid") ?? "";
     const thread = answerQuestion(store.threadsPath(session.id), qid, body.body);
-    if (!thread || thread.kind !== "question") {
+    if (!thread) {
       return c.json(
         {
           error: {
@@ -427,7 +427,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       ok: true,
       session: session.id,
       question: qid,
-      answeredAt: thread.answer?.answeredAt,
+      answeredAt: thread.answer.answeredAt,
     });
   });
 

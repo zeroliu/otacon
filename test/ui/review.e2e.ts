@@ -4,54 +4,19 @@
 // hard-coded from the fixture on purpose: the linter reports Phase 1 Details
 // as 86 lines, and the UI badge must quote the same measure.
 
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
+import { createSession, plantMarker, readMarker, submitFixturePlan, uniqueTitle } from "./helpers.js";
 
-const fixturePath = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "rich-plan.md");
-
-interface Session {
-  id: string;
-  title: string;
-}
-
-const uniqueTitle = (label: string) =>
-  `${label} ${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-
-async function createSession(request: APIRequestContext, title: string): Promise<Session> {
-  const repo = mkdtempSync(join(tmpdir(), "otacon-ui-e2e-repo-"));
-  const res = await request.post("/api/sessions", {
-    data: { title, repo, branch: "zero/prototype" },
-  });
-  expect(res.status()).toBe(201);
-  return (await res.json()) as Session;
-}
-
-async function submitRichPlan(
+const submitRichPlan = (
   request: APIRequestContext,
   id: string,
   revision = 1,
   mutate: (plan: string) => string = (plan) => plan,
-): Promise<void> {
-  const plan = mutate(
-    readFileSync(fixturePath, "utf8")
-      .replace("otc_test01", id)
-      .replace("revision: 1", `revision: ${revision}`),
+) =>
+  submitFixturePlan(request, id, "rich-plan.md", (plan) =>
+    mutate(plan.replace("revision: 1", `revision: ${revision}`)),
   );
-  const res = await request.post(`/api/sessions/${id}/submit`, {
-    headers: { "content-type": "text/markdown" },
-    data: plan,
-  });
-  expect(res.ok()).toBeTruthy();
-}
-
-// Marker that survives SPA updates but not a page reload (same trick as the
-// index spec; string-expression evaluate keeps DOM types out of the tsconfig).
-const plantMarker = (page: Page) => page.evaluate("window.__otaconMarker = true");
-const readMarker = (page: Page) => page.evaluate("window.__otaconMarker === true");
 
 const SLUG_IDS = [
   "summary",
