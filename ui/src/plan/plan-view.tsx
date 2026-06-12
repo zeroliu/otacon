@@ -59,10 +59,18 @@ function DetailsBlock({ details, l6 }: { details: PlanDetails; l6?: LintIssue })
   );
 }
 
-function PhaseCard({ phase, warnings }: { phase: PlanPhase; warnings: LintIssue[] }) {
+function PhaseCard({
+  phase,
+  warnings,
+  changed,
+}: {
+  phase: PlanPhase;
+  warnings: LintIssue[];
+  changed: ReadonlySet<string>;
+}) {
   const l6 = warnings.find((w) => w.rule === "L6" && w.section === phase.id);
   return (
-    <section id={phase.id} className="phase">
+    <section id={phase.id} className={changed.has(phase.id) ? "phase unit-changed" : "phase"}>
       <header className="phase-head">
         <span className="phase-n" aria-hidden="true">
           {String(phase.n).padStart(2, "0")}
@@ -92,15 +100,17 @@ function SectionBlock({
   section,
   index,
   warnings,
+  changed,
 }: {
   section: PlanSection;
   index: number;
   warnings: LintIssue[];
+  changed: ReadonlySet<string>;
 }) {
   return (
     <section
       id={section.id}
-      className="plan-section"
+      className={changed.has(section.id) ? "plan-section unit-changed" : "plan-section"}
       style={{ "--si": index } as CSSProperties}
     >
       <header className="section-rail">
@@ -110,7 +120,7 @@ function SectionBlock({
       </header>
       {section.blocks.length > 0 && <Blocks blocks={section.blocks} />}
       {section.phases.map((phase) => (
-        <PhaseCard key={phase.id} phase={phase} warnings={warnings} />
+        <PhaseCard key={phase.id} phase={phase} warnings={warnings} changed={changed} />
       ))}
     </section>
   );
@@ -119,16 +129,25 @@ function SectionBlock({
 // memo'd so the review loop's state churn (selection tracking, drawer edits)
 // never re-renders the dossier: a re-render rewrites the .md innerHTML (see
 // markdown.tsx), which would collapse the very selection being anchored. The
-// props are a string and the revision payload's stable warnings array, so
-// the shallow compare only fails when a new revision actually lands.
+// props are a string, the revision payload's stable warnings array, and the
+// changed-unit ids *as one space-joined string* (a Set or array prop would
+// get a fresh identity per parent render and defeat the memo), so the
+// shallow compare only fails when a new revision or diff actually lands.
 export default memo(function PlanView({
   markdown,
   warnings,
+  changedIds = "",
 }: {
   markdown: string;
   warnings: LintIssue[];
+  /** Space-joined slug ids changed vs the diff baseline (gutter markers, §10). */
+  changedIds?: string;
 }) {
   const doc = useMemo(() => parsePlan(markdown), [markdown]);
+  const changed = useMemo(
+    () => new Set(changedIds.split(" ").filter(Boolean)),
+    [changedIds],
+  );
   return (
     <article className="plan">
       {doc.preamble.length > 0 && (
@@ -142,6 +161,7 @@ export default memo(function PlanView({
           section={section}
           index={index}
           warnings={warnings}
+          changed={changed}
         />
       ))}
     </article>

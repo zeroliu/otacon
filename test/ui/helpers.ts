@@ -61,3 +61,32 @@ export async function submitFixturePlan(
 // globals out of the server tsconfig (no DOM lib).
 export const plantMarker = (page: Page) => page.evaluate("window.__otaconMarker = true");
 export const readMarker = (page: Page) => page.evaluate("window.__otaconMarker === true");
+
+/**
+ * Select `needle` inside the element at `selector` the way a user would —
+ * a real DOM Range over the text node, which fires selectionchange. The
+ * string-expression evaluate keeps DOM types out of the server tsconfig.
+ */
+export async function selectText(page: Page, selector: string, needle: string): Promise<void> {
+  const found = await page.evaluate(
+    `(() => {
+      const root = document.querySelector(${JSON.stringify(selector)});
+      if (!root) return false;
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const at = (node.nodeValue ?? "").indexOf(${JSON.stringify(needle)});
+        if (at !== -1) {
+          const range = document.createRange();
+          range.setStart(node, at);
+          range.setEnd(node, at + ${needle.length});
+          const sel = getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+          return true;
+        }
+      }
+      return false;
+    })()`,
+  );
+  expect(found, `could not select ${JSON.stringify(needle)} in ${selector}`).toBe(true);
+}

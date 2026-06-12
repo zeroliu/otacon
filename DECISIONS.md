@@ -710,6 +710,52 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Multi-reader sessions appear (per-device baselines), or
   marking individual sections reviewed becomes a thing.
 
+## Re-review chrome is derived server state; banner from r2, markers need a baseline
+
+- **Decision:** The new-revision banner renders while
+  `lastReviewedRevision < revision` **and** `revision ≥ 2`; Dismiss just POSTs
+  `/reviewed` and the answering session SSE frame unmounts it — no client-side
+  "dismissed" flag exists. Gutter markers and the changed tally render only when
+  the diff baseline is ≥ r1.
+- **Why:** Deriving visibility from the summary makes the banner identical across
+  devices and reloads for free, and dismiss idempotent — unlike the index unread
+  badge (per-device presentation state), the diff baseline is §9 protocol state, so
+  the daemon's value is the only truth worth rendering. r1 and the never-reviewed
+  case are first reviews, not re-reviews: r1 carries no changelog to show, and with
+  a baseline of 0 every section is "new", so marking them all carries zero signal.
+- **Revisit when:** Multi-reader sessions want per-device banners, or agents stack
+  several unreviewed revisions (the banner may then need a changelog list, not the
+  latest one).
+
+## Diff mode: unchanged units collapse to calm rails; anchoring stays clean-view-only
+
+- **Decision:** In diff mode, unchanged sections render as a dimmed status-tagged
+  rail with no body; changed/added/removed ones render their server hunks (mono op
+  gutter, add/del washes). Diff units reuse the real slug ids — only one view is
+  ever mounted — so j/k jumps and thread click-to-flash work in both views from one
+  implementation. The selection toolbar and the c/q shortcuts are disabled in diff
+  mode.
+- **Why:** The diff exists to audit change; re-rendering full prose for unchanged
+  sections buries the hunks under exactly the content the user already reviewed,
+  and the clean reading is one toggle away. Selections over hunk lines would
+  capture del-text and op glyphs that do not exist in the current plan source — an
+  anchor that could never survive, the same honesty rule as the renderer-chrome
+  guard.
+- **Revisit when:** Users want to comment from the diff view (then: map hunk
+  to-lines back to plan source for a real anchor), or unchanged units need
+  expand-in-place.
+
+## Diff baseline picker is per-screen view state; markers follow it
+
+- **Decision:** The picker defaults to last-reviewed, and a pick overrides it for
+  this screen only — React state, never persisted, never POSTs `/reviewed`. The
+  clean view's gutter markers track the same pick.
+- **Why:** §9 calls looking backwards "a per-request baseline choice, not an
+  un-knowing" — persisting a pick would quietly redefine what *reviewed* means. One
+  baseline driving both views keeps the marker count and the hunk set the same
+  story; two baselines would let the markers contradict the diff.
+- **Revisit when:** Cross-device baseline pinning becomes a real want.
+
 ## Quarantine counter recovery high-water scans threads and events
 
 - **Decision:** When session.json is rebuilt after quarantine (or deletion), the

@@ -4,89 +4,20 @@
 // "answering" placeholder flips to the agent's `otacon answer` over SSE,
 // without a reload. Anchors are asserted byte-for-byte against the selection.
 
-import type { ChildProcess } from "node:child_process";
-import { spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
+import { reapCli, runCli } from "./cli.js";
 import type { Session } from "./helpers.js";
-import { createSession, plantMarker, readMarker, submitFixturePlan, uniqueTitle } from "./helpers.js";
+import {
+  createSession,
+  plantMarker,
+  readMarker,
+  selectText,
+  submitFixturePlan,
+  uniqueTitle,
+} from "./helpers.js";
 
-const here = dirname(fileURLToPath(import.meta.url));
-const cliPath = join(here, "..", "..", "dist", "cli", "main.js");
-const port = Number(process.env.OTACON_E2E_PORT ?? "4790");
-// The CLI only touches its home when it has to spawn a daemon (it never
-// should here — the webServer daemon is up); a temp home keeps a failure from
-// ever spilling into the real ~/.otacon.
-const cliHome = mkdtempSync(join(tmpdir(), "otacon-ui-e2e-cli-"));
-
-// A test that fails between spawning a parked `otacon wait` and awaiting it
-// would otherwise orphan the child to long-poll the daemon for up to 30s past
-// the failure; afterEach reaps whatever is still running.
-const liveChildren = new Set<ChildProcess>();
-test.afterEach(() => {
-  for (const child of liveChildren) child.kill("SIGKILL");
-  liveChildren.clear();
-});
-
-/** Run the REAL built CLI against the e2e daemon; resolves on exit. */
-function runCli(args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [cliPath, ...args], {
-      env: {
-        ...process.env,
-        OTACON_PORT: String(port),
-        OTACON_HOME: cliHome,
-        NO_PROXY: "127.0.0.1,localhost",
-      },
-    });
-    liveChildren.add(child);
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
-    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-    child.on("error", (error) => {
-      liveChildren.delete(child);
-      reject(error);
-    });
-    child.on("close", (code) => {
-      liveChildren.delete(child);
-      resolve({ code, stdout, stderr });
-    });
-  });
-}
-
-/**
- * Select `needle` inside the element at `selector` the way a user would —
- * a real DOM Range over the text node, which fires selectionchange. The
- * string-expression evaluate keeps DOM types out of the server tsconfig.
- */
-async function selectText(page: Page, selector: string, needle: string): Promise<void> {
-  const found = await page.evaluate(
-    `(() => {
-      const root = document.querySelector(${JSON.stringify(selector)});
-      if (!root) return false;
-      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-        const at = (node.nodeValue ?? "").indexOf(${JSON.stringify(needle)});
-        if (at !== -1) {
-          const range = document.createRange();
-          range.setStart(node, at);
-          range.setEnd(node, at + ${needle.length});
-          const sel = getSelection();
-          sel.removeAllRanges();
-          sel.addRange(range);
-          return true;
-        }
-      }
-      return false;
-    })()`,
-  );
-  expect(found, `could not select ${JSON.stringify(needle)} in ${selector}`).toBe(true);
-}
+test.afterEach(reapCli);
 
 async function openReview(page: Page, request: APIRequestContext, label: string): Promise<Session> {
   const session = await createSession(request, uniqueTitle(label));

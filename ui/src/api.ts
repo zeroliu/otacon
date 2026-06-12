@@ -6,14 +6,27 @@
 import { useEffect, useMemo, useState } from "react";
 import type {
   Anchor,
+  DiffHunk,
+  DiffPayload,
   LintIssue,
   RevisionPayload,
+  SectionDiff,
   SessionStatus,
   SessionSummary,
   Thread,
 } from "../../src/shared/types";
 
-export type { Anchor, LintIssue, RevisionPayload, SessionStatus, SessionSummary, Thread };
+export type {
+  Anchor,
+  DiffHunk,
+  DiffPayload,
+  LintIssue,
+  RevisionPayload,
+  SectionDiff,
+  SessionStatus,
+  SessionSummary,
+  Thread,
+};
 
 /** A summary plus the client-side "this card just changed" timestamp. */
 export interface LiveSession extends SessionSummary {
@@ -176,6 +189,65 @@ export function postComments(id: string, items: CommentDraft[]): Promise<boolean
 /** Fire a question instantly (DESIGN.md §9); the answer arrives as a thread frame. */
 export function postQuestion(id: string, anchor: Anchor | null, body: string): Promise<boolean> {
   return post202(`/api/sessions/${id}/questions`, { anchor, body });
+}
+
+/**
+ * Mark a revision reviewed (DESIGN.md §9 layer 3) — the banner's dismiss and
+ * the explicit "mark reviewed" both land here. The daemon answers with a
+ * session SSE frame carrying the moved baseline, so callers need no local
+ * state: banner visibility and gutter markers are derived from the summary.
+ */
+export async function postReviewed(id: string, revision?: number): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/sessions/${id}/reviewed`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(revision === undefined ? {} : { revision }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The structural diff `from` → `to` (DESIGN.md §6). One payload drives both
+ * the diff view's hunks and the clean view's gutter markers, so it is fetched
+ * whenever a plan exists. Refetches when either endpoint moves (a new
+ * revision over SSE, a baseline pick, a dismiss moving last-reviewed); the
+ * previous payload stays rendered meanwhile, same posture as useRevision.
+ */
+export function useDiff(id: string, from: number, to: number): DiffPayload | undefined {
+  const [payload, setPayload] = useState<DiffPayload>();
+
+  useEffect(() => {
+    if (to < 1) {
+      setPayload(undefined);
+      return;
+    }
+    let live = true;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    const load = (): void => {
+      fetch(`/api/sessions/${id}/diff?from=${from}&to=${to}`)
+        .then((res) => {
+          if (!res.ok) throw new Error(`diff fetch failed: ${res.status}`);
+          return res.json() as Promise<DiffPayload>;
+        })
+        .then((data) => {
+          if (live) setPayload(data);
+        })
+        .catch(() => {
+          if (live) retry = setTimeout(load, 2000);
+        });
+    };
+    load();
+    return () => {
+      live = false;
+      if (retry !== undefined) clearTimeout(retry);
+    };
+  }, [id, from, to]);
+
+  return payload;
 }
 
 /**

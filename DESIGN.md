@@ -502,8 +502,22 @@ unread-change badge, last activity, accent color. Tap → review screen.
   **Send all**; when nothing is pending it shrinks to the whole-plan comment
   affordance alone.
 - Threads rail: clicking an anchored thread scrolls to its section and flashes the
-  quoted text in the plan.
-- New revision → banner: _changelog / diff / dismiss_.
+  quoted text in the plan. Resolved comments collapse to their ✓ line (id, revision,
+  section) and expand to the agent's reply. Orphaned threads leave the list for the
+  rail's badge-counted **orphan tray**: each entry keeps its dead quote (section slug
+  struck through) and expands to the full original anchor text.
+- New revision → banner: _changelog / diff / dismiss_. Shown while the latest
+  revision is newer than last-reviewed — derived state, so it survives reloads and
+  shows on every device — and only from r2 on: the first read of a plan is a first
+  review, not a re-review. Dismiss marks the revision reviewed; a header
+  **Changelog** control re-opens the current revision's changelog afterwards.
+- Diff mode renders the server's hunks inside the same reading column; a baseline
+  picker ("vs r2 ▾") selects any prior revision and the clean view's gutter markers
+  follow the same baseline. Unchanged sections collapse to status-tagged rails —
+  the clean reading is one toggle away. Selection anchoring works only in clean
+  view; diff lines are telemetry, not plan text an anchor could survive on. Markers
+  (and the banner) wait for a first review: with no baseline everything is new, and
+  marking every section says nothing.
 - Agent questions: card queue pinned above the plan (chips + free text), session-colored.
 - Collapsed Details show size badges ("▸ 34 lines · 1 diagram · 2 code blocks") —
   skipping is a conscious choice. L6 warnings render here.

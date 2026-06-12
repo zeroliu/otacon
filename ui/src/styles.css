@@ -1643,6 +1643,523 @@ code {
   }
 }
 
+/* ───────────────────────── the re-review layer ─────────────────────────
+ * M3's three layers (DESIGN.md §9): the changelog banner is an incoming
+ * transmission card, the controls strip is the instrument row under the
+ * header, the diff view re-reads the same column as change telemetry, and
+ * gutter markers brand changed sections even in the clean view. Amber — the
+ * "your move" ink the chips already use — marks change awaiting review;
+ * add/del keep the established diff inks in both schemes.
+ */
+
+.review-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-top: 14px;
+  padding: 0 2px;
+}
+
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.seg-btn {
+  padding: 7px 13px;
+  border: none;
+  background: none;
+  color: var(--ink-soft);
+  font: 600 10.5px/1 var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.seg-btn + .seg-btn {
+  border-left: 1px solid var(--line-strong);
+}
+
+.seg-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.seg-on {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  cursor: default;
+}
+
+.baseline {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font: 600 10.5px/1 var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.baseline-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.baseline-wrap::after {
+  content: "▾";
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  font-size: 9px;
+  color: var(--ink-soft);
+}
+
+.baseline select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 6px 24px 6px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--ink);
+  font: 600 11px/1 var(--mono);
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+
+.baseline select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.changed-tally {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font: 600 10.5px/1 var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--chip-await-ink);
+}
+
+.tally-mark {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.tally-keys {
+  color: var(--ink-soft);
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+.tally-keys kbd {
+  font: 600 10px/1 var(--mono);
+  padding: 2px 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+}
+
+@media (max-width: 559px) {
+  .tally-keys {
+    display: none; /* no keyboard on a phone */
+  }
+}
+
+.ctrl-changelog {
+  margin-left: auto;
+  padding: 6px 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: none;
+  color: var(--ink-soft);
+  font: 600 10.5px/1 var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.ctrl-changelog:hover,
+.ctrl-changelog[aria-pressed="true"] {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+
+.ctrl-changelog:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ── the new-revision banner: an incoming transmission ── */
+
+.rev-banner {
+  margin-top: 14px;
+  padding: 13px 15px 13px 16px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-left: 4px solid var(--accent);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  animation: card-in 0.35s cubic-bezier(0.22, 0.7, 0.3, 1) both;
+}
+
+.rev-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font: 700 11px/1 var(--mono);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+/* The codec cursor blinks only while the revision awaits review. */
+.rev-fresh .rev-pulse {
+  animation: cursor-blink 1.1s steps(2, start) infinite;
+}
+
+.rev-head .composer-close {
+  margin-left: auto;
+}
+
+.rev-changelog {
+  margin: 9px 0 0;
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.rev-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.rev-actions .composer-hint {
+  margin-right: auto;
+}
+
+/* ── gutter markers: changed since the baseline, even in clean view ── */
+
+.plan-section,
+.phase {
+  position: relative;
+}
+
+.unit-changed::before {
+  content: "▌";
+  position: absolute;
+  left: -15px;
+  top: 1px;
+  font: 700 13px/1 var(--mono);
+  color: var(--chip-await-ink);
+  animation: card-in 0.3s ease-out both;
+}
+
+.phase.unit-changed::before {
+  top: 17px; /* sit beside the phase head, inside the card's outline */
+}
+
+@media (max-width: 639px) {
+  .unit-changed::before {
+    left: -12px; /* the page gutter is 16px on a phone */
+  }
+}
+
+/* ── the diff view: change telemetry in the reading column ── */
+
+.diff-legend {
+  margin: 22px 2px 0;
+  font: 600 11px/1 var(--mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink);
+  animation: card-in 0.35s cubic-bezier(0.22, 0.7, 0.3, 1) both;
+}
+
+.diff-legend-tally {
+  color: var(--ink-soft);
+}
+
+.diff-unit {
+  margin-top: 30px;
+  animation: card-in 0.35s cubic-bezier(0.22, 0.7, 0.3, 1) both;
+}
+
+/* Collapsed-calm: an unchanged unit is just its rail, dimmed and tightened —
+ * the clean view is one keystroke away (DECISIONS.md). */
+.diff-unchanged {
+  margin-top: 18px;
+  opacity: 0.55;
+}
+
+.diff-status {
+  font: 600 10px/1.2 var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.diff-status-changed {
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--chip-await-bg);
+  color: var(--chip-await-ink);
+}
+
+.diff-status-added {
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--diff-add) 14%, transparent);
+  color: var(--diff-add);
+}
+
+.diff-status-removed {
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--diff-del) 12%, transparent);
+  color: var(--diff-del);
+}
+
+.diff-status-unchanged {
+  color: var(--ink-soft);
+}
+
+.diff-body {
+  margin-top: 2px;
+  padding: 9px 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.dline {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  font: 12.5px/1.7 var(--mono);
+}
+
+.dline-op {
+  text-align: center;
+  user-select: none;
+  color: var(--ink-soft);
+}
+
+.dline-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding-right: 14px;
+}
+
+.dline-context {
+  color: var(--ink-soft);
+}
+
+.dline-add {
+  background: color-mix(in srgb, var(--diff-add) 9%, transparent);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--diff-add) 60%, transparent);
+}
+
+.dline-add .dline-op {
+  color: var(--diff-add);
+  font-weight: 700;
+}
+
+.dline-del {
+  background: color-mix(in srgb, var(--diff-del) 8%, transparent);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--diff-del) 55%, transparent);
+}
+
+.dline-del .dline-op {
+  color: var(--diff-del);
+  font-weight: 700;
+}
+
+.dline-del .dline-text {
+  color: color-mix(in srgb, var(--ink) 62%, var(--ink-soft));
+}
+
+.hunk-gap {
+  margin: 7px 14px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--line-strong);
+  font: 600 10px/1 var(--mono);
+  letter-spacing: 0.3em;
+  color: var(--ink-soft);
+  user-select: none;
+}
+
+/* ── resolved threads: collapsed to their ✓ line (§10 sketch) ── */
+
+.thread-resolved {
+  padding: 0;
+  border-left-color: color-mix(in srgb, var(--chip-approved-ink) 55%, var(--line));
+}
+
+.resolved-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 10px 12px 11px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  font: 600 10px/1 var(--mono);
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+}
+
+.resolved-summary::-webkit-details-marker {
+  display: none;
+}
+
+.resolved-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 9px;
+}
+
+.resolved-check {
+  color: var(--chip-approved-ink);
+  font-size: 11px;
+}
+
+.resolved-word {
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--chip-approved-ink);
+}
+
+.resolved-rev {
+  color: var(--ink-soft);
+}
+
+.thread-resolved .thread-where {
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resolved-detail {
+  padding: 0 12px 11px;
+}
+
+.thread-resolved[open] .resolved-detail {
+  animation: details-in 0.2s ease-out both;
+}
+
+.thread-quote-jump {
+  cursor: pointer;
+}
+
+.thread-quote-jump:hover {
+  border-left-color: var(--accent);
+  color: var(--ink);
+}
+
+/* ── the orphan tray: severed anchors, kept in amber ── */
+
+.orphan-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 1.5px dashed color-mix(in srgb, var(--chip-await-ink) 50%, var(--line-strong));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--chip-await-ink) 5%, transparent);
+  color: var(--chip-await-ink);
+  font: 600 10.5px/1 var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  text-align: left;
+}
+
+.orphan-toggle:hover {
+  border-color: var(--chip-await-ink);
+}
+
+.orphan-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.orphan-glyph {
+  color: var(--chip-await-ink);
+}
+
+.orphan-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--chip-await-bg);
+  font: 700 10.5px/1 var(--mono);
+  align-self: center;
+}
+
+.orphan-caret {
+  margin-left: auto;
+  letter-spacing: 0;
+}
+
+.orphan-tray {
+  display: grid;
+  gap: 8px;
+  animation: details-in 0.2s ease-out both;
+}
+
+.orphan-note {
+  margin: 0;
+  padding: 0 2px;
+  font: 11px/1.6 var(--mono);
+  letter-spacing: 0.02em;
+  color: var(--ink-soft);
+}
+
+.orphan {
+  padding: 10px 12px 11px;
+  background: color-mix(in srgb, var(--chip-await-ink) 4%, var(--surface));
+  border: 1px dashed color-mix(in srgb, var(--chip-await-ink) 45%, var(--line-strong));
+  border-radius: 9px;
+  cursor: pointer;
+  animation: card-in 0.3s cubic-bezier(0.22, 0.7, 0.3, 1) both;
+}
+
+.orphan:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The slug its anchor used to answer to — struck, the anchor is dead. */
+.orphan-where {
+  text-decoration: line-through;
+}
+
+.orphan-quote {
+  border-left-color: color-mix(in srgb, var(--chip-await-ink) 55%, var(--line-strong));
+}
+
+/* Open = show the full original anchor text, unclamped. */
+.orphan-open .orphan-quote {
+  display: block;
+  -webkit-line-clamp: none;
+}
+
 /* ───────────────────────── motion preferences ───────────────────────── */
 
 @media (prefers-reduced-motion: reduce) {

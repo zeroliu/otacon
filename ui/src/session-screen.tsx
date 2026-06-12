@@ -1,20 +1,25 @@
 // The /s/:id review screen: session header in the session's accent color,
 // live over its SSE stream, rendering the latest stored revision as the plan
-// dossier (DESIGN.md §10) — now with the review loop's desktop verbs: select
-// text → toolbar (Comment | Ask), comments batch in the drawer, questions
-// fire instantly, and every thread lands in the rail beside the plan.
-// Keyboard: c = comment on selection, q = ask; no Approve shortcut exists,
-// deliberately (§10). The renderer stays a lazy chunk; diffs/approve are M3+.
+// dossier (DESIGN.md §10) — with the review loop's desktop verbs (select text
+// → toolbar, comments batch in the drawer, questions fire instantly, threads
+// in the rail) and M3's re-review layer: the new-revision banner, the
+// [clean|diff] toggle with its baseline picker, gutter markers on sections
+// changed since last-reviewed, and j/k jumping between them. Keyboard:
+// c = comment, q = ask, j/k = changed sections; no Approve shortcut exists,
+// deliberately (§10). The renderer stays a lazy chunk; approve is M4.
 
 import type { MouseEvent, ReactNode, RefObject } from "react";
-import { Component, lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { accentStyle } from "./accent";
 import type { Anchor, CommentDraft, LiveSession, Thread } from "./api";
-import { postComments, postQuestion, useRevision, useSession } from "./api";
+import { postComments, postQuestion, postReviewed, useDiff, useRevision, useSession } from "./api";
 import { LinkState, StatusChip } from "./chip";
 import { relativeTime, repoName } from "./format";
 import { captureSelection, flashAnchor } from "./review/anchor";
 import type { CapturedSelection } from "./review/anchor";
+import type { ReviewView } from "./review/banner";
+import { ReviewControls, RevisionBanner } from "./review/banner";
+import { DiffView } from "./review/diff";
 import type { PendingComment } from "./review/drawer";
 import { CommentDrawer } from "./review/drawer";
 import type { ComposerState } from "./review/feedback";
@@ -85,28 +90,6 @@ function SessionHead({ session, connected }: { session: LiveSession; connected: 
   );
 }
 
-function PlanPane({
-  session,
-  planRef,
-}: {
-  session: LiveSession;
-  planRef: RefObject<HTMLElement | null>;
-}) {
-  const payload = useRevision(session.id, session.revision);
-  if (!payload) {
-    return <p className="loading">loading r{session.revision}…</p>;
-  }
-  return (
-    <main className="review" ref={planRef}>
-      <RendererBoundary>
-        <Suspense fallback={<p className="loading">loading renderer…</p>}>
-          <PlanView markdown={payload.markdown} warnings={payload.warnings} />
-        </Suspense>
-      </RendererBoundary>
-    </main>
-  );
-}
-
 const COMPOSER_WIDTH = 380;
 const COMPOSER_GUESS_HEIGHT = 240;
 
@@ -130,8 +113,62 @@ function ReviewLoop({
   const [pending, setPending] = useState<PendingComment[]>([]);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
-  const selection = useSelection(planRef, composer === null);
+  const [view, setView] = useState<ReviewView>("clean");
+  // null = follow the server's last-reviewed baseline (DESIGN.md §9 layer 3);
+  // a number = the user picked another baseline from the diff controls.
+  const [baseline, setBaseline] = useState<number | null>(null);
+  const [changelogOpen, setChangelogOpen] = useState(false);
   const hasPlan = session.revision > 0;
+  // Selections only anchor in the clean view: diff lines are change telemetry,
+  // not plan text the agent could re-locate (same honesty rule as the
+  // chrome-selector guard in anchor.ts).
+  const selection = useSelection(planRef, composer === null && view === "clean");
+
+  const payload = useRevision(session.id, session.revision);
+  const from = Math.min(baseline ?? session.lastReviewedRevision, session.revision);
+  const diff = useDiff(session.id, from, session.revision);
+
+  // Gutter markers (§10): changed/added units vs the baseline, in clean view.
+  // Joined to one string so PlanView's memo survives this loop's re-renders.
+  // A baseline of 0 means "never reviewed" — everything is new, so marking
+  // every section would carry zero signal (DECISIONS.md).
+  const changedIds = useMemo(() => {
+    if (!diff || diff.from === 0) return "";
+    return diff.sections
+      .filter((s) => s.status === "changed" || s.status === "added")
+      .map((s) => s.id)
+      .join(" ");
+  }, [diff]);
+
+  // j/k targets, in plan order. Removed units only exist in the diff view;
+  // the all-new r0 baseline only jumps there too (markers are off in clean).
+  const jumpIds = useMemo(() => {
+    if (!diff || (diff.from === 0 && view === "clean")) return [];
+    return diff.sections
+      .filter((s) => s.status !== "unchanged" && (view === "diff" || s.status !== "removed"))
+      .map((s) => s.id);
+  }, [diff, view]);
+  const jumpAt = useRef(-1);
+  const jumpKey = jumpIds.join(" ");
+  useEffect(() => {
+    jumpAt.current = -1; // a new target list restarts the walk from the top
+  }, [jumpKey]);
+  const jumpChanged = useCallback(
+    (delta: 1 | -1) => {
+      if (jumpIds.length === 0) return;
+      const next = Math.min(Math.max(jumpAt.current + delta, 0), jumpIds.length - 1);
+      jumpAt.current = next;
+      const id = jumpIds[next];
+      if (planRef.current && id !== undefined) flashAnchor(planRef.current, { section: id });
+    },
+    [jumpIds],
+  );
+
+  const fresh = hasPlan && session.revision >= 2 && session.lastReviewedRevision < session.revision;
+  // The banner must quote the *landed* revision's changelog; while the
+  // payload refetch is in flight the previous revision stays rendered, so
+  // gate on the revision number instead of showing the stale changelog.
+  const currentChangelog = payload?.revision === session.revision ? payload.changelog : undefined;
 
   const clearSelection = () => document.getSelection()?.removeAllRanges();
 
@@ -155,8 +192,9 @@ function ReviewLoop({
     setComposer({ mode, anchor: sel.anchor, at: { x, y } });
   }, []);
 
-  // Keyboard: c = comment on selection, q = ask (DESIGN.md §10 — there is no
-  // Approve shortcut, on purpose). Esc closes the composer from anywhere.
+  // Keyboard: c = comment on selection, q = ask, j/k = jump changed sections
+  // (DESIGN.md §10 — there is no Approve shortcut, on purpose). Esc closes
+  // the composer from anywhere.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -164,6 +202,7 @@ function ReviewLoop({
       if (
         target?.tagName === "INPUT" ||
         target?.tagName === "TEXTAREA" ||
+        target?.tagName === "SELECT" ||
         target?.isContentEditable
       ) {
         return;
@@ -172,7 +211,13 @@ function ReviewLoop({
         setComposer(null);
         return;
       }
+      if (event.key === "j" || event.key === "k") {
+        event.preventDefault();
+        jumpChanged(event.key === "j" ? 1 : -1);
+        return;
+      }
       if (event.key !== "c" && event.key !== "q") return;
+      if (view !== "clean") return; // diff lines are not anchorable plan text
       const plan = planRef.current;
       const sel = plan ? captureSelection(plan) : null;
       if (!sel) return;
@@ -181,7 +226,7 @@ function ReviewLoop({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [openComposer]);
+  }, [openComposer, jumpChanged, view]);
 
   const stack = (body: string) => {
     if (!composer) return;
@@ -257,8 +302,62 @@ function ReviewLoop({
       <div className="review-layout">
         <div className="review-main">
           <SessionHead session={session} connected={connected} />
+          {hasPlan && (
+            <ReviewControls
+              view={view}
+              onView={setView}
+              revision={session.revision}
+              lastReviewed={session.lastReviewedRevision}
+              baseline={from}
+              onBaseline={setBaseline}
+              changedCount={diff && diff.from > 0 ? diff.sections.filter((s) => s.status !== "unchanged").length : 0}
+              showChangelog={!fresh && currentChangelog != null}
+              changelogOpen={changelogOpen}
+              onToggleChangelog={() => setChangelogOpen((value) => !value)}
+            />
+          )}
+          {fresh && (
+            <RevisionBanner
+              revision={session.revision}
+              changelog={currentChangelog}
+              fresh
+              onViewDiff={() => setView("diff")}
+              onDismiss={() => postReviewed(session.id)}
+              onClose={() => undefined}
+            />
+          )}
+          {!fresh && changelogOpen && currentChangelog != null && (
+            <RevisionBanner
+              revision={session.revision}
+              changelog={currentChangelog}
+              fresh={false}
+              onViewDiff={() => setView("diff")}
+              onDismiss={() => Promise.resolve(true)}
+              onClose={() => setChangelogOpen(false)}
+            />
+          )}
           {hasPlan ? (
-            <PlanPane session={session} planRef={planRef} />
+            <main className="review" ref={planRef}>
+              {view === "clean" ? (
+                payload ? (
+                  <RendererBoundary>
+                    <Suspense fallback={<p className="loading">loading renderer…</p>}>
+                      <PlanView
+                        markdown={payload.markdown}
+                        warnings={payload.warnings}
+                        changedIds={changedIds}
+                      />
+                    </Suspense>
+                  </RendererBoundary>
+                ) : (
+                  <p className="loading">loading r{session.revision}…</p>
+                )
+              ) : diff ? (
+                <DiffView diff={diff} />
+              ) : (
+                <p className="loading">computing diff…</p>
+              )}
+            </main>
           ) : (
             <main className="review-wait">
               <p className="wait-line">// no revision yet</p>
