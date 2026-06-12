@@ -258,12 +258,16 @@ the model is suspended — no inference, no token spend.
 
 Every payload carries `session` so the agent can sanity-check it is handling its own plan.
 
-### HTTP API sketch (daemon)
+### HTTP API (daemon, 127.0.0.1 only)
 
 ```
+GET  /api/health                            daemon identity + version (CLI handshake)
+POST /api/shutdown                          clean daemon exit
 GET  /api/sessions                          index (registry)
-GET  /api/sessions/:id                      session detail
+POST /api/sessions                          mint + register a session (otacon start)
+GET  /api/sessions/:id                      session detail (+ revision, pending events)
 GET  /api/sessions/:id/events?wait=540      agent long-poll
+POST /api/sessions/:id/submit               lint; reject 422 with issues, or store revision N
 POST /api/sessions/:id/comments             flush a comment batch
 POST /api/sessions/:id/questions            user question (instant)
 POST /api/sessions/:id/answers              answer to an agent question
@@ -271,7 +275,13 @@ POST /api/sessions/:id/approve              approve (daemon writes final artifac
 GET  /api/sessions/:id/revisions/:n         raw revision markdown
 GET  /api/sessions/:id/diff?from=&to=       computed diff
 GET  /api/sessions/:id/stream               SSE for the UI
+GET  /s/:id                                 review page for a session
 ```
+
+Errors are machine-readable JSON — `{"error":{"code":…,"message":…}}` — except a
+failed submit, which returns 422 carrying the linter's `errors`/`warnings` arrays.
+Event delivery over `/events` is at-least-once: an event is removed from the queue
+only after its response is fully written; a dropped connection requeues it.
 
 ### The full loop
 

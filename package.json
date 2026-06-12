@@ -19,6 +19,7 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:daemon": "bun run src/daemon/main.ts",
+    "e2e": "bash test/e2e-daemon.sh",
     "smoke": "bash test/smoke.sh"
   },
   "dependencies": {

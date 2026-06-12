@@ -188,6 +188,35 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Consumers need exactly-once (seq-based dedupe stops being
   enough), or queue wiring wants the seq owned in one place.
 
+## Long-poll ack and abort ride the Node response socket
+
+- **Decision:** The events endpoint acks an event (`queue.flush(event)`) from the
+  Node `ServerResponse`'s `"close"` listener when `writableFinished` is true and
+  requeues it otherwise; a client dropping a *parked* poll is detected via
+  `c.req.raw.signal` (accessing it materializes @hono/node-server's lazy
+  AbortController, which aborts on premature close). Under `app.request()` in tests
+  there is no socket, so the ack is immediate.
+- **Why:** "Ack only after the response is written" needs a write-completion signal
+  that Hono's fetch-shaped handlers don't expose. @hono/node-server passes the raw
+  `ServerResponse` as `c.env.outgoing`, and its `"close"` event fires exactly once
+  per response with `writableFinished` separating delivered from aborted (verified
+  against the 1.19.x source; exercised by the e2e abort check). Hooking it makes
+  at-least-once literal: a crash or client abort inside the dequeue→respond window
+  re-delivers instead of losing the event.
+- **Revisit when:** @hono/node-server changes its bindings or abort contract, or
+  the daemon moves off Node's http server.
+
+## One SessionQueue instance per session, for the daemon's lifetime
+
+- **Decision:** The app keeps a lazy `Map<sessionId, SessionQueue>`; queues are
+  never evicted or re-created per request.
+- **Why:** Waiters park on an in-memory list, so every request must hit the same
+  instance — and the constructor re-reads disk, so a per-request queue would
+  resurrect delivered-but-unacked in-flight events as duplicates. Daemon-lifetime
+  scope is the simplest correct choice at single-user session counts.
+- **Revisit when:** `otacon clean` archives sessions while the daemon runs —
+  eviction must then drain in-flight events first.
+
 ## M1 scope: CLI surface is `start`/`submit`/`wait`/`status` only
 
 - **Decision:** M1 ships sessions, registry, submit + linter (L1/L2/L6), event queues,
