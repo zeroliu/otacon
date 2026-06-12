@@ -7,7 +7,7 @@
 
 import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/common";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { FenceBlock, PairBlock } from "./parse";
 
 function escapeHtml(code: string): string {
@@ -23,10 +23,15 @@ export function CodeFence({
   label?: string;
   className?: string;
 }) {
-  const language = fence.lang !== "" && hljs.getLanguage(fence.lang) ? fence.lang : undefined;
-  const html = language
-    ? hljs.highlight(fence.code, { language, ignoreIllegals: true }).value
-    : escapeHtml(fence.code);
+  // Memoized: the dossier re-renders on every SSE frame (queue ticks
+  // included), and re-highlighting every fence each time is pure waste —
+  // parsePlan is memoized upstream, so fence identity is stable per revision.
+  const html = useMemo(() => {
+    const language = fence.lang !== "" && hljs.getLanguage(fence.lang) ? fence.lang : undefined;
+    return language
+      ? hljs.highlight(fence.code, { language, ignoreIllegals: true }).value
+      : escapeHtml(fence.code);
+  }, [fence]);
   return (
     <figure className={className ? `fence ${className}` : "fence"}>
       <figcaption className="fence-head">{label ?? (fence.lang || "text")}</figcaption>
@@ -71,6 +76,12 @@ function loadMermaid(): Promise<MermaidApi> {
       flowchart: { htmlLabels: false },
     });
     return mermaid;
+  }).catch((error: unknown) => {
+    // Don't cache a rejected promise: a transient chunk-fetch failure
+    // (offline blip) would otherwise poison every future diagram until a
+    // full reload. The caller still sees this rejection and falls back.
+    mermaidLoad = undefined;
+    throw error;
   });
   return mermaidLoad;
 }
@@ -83,6 +94,12 @@ export function MermaidFigure({ code }: { code: string }) {
 
   useEffect(() => {
     let live = true;
+    // Reset on a code change: Blocks keys by index, so a live revision bump
+    // reuses this instance — without the reset the old revision's diagram
+    // (or a stale "failed" label over fixed source) would show while the new
+    // render is in flight.
+    setSvg(undefined);
+    setFailed(false);
     const id = `otacon-mmd-${++renderSeq}`;
     loadMermaid()
       .then((mermaid) => mermaid.render(id, code))

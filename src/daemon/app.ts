@@ -21,6 +21,7 @@ import type {
   EventPayload,
   QueuedEvent,
   RegistrySession,
+  RevisionPayload,
   SessionSummary,
 } from "../shared/types.js";
 import { VERSION } from "../shared/version.js";
@@ -385,13 +386,14 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     // Default is the raw markdown (byte-identical read-back; the CLI/curl
     // path). The web UI asks for JSON to get the lint warnings the revision
     // was accepted with alongside it (DESIGN.md §6).
-    if (c.req.header("accept")?.includes("application/json")) {
-      return c.json({
+    if (c.req.header("accept")?.toLowerCase().includes("application/json")) {
+      const payload: RevisionPayload = {
         session: session.id,
         revision: n,
         markdown: store.readRevision(session.id, n),
         warnings: store.readRevisionWarnings(session.id, n),
-      });
+      };
+      return c.json(payload);
     }
     return c.text(store.readRevision(session.id, n), 200, {
       "content-type": "text/markdown; charset=utf-8",

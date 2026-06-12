@@ -128,6 +128,11 @@ class Collector {
     return this.blocks;
   }
 
+  /** True while nothing but blank lines has been collected. */
+  isEmpty(): boolean {
+    return this.blocks.length === 0 && this.run.every((l) => l.trim() === "");
+  }
+
   private flush(): void {
     const text = this.run.join("\n").replace(/^\n+|\s+$/g, "");
     this.run = [];
@@ -219,7 +224,9 @@ export function parsePlan(content: string): PlanDoc {
     if (heading) {
       const level = heading[1]!.length;
       const title = heading[2]!;
-      if (level === 1 && section === null && doc.title === null) {
+      // Only a leading H1 is the document title; an H1 after preamble prose
+      // is content — swallowing it would silently drop plan text.
+      if (level === 1 && section === null && doc.title === null && collector.isEmpty()) {
         doc.title = title;
         continue;
       }
@@ -234,9 +241,13 @@ export function parsePlan(content: string): PlanDoc {
       if (level === 3 && section?.id === "phases") {
         const m = PHASE_RE.exec(line);
         if (m) {
+          // Normalize the digits exactly like the linter's phaseSlug
+          // (`phase-${Number(n)}`) — "Phase 01" must anchor and badge as
+          // "phase-1", or L6 warnings would miss their Details block.
+          const n = Number(m[1]);
           const next: PlanPhase = {
-            id: `phase-${m[1]!}`,
-            n: Number(m[1]),
+            id: `phase-${n}`,
+            n,
             name: m[2]!,
             body: [],
             fields: [],

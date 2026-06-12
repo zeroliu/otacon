@@ -467,7 +467,10 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   initialized with `securityLevel: "strict"` and top-level `htmlLabels: false` —
   the flowchart-scoped option is ignored by mermaid 11's renderer, and HTML labels
   live in `foreignObject`s, which the DOMPurify SVG profile strips (labels would
-  vanish).
+  vanish). The prose pass additionally forbids `<form>`, `<style>`, and inline
+  `style` (phishing-form and CSS-exfiltration surfaces the html profile leaves
+  open); the SVG pass keeps `<style>` because mermaid inlines its theme CSS there
+  and strict mode sanitizes diagram-author styles.
 - **Why:** Prose *inside* sections is arbitrary markdown — this is where the
   hand-rolled-parser argument (DECISIONS.md "Plan parser") flips, because rendering
   full markdown correctly is exactly what an AST library is for. Sanitizing

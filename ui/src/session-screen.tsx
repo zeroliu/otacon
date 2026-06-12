@@ -5,8 +5,8 @@
 // then the header carries no dead Approve/Diff controls (DECISIONS.md
 // "Review screen: reading surface only until the verbs exist").
 
-import type { MouseEvent } from "react";
-import { lazy, Suspense, useEffect } from "react";
+import type { MouseEvent, ReactNode } from "react";
+import { Component, lazy, Suspense, useEffect } from "react";
 import { accentStyle } from "./accent";
 import type { LiveSession } from "./api";
 import { useRevision, useSession } from "./api";
@@ -30,6 +30,33 @@ function BackLink() {
   );
 }
 
+/**
+ * Catches a failed plan-view chunk load (offline, or a stale tab whose chunk
+ * URLs vanished when the daemon was rebuilt) — and any renderer crash —
+ * instead of letting React unmount the whole tree to a blank page. React
+ * caches a lazy() rejection, so recovery is a real reload, not a re-render.
+ */
+class RendererBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <main className="review-wait">
+        <p className="wait-line">// renderer unavailable</p>
+        <p>
+          The plan renderer failed to load — the daemon may have restarted with a new build, or
+          the network dropped. <a href="">Reload</a> to fetch the current one.
+        </p>
+      </main>
+    );
+  }
+}
+
 function ReviewPane({ session }: { session: LiveSession }) {
   const payload = useRevision(session.id, session.revision);
 
@@ -49,9 +76,11 @@ function ReviewPane({ session }: { session: LiveSession }) {
   }
   return (
     <main className="review">
-      <Suspense fallback={<p className="loading">loading renderer…</p>}>
-        <PlanView markdown={payload.markdown} warnings={payload.warnings} />
-      </Suspense>
+      <RendererBoundary>
+        <Suspense fallback={<p className="loading">loading renderer…</p>}>
+          <PlanView markdown={payload.markdown} warnings={payload.warnings} />
+        </Suspense>
+      </RendererBoundary>
     </main>
   );
 }

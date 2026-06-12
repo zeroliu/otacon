@@ -14,6 +14,13 @@ export function Markdown({ source }: { source: string }) {
     () =>
       DOMPurify.sanitize(marked.parse(source, { async: false }), {
         USE_PROFILES: { html: true },
+        // The html profile still permits <form>/<style>/inline style — plan
+        // prose never needs them, and they are the remaining phishing-form
+        // and CSS-exfiltration surfaces. (The mermaid SVG pass keeps <style>:
+        // mermaid inlines its theme CSS there, and strict mode sanitizes
+        // diagram-author styles.)
+        FORBID_TAGS: ["form", "style"],
+        FORBID_ATTR: ["style"],
       }),
     [source],
   );
