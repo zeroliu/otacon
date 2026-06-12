@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_CONFIG, loadConfig } from "../src/shared/config.js";
-import { otaconHome, otaconPort } from "../src/shared/paths.js";
+import { DEFAULT_CONFIG, loadConfig } from "./config.js";
+import { otaconHome, otaconPort } from "./paths.js";
 
 let home: string;
 let repo: string;

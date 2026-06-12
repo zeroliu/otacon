@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { parsePlan, slugify } from "../src/daemon/linter/parse.js";
+import { parsePlan, slugify } from "./parse.js";
 
 const validPlan = readFileSync(
-  new URL("./fixtures/valid-plan.md", import.meta.url),
+  new URL("../../../test/fixtures/valid-plan.md", import.meta.url),
   "utf8",
 );
 

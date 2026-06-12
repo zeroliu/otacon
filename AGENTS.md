@@ -33,12 +33,20 @@ incoherently just to duck under the number. **Tests, lockfiles (bun.lock /
 package-lock.json), and docs never count toward the limit** — write as much test
 coverage as the change deserves.
 
+## Test placement
+
+Test files live next to the implementation they cover: `foo.ts` gets `foo.test.ts` in
+the same directory. Test data fixtures live under `test/fixtures/`. The top-level
+`test/` directory holds only cross-cutting assets (fixtures, the end-to-end smoke
+script) — never `*.test.ts` files. Test files are excluded from the published build
+(`tsconfig.build.json`); keep it that way when adding new ones.
+
 ## Repo orientation
 
 - `src/shared/` — types, path helpers, config (used by both daemon and CLI)
 - `src/daemon/` — otacond: HTTP server, session store, event queues, plan linter
 - `src/cli/` — otacon: thin client that coding agents drive via their Bash tool
-- `test/` — bun tests, fixtures, and the end-to-end smoke script
+- `test/` — cross-cutting assets: fixtures and the end-to-end smoke script
 
 Verification commands: `bun test` (unit), `bun run typecheck`, `bun run build` (output
 must stay Node-runnable: `node dist/cli/main.js`), `bun run smoke` (end-to-end, once it

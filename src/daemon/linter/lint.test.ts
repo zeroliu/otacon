@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { DEFAULT_CONFIG, type OtaconConfig } from "../src/shared/config.js";
-import type { LintResult } from "../src/shared/types.js";
-import { lint, type LintOptions } from "../src/daemon/linter/index.js";
+import { DEFAULT_CONFIG, type OtaconConfig } from "../../shared/config.js";
+import type { LintResult } from "../../shared/types.js";
+import { lint, type LintOptions } from "./index.js";
 
 const SESSION = "otc_test01";
 
@@ -56,7 +56,7 @@ describe("lint happy paths", () => {
 
   test("the valid fixture passes clean", () => {
     const fixture = readFileSync(
-      new URL("./fixtures/valid-plan.md", import.meta.url),
+      new URL("../../../test/fixtures/valid-plan.md", import.meta.url),
       "utf8",
     );
     const result = run(fixture);
