@@ -423,3 +423,88 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Why:** The strict milestone reading keeps every change small and testable
   end-to-end via curl/CLI before any UI exists.
 - **Revisit when:** M2+ planning starts (each milestone gets its own `.otacon/` plan).
+
+## Review screen renders via a ported line grammar, not the linter parser
+
+- **Decision:** The UI has its own plan parser (`ui/src/plan/parse.ts`) implementing
+  the identical line grammar as the linter's (`src/daemon/linter/parse.ts` —
+  headings, phase/field regexes, fences, the same slug and Details line-count
+  algorithms) but building a render model that *keeps* content where the linter only
+  measures it. It is deliberately tolerant: structure it does not recognize renders
+  as plain markdown, never an error.
+- **Why:** The linter's `ParsedPlan` carries line counts and verdict inputs, not
+  bodies — rendering from it would mean growing the daemon a parallel content model
+  plus an API for it, coupling the review screen's needs into submit-path code. The
+  grammar itself is ~10 regexes; duplicating it is cheaper than the coupling, and the
+  shapes that must never drift (section slugs, `phase-<n>`, the L6 line measure) are
+  pinned by the e2e suite asserting UI badges against linter-recorded warnings.
+  Tolerance is safe because every stored revision already passed lint at submit.
+- **Revisit when:** The grammar changes twice in one milestone (then extract a shared
+  grammar module), or the daemon grows a render-model endpoint for another consumer.
+
+## Before/after pairs: fence info-string tags, adjacency required
+
+- **Decision:** A before/after pair (DESIGN.md §4) is a fence whose info string is
+  `<lang> before` immediately followed — same container, nothing but blank lines
+  between — by one tagged `<lang> after`. Pairs render side-by-side ≥640px and
+  stacked on phones; an unpaired `before`/`after` renders as an ordinary fence.
+- **Why:** The info string is where fence metadata already lives, so the plan stays
+  plain markdown that renders acceptably in any other viewer (GitHub shows two
+  labeled code blocks — degraded, not broken). Adjacency keeps pairing deterministic
+  with zero cross-references to resolve or lint. Falling back to a plain fence beats
+  erroring because the linter has already accepted the revision.
+- **Revisit when:** Plans need more than one pair semantic (e.g. N-way variants), or
+  agents habitually emit non-adjacent pairs.
+
+## Plan rendering deps: marked + DOMPurify + highlight.js, mermaid as a lazy chunk
+
+- **Decision:** Plan prose renders through `marked` (GFM) with the output — and
+  mermaid's SVG — sanitized by `DOMPurify` before touching the DOM. Code fences
+  highlight with highlight.js's common-languages build. All four are
+  devDependencies bundled into `dist/ui`; runtime deps stay hono +
+  @hono/node-server. The whole renderer is a lazy route chunk (the index never
+  loads it); mermaid is a further dynamic import fetched on the first diagram,
+  initialized with `securityLevel: "strict"` and top-level `htmlLabels: false` —
+  the flowchart-scoped option is ignored by mermaid 11's renderer, and HTML labels
+  live in `foreignObject`s, which the DOMPurify SVG profile strips (labels would
+  vanish).
+- **Why:** Prose *inside* sections is arbitrary markdown — this is where the
+  hand-rolled-parser argument (DECISIONS.md "Plan parser") flips, because rendering
+  full markdown correctly is exactly what an AST library is for. Sanitizing
+  semi-trusted agent-written content is defense in depth for a surface that will be
+  exposed over Tailscale (DESIGN.md §10-11). Mermaid is by far the heaviest dep
+  (~1.5 MB of chunks), which lazy loading turns into a cost paid only on plans that
+  actually contain diagrams.
+- **Revisit when:** The published package would need any of these at runtime, or
+  mermaid's sanitization story changes enough to drop the strict/htmlLabels posture.
+
+## L6 warnings persist beside the revision; JSON read via Accept header
+
+- **Decision:** `saveRevision` writes the lint warnings a revision was accepted with
+  to `r<N>.warnings.json` next to `r<N>.md`. `GET /api/sessions/:id/revisions/:n`
+  still returns raw markdown by default; `Accept: application/json` returns
+  `{session, revision, markdown, warnings}`. A missing or corrupt warnings file
+  reads as `[]` — no quarantine.
+- **Why:** Warnings exist only in the submit response; the UI renders L6 badges on
+  every later read, so they must be stored — re-linting at read time would let later
+  budget tuning silently rewrite what the user was shown at review time. Content
+  negotiation keeps the CLI/curl contract byte-identical instead of minting a second
+  endpoint. Corruption degrades to `[]` because badges are presentation metadata;
+  quarantine machinery exists for state the protocol cannot lose.
+- **Revisit when:** Revisions need richer read-side metadata (diff stats, changelog)
+  — then a real `?format=` or detail endpoint should subsume the Accept switch.
+
+## Review screen: reading surface only until the verbs exist
+
+- **Decision:** The M2-era review screen renders the dossier — header, sections,
+  phases, Details, badges — with no Approve/Diff/Changelog controls and no threads
+  rail; those appear only when their flows land (comments M2c, diffs/approve M3+).
+  Section and phase elements already carry their slug DOM ids (`#decisions`,
+  `#phase-2`), quietly surfaced on hover, so the M2c anchoring contract is in the
+  DOM from day one.
+- **Why:** Disabled chrome trains the user to ignore chrome, and a dead Approve
+  button on a review surface is actively dangerous. Shipping the ids early means
+  comment anchoring (DESIGN.md §4) attaches to a stable contract rather than
+  retrofitting one.
+- **Revisit when:** M2c lands the comment flow (drawer + selection toolbar mount
+  around the dossier).

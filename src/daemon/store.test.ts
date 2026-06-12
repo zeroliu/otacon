@@ -240,6 +240,27 @@ describe("Store counters and revisions", () => {
     // Round-trip: a fresh Store continues the numbering from disk.
     expect(new Store().saveRevision(id, "# plan v3\n")).toBe(3);
   });
+
+  test("saveRevision persists the warnings it was accepted with; absent reads as []", () => {
+    const store = new Store();
+    const { id } = store.createSession({ title: "t", repo });
+    const warning = {
+      rule: "L6" as const,
+      code: "W_DETAILS_SOFT_CAP",
+      severity: "warning" as const,
+      message: "Phase 1 Details is 94 lines (soft cap 80)",
+      section: "phase-1",
+      actual: 94,
+      budget: 80,
+    };
+    store.saveRevision(id, "# v1\n", [warning]);
+    store.saveRevision(id, "# v2\n"); // default: no warnings
+    expect(store.readRevisionWarnings(id, 1)).toEqual([warning]);
+    expect(store.readRevisionWarnings(id, 2)).toEqual([]);
+    // A corrupt warnings file degrades to [] — badges are presentation metadata.
+    writeFileSync(join(sessionDir(repo, id), "r1.warnings.json"), "{nope");
+    expect(store.readRevisionWarnings(id, 1)).toEqual([]);
+  });
 });
 
 describe("end to end: store + queue across instances", () => {

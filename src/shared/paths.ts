@@ -57,3 +57,8 @@ export function eventsPath(repoRoot: string, id: string): string {
 export function revisionPath(repoRoot: string, id: string, n: number): string {
   return join(sessionDir(repoRoot, id), `r${n}.md`);
 }
+
+/** Lint warnings recorded when r<n>.md was accepted (the UI's L6 badges). */
+export function revisionWarningsPath(repoRoot: string, id: string, n: number): string {
+  return join(sessionDir(repoRoot, id), `r${n}.warnings.json`);
+}

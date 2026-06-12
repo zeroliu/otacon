@@ -7,5 +7,7 @@ import { defineConfig } from "vite";
 // (DECISIONS.md "UI toolchain: Vite build into dist/, React as devDependency").
 export default defineConfig({
   plugins: [react()],
-  build: { outDir: "../dist/ui", emptyOutDir: true },
+  // mermaid is one intentionally huge lazy chunk (fetched on the first
+  // diagram, never by the index) — don't warn about its size.
+  build: { outDir: "../dist/ui", emptyOutDir: true, chunkSizeWarningLimit: 1800 },
 });

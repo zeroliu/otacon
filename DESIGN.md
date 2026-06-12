@@ -169,6 +169,11 @@ code blocks (rendered side-by-side), ASCII wireframes in monospace fences. Fence
 blocks are exempt from line budgets but capped at one fence per read-path section
 (tunable); unlimited inside Details. Images deferred to v2.
 
+A before/after pair is two adjacent fences whose info strings carry `before` and
+`after` tags after the language (` ```ts before ` … ` ```ts after `). The UI renders
+them side-by-side on desktop, stacked on phones; an unpaired tag renders as an
+ordinary fence. The plan stays plain renderable markdown everywhere else.
+
 ### Anchoring (for comments)
 
 Comments anchor to **section ID + text quote** (exact text + prefix/suffix context),
@@ -272,7 +277,9 @@ POST /api/sessions/:id/comments             flush a comment batch
 POST /api/sessions/:id/questions            user question (instant)
 POST /api/sessions/:id/answers              answer to an agent question
 POST /api/sessions/:id/approve              approve (daemon writes final artifact)
-GET  /api/sessions/:id/revisions/:n         raw revision markdown
+GET  /api/sessions/:id/revisions/:n         raw revision markdown; with Accept:
+                                            application/json, {markdown, warnings}
+                                            (the lint warnings it was accepted with)
 GET  /api/sessions/:id/diff?from=&to=       computed diff
 GET  /api/sessions/:id/stream               SSE for the UI (one session)
 GET  /api/stream                            SSE for the index (all sessions)
@@ -483,7 +490,7 @@ Operational requirement: the Mac stays awake while a plan is in review
 
 | Location                                 | Contents                                                                                                       | Git                                        |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `<repo>/.otacon/`                        | Working state: `current-session`, `plan.md`, revision snapshots `r1.md…rN.md`, threads, Q&A transcript, queues | **gitignored**                             |
+| `<repo>/.otacon/`                        | Working state: `current-session`, `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`), threads, Q&A transcript, queues | **gitignored**                             |
 | `<repo>/docs/plans/YYYY-MM-DD-<slug>.md` | Final approved plan (`status: approved` frontmatter + grill transcript)                                        | **committed** (by the agent, post-approve) |
 | `~/.otacon/registry.json`                | Session registry: ID → repo, branch, title, status                                                             | n/a (global)                               |
 

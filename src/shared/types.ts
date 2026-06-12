@@ -98,3 +98,15 @@ export interface LintResult {
   errors: LintIssue[];
   warnings: LintIssue[];
 }
+
+/**
+ * JSON variant of GET /api/sessions/:id/revisions/:n (Accept: application/json).
+ * `warnings` are the lint warnings the revision was accepted with — the review
+ * screen renders the L6 entries as badges on Details blocks (DESIGN.md §5, §10).
+ */
+export interface RevisionPayload {
+  session: string;
+  revision: number;
+  markdown: string;
+  warnings: LintIssue[];
+}

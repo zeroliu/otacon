@@ -1,14 +1,21 @@
-// The /s/:id shell: session header in the session's accent color, live over
-// its SSE stream. Plan rendering, threads, and diffs land here in M2b/M2c.
+// The /s/:id review screen: session header in the session's accent color,
+// live over its SSE stream, rendering the latest stored revision as the plan
+// dossier (DESIGN.md §10). The renderer (markdown + highlighter) is a lazy
+// chunk so the index stays light; threads and diffs land in M2c/M3+ — until
+// then the header carries no dead Approve/Diff controls (DECISIONS.md
+// "Review screen: reading surface only until the verbs exist").
 
 import type { MouseEvent } from "react";
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { accentStyle } from "./accent";
-import { useSession } from "./api";
+import type { LiveSession } from "./api";
+import { useRevision, useSession } from "./api";
 import { LinkState, StatusChip } from "./chip";
 import { relativeTime, repoName } from "./format";
 import { navigate } from "./router";
 import { markSeen } from "./seen";
+
+const PlanView = lazy(() => import("./plan/plan-view"));
 
 function BackLink() {
   const onClick = (event: MouseEvent) => {
@@ -20,6 +27,32 @@ function BackLink() {
     <a className="backlink" href="/" onClick={onClick}>
       ← sessions
     </a>
+  );
+}
+
+function ReviewPane({ session }: { session: LiveSession }) {
+  const payload = useRevision(session.id, session.revision);
+
+  if (session.revision === 0) {
+    return (
+      <main className="review-wait">
+        <p className="wait-line">// no revision yet</p>
+        <p>
+          The agent is still drafting. The plan renders here the moment revision 1 passes the
+          linter — this screen updates live.
+        </p>
+      </main>
+    );
+  }
+  if (!payload) {
+    return <p className="loading">loading r{session.revision}…</p>;
+  }
+  return (
+    <main className="review">
+      <Suspense fallback={<p className="loading">loading renderer…</p>}>
+        <PlanView markdown={payload.markdown} warnings={payload.warnings} />
+      </Suspense>
+    </main>
   );
 }
 
@@ -72,18 +105,7 @@ export function SessionScreen({ id }: { id: string }) {
           <LinkState connected={connected} />
         </div>
       </header>
-      <main className="review-stub">
-        <p className="stub-line">// review screen lands in M2b</p>
-        <p>
-          {session.revision === 0
-            ? "No revision has been submitted yet — the agent is still drafting."
-            : `Revision ${session.revision} is stored on the daemon.`}{" "}
-          Plan rendering, threads, and diffs arrive with M2b/M2c.
-        </p>
-        <p className="stub-id">
-          session <code>{session.id}</code>
-        </p>
-      </main>
+      <ReviewPane key={session.id} session={session} />
     </div>
   );
 }

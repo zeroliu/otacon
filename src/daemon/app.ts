@@ -293,7 +293,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     if (!result.ok) {
       return c.json({ ok: false, errors: result.errors, warnings: result.warnings }, 422);
     }
-    const revision = store.saveRevision(session.id, content);
+    const revision = store.saveRevision(session.id, content, result.warnings);
     const updated = store.updateSession(session.id, { status: "in_review" });
     publishSession(updated);
     notifier.publish({ type: "revision", session: session.id, data: { session: session.id, revision } });
@@ -381,6 +381,17 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     }
     if (n > store.readState(session.id).revision) {
       return notFound(c, `session ${session.id} has no revision ${n}`);
+    }
+    // Default is the raw markdown (byte-identical read-back; the CLI/curl
+    // path). The web UI asks for JSON to get the lint warnings the revision
+    // was accepted with alongside it (DESIGN.md §6).
+    if (c.req.header("accept")?.includes("application/json")) {
+      return c.json({
+        session: session.id,
+        revision: n,
+        markdown: store.readRevision(session.id, n),
+        warnings: store.readRevisionWarnings(session.id, n),
+      });
     }
     return c.text(store.readRevision(session.id, n), 200, {
       "content-type": "text/markdown; charset=utf-8",

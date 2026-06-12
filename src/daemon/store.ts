@@ -11,7 +11,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import * as paths from "../shared/paths.js";
-import type { RegistryFile, RegistrySession, SessionStateFile } from "../shared/types.js";
+import type { LintIssue, RegistryFile, RegistrySession, SessionStateFile } from "../shared/types.js";
 
 let tmpSerial = 0;
 let quarantineSerial = 0;
@@ -237,12 +237,20 @@ export class Store {
     return { ...state.counters };
   }
 
-  /** Store the next revision snapshot r<N>.md (DESIGN.md §12); returns N. */
-  saveRevision(id: string, content: string): number {
+  /**
+   * Store the next revision snapshot r<N>.md plus the lint warnings it was
+   * accepted with (r<N>.warnings.json — the UI's L6 badges; DESIGN.md §12);
+   * returns N.
+   */
+  saveRevision(id: string, content: string, warnings: LintIssue[] = []): number {
     const session = this.require(id);
     const state = this.readState(id);
     state.revision += 1;
     writeFileAtomic(paths.revisionPath(session.repo, id, state.revision), content);
+    writeFileAtomic(
+      paths.revisionWarningsPath(session.repo, id, state.revision),
+      stringify(warnings),
+    );
     writeFileAtomic(paths.sessionStatePath(session.repo, id), stringify(state));
     session.updatedAt = new Date().toISOString();
     this.flushRegistry();
@@ -252,6 +260,16 @@ export class Store {
   readRevision(id: string, n: number): string {
     const session = this.require(id);
     return readFileSync(paths.revisionPath(session.repo, id, n), "utf8");
+  }
+
+  /**
+   * Warnings recorded with r<n>.md. Missing or corrupt files read as [] — the
+   * badges are presentation metadata, never worth quarantine machinery.
+   */
+  readRevisionWarnings(id: string, n: number): LintIssue[] {
+    const session = this.require(id);
+    const raw = readJsonOr(paths.revisionWarningsPath(session.repo, id, n));
+    return Array.isArray(raw) ? (raw as LintIssue[]) : [];
   }
 
   /** Where this session's SessionQueue persists — for the daemon to wire queues. */

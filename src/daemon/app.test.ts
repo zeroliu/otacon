@@ -368,6 +368,42 @@ describe("revisions", () => {
     expect(await res.text()).toBe(plan);
   });
 
+  test("Accept: application/json returns markdown plus the warnings the revision was accepted with", async () => {
+    const session = mintSession();
+    // Blow Phase 1's Details past the 80-line soft cap so the submit records an L6 warning.
+    const longDetails = Array.from({ length: 85 }, (_, i) => `detail line ${i + 1}`).join("\n");
+    const plan = validPlanFor(session.id).replace(
+      "The issuer reads the signing key from the keychain at boot.",
+      longDetails,
+    );
+    const submit = await app.request(`/api/sessions/${session.id}/submit`, {
+      method: "POST",
+      body: plan,
+    });
+    expect(submit.status).toBe(200);
+
+    const res = await app.request(`/api/sessions/${session.id}/revisions/1`, {
+      headers: { accept: "application/json" },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    const payload = (await res.json()) as {
+      session: string;
+      revision: number;
+      markdown: string;
+      warnings: { rule: string; section?: string }[];
+    };
+    expect(payload.session).toBe(session.id);
+    expect(payload.revision).toBe(1);
+    expect(payload.markdown).toBe(plan);
+    expect(payload.warnings.some((w) => w.rule === "L6" && w.section === "phase-1")).toBe(true);
+
+    // The default (no Accept) read-back stays byte-identical raw markdown.
+    const raw = await app.request(`/api/sessions/${session.id}/revisions/1`);
+    expect(raw.headers.get("content-type")).toContain("text/markdown");
+    expect(await raw.text()).toBe(plan);
+  });
+
   test("missing and malformed revision numbers are rejected", async () => {
     const session = mintSession();
     expect((await app.request(`/api/sessions/${session.id}/revisions/1`)).status).toBe(404);

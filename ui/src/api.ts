@@ -4,9 +4,14 @@
 // (DECISIONS.md "UI live updates: in-process Notifier, snapshot-first SSE").
 
 import { useEffect, useMemo, useState } from "react";
-import type { SessionStatus, SessionSummary } from "../../src/shared/types";
+import type {
+  LintIssue,
+  RevisionPayload,
+  SessionStatus,
+  SessionSummary,
+} from "../../src/shared/types";
 
-export type { SessionStatus, SessionSummary };
+export type { LintIssue, RevisionPayload, SessionStatus, SessionSummary };
 
 /** A summary plus the client-side "this card just changed" timestamp. */
 export interface LiveSession extends SessionSummary {
@@ -121,4 +126,44 @@ export function useSession(id: string): SessionDetail {
   }, [id]);
 
   return { session, missing, connected };
+}
+
+/**
+ * The stored revision `n` (markdown + the warnings it was accepted with).
+ * Re-fetches when `n` bumps — the session stream's `revision` frame drives
+ * that — while keeping the previous payload rendered, so a live update swaps
+ * content without a loading flash. Failed fetches retry; recovery from a
+ * daemon restart is automatic.
+ */
+export function useRevision(id: string, n: number): RevisionPayload | undefined {
+  const [payload, setPayload] = useState<RevisionPayload>();
+
+  useEffect(() => {
+    if (n < 1) {
+      setPayload(undefined);
+      return;
+    }
+    let live = true;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    const load = (): void => {
+      fetch(`/api/sessions/${id}/revisions/${n}`, { headers: { accept: "application/json" } })
+        .then((res) => {
+          if (!res.ok) throw new Error(`revision fetch failed: ${res.status}`);
+          return res.json() as Promise<RevisionPayload>;
+        })
+        .then((data) => {
+          if (live) setPayload(data);
+        })
+        .catch(() => {
+          if (live) retry = setTimeout(load, 2000);
+        });
+    };
+    load();
+    return () => {
+      live = false;
+      if (retry !== undefined) clearTimeout(retry);
+    };
+  }, [id, n]);
+
+  return payload;
 }
