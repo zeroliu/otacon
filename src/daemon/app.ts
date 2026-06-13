@@ -292,6 +292,31 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     return c.json(summarize(session));
   });
 
+  // otacon clean's deregistration (DESIGN.md §6, §12): only an approved
+  // (ended) session may leave the registry — the CLI archives its .otacon/
+  // dir afterwards. The queue instance is evicted with it; still-queued
+  // events on an ended session (an undrained `approved` copy) leave with the
+  // dir by design (DECISIONS.md "clean: daemon deregisters, CLI archives").
+  app.delete("/api/sessions/:id", (c) => {
+    const session = sessionFor(c);
+    if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.status !== "approved") {
+      return c.json(
+        {
+          error: {
+            code: "E_SESSION_ACTIVE",
+            message: `session ${session.id} is ${session.status} — only approved (ended) sessions can be cleaned`,
+          },
+        },
+        409,
+      );
+    }
+    const pendingEvents = queueFor(session.id).size;
+    queues.delete(session.id);
+    store.deleteSession(session.id);
+    return c.json({ ok: true, session: session.id, repo: session.repo, pendingEvents });
+  });
+
   app.get("/api/sessions/:id/events", (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);

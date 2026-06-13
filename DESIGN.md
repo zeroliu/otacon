@@ -252,8 +252,8 @@ the model is suspended — no inference, no token spend.
 | `otacon ask --question "…" [--options "A\|B\|C"] [--recommend A] [--multi]` | Post agent question card to UI; answer arrives via `wait`                     |
 | `otacon answer <question-id> (--body "…" \| --file f.md)`                   | Answer a user question; no revision                                           |
 | `otacon status [--all]`                                                     | Session state + undelivered event count (crash/resume entry point)            |
-| `otacon open`                                                               | Print/open the review URL (human convenience)                                 |
-| `otacon clean`                                                              | Archive/remove working state for ended sessions                               |
+| `otacon open [--session <id>]`                                              | Print the review URL — the index URL when no session resolves; never launches a browser |
+| `otacon clean [--all]`                                                      | Archive ended sessions' working state to `.otacon/archive/` and prune the registry (§12) |
 
 The `--resolutions` file is the revision-accompaniment document:
 
@@ -296,6 +296,8 @@ POST /api/shutdown                          clean daemon exit
 GET  /api/sessions                          index (registry)
 POST /api/sessions                          mint + register a session (otacon start)
 GET  /api/sessions/:id                      session detail (+ revision, pending events)
+DELETE /api/sessions/:id                    deregister an ended session (otacon clean);
+                                            non-approved sessions → 409 E_SESSION_ACTIVE
 GET  /api/sessions/:id/events?wait=540      agent long-poll
 POST /api/sessions/:id/submit               lint; reject 422 with issues, or store revision N
 POST /api/sessions/:id/comments             flush a comment batch
@@ -616,7 +618,13 @@ Operational requirement: the Mac stays awake while a plan is in review
 
 The committed plan is the contract `snake` consumes — any fresh session, worktree, or
 machine can find it. Review exhaust stays out of git. `otacon clean` archives ended
-sessions' working state.
+sessions' working state: for every **approved** session in the current repo (`--all`:
+everywhere), the daemon drops the registry entry (`DELETE /api/sessions/:id`, refused
+409 for active sessions), then the CLI moves `.otacon/<id>/` to
+`.otacon/archive/<id>/` in the session's repo (name collisions get a numeric suffix)
+and removes a `current-session` pointer naming it. Committed plans under `docs/plans/`
+are never touched; events still queued on an ended session are archived with the
+directory rather than blocking the clean.
 
 **The approved artifact** is the final revision's markdown with the frontmatter
 `status` rewritten to `approved` and `revision` corrected to the daemon's count (the
@@ -681,8 +689,8 @@ Session status machine: `draft → in_review ⇄ revising → approved`.
 
 - Budget numbers (L2/L6) and fence-per-section caps are config; expect a week of tuning.
 - Lint L4 heuristics will grow from observed smuggle vectors.
-- Skill wrapper texts per agent (identical protocol, three thin files) — written during
-  implementation.
+- Wrapper text tuning from observed agent behavior (the protocol card is one shared
+  text written by `otacon install`; see §16).
 - `snake` naming/design — separate document when its time comes.
 
 ---
@@ -695,17 +703,28 @@ Session status machine: `draft → in_review ⇄ revising → approved`.
 npm install -g otacon        # one package: CLI + daemon (npm name verified free)
                              # until published: npm i -g github:zeroliu/otacon
 otacon install --all         # write agent skill wrappers; or --agent claude|codex|opencode
-otacon doctor                # verify: daemon boots, port 4747 free, wrappers present, Tailscale status
-otacon expose                # optional, phone access: checks Tailscale login,
-                             # configures `tailscale serve`, prints the tailnet URL to bookmark
+                             # --hooks also registers the Claude Code Stop hook
+otacon doctor                # verify: node ≥ 20, daemon boots + port free-or-ours,
+                             # wrappers present, Stop hook registered, Tailscale status
+                             # (hard failures exit 1; optional pieces are warnings)
+otacon expose                # optional, phone access: checks the tailscale CLI exists
+                             # and is logged in, runs `tailscale serve` against the
+                             # daemon port, prints the tailnet URL to bookmark
 ```
 
-`otacon install` writes the thin protocol wrapper into each agent's skill location
-(Claude Code: `~/.claude/skills/otacon/SKILL.md`, plus an offer to register the Stop
-hook in `~/.claude/settings.json`; Codex and OpenCode: their skill/instructions
-equivalents). `otacond` is never installed or started by hand — any `otacon` command
-auto-spawns it if it isn't running, and the CLI restarts a stale daemon on version
-mismatch (version handshake on every call).
+`otacon install` writes the thin protocol wrapper — one protocol card teaching the
+full loop (§6), grill discipline (§8), and the never-end-your-turn rule (§13) — into
+each agent's skill location: Claude Code `~/.claude/skills/otacon/SKILL.md` plus the
+Stop hook script `~/.claude/hooks/otacon-stop.sh`; Codex a marker-delimited block in
+`$CODEX_HOME/AGENTS.md` (default `~/.codex/`, user content outside the markers
+preserved); OpenCode `$XDG_CONFIG_HOME/opencode/skills/otacon/SKILL.md`. Wrappers are
+managed files — reinstall overwrites them. The Stop hook registration in
+`~/.claude/settings.json` is offered, applied only by `--hooks`: an additive,
+idempotent merge that preserves every existing key and backs the file up before the
+first change (unparseable settings are refused, never clobbered). `otacond` is never
+installed or started by hand — any `otacon` command auto-spawns it if it isn't
+running, and the CLI restarts a stale daemon on version mismatch (version handshake
+on every call).
 
 ### Per-repo setup
 

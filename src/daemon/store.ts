@@ -245,6 +245,17 @@ export class Store {
     return { ...session };
   }
 
+  /**
+   * Remove a session from the registry (otacon clean, DESIGN.md §12); the
+   * .otacon/<id>/ dir in its repo is the CLI's to archive afterwards.
+   */
+  deleteSession(id: string): RegistrySession {
+    const session = this.require(id);
+    delete this.registry.sessions[id];
+    this.flushRegistry();
+    return { ...session };
+  }
+
   readState(id: string): SessionStateFile {
     const session = this.require(id);
     const path = paths.sessionStatePath(session.repo, id);

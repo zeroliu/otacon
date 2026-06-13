@@ -244,7 +244,9 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   resurrect delivered-but-unacked in-flight events as duplicates. Daemon-lifetime
   scope is the simplest correct choice at single-user session counts.
 - **Revisit when:** `otacon clean` archives sessions while the daemon runs —
-  eviction must then drain in-flight events first.
+  eviction must then drain in-flight events first. *(Resolved in M5a the other way:
+  clean accepts only approved sessions, where dropping undrained `approved` copies
+  is safe — see "clean: daemon deregisters, CLI archives".)*
 
 ## Daemon spawn: health re-probe, not the boot line
 
@@ -853,8 +855,8 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   approved event still has to drain through the session's queue file, and
   `E_SESSION_OVER`/registry status already remove the session from every active
   surface; moving directories under a live queue would be a race for zero gain.
-- **Revisit when:** `otacon clean` lands (it owns the physical move), or `snake`
-  needs structured (non-markdown) access to the interview.
+- **Revisit when:** `snake` needs structured (non-markdown) access to the interview.
+  *(The physical move landed in M5a — see "clean: daemon deregisters, CLI archives".)*
 
 ## "questions pending" is derived from openQuestions, never a stored status
 
@@ -909,3 +911,114 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   of truth that goes stale the moment the file is moved or renamed.
 - **Revisit when:** Citations want hover previews (the transform would need
   real components), or sessions list their artifact post-approve (M5 `clean`).
+
+## Wrappers are managed files: overwrite wholesale, marked
+
+- **Decision:** `otacon install` owns wrapper content. SKILL.md files are rewritten
+  byte-for-byte on every install and carry a visible ``managed by `otacon install` ``
+  marker; Codex's shared `AGENTS.md` gets a BEGIN/END-marked block that is replaced in
+  place (user content outside the markers survives verbatim). User edits inside
+  managed content are not preserved.
+- **Why:** The wrapper is product behavior — it must track the CLI version exactly
+  (`npm update -g` then reinstall, §16), and a three-way merge with user edits would
+  fork the protocol invisibly: an agent following last month's card against this
+  month's linter is a support nightmare. The marker makes the policy legible at the
+  point of temptation. Codex is block-scoped (not whole-file) only because its file is
+  a shared instructions surface other tools and humans also write to.
+- **Revisit when:** Wrapper customization becomes a real need (then: a user-content
+  slot outside the managed region, never merge).
+
+## Wrapper destinations: claude skills dir, codex AGENTS.md block, opencode config skills dir
+
+- **Decision:** Claude Code `~/.claude/skills/otacon/SKILL.md` + the hook script
+  `~/.claude/hooks/otacon-stop.sh`; Codex a marked block in `$CODEX_HOME/AGENTS.md`
+  (default `~/.codex/`); OpenCode `$XDG_CONFIG_HOME/opencode/skills/otacon/SKILL.md`.
+  All three are fully implemented; one protocol card is the single source for all of
+  them.
+- **Why:** Verified conventions (June 2026): Codex reads global instructions from
+  `~/.codex/AGENTS.md` and has no stable global skills contract, so the shared
+  instructions file with a managed block is the honest integration; OpenCode reads
+  Claude-compatible SKILL.md skills from `~/.config/opencode/skills/` (it also reads
+  `~/.claude/skills/`, so the Claude install alone would work — the dedicated copy
+  exists so installing/uninstalling one agent never silently depends on another's
+  files). One card for all three because the protocol is agent-agnostic by
+  construction (§13: "can run shell commands + can edit files").
+- **Revisit when:** Codex ships a real global skills dir, or the agents' conventions
+  drift apart enough that one card stops fitting all.
+
+## Stop hook: plain sh, block-decision JSON, fail-open, stop_hook_active ignored
+
+- **Decision:** The hook is POSIX sh: cwd parsed from the stdin JSON with sed ($PWD
+  fallback), repo root via `git rev-parse`, session from `.otacon/current-session`,
+  status probed with `curl --max-time 2`; an open session emits
+  `{"decision":"block","reason":…}` on exit 0, everything else exits 0 silently.
+  Approval is detected by a `"status":"approved"` substring check. Any failure —
+  missing pointer, daemon down, curl absent — allows the stop. `stop_hook_active` is
+  deliberately not consulted.
+- **Why:** Exit-0-plus-JSON is Claude Code's documented decision channel and routes
+  the reason to the model cleanly (exit 2 ignores stdout and dumps stderr). Fail-open
+  is non-negotiable: a guard that can trap an agent in an unstoppable session when
+  the daemon dies is worse than no guard. Ignoring `stop_hook_active` is the point of
+  §13 — the block should hold exactly as long as the session is open; it terminates
+  deterministically because approve flips the status the very check reads, and the
+  human can always interrupt. The substring check is naive but sound in practice: the
+  summary JSON is compact, and a session title containing the literal
+  `"status":"approved"` is not a real threat model for a personal tool.
+- **Revisit when:** Hook input grows fields sed can't safely extract (then: a node
+  one-liner — node is guaranteed by the package's own engines), or false blocks show
+  up in real use.
+
+## clean: daemon deregisters, CLI archives; undrained events leave with the dir
+
+- **Decision:** `DELETE /api/sessions/:id` accepts only approved sessions (active →
+  409 `E_SESSION_ACTIVE`), removes the registry entry, and evicts the session's queue
+  instance without draining it; the CLI then moves `.otacon/<id>/` to
+  `.otacon/archive/<id>/` and deletes a `current-session` pointer naming the session.
+  The response reports still-pending events; clean surfaces them as a notice and
+  proceeds.
+- **Why:** The registry is daemon-owned in-memory state — a CLI editing
+  `registry.json` directly would be overwritten by the next flush, so deregistration
+  must be a daemon verb; the dir move stays in the CLI because the files live in the
+  user's repo and the daemon stops knowing the session the moment the entry is gone
+  (`require()` throws — nothing can race the move). Dropping undrained events is the
+  conscious resolution of the M2-era eviction caveat (DECISIONS "One SessionQueue
+  instance per session"): on an approved session the only loseable events are
+  `approved` copies, and the artifact they announce is already committed on disk —
+  blocking clean on them would make the common "approve, then tidy up" flow refuse.
+- **Revisit when:** clean wants to cover non-approved states (abandoned drafts), which
+  would need a real force/drain story.
+
+## doctor/expose: OTACON_TAILSCALE override, PATH + app-bundle lookup, serve-only automation
+
+- **Decision:** Tailscale is discovered via `OTACON_TAILSCALE` (authoritative when
+  set), else PATH, else the macOS app bundle's embedded CLI. `otacon expose`
+  automates exactly one thing — `tailscale serve --bg http://127.0.0.1:<port>` after
+  verifying `BackendState === "Running"` — and prints the MagicDNS-derived URL;
+  install, login (`tailscale up`), and tailnet HTTPS/MagicDNS enablement are
+  errors/pointers, never automated. doctor treats every tailscale state as a warning,
+  and wrapper absence likewise; only node < 20 and a daemon that cannot own its port
+  fail the run (exit 1).
+- **Why:** Login and HTTPS enablement are interactive and account-scoped (browser
+  auth, admin console) — automating them means scraping flows that change under us,
+  for a step done once per machine. The env override extends the established
+  OTACON_HOME/OTACON_PORT escape-hatch pattern and is what makes the expose e2e
+  hermetic (a stub binary, never a real tailnet). Doctor's warn-vs-fail split follows
+  use: phone access and non-Claude agents are optional features, but a broken daemon
+  or runtime breaks everything.
+- **Revisit when:** `tailscale serve` syntax changes (the e2e stub pins today's), or
+  expose needs serve-status introspection to detect an already-configured tailnet.
+
+## open prints, never launches; implicit failures degrade to the index URL
+
+- **Decision:** `otacon open` only prints `{url}` JSON — it never spawns a browser.
+  With `--session` it resolves strictly; implicit resolution failures (no session,
+  ambiguous, stale pointer, ended session) print the index URL with a stderr notice
+  instead of failing.
+- **Why:** Agents run this command too, and stdout is the contract — a CLI that pops
+  GUI windows out of an agent's Bash tool is a misfeature; the human pastes or taps
+  the URL (on the phone it was never going to be the Mac's browser anyway). Lenient
+  fallback because the never-guess rule (§7) guards *writes* — posting feedback to
+  the wrong session — while the index is a read that is never the wrong screen and
+  lists every session including the ones the refusals are about.
+- **Revisit when:** A desktop "open in browser" convenience is actually missed
+  (then: an explicit `--browser` flag, default off).

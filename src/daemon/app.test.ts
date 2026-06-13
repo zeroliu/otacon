@@ -1341,3 +1341,43 @@ describe("approve and the status machine (M4)", () => {
     }
   });
 });
+
+describe("DELETE /api/sessions/:id (otacon clean, M5)", () => {
+  test("404 on an unknown session", async () => {
+    const res = await app.request("/api/sessions/otc_nope", { method: "DELETE" });
+    expect(res.status).toBe(404);
+  });
+
+  test("refuses an active session with E_SESSION_ACTIVE", async () => {
+    const session = mintSession();
+    const res = await app.request(`/api/sessions/${session.id}`, { method: "DELETE" });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("E_SESSION_ACTIVE");
+    expect(store.getSession(session.id)).toBeDefined();
+  });
+
+  test("deregisters an approved session and reports its pending events", async () => {
+    const session = mintSession();
+    await app.request(`/api/sessions/${session.id}/submit`, {
+      method: "POST",
+      body: validPlanFor(session.id),
+    });
+    const approved = await postJson(`/api/sessions/${session.id}/approve`, { force: true });
+    expect(approved.status).toBe(200);
+
+    const res = await app.request(`/api/sessions/${session.id}`, { method: "DELETE" });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; repo: string; pendingEvents: number };
+    expect(body.ok).toBe(true);
+    expect(body.repo).toBe(repo);
+    expect(body.pendingEvents).toBe(1); // the undrained `approved` event
+
+    expect(store.getSession(session.id)).toBeUndefined();
+    const detail = await app.request(`/api/sessions/${session.id}`);
+    expect(detail.status).toBe(404);
+    // The .otacon/<id>/ dir is untouched — archiving is the CLI's job.
+    expect(existsSync(revisionPath(repo, session.id, 1))).toBe(true);
+    expect(existsSync(eventsPath(repo, session.id))).toBe(true);
+  });
+});

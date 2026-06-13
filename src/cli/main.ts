@@ -5,13 +5,19 @@
 
 import { answerCommand } from "./commands/answer.js";
 import { askCommand } from "./commands/ask.js";
+import { cleanCommand } from "./commands/clean.js";
+import { doctorCommand } from "./commands/doctor.js";
+import { exposeCommand } from "./commands/expose.js";
+import { installCommand } from "./commands/install.js";
+import { openCommand } from "./commands/open.js";
 import { startCommand } from "./commands/start.js";
 import { statusCommand } from "./commands/status.js";
 import { submitCommand } from "./commands/submit.js";
 import { waitCommand } from "./commands/wait.js";
 import { CliError, printJson } from "./output.js";
 
-const USAGE = "usage: otacon <start|submit|wait|ask|answer|status> [options]";
+const USAGE =
+  "usage: otacon <start|submit|wait|ask|answer|status|open|clean|install|doctor|expose> [options]";
 
 async function dispatch(command: string | undefined, argv: string[]): Promise<number> {
   switch (command) {
@@ -27,6 +33,16 @@ async function dispatch(command: string | undefined, argv: string[]): Promise<nu
       return answerCommand(argv);
     case "status":
       return statusCommand(argv);
+    case "open":
+      return openCommand(argv);
+    case "clean":
+      return cleanCommand(argv);
+    case "install":
+      return installCommand(argv);
+    case "doctor":
+      return doctorCommand(argv);
+    case "expose":
+      return exposeCommand(argv);
     default:
       throw new CliError("E_USAGE", USAGE, 2);
   }
