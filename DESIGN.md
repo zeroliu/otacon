@@ -373,9 +373,12 @@ gaining its answer, a comment gaining its resolution, an anchor re-anchoring or
 orphaning); a `grill` frame is the transcript's upsert: a question asked via
 `otacon ask`, or an entry gaining the user's answer; a `removed` frame is terminal —
 the session left the registry (`otacon clean`): the index and the session switcher
-drop it live, and an open review screen flips to a quiet "session cleaned" state and
-closes its stream (a reconnect against the deregistered id could only 404) — with a
-comment heartbeat to keep idle proxies from closing the stream.
+drop it live, an open review screen flips to a quiet "session cleaned" state and
+closes its stream (a reconnect against the deregistered id could only 404), and the
+daemon ends the per-session stream after the frame (nothing can be published for the
+session again, so a client that ignored the frame must not pin the connection; the
+index stream stays open) — with a comment heartbeat to keep idle proxies from
+closing the stream.
 Session payloads (snapshot, `session` frames, session detail) carry
 `lastReviewedRevision` alongside `revision`, and `openQuestions` — the count of
 transcript entries still awaiting the user's answer, from which the index's

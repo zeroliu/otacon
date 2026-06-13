@@ -9,7 +9,7 @@ import { useSessions } from "./api";
 import { LinkState, StatusChip } from "./chip";
 import { relativeTime, repoName } from "./format";
 import { navigate } from "./router";
-import { seenRevision } from "./seen";
+import { unreadCount } from "./seen";
 
 /** Re-render every `ms` so "3m ago" stays honest while the page idles. */
 function useTick(ms: number): void {
@@ -52,7 +52,7 @@ export function IndexScreen() {
 }
 
 function SessionCard({ session, index }: { session: LiveSession; index: number }) {
-  const unread = session.revision > seenRevision(session.id);
+  const unread = unreadCount(session.id, session.revision) > 0;
   const href = `/s/${session.id}`;
   const style = { ...accentStyle(session.id), "--i": index } as CSSProperties;
   const onClick = (event: MouseEvent) => {

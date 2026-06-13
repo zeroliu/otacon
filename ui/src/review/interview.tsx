@@ -7,6 +7,7 @@
 import { memo, useEffect, useRef } from "react";
 import type { TranscriptEntry } from "../api";
 import { relativeTime } from "../format";
+import { motionSafeScroll } from "./anchor";
 
 /** A deep-link request; `nonce` re-fires the flash on repeat clicks. */
 export interface InterviewTarget {
@@ -37,8 +38,7 @@ export const InterviewPanel = memo(function InterviewPanel({
     if (!target || !open) return;
     const el = bodyRef.current?.querySelector<HTMLElement>(`[data-iv="${target.id}"]`);
     if (!el) return;
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    el.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "center" });
+    motionSafeScroll(el, "center");
     el.classList.remove("iv-hit");
     void el.offsetWidth; // restart the wash on repeat clicks
     el.classList.add("iv-hit");

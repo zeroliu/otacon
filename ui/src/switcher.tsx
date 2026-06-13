@@ -9,8 +9,9 @@ import type { MouseEvent } from "react";
 import { accentStyle } from "./accent";
 import type { LiveSession, SessionStatus } from "./api";
 import { useSessions } from "./api";
+import { questionsPending } from "./chip";
 import { navigate } from "./router";
-import { seenRevision } from "./seen";
+import { unreadCount } from "./seen";
 
 const GLYPHS: Record<SessionStatus, { glyph: string; word: string }> = {
   draft: { glyph: "✎", word: "drafting" },
@@ -20,17 +21,12 @@ const GLYPHS: Record<SessionStatus, { glyph: string; word: string }> = {
 };
 
 function stateOf(session: LiveSession): { glyph: string; word: string } {
-  // Same derivation as the status chips: unanswered agent questions are the
-  // user's move and outrank the agent-side statuses until the session ends.
-  if (session.status !== "approved" && session.openQuestions > 0) {
+  // questionsPending is the status chips' derivation — one source, so the
+  // index card and the switcher can never disagree about a session's state.
+  if (questionsPending(session.status, session.openQuestions)) {
     return { glyph: "?", word: "questions" };
   }
   return GLYPHS[session.status];
-}
-
-/** Revisions this device has not opened yet (●N); the daemon owns no read state. */
-function unreadOf(session: LiveSession): number {
-  return Math.max(0, session.revision - seenRevision(session.id));
 }
 
 export function SessionSwitcher({ current }: { current: string }) {
@@ -38,10 +34,19 @@ export function SessionSwitcher({ current }: { current: string }) {
   if (byActivity.length === 0) return null;
   // The chip you are on leads the strip (§7's sketch): the "you are here"
   // anchor never scrolls out of reach; the rest keep their activity order.
-  const sessions = [
+  // Unread is computed once here for both faces (select + chips); the entry
+  // you are on never wears a badge — you are reading it.
+  const entries = [
     ...byActivity.filter((s) => s.id === current),
     ...byActivity.filter((s) => s.id !== current),
-  ];
+  ].map((session) => ({
+    session,
+    unread: session.id === current ? 0 : unreadCount(session.id, session.revision),
+  }));
+  // On the cleaned screen `current` was just removed from the registry, so no
+  // option matches it — without a placeholder the controlled select would
+  // render blank (selectedIndex -1).
+  const gone = !byActivity.some((s) => s.id === current);
 
   const onSelect = (id: string) => {
     if (id !== current) navigate(`/s/${id}`);
@@ -55,35 +60,49 @@ export function SessionSwitcher({ current }: { current: string }) {
         <span className="baseline-wrap">
           <select
             aria-label="switch session"
-            value={current}
+            value={gone ? "" : current}
             onChange={(event) => onSelect(event.target.value)}
           >
-            {sessions.map((session) => {
-              const unread = session.id === current ? 0 : unreadOf(session);
-              return (
-                <option key={session.id} value={session.id}>
-                  {session.title} · {stateOf(session).word}
-                  {unread > 0 ? ` ●${unread}` : ""}
-                </option>
-              );
-            })}
+            {gone && (
+              <option value="" disabled>
+                cleaned session
+              </option>
+            )}
+            {entries.map(({ session, unread }) => (
+              <option key={session.id} value={session.id}>
+                {session.title} · {stateOf(session).word}
+                {unread > 0 ? ` ●${unread}` : ""}
+              </option>
+            ))}
           </select>
         </span>
       </label>
       {/* Phone: a one-thumb scroll row of accent-coded chips. */}
       <div className="switch-chips" role="list">
-        {sessions.map((session) => (
-          <SwitchChip key={session.id} session={session} current={session.id === current} />
+        {entries.map(({ session, unread }) => (
+          <SwitchChip
+            key={session.id}
+            session={session}
+            unread={unread}
+            current={session.id === current}
+          />
         ))}
       </div>
     </nav>
   );
 }
 
-function SwitchChip({ session, current }: { session: LiveSession; current: boolean }) {
+function SwitchChip({
+  session,
+  unread,
+  current,
+}: {
+  session: LiveSession;
+  /** Pre-derived by the switcher (zero for the current chip). */
+  unread: number;
+  current: boolean;
+}) {
   const { glyph, word } = stateOf(session);
-  // The chip you are on never wears an unread badge — you are reading it.
-  const unread = current ? 0 : unreadOf(session);
   const href = `/s/${session.id}`;
   const onClick = (event: MouseEvent) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey) return;

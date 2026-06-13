@@ -1088,11 +1088,15 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   carry-forward) after deregistration. The index and switcher drop the session from
   their maps; an open review screen flips to a quiet "session cleaned" terminal
   state — switcher still live, message naming `otacon clean` and `docs/plans/` —
-  and closes its EventSource for good.
+  and closes its EventSource for good. The daemon ends the per-session stream after
+  the frame too (the index stream stays open).
 - **Why:** Without the frame, an open tab showed a ghost session until reload (noted
   as acceptable-for-M5a, revisited here). Closing the stream matters: EventSource
   auto-reconnects, and a reconnect against the deregistered id can only 404-loop;
   cleaned is terminal by definition, so there is nothing to re-sync. The frame
   carries just the id — removal needs no summary, and the UI must not retain one.
+  Server-side close is the other half of terminal: nothing can ever be published
+  for the session again, so a client that ignored the frame would otherwise pin the
+  connection (subscription + heartbeat) until it disconnected on its own.
 - **Revisit when:** Sessions gain other terminal removals (abandon/expire), which
   should reuse this frame rather than mint new ones.

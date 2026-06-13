@@ -11,6 +11,15 @@ const CHIPS: Record<SessionStatus, { label: string; tone: string }> = {
   approved: { label: "approved", tone: "approved" },
 };
 
+/**
+ * The §10 derivation, single-sourced for every status surface (this chip, the
+ * switcher's glyphs): unanswered grill questions are the user's move, so they
+ * outrank the agent-side statuses until the session is over.
+ */
+export function questionsPending(status: SessionStatus, openQuestions: number): boolean {
+  return status !== "approved" && openQuestions > 0;
+}
+
 export function StatusChip({
   status,
   openQuestions = 0,
@@ -19,7 +28,7 @@ export function StatusChip({
   /** Unanswered agent questions (summary.openQuestions); flips the chip. */
   openQuestions?: number;
 }) {
-  if (status !== "approved" && openQuestions > 0) {
+  if (questionsPending(status, openQuestions)) {
     return (
       <span className="chip chip-questions" data-status="questions_pending">
         <span className="chip-dot" aria-hidden="true" />

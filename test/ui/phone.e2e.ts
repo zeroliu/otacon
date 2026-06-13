@@ -310,6 +310,27 @@ test("desktop regression: header strip intact, phone bar controls absent, ⋯ op
   await expect(page.locator(".session-title")).toHaveText(other.title);
 });
 
+test("tablet band (600px): the phone face and the menu sheet flip together, not at split widths", async ({
+  page,
+  request,
+}) => {
+  // 560–639px is the phone face in CSS (chip switcher, sticky bar). The
+  // sheet-vs-popover JS threshold (SHEET_VIEWPORT) must match that breakpoint,
+  // or the ⋯ here would open a desktop popover anchored off-thumb while the
+  // rest of the surface is the phone's. Lock them in lockstep.
+  await page.setViewportSize({ width: 600, height: 800 });
+  await openReview(page, request, "tablet-band");
+
+  // The phone face is on: chips, not the dropdown.
+  await expect(page.locator(".switch-chips")).toBeVisible();
+  await expect(page.locator(".switch-select select")).toBeHidden();
+
+  // So the ⋯ menu docks as the thumb-range sheet, never a desktop popover.
+  await page.locator("#decisions .sec-menu").click();
+  await expect(page.locator(".sec-sheet")).toBeVisible();
+  await expect(page.locator(".sec-pop")).toHaveCount(0);
+});
+
 test("375px dark: menu sheet, sticky bar, and switcher chips render on the dark scheme", async ({
   page,
   request,

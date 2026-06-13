@@ -1406,7 +1406,16 @@ describe("DELETE /api/sessions/:id (otacon clean, M5)", () => {
       event: "removed",
       data: { session: session.id },
     });
+    // `removed` is terminal for the per-session stream: the daemon ends it,
+    // so a client that ignores the frame can't pin the connection forever.
+    await expect(own.next()).rejects.toThrow("SSE stream ended unexpectedly");
+    // The index stream stays open: other sessions keep flowing over it.
+    const survivor = (await (await postJson("/api/sessions", { title: "live", repo })).json()) as {
+      id: string;
+    };
+    const frame = await index.next();
+    expect(frame.event).toBe("session");
+    expect((frame.data as { session: { id: string } }).session.id).toBe(survivor.id);
     await index.cancel();
-    await own.cancel();
   });
 });

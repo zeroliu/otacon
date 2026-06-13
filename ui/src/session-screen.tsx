@@ -18,7 +18,7 @@ import type { Anchor, CommentDraft, LiveSession, Thread, TranscriptEntry } from 
 import { postComments, postQuestion, postReviewed, useDiff, useRevision, useSession } from "./api";
 import { LinkState, StatusChip } from "./chip";
 import { relativeTime, repoName } from "./format";
-import { captureSelection, flashAnchor } from "./review/anchor";
+import { captureSelection, flashAnchor, motionSafeScroll } from "./review/anchor";
 import type { CapturedSelection } from "./review/anchor";
 import { ApproveDialog, ApprovedNote } from "./review/approve";
 import type { ReviewView } from "./review/banner";
@@ -102,6 +102,13 @@ function SessionHead({ session, connected }: { session: LiveSession; connected: 
 
 const COMPOSER_WIDTH = 380;
 const COMPOSER_GUESS_HEIGHT = 240;
+// The phone face: below this width the composer and the section ⋯ menu dock as
+// bottom sheets instead of floating popovers. Kept in lockstep with the CSS
+// `max-width: 639px` breakpoint that swaps the bar/switcher faces (styles.css)
+// — so the whole phone control surface (chips, sticky bar, sheets) flips
+// together; a tablet-band gap where the visual face is the phone's but a tap
+// opened a desktop popover anchored off-thumb would otherwise sit at 560–639px.
+const SHEET_VIEWPORT = 640;
 
 /** The review loop: plan + rail + grill + interview + approve + composer + drawer. */
 function ReviewLoop({
@@ -215,7 +222,7 @@ function ReviewLoop({
 
   const openComposer = useCallback((mode: "comment" | "ask", sel: CapturedSelection) => {
     composerSeq.current += 1;
-    if (window.innerWidth < 560) {
+    if (window.innerWidth < SHEET_VIEWPORT) {
       // Selection popovers don't fit a phone; the composer becomes a sheet.
       setComposer({ mode, anchor: sel.anchor, at: null });
       return;
@@ -352,7 +359,7 @@ function ReviewLoop({
         if (id === undefined) return;
         const rect = menuBtn.getBoundingClientRect();
         setMenu(
-          window.innerWidth < 560
+          window.innerWidth < SHEET_VIEWPORT
             ? { id, at: null } // a popover doesn't fit a phone: bottom sheet
             : { id, at: { x: rect.right, y: rect.bottom } },
         );
@@ -386,10 +393,8 @@ function ReviewLoop({
   // The sticky bar's ❓ (DESIGN.md §10): jump back up to the question queue.
   const openQuestions = transcript.filter((entry) => entry.answer === undefined).length;
   const jumpQuestions = useCallback(() => {
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    document
-      .querySelector(".grill-queue")
-      ?.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+    const queue = document.querySelector(".grill-queue");
+    if (queue) motionSafeScroll(queue, "start");
   }, []);
 
   const toggleInterview = useCallback(() => setInterviewOpen((value) => !value), []);

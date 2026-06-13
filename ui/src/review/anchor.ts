@@ -135,6 +135,17 @@ let flashTimer: ReturnType<typeof setTimeout> | undefined;
 let washed: HTMLElement | undefined;
 
 /**
+ * scrollIntoView that honors prefers-reduced-motion (smooth → auto) — the one
+ * scroll affordance every jump shares (anchor flashes, decision deep-links,
+ * the sticky bar's ❓), so no jump can forget the preference.
+ */
+export function motionSafeScroll(el: Element, block: ScrollLogicalPosition): void {
+  const win = el.ownerDocument.defaultView ?? window;
+  const reduced = win.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  el.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block });
+}
+
+/**
  * Scroll the anchored section into view and flash the anchored text (plus a
  * soft wash on the section itself). Safe no-op when the section is gone.
  */
@@ -142,8 +153,7 @@ export function flashAnchor(container: HTMLElement, anchor: Anchor): void {
   const win = container.ownerDocument.defaultView;
   const section = container.querySelector<HTMLElement>(`#${CSS.escape(anchor.section)}`);
   if (!section || !win) return;
-  const reduced = win.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  section.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "center" });
+  motionSafeScroll(section, "center");
 
   if (flashTimer !== undefined) clearTimeout(flashTimer);
   washed?.classList.remove("anchor-hit");

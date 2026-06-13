@@ -37,15 +37,17 @@ export function SectionMenu({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const sheet = state.at === null;
-  const style = sheet
-    ? undefined
-    : {
-        // The ⋯ sits at the line's end: hang the menu from its right edge,
-        // clamped inside the viewport.
-        left: Math.min(state.at?.x ?? 0, window.innerWidth - 12),
-        top: (state.at?.y ?? 0) + 8,
-      };
+  const { at } = state;
+  const sheet = at === null;
+  const style =
+    at === null
+      ? undefined
+      : {
+          // The ⋯ sits at the line's end: hang the menu from its right edge,
+          // clamped inside the viewport.
+          left: Math.min(at.x, window.innerWidth - 12),
+          top: at.y + 8,
+        };
   return (
     <div
       className="sec-overlay"

@@ -105,6 +105,12 @@ function sse(
       const unsubscribe = deps.notifier.subscribe((event: UiEvent) => {
         if (onlySession !== undefined && event.session !== onlySession) return;
         send(frame(event.type, event.data));
+        // `removed` is terminal for a single-session stream: the session left
+        // the registry, so nothing can ever be published for it again. End the
+        // response server-side too — otherwise a client that ignores the frame
+        // pins this connection (subscription + heartbeat) forever. The index
+        // stream stays open: other sessions keep flowing.
+        if (onlySession !== undefined && event.type === "removed") close();
       });
       const heartbeat = setInterval(
         () => send(encoder.encode(": hb\n\n")),
