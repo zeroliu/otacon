@@ -1122,35 +1122,6 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Sessions gain other terminal removals (abandon/expire), which
   should reuse this frame rather than mint new ones.
 
-## `zero/prototype` ships a committed `dist/` so `npm i -g github:…#zero/prototype` works
-
-- **Decision:** The `zero/prototype` branch tracks a prebuilt `dist/` (force-added
-  past the `dist/` gitignore entry). `npm run pack:dist` rebuilds and re-stages it
-  (`rm -rf dist && npm run build && git add -f -A dist`); refresh it (commit +
-  push) whenever the global install should pick up new source. `package.json` also
-  keeps a guarded `"prepare": "test -f dist/cli/main.js || (node
-  ./node_modules/typescript/bin/tsc … && node ./node_modules/vite/bin/vite.js build
-  ui)"` as a fallback for **non-global** installs.
-- **Why committed, not built-on-install:** `npm install -g github:…` clones source
-  (not the npm-registry tarball that `files: ["dist"]` governs), and a **global**
-  install implies `omit=dev`. npm's git-prep honors that omit even against the
-  `--include=dev` it spawns — verified from its debug log: only the production deps
-  (`hono`, `@hono/node-server`) are placed; `typescript`/`vite` never install, so
-  no `prepare` build can ever find them ("Cannot find module …/typescript/bin/tsc").
-  A global git install therefore **cannot** build from source. Shipping a built
-  `dist/` on the branch sidesteps the build entirely: the `prepare` guard sees
-  `dist/cli/main.js` and no-ops, and the `bin` targets exist straight from the
-  clone. (Live dogfooding doesn't use this — `./bin/otacon` runs from `src/`.)
-- **Why the `prepare` fallback still uses `node ./node_modules/...`:** for the
-  paths where a build *does* run (a local `npm install`/`bun install` in a clone
-  with no committed `dist/`), invoking the tools through `node` by explicit module
-  path avoids npm's git-prep PATH quirk (it runs `prepare` without
-  `node_modules/.bin` on PATH, so bare `tsc` / nested `npm run build` fail).
-- **Revisit when:** Publishing to the npm registry — a registry tarball ships
-  prebuilt `dist/` via `files`, so neither the committed `dist/` nor `prepare` is
-  needed for that path; the committed `dist/` is a `zero/prototype`-only convenience
-  for installing an unpublished branch.
-
 ## Option grill cards accept a free-form custom answer ("Other" parity)
 
 - **Decision:** `POST /answers` accepts a non-empty trimmed `text` with neither
