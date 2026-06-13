@@ -16,7 +16,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && vite build ui",
-    "prepare": "test -f dist/cli/main.js || (tsc -p tsconfig.build.json && vite build ui)",
+    "prepare": "test -f dist/cli/main.js || (node ./node_modules/typescript/bin/tsc -p tsconfig.build.json && node ./node_modules/vite/bin/vite.js build ui)",
     "typecheck": "tsc --noEmit && tsc -p ui",
     "test": "bun test",
     "dev:daemon": "bun run src/daemon/main.ts",

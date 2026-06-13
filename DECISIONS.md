@@ -1104,9 +1104,11 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 ## Git installs build `dist/` via a guarded `prepare` script
 
 - **Decision:** `package.json` carries `"prepare": "test -f dist/cli/main.js ||
-  (tsc -p tsconfig.build.json && vite build ui)"` — the build binaries invoked
-  directly, NOT via `npm run build`. `dist/` stays gitignored. The `bin` entries
-  still point at `dist/cli/main.js` / `dist/daemon/main.js`.
+  (node ./node_modules/typescript/bin/tsc -p tsconfig.build.json && node
+  ./node_modules/vite/bin/vite.js build ui)"` — the build tools invoked through
+  `node` by explicit path, NOT via `npm run build` or bare `tsc`/`vite`. `dist/`
+  stays gitignored. The `bin` entries still point at `dist/cli/main.js` /
+  `dist/daemon/main.js`.
 - **Why:** `npm install -g github:zeroliu/otacon` clones source, not the built
   artifact (`dist/` is gitignored and `files: ["dist"]` only governs npm-registry
   tarballs). With no build step the bin targets are absent, so the global `otacon`
@@ -1114,13 +1116,15 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   installs devDeps, runs it, then prunes them), so `dist/` is built on the user's
   machine. The `test -f … ||` guard makes it a no-op for local `bun install` when a
   build already exists, so day-to-day dev installs don't trigger a full UI rebuild.
-- **Why direct, not `npm run build`:** during a `-g` git install the dep is
-  prepared in a cache temp dir; a *nested* `npm run build` there re-resolves PATH
-  and loses the clone's `node_modules/.bin`, so `tsc` is "command not found" and
-  the install fails. npm puts the package's own `node_modules/.bin` on PATH for its
-  lifecycle scripts (incl. `prepare`), so calling `tsc`/`vite` straight from
-  `prepare` resolves reliably. (A plain local `npm install` worked either way; only
-  the `-g` git-prep path was brittle.)
+- **Why `node ./node_modules/...`, not a bare command:** during a `-g` git install
+  the dep is prepared in a cache temp dir. npm's git-prep installs devDeps
+  (typescript/vite land in `node_modules/.bin`) but runs `prepare` **without
+  `node_modules/.bin` on PATH** — so both bare `tsc` and a nested `npm run build`
+  fail with "tsc: command not found", and the whole install aborts. Invoking the
+  tools through `node` by explicit module path sidesteps PATH and the `.bin`
+  shim/`.cmd` layer entirely, so it resolves wherever `prepare` runs. (A plain
+  local `npm install` worked with any form — only the `-g` git-prep path was
+  brittle; verified by reproducing npm's exact prep flags.)
 - **Revisit when:** Publishing to the npm registry — a registry tarball ships
   prebuilt `dist/` via `files`, so `prepare` becomes redundant for that path (it
   stays correct and harmless; only git installs still need it).
