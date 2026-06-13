@@ -1,0 +1,20 @@
+#!/bin/sh
+# otacon dogfood shim — runs the CLI straight from this checkout's TypeScript
+# source via bun, so every plan loop exercises the code you are editing (linter,
+# parser, CLI). No build, no publish, no global install: it always reflects
+# current source. The daemon auto-spawns from source too (client.ts .ts fallback).
+#
+# After editing DAEMON source (src/daemon/**), restart the running daemon so the
+# next command respawns it fresh:
+#   curl -fsS -X POST "http://127.0.0.1:${OTACON_PORT:-4747}/api/shutdown"
+#
+# Resolve through any symlink chain so this works whether invoked as ./bin/otacon
+# or via a symlink placed on PATH.
+src=$0
+while [ -L "$src" ]; do
+  dir=$(cd -P -- "$(dirname -- "$src")" && pwd)
+  src=$(readlink -- "$src")
+  case $src in /*) ;; *) src=$dir/$src ;; esac
+done
+root=$(cd -P -- "$(dirname -- "$src")/.." && pwd)
+exec bun run "$root/src/cli/main.ts" "$@"

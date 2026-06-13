@@ -1100,3 +1100,19 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   connection (subscription + heartbeat) until it disconnected on its own.
 - **Revisit when:** Sessions gain other terminal removals (abandon/expire), which
   should reuse this frame rather than mint new ones.
+
+## Git installs build `dist/` via a guarded `prepare` script
+
+- **Decision:** `package.json` carries `"prepare": "test -f dist/cli/main.js || npm
+  run build"`. `dist/` stays gitignored. The `bin` entries still point at
+  `dist/cli/main.js` / `dist/daemon/main.js`.
+- **Why:** `npm install -g github:zeroliu/otacon` clones source, not the built
+  artifact (`dist/` is gitignored and `files: ["dist"]` only governs npm-registry
+  tarballs). With no build step the bin targets are absent, so the global `otacon`
+  symlink dangles — "unknown path." `prepare` runs after a git install (npm
+  installs devDeps, runs it, then prunes them), so `dist/` is built on the user's
+  machine. The `test -f … ||` guard makes it a no-op for local `bun install` when a
+  build already exists, so day-to-day dev installs don't trigger a full UI rebuild.
+- **Revisit when:** Publishing to the npm registry — a registry tarball ships
+  prebuilt `dist/` via `files`, so `prepare` becomes redundant for that path (it
+  stays correct and harmless; only git installs still need it).
