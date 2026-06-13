@@ -64,5 +64,7 @@ tailnet in the Tailscale admin console — the one step otacon cannot do for you
 - **M4 — grill + approve** (ask/answer cards, transcript panel, traceability lint,
   approve flow + artifact write-out) — **done**
 - **M5 — install + phone polish** (install/doctor/expose/open/clean, Claude
-  Code/Codex/OpenCode wrappers + Stop hook, Tailscale docs; then section-menu
-  anchoring + sticky bar) — **in progress**
+  Code/Codex/OpenCode wrappers + Stop hook, Tailscale docs; section-menu
+  anchoring, sticky bar, session switcher, live clean) — **done**
+
+All v1 milestones are complete.

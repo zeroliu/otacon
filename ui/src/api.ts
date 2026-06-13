@@ -73,6 +73,15 @@ export function useSessions(): { sessions: LiveSession[]; connected: boolean } {
     on<{ session: string; pending: number }>(source, "queue", (data) => {
       setById((prev) => patch(prev, data.session, { pendingEvents: data.pending }));
     });
+    // Terminal: the session left the registry (otacon clean) — drop its card.
+    on<{ session: string }>(source, "removed", (data) => {
+      setById((prev) => {
+        if (!prev.has(data.session)) return prev;
+        const next = new Map(prev);
+        next.delete(data.session);
+        return next;
+      });
+    });
     return () => source.close();
   }, []);
 
@@ -90,6 +99,8 @@ export interface SessionDetail {
   /** The grill transcript, oldest first; live over `grill` frames (DESIGN.md §8). */
   transcript: TranscriptEntry[];
   missing: boolean;
+  /** True once a `removed` frame lands: otacon clean archived this session. */
+  cleaned: boolean;
   connected: boolean;
 }
 
@@ -107,6 +118,7 @@ export function useSession(id: string): SessionDetail {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [missing, setMissing] = useState(false);
+  const [cleaned, setCleaned] = useState(false);
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
@@ -114,6 +126,7 @@ export function useSession(id: string): SessionDetail {
     setThreads([]);
     setTranscript([]);
     setMissing(false);
+    setCleaned(false);
     setConnected(false);
     let source: EventSource | undefined;
     let retry: ReturnType<typeof setTimeout> | undefined;
@@ -164,6 +177,14 @@ export function useSession(id: string): SessionDetail {
           on<{ session: string; entry: TranscriptEntry }>(source, "grill", ({ entry }) =>
             setTranscript((prev) => upsertById(prev, entry)),
           );
+          // Terminal: otacon clean archived this session. Close the stream —
+          // a reconnect would 404-loop against the deregistered id — and let
+          // the screen render its cleaned state.
+          on<{ session: string }>(source, "removed", () => {
+            setCleaned(true);
+            source?.close();
+            setConnected(false);
+          });
         })
         .catch(() => {
           // daemon unreachable: keep probing so recovery is automatic
@@ -178,7 +199,7 @@ export function useSession(id: string): SessionDetail {
     };
   }, [id]);
 
-  return { session, threads, transcript, missing, connected };
+  return { session, threads, transcript, missing, cleaned, connected };
 }
 
 /** A drawer item not yet flushed to the daemon (DESIGN.md §9 batching). */

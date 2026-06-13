@@ -31,10 +31,12 @@ export interface CliResult {
   stderr: string;
 }
 
-/** Run the real built CLI against the e2e daemon; resolves on exit. */
-export function runCli(args: string[]): Promise<CliResult> {
+/** Run the real built CLI against the e2e daemon; resolves on exit. `cwd`
+ * matters for repo-scoped verbs (clean resolves its targets from the cwd). */
+export function runCli(args: string[], opts: { cwd?: string } = {}): Promise<CliResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cliPath, ...args], {
+      cwd: opts.cwd,
       env: {
         ...process.env,
         OTACON_PORT: String(port),

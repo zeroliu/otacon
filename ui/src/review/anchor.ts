@@ -35,7 +35,8 @@ export function anchorLabel(anchor: Anchor | null): string {
 // An `exact` captured from these could never be re-located — by the agent
 // grepping the source, or by findExactRange after a re-render — so the
 // toolbar must not offer to anchor there.
-const CHROME_SELECTOR = "svg, .fence-head, .anchor-slug, .phase-n, .details-summary, .diagram-pending";
+const CHROME_SELECTOR =
+  "svg, .fence-head, .anchor-slug, .phase-n, .details-summary, .diagram-pending, .sec-menu";
 
 function touchesChrome(range: Range, section: HTMLElement): boolean {
   for (const el of section.querySelectorAll(CHROME_SELECTOR)) {

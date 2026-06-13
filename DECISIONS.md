@@ -1024,3 +1024,75 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   lists every session including the ones the refusals are about.
 - **Revisit when:** A desktop "open in browser" convenience is actually missed
   (then: an explicit `--browser` flag, default off).
+
+## Section ⋯ menus mint section-only anchors; clicks delegate like citations
+
+- **Decision:** Every section and phase header renders a `⋯` button (M5b) whose menu
+  offers _comment on section_ / _ask about section_; both open the existing composer
+  with a `{section}`-only anchor — no `exact` quote, no new anchor grammar. The
+  buttons are pure markup inside the memo'd PlanView; their clicks are delegated
+  through the plan container's onClick exactly like the `← q<n>` citation links, and
+  the buttons join the chrome selector so a text selection touching one never offers
+  the toolbar. The menus render on desktop too (a popover under the button; a bottom
+  sheet on phones).
+- **Why:** Selection anchoring is miserable on a phone, and §4's anchor shape already
+  treats the quote as optional — the re-anchoring ladder's quoteless rung (section
+  existence) and the orphan tray have handled `{section}` anchors since M3, so the
+  daemon needed zero changes; inventing a coarser anchor type would have forked the
+  thread/orphan logic for nothing. Delegation keeps PlanView callback-free: a menu
+  prop would defeat the memo and re-render (= re-write) the DOM under the very
+  selection being anchored. Desktop keeps the menus because hiding an affordance per
+  viewport makes muscle memory lie.
+- **Revisit when:** Plans grow anchor targets below section granularity (paragraph
+  ids), which would want a finer menu or a different gesture.
+
+## The sticky bar is the drawer, augmented at the phone breakpoint
+
+- **Decision:** The §10 phone sticky bar is not a new component: the comment drawer
+  bar gains the phone-only instruments — ❓ question count (scrolls to the grill
+  queue), ✓ approve — and CSS at ≤639px swaps the faces: the header strip's approve
+  hides, the drawer's review toggle folds into the (now tappable) ◆N tally, labels
+  compact to glyphs, every target grows to ≥44px. With a batch pending, approve drops
+  its word to its glyph via a sibling selector so all five instruments hold one 375px
+  row. Glyphs stay the rail's mono family (◆ comment, ? question), not emoji.
+- **Why:** One DOM means one state machine — pending drafts, busy/failed, the
+  question count — with zero risk of the two surfaces disagreeing; the §10 rule
+  ("don't show both redundantly") becomes a pure CSS concern. 639px matches the
+  existing phone breakpoints rather than minting another. The conditional approve
+  word is the cheapest honest fix for the densest-bar overflow found in the 375px
+  screenshot audit.
+- **Revisit when:** The bar wants a sixth instrument (it is full at 375px), or
+  thread bottom-sheets land and need their own bar seat.
+
+## Switcher rides the index stream; current chip leads; unread is device-local
+
+- **Decision:** The review header's session switcher is one component with two
+  CSS-toggled faces: a native `<select>` on desktop, the §7 chip strip on phones.
+  It opens its own `/api/stream` EventSource (snapshot + `session` + `removed`
+  frames). The current session's chip is pinned first and never shows an unread
+  badge; other chips badge `●N` where N = revision − this device's seen mark
+  (localStorage, M2's unread convention).
+- **Why:** The index stream already carries exactly the needed summaries live —
+  reusing it costs one idle SSE connection and zero new endpoints. A native select
+  is the one dropdown that needs no positioning, focus-trap, or ARIA work. Pinning
+  the current chip keeps the "you are here" anchor from scrolling out of the strip;
+  suppressing its badge avoids a lie — markSeen runs after the first render, so the
+  badge would flash for one frame on every switch and then mean nothing.
+- **Revisit when:** Session counts make the strip unwieldy (then: collapse approved
+  chips behind a tail toggle), or the select needs unread affordances a native
+  control cannot draw.
+
+## clean publishes a terminal `removed` frame; cleaned screens close their stream
+
+- **Decision:** `DELETE /api/sessions/:id` publishes `removed` (the M5a review's
+  carry-forward) after deregistration. The index and switcher drop the session from
+  their maps; an open review screen flips to a quiet "session cleaned" terminal
+  state — switcher still live, message naming `otacon clean` and `docs/plans/` —
+  and closes its EventSource for good.
+- **Why:** Without the frame, an open tab showed a ghost session until reload (noted
+  as acceptable-for-M5a, revisited here). Closing the stream matters: EventSource
+  auto-reconnects, and a reconnect against the deregistered id can only 404-loop;
+  cleaned is terminal by definition, so there is nothing to re-sync. The frame
+  carries just the id — removal needs no summary, and the UI must not retain one.
+- **Revisit when:** Sessions gain other terminal removals (abandon/expire), which
+  should reuse this frame rather than mint new ones.

@@ -32,8 +32,11 @@ import { GrillQueue } from "./review/grill";
 import type { InterviewTarget } from "./review/interview";
 import { InterviewPanel } from "./review/interview";
 import { ThreadsRail } from "./review/rail";
+import type { SectionMenuState } from "./review/section-menu";
+import { SectionMenu } from "./review/section-menu";
 import { navigate } from "./router";
 import { markSeen } from "./seen";
+import { SessionSwitcher } from "./switcher";
 
 const PlanView = lazy(() => import("./plan/plan-view"));
 
@@ -119,6 +122,9 @@ function ReviewLoop({
   // and a half-typed draft must never silently follow the new anchor.
   const composerSeq = useRef(0);
   const [composer, setComposer] = useState<ComposerState | null>(null);
+  // The open section ⋯ menu (DESIGN.md §10): the coarse-anchor path. Phone
+  // (at: null) docks it as a bottom sheet; desktop drops it under the button.
+  const [menu, setMenu] = useState<SectionMenuState | null>(null);
   const [pending, setPending] = useState<PendingComment[]>([]);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -146,7 +152,10 @@ function ReviewLoop({
   // Selections only anchor in the clean view: diff lines are change telemetry,
   // not plan text the agent could re-locate (same honesty rule as the
   // chrome-selector guard in anchor.ts).
-  const selection = useSelection(planRef, composer === null && view === "clean" && !over);
+  const selection = useSelection(
+    planRef,
+    composer === null && menu === null && view === "clean" && !over,
+  );
 
   const payload = useRevision(session.id, session.revision);
   const from = Math.min(baseline ?? session.lastReviewedRevision, session.revision);
@@ -329,12 +338,27 @@ function ReviewLoop({
     if (planRef.current) flashAnchor(planRef.current, anchor);
   }, []);
 
-  // Decision deep-links (DESIGN.md §8): `← q7` citations render as
-  // `a.q-cite[data-q]` (plan-view's text transform); the click is delegated
-  // here so PlanView takes no callback prop and its memo survives.
+  // Decision deep-links (DESIGN.md §8) and the section ⋯ menus (§10) are both
+  // delegated here, so PlanView takes no callback props and its memo survives.
+  // `← q7` citations render as `a.q-cite[data-q]`; the menu buttons as
+  // `button.sec-menu[data-menu]`.
   const onPlanClick = useCallback(
     (event: MouseEvent<HTMLElement>) => {
-      const cite = (event.target as Element | null)?.closest?.("a.q-cite");
+      const target = event.target as Element | null;
+      const menuBtn = target?.closest?.("button.sec-menu");
+      if (menuBtn) {
+        if (over) return; // read-only: the buttons are hidden, but belt and braces
+        const id = (menuBtn as HTMLElement).dataset.menu;
+        if (id === undefined) return;
+        const rect = menuBtn.getBoundingClientRect();
+        setMenu(
+          window.innerWidth < 560
+            ? { id, at: null } // a popover doesn't fit a phone: bottom sheet
+            : { id, at: { x: rect.right, y: rect.bottom } },
+        );
+        return;
+      }
+      const cite = target?.closest?.("a.q-cite");
       if (!cite) return;
       event.preventDefault();
       const id = (cite as HTMLElement).dataset.q;
@@ -342,8 +366,31 @@ function ReviewLoop({
       setInterviewOpen(true);
       setIvTarget({ id, nonce: (ivNonce.current += 1) });
     },
-    [transcript],
+    [transcript, over],
   );
+
+  // The ⋯ menu's verbs ride the existing composer with a section-only anchor
+  // ({section}, no exact quote — DESIGN.md §4 anchors don't require one). A
+  // zero-width rect at the button's corner reuses openComposer's placement:
+  // pinned under the ⋯ on desktop, the sheet on phones.
+  const menuCompose = (mode: "comment" | "ask") => {
+    if (!menu) return;
+    const at = menu.at ?? { x: 0, y: 0 };
+    openComposer(mode, {
+      anchor: { section: menu.id },
+      rect: { top: at.y, bottom: at.y, left: at.x, width: 0 },
+    });
+    setMenu(null);
+  };
+
+  // The sticky bar's ❓ (DESIGN.md §10): jump back up to the question queue.
+  const openQuestions = transcript.filter((entry) => entry.answer === undefined).length;
+  const jumpQuestions = useCallback(() => {
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    document
+      .querySelector(".grill-queue")
+      ?.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+  }, []);
 
   const toggleInterview = useCallback(() => setInterviewOpen((value) => !value), []);
 
@@ -400,7 +447,11 @@ function ReviewLoop({
             target={ivTarget}
           />
           {hasPlan ? (
-            <main className="review" ref={planRef} onClick={onPlanClick}>
+            <main
+              className={over ? "review review-over" : "review"}
+              ref={planRef}
+              onClick={onPlanClick}
+            >
               {view === "clean" ? (
                 payload ? (
                   <RendererBoundary>
@@ -456,6 +507,14 @@ function ReviewLoop({
               onAsk={() => openComposer("ask", selection)}
             />
           )}
+          {menu !== null && composer === null && (
+            <SectionMenu
+              state={menu}
+              onComment={() => menuCompose("comment")}
+              onAsk={() => menuCompose("ask")}
+              onClose={() => setMenu(null)}
+            />
+          )}
           {composer !== null && (
             <Composer
               key={composerSeq.current}
@@ -470,6 +529,9 @@ function ReviewLoop({
             pending={pending}
             busy={busy}
             failed={failed}
+            questions={openQuestions}
+            onQuestions={jumpQuestions}
+            onApprove={() => setApproveOpen(true)}
             onEdit={edit}
             onDelete={remove}
             onSendOne={sendOne}
@@ -486,13 +548,33 @@ function ReviewLoop({
 }
 
 export function SessionScreen({ id }: { id: string }) {
-  const { session, threads, transcript, missing, connected } = useSession(id);
+  const { session, threads, transcript, missing, cleaned, connected } = useSession(id);
 
   const revision = session?.revision;
   useEffect(() => {
     if (session && revision !== undefined) markSeen(session.id, revision);
   }, [session, revision]);
 
+  // A `removed` frame landed while this screen was open: otacon clean
+  // archived the session (DESIGN.md §12). A terminal state, not an error —
+  // the stream is closed and the switcher still offers everything live.
+  if (cleaned) {
+    return (
+      <div className="page">
+        <div className="topbar">
+          <BackLink />
+          <SessionSwitcher current={id} />
+        </div>
+        <main className="empty">
+          <p className="empty-title">session cleaned</p>
+          <p className="empty-body">
+            This session ended and <code>otacon clean</code> archived its working state. The
+            approved plan stays committed under <code>docs/plans/</code>.
+          </p>
+        </main>
+      </div>
+    );
+  }
   if (missing) {
     return (
       <div className="page">
@@ -518,7 +600,10 @@ export function SessionScreen({ id }: { id: string }) {
 
   return (
     <div className="page page-review" style={accentStyle(session.id)}>
-      <BackLink />
+      <div className="topbar">
+        <BackLink />
+        <SessionSwitcher current={session.id} />
+      </div>
       <ReviewLoop
         key={session.id}
         session={session}

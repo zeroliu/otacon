@@ -12,10 +12,13 @@ import type { SessionSummary, Thread, TranscriptEntry } from "../shared/types.js
  * frame carries the full thread — both a new thread (comment/question posted)
  * and an updated one (the agent's answer landing); the UI upserts by id. A
  * `grill` frame is the transcript's equivalent: a question asked, or an
- * existing entry gaining its answer.
+ * existing entry gaining its answer. A `removed` frame is terminal: the
+ * session left the registry (otacon clean) — the index drops its card and an
+ * open review screen flips to its cleaned state (DESIGN.md §12).
  */
 export type UiEvent =
   | { type: "session"; session: string; data: { session: SessionSummary } }
+  | { type: "removed"; session: string; data: { session: string } }
   | {
       type: "revision";
       session: string;

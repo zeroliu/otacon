@@ -320,6 +320,9 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     store.deleteSession(session.id);
     queue.close();
     queues.delete(session.id);
+    // Terminal frame: the index and switcher drop the session live, and an
+    // open review tab flips to its cleaned state instead of error-limbo.
+    notifier.publish({ type: "removed", session: session.id, data: { session: session.id } });
     return c.json({ ok: true, session: session.id, repo: session.repo, pendingEvents });
   });
 

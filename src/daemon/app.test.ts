@@ -1380,4 +1380,33 @@ describe("DELETE /api/sessions/:id (otacon clean, M5)", () => {
     expect(existsSync(revisionPath(repo, session.id, 1))).toBe(true);
     expect(existsSync(eventsPath(repo, session.id))).toBe(true);
   });
+
+  test("deletion publishes a `removed` frame on the index and per-session streams", async () => {
+    const session = mintSession();
+    await app.request(`/api/sessions/${session.id}/submit`, {
+      method: "POST",
+      body: validPlanFor(session.id),
+    });
+    await postJson(`/api/sessions/${session.id}/approve`, { force: true });
+
+    // Subscribe both streams before the delete; drain their snapshots.
+    const index = sseReader(await app.request("/api/stream"));
+    expect((await index.next()).event).toBe("snapshot");
+    const own = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
+    expect((await own.next()).event).toBe("snapshot");
+
+    const res = await app.request(`/api/sessions/${session.id}`, { method: "DELETE" });
+    expect(res.status).toBe(200);
+
+    expect(await index.next()).toEqual({
+      event: "removed",
+      data: { session: session.id },
+    });
+    expect(await own.next()).toEqual({
+      event: "removed",
+      data: { session: session.id },
+    });
+    await index.cancel();
+    await own.cancel();
+  });
 });

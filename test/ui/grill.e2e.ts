@@ -328,8 +328,9 @@ test("375px: cards are one-thumb — ≥44px targets, no horizontal scroll, appr
   const scrollWidth = (await page.evaluate("document.documentElement.scrollWidth")) as number;
   expect(scrollWidth).toBeLessThanOrEqual(375);
 
-  // The confirm sheet docks to the bottom edge — thumb range, not screen center.
-  await page.locator(".ctrl-approve").click();
+  // The confirm sheet docks to the bottom edge — thumb range, not screen
+  // center. On a phone approve lives on the sticky bar (M5b), not the header.
+  await page.locator(".bar-approve").click();
   const sheet = await page.locator(".approve-sheet").boundingBox();
   expect(sheet).not.toBeNull();
   expect(sheet!.y + sheet!.height).toBeGreaterThan(720 * 0.8);

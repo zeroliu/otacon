@@ -14,6 +14,20 @@ import { Markdown } from "./markdown";
 import type { Block, PlanDetails, PlanPhase, PlanSection } from "./parse";
 import { parsePlan } from "./parse";
 
+/**
+ * The section/phase ⋯ menu affordance (DESIGN.md §10): always available, and
+ * the primary anchoring path on a phone, where text selection is miserable.
+ * Pure markup — the click is delegated in session-screen (like the q-cite
+ * links), so PlanView stays callback-free and its memo survives.
+ */
+function MenuButton({ id }: { id: string }) {
+  return (
+    <button type="button" className="sec-menu" data-menu={id} aria-label={`actions for #${id}`} aria-haspopup="menu">
+      ⋯
+    </button>
+  );
+}
+
 function Blocks({ blocks }: { blocks: Block[] }) {
   return (
     <>
@@ -78,6 +92,7 @@ function PhaseCard({
         </span>
         <h3 className="phase-name">{phase.name}</h3>
         <span className="anchor-slug">#{phase.id}</span>
+        <MenuButton id={phase.id} />
       </header>
       {phase.body.length > 0 && <Blocks blocks={phase.body} />}
       {phase.fields.length > 0 && (
@@ -152,6 +167,7 @@ function SectionBlock({
         <h2 className="section-title">{section.title}</h2>
         <span className="rail-line" aria-hidden="true" />
         <span className="anchor-slug">#{section.id}</span>
+        <MenuButton id={section.id} />
       </header>
       {blocks.length > 0 && <Blocks blocks={blocks} />}
       {section.phases.map((phase) => (

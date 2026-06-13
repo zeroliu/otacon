@@ -297,7 +297,8 @@ GET  /api/sessions                          index (registry)
 POST /api/sessions                          mint + register a session (otacon start)
 GET  /api/sessions/:id                      session detail (+ revision, pending events)
 DELETE /api/sessions/:id                    deregister an ended session (otacon clean);
-                                            non-approved sessions → 409 E_SESSION_ACTIVE
+                                            non-approved sessions → 409 E_SESSION_ACTIVE;
+                                            publishes a terminal `removed` SSE frame
 GET  /api/sessions/:id/events?wait=540      agent long-poll
 POST /api/sessions/:id/submit               lint; reject 422 with issues, or store revision N
 POST /api/sessions/:id/comments             flush a comment batch
@@ -365,13 +366,16 @@ pointer rules.
 session id renders as a client-side not-found state. Each SSE stream opens with a
 `snapshot` frame (the per-session stream's snapshot carries the thread list and the
 grill transcript), then pushes `session` / `revision` / `queue` / `thread` / `grill`
-frames as state changes — a
+/ `removed` frames as state changes — a
 `revision` frame carries the revision number and its changelog; a `thread` frame is
 an upsert: a new comment/question thread, or an existing thread changing (a question
 gaining its answer, a comment gaining its resolution, an anchor re-anchoring or
 orphaning); a `grill` frame is the transcript's upsert: a question asked via
-`otacon ask`, or an entry gaining the user's answer — with a comment heartbeat to
-keep idle proxies from closing the stream.
+`otacon ask`, or an entry gaining the user's answer; a `removed` frame is terminal —
+the session left the registry (`otacon clean`): the index and the session switcher
+drop it live, and an open review screen flips to a quiet "session cleaned" state and
+closes its stream (a reconnect against the deregistered id could only 404) — with a
+comment heartbeat to keep idle proxies from closing the stream.
 Session payloads (snapshot, `session` frames, session detail) carry
 `lastReviewedRevision` alongside `revision`, and `openQuestions` — the count of
 transcript entries still awaiting the user's answer, from which the index's
@@ -429,6 +433,10 @@ HTTP requests, no contention.
 **UI switching.** Index page is home (all sessions, status, unread badges). The review
 screen header has a persistent session switcher — dropdown on desktop, horizontally
 scrollable chips on phone: `auth-refactor ●2 │ search-index ✋awaiting │ miyo ⏳revising`.
+The current session's chip leads the strip (the "you are here" anchor never scrolls
+out of reach) and never wears an unread badge — you are reading it; `●N` counts the
+revisions this device hasn't opened (unread state is device-local, §10). The switcher
+rides the index SSE stream, so chips appear, re-badge, and vanish live.
 Each session gets a stable **accent color** used on the header, comment composer, and
 agent-question cards, so rapid phone switching can't post feedback to the wrong plan.
 
@@ -581,11 +589,16 @@ unread-change badge, last activity, accent color. Tap → review screen.
 ```
 
 - Selection-based anchoring is miserable on mobile, so anchoring goes coarser by
-  design: every section header has a `⋯` menu — _Comment on section / Ask about
-  section_. Long-press text selection still works for precision.
+  design: every section and phase header has a `⋯` menu — _Comment on section / Ask
+  about section_ — opening the composer with a **section-only anchor** (`{section}`,
+  no exact quote; it survives revisions as long as the section does). The menu is
+  always available — a popover on desktop, a bottom sheet in thumb range on phone —
+  and long-press text selection still works for precision.
 - Threads open as bottom sheets. Sticky bar = whole control surface: pending
-  questions, drawer + Send, Approve (confirm sheet: "Finalize r4 →
-  docs/plans/2026-06-12-auth-refactor.md and end the session").
+  questions ❓ (tap → the question queue), drawer + Send, Approve (confirm sheet:
+  "Finalize r4 → docs/plans/2026-06-12-auth-refactor.md and end the session"). The
+  bar is the desktop drawer augmented at the phone breakpoint — approve and the
+  question tally fold into it and leave the header strip, never shown twice.
 - Agent question cards answerable with chips — designed for grilling on the move.
 
 ### Cross-cutting
