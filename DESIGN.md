@@ -184,11 +184,14 @@ to readable text if rendering ever fails:
 - **Decision matrix** — a GFM table whose chosen row leads with a `✓` first cell; the
   renderer accent-inks that row so the winner reads at a glance (§10). Any table with no
   `✓` row degrades to a plain table.
+- **Inline scope pills** — a closed set of bracket tokens (`[new]`, `[breaking]`,
+  `[risky]`, `[deletes]`) renders as small mono tags inline in prose (§10). Markdown
+  links and the `[assumed]` decision tag are left untouched.
 
-These are exempt from line budgets but counted against a per-read-path-section **visual
-cap** (default 2, tunable — the same shape as the one-fence rule, and uncapped inside
-Details), so a 2-line risk can _be_ a callout without a section becoming a wall of
-widgets.
+The two block visuals are exempt from line budgets but counted against a
+per-read-path-section **visual cap** (default 2, tunable — the same shape as the
+one-fence rule, and uncapped inside Details), so a 2-line risk can _be_ a callout without
+a section becoming a wall of widgets. **Inline pills are always free** (never counted).
 
 ### Anchoring (for comments)
 
@@ -564,6 +567,10 @@ The marker line is chrome (unselectable, never anchored); the body stays anchora
 markdown so a comment pins to one specific callout. A **decision matrix** is a plain
 GFM table; the chosen row (first cell `✓`) gets a 2px accent rule on the marker cell
 and a faint accent wash — the winner inked, the alternatives left as ordinary rows.
+**Inline pills** are small mono tags hued by scope (new green, breaking/deletes red,
+risky amber). They render the keyword without its brackets, so — like inline emphasis —
+a comment quote that spans a pill may not survive a cross-revision re-anchor; it orphans
+gracefully rather than misattaching.
 
 ### Index (the phone bookmark)
 

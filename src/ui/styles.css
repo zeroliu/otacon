@@ -667,6 +667,35 @@ code {
   margin-bottom: 0;
 }
 
+/* ── inline scope pills (DESIGN.md §4) ──
+ * Bracket tokens like `[new]` become small mono tags inline in prose, hue per
+ * scope, from the tested chip/diff palette. Rendered inline (not inline-block)
+ * so a text selection still flows across them. Always budget-free. */
+.pill {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font: 600 0.8em var(--mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.pill-new {
+  color: var(--chip-approved-ink);
+  background: var(--chip-approved-bg);
+}
+
+.pill-risky {
+  color: var(--chip-await-ink);
+  background: var(--chip-await-bg);
+}
+
+.pill-breaking,
+.pill-deletes {
+  color: var(--diff-del);
+  background: color-mix(in srgb, var(--diff-del) 15%, transparent);
+}
+
 .md h1,
 .md h2,
 .md h3,

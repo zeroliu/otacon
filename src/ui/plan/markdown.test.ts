@@ -34,3 +34,29 @@ describe("callout rendering through the configured marked", () => {
     expect(html).not.toContain("callout");
   });
 });
+
+describe("inline scope pills", () => {
+  test("every known bracket token becomes a pill span", () => {
+    const html = render("touches [new], is [breaking], [risky], and [deletes] code");
+    expect(html).toContain('<span class="pill pill-new">new</span>');
+    expect(html).toContain('<span class="pill pill-breaking">breaking</span>');
+    expect(html).toContain('<span class="pill pill-risky">risky</span>');
+    expect(html).toContain('<span class="pill pill-deletes">deletes</span>');
+  });
+
+  test("markdown links are left alone, not turned into pills", () => {
+    const html = render("see [new](https://example.com/new) for details");
+    expect(html).toContain('href="https://example.com/new"');
+    expect(html).not.toContain('class="pill');
+  });
+
+  test("[assumed] is left untouched (it is the decision-trace tag, not a pill)", () => {
+    const html = render("decided [assumed] without asking");
+    expect(html).toContain("[assumed]");
+    expect(html).not.toContain('class="pill');
+  });
+
+  test("unknown bracket tokens stay literal text", () => {
+    expect(render("a [todo] note")).not.toContain('class="pill');
+  });
+});

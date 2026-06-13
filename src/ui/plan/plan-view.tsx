@@ -121,6 +121,11 @@ function PhaseCard({
  * deep-links into the Interview panel (the click is delegated in
  * session-screen, so this stays a pure text transform and PlanView's memo
  * survives), and `[assumed]` becomes the visible "veto me" tag.
+ *
+ * Runs on the markdown source before `<Markdown>` parses it, so `[assumed]` is
+ * already a `<span>` (brackets gone) by the time the inline-pill extension
+ * (marked-setup.ts) scans for bracket tokens — and `assumed` is not in the pill
+ * set anyway, so the two transforms never compete for the same token.
  */
 export function markDecisionTraces(text: string): string {
   return text
