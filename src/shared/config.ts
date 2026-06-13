@@ -12,8 +12,14 @@ export interface Budgets {
   detailsSoftCapLines: number;
 }
 
+/** Attention notifications (DESIGN.md §6). Desktop = a native macOS banner. */
+export interface Notifications {
+  desktop: boolean;
+}
+
 export interface OtaconConfig {
   budgets: Budgets;
+  notifications: Notifications;
 }
 
 export const DEFAULT_CONFIG: OtaconConfig = {
@@ -27,6 +33,7 @@ export const DEFAULT_CONFIG: OtaconConfig = {
     maxFencesPerReadSection: 1,
     detailsSoftCapLines: 80,
   },
+  notifications: { desktop: true },
 };
 
 function readJsonFile(path: string): unknown {
@@ -54,19 +61,37 @@ function mergeBudgets(base: Budgets, raw: unknown, source: string): Budgets {
   return merged;
 }
 
+/** Overlay one config file's notifications; a non-boolean is ignored with a notice. */
+function mergeNotifications(base: Notifications, raw: unknown, source: string): Notifications {
+  if (typeof raw !== "object" || raw === null) return base;
+  const notifications = (raw as Record<string, unknown>).notifications;
+  if (typeof notifications !== "object" || notifications === null) return base;
+  const merged = { ...base };
+  for (const key of Object.keys(base) as (keyof Notifications)[]) {
+    const value = (notifications as Record<string, unknown>)[key];
+    if (typeof value === "boolean") {
+      merged[key] = value;
+    } else if (value !== undefined) {
+      process.stderr.write(`otacon: ignoring invalid notifications.${key} in ${source}\n`);
+    }
+  }
+  return merged;
+}
+
 /**
  * defaults ← $OTACON_HOME/config.json ← <repo>/otacon.config.json.
- * Loaded fresh on every use so budget tuning takes effect immediately.
+ * Loaded fresh on every use so config tuning takes effect immediately. Each
+ * file is read once and overlaid section by section (budgets, notifications).
  */
 export function loadConfig(repoRoot?: string): OtaconConfig {
-  let budgets = mergeBudgets(
-    DEFAULT_CONFIG.budgets,
-    readJsonFile(globalConfigPath()),
-    globalConfigPath(),
-  );
+  const globalRaw = readJsonFile(globalConfigPath());
+  let budgets = mergeBudgets(DEFAULT_CONFIG.budgets, globalRaw, globalConfigPath());
+  let notifications = mergeNotifications(DEFAULT_CONFIG.notifications, globalRaw, globalConfigPath());
   if (repoRoot) {
     const repoPath = repoConfigPath(repoRoot);
-    budgets = mergeBudgets(budgets, readJsonFile(repoPath), repoPath);
+    const repoRaw = readJsonFile(repoPath);
+    budgets = mergeBudgets(budgets, repoRaw, repoPath);
+    notifications = mergeNotifications(notifications, repoRaw, repoPath);
   }
-  return { budgets };
+  return { budgets, notifications };
 }

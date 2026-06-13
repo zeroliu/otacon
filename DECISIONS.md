@@ -1199,3 +1199,82 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** The accent mark's final form is judged on a live screen and a
   different indicator (dot vs tag vs underline) wins, or a surface needs more than a
   hairline to separate from dense neighbors.
+
+## Attention notifications: native macOS banner, not Web Push, for desktop
+
+- **Decision:** "This plan needs your attention" reaches the desktop as a native
+  macOS banner that the **daemon** fires (`src/daemon/desktop-notify.ts`), not via
+  Web Push. The daemon already runs on the Mac, so it owns that surface directly —
+  no service worker, no VAPID, no push subscription. Phone (Web Push) is a separate,
+  deferred path (DESIGN.md §14), tracked in TODOs.md.
+- **Why:** Web Push exists to reach a device the sender can't address directly — the
+  phone. The desktop is not that device: the daemon is already a local process on the
+  same machine, so a local OS call is the shortest, most reliable path and adds zero
+  moving parts. Shipping desktop first delivers the daily-driver surface (you plan at
+  your Mac) without the push-infrastructure tax, and keeps the phone path a clean,
+  isolated future lift rather than a half-built dependency.
+- **Revisit when:** The phone Web Push path lands and a shared notification core is
+  worth extracting, or the daemon routinely runs somewhere without a Mac GUI session.
+
+## Desktop notify tool: prefer terminal-notifier, fall back to osascript, no hard dep
+
+- **Decision:** `notifyDesktop` prefers `terminal-notifier` when callable
+  (`$OTACON_TERMINAL_NOTIFIER` pins it, else PATH), because its banner is
+  *clickable* — `-open <url>` opens the review screen on tap. Absent it, it falls
+  back to `osascript -e 'display notification …'` (zero dependency, informs but not
+  clickable). Neither is a hard dependency; off macOS the whole thing is a no-op.
+  Every spawn goes through `execFile` with an **arg array** (no shell).
+- **Why:** Click-to-open is the difference between a banner that just pings and one
+  that lands you on the plan — worth preferring `terminal-notifier` when the user has
+  it, but not worth forcing a `brew install` on a personal tool that must work out of
+  the box, hence the osascript fallback. The arg array (no shell) is the injection
+  guard: a session title or question text rides as one inert argv element, so quotes,
+  semicolons, or backticks in plan content can never become a command — only
+  osascript's own AppleScript-literal escaping (backslash + double-quote) remains, and
+  that is applied explicitly.
+- **Revisit when:** Linux/Windows desktop support is wanted (add `notify-send` /
+  toast equivalents behind the same seam), or terminal-notifier's CLI changes.
+
+## Banner suppression keys on visibility, not on a live SSE connection
+
+- **Decision:** A desktop banner is suppressed only while that session's review is
+  *visible*. The review screen reports `document.visibilityState` to the daemon
+  (`POST /presence`: {visible:true} on show + a ~20s heartbeat, {visible:false} on
+  visibilitychange→hidden, a `sendBeacon` false on unload); the daemon's `Presence`
+  tracker holds `lastVisibleAt` and treats a session as watched within a ~45s TTL.
+  Suppression is NOT keyed on the per-session SSE stream being connected.
+- **Why:** The original sketch (q5) suppressed on a live SSE connection because "the
+  daemon already knows the stream count." But a hidden or backgrounded tab keeps its
+  SSE stream open — so a connection count silences exactly the banner you need when
+  you've tabbed away or locked your phone. Visibility is the real signal: the point of
+  the banner is to reach you when you're *not* watching. The TTL makes a crashed or
+  closed visible tab self-expire (it stops heartbeating) instead of suppressing
+  forever, while the explicit hidden/unload ping makes the common "switched tabs" case
+  un-suppress immediately. The agent's parked `otacon wait` hits `/events`, never
+  `/presence`, so a waiting agent can never suppress.
+- **Revisit when:** Multiple devices view one session (per-device visibility, or
+  "suppress only if visible *somewhere*"), or the heartbeat/TTL pair needs retuning
+  against real backgrounding behavior.
+
+## Phone (Web Push) is deferred; the future approach is zero-dep VAPID + wake-up fetch
+
+- **Decision:** This milestone ships desktop banners only. Phone notifications via
+  Web Push are deferred to a TODO (DESIGN.md §14). When they land, the agreed shape is:
+  zero-dependency hand-rolled VAPID signing (`node:crypto`) plus a **payload-less**
+  wake-up push — the service worker, woken by the push, fetches the session detail over
+  Tailscale and builds the notification client-side. No `web-push` library, no
+  RFC-8291 payload encryption in the daemon.
+- **Why:** Desktop is the daily-driver surface (you plan at your Mac) and reaching it is
+  a local OS call with zero infrastructure, so shipping it alone delivers most of the
+  value immediately; bundling Web Push would have dragged a service worker, push
+  subscription storage, and VAPID into the same change for the secondary surface.
+  Deferring keeps this milestone small and the phone path a clean future lift. The
+  payload-less design is chosen ahead of time because it sidesteps RFC-8291 encryption
+  entirely (the heaviest hand-rolled-crypto path) while keeping plan content off the
+  push service — the SW already has authenticated Tailscale access to the daemon, so a
+  bare "wake up and fetch" is both the simplest and the most private option. Sketching
+  it now means the TODO is actionable, not a blank "do Web Push somehow."
+- **Revisit when:** The phone path is picked up — at which point payload-less-fetch vs.
+  a `web-push` dep vs. full hand-rolled RFC-8291 gets re-decided against the then-current
+  effort/dependency tradeoff (the alternatives from the interview's q2 are recorded
+  there).

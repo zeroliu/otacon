@@ -241,6 +241,7 @@ describe("L2 budgets", () => {
   test("budgets are config-driven", () => {
     const summary = `## Summary\n\n${"line\n".repeat(6)}`;
     const config: OtaconConfig = {
+      ...DEFAULT_CONFIG,
       budgets: { ...DEFAULT_CONFIG.budgets, summaryLines: 10 },
     };
     expect(run(doc({ summary }), { session: SESSION }, config).ok).toBeTrue();

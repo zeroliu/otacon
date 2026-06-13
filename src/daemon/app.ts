@@ -15,6 +15,7 @@ import type { Context } from "hono";
 import type { ServerResponse } from "node:http";
 import { isAbsolute, join } from "node:path";
 import { loadConfig } from "../shared/config.js";
+import { otaconPort } from "../shared/paths.js";
 import { parseQuestionSpec } from "../shared/question-spec.js";
 import type {
   Anchor,
@@ -33,9 +34,12 @@ import type {
 } from "../shared/types.js";
 import { VERSION } from "../shared/version.js";
 import { composeArtifact, localDate, pickArtifactRelPath } from "./approve.js";
+import type { DesktopNotifier } from "./desktop-notify.js";
+import { createDesktopNotifier } from "./desktop-notify.js";
 import { diffPlans } from "./diff.js";
 import { lint } from "./linter/index.js";
 import { Notifier } from "./notify.js";
+import { Presence } from "./presence.js";
 import type { ParkHandle } from "./queue.js";
 import { SessionQueue } from "./queue.js";
 import type { Store } from "./store.js";
@@ -63,6 +67,10 @@ export interface AppOptions {
   uiDir?: string | null;
   /** Test override for the SSE heartbeat interval. */
   sseHeartbeatMs?: number;
+  /** Test override: visibility tracker (default: a fresh Presence with the 45s TTL). */
+  presence?: Presence;
+  /** Test override: the desktop notify sink (default: the real macOS notifier, a no-op off darwin). */
+  notify?: DesktopNotifier;
 }
 
 type AppContext = Context<{ Bindings: NodeBindings }>;
@@ -205,6 +213,50 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     notifier.publish({ type: "thread", session: id, data: { session: id, thread } });
   const publishGrill = (id: string, entry: TranscriptEntry): void =>
     notifier.publish({ type: "grill", session: id, data: { session: id, entry } });
+
+  // Desktop attention banners (DESIGN.md §6). Presence tracks which sessions
+  // have a *visible* review open; the notify sink fires the native macOS banner
+  // (a no-op off darwin). Both are injectable for tests.
+  const presence = options.presence ?? new Presence();
+  const notify = options.notify ?? createDesktopNotifier();
+
+  /**
+   * Fire a desktop banner for an attention moment unless the user is already
+   * watching this session's review (presence) or has disabled them (config,
+   * loaded fresh per session.repo so a repo override applies). The whole thing
+   * is wrapped: a spawn or config error must never break the submit/ask response
+   * — it is swallowed to stderr (DESIGN.md §13: zero-API-spend untouched; this
+   * is a local OS call).
+   */
+  const maybeNotify = (
+    session: RegistrySession,
+    moment:
+      | { kind: "question"; text: string }
+      | { kind: "questions"; count: number }
+      | { kind: "revision"; revision: number },
+  ): void => {
+    try {
+      if (!loadConfig(session.repo).notifications.desktop) return;
+      if (presence.isWatched(session.id)) return;
+      const message =
+        moment.kind === "revision"
+          ? `Revision r${moment.revision} ready for review`
+          : moment.kind === "questions"
+            ? `${moment.count} questions need your answer`
+            : moment.text.length > 80
+              ? `${moment.text.slice(0, 79)}…`
+              : moment.text;
+      notify({
+        title: session.title,
+        message,
+        url: `http://127.0.0.1:${otaconPort()}/s/${session.id}`,
+      });
+    } catch (error) {
+      process.stderr.write(
+        `otacond: desktop notification failed: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+    }
+  };
 
   /** Respond with the event; ack only after the bytes are out (see header comment). */
   function respondEvent(c: AppContext, queue: SessionQueue, event: QueuedEvent): Response {
@@ -448,6 +500,8 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       data: { session: session.id, revision, changelog },
     });
     for (const thread of changedThreads) publishThread(session.id, thread);
+    // The ball is back in the user's court: a fresh revision awaits review.
+    maybeNotify(session, { kind: "revision", revision });
     return c.json({
       ok: true,
       session: session.id,
@@ -476,6 +530,24 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     const lastReviewedRevision = store.markReviewed(session.id, revision);
     publishSession(session); // summary re-reads state, so the frame carries it
     return c.json({ ok: true, session: session.id, lastReviewedRevision });
+  });
+
+  // The review screen reports its visibility here (DESIGN.md §6): {visible:true}
+  // when shown + on a heartbeat, {visible:false} on blur/unload. The daemon
+  // suppresses a desktop banner only while a review is visible — a hidden or
+  // backgrounded tab (its SSE stream still open) does NOT suppress. No status
+  // change, so it stays callable on an approved session (a closing tab still
+  // pings); presence is ephemeral, not persisted.
+  app.post("/api/sessions/:id/presence", async (c) => {
+    const session = sessionFor(c);
+    if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    const body = (await readJsonBody(c)) ?? {};
+    if (typeof body.visible !== "boolean") {
+      return badRequest(c, "visible must be a boolean");
+    }
+    if (body.visible) presence.markVisible(session.id);
+    else presence.markHidden(session.id);
+    return c.json({ ok: true, session: session.id, visible: body.visible });
   });
 
   // Structural diff between two stored revisions (DESIGN.md §6, §9 layer 3).
@@ -678,6 +750,13 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       appendEntries(store.transcriptPath(session.id), entries);
       for (const entry of entries) publishGrill(session.id, entry);
       publishSession(store.getSession(session.id) ?? session);
+      // A batch coalesces to one banner — N questions need answering (DESIGN.md §6).
+      maybeNotify(
+        session,
+        entries.length === 1
+          ? { kind: "question", text: specs[0]!.question }
+          : { kind: "questions", count: entries.length },
+      );
       return c.json({ ok: true, session: session.id, ids: entries.map((e) => e.id) }, 201);
     }
 
@@ -690,6 +769,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     // The summary's openQuestions just moved: the index's "questions pending"
     // chip rides session frames, so every transcript change publishes one.
     publishSession(store.getSession(session.id) ?? session);
+    maybeNotify(session, { kind: "question", text: spec.question });
     return c.json({ ok: true, session: session.id, id: entry.id }, 201);
   });
 

@@ -5,11 +5,13 @@ import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hono } from "hono";
-import { eventsPath, revisionPath } from "../shared/paths.js";
+import { eventsPath, otaconPort, revisionPath } from "../shared/paths.js";
 import type { RegistrySession } from "../shared/types.js";
 import { VERSION } from "../shared/version.js";
 import type { NodeBindings } from "./app.js";
 import { createApp } from "./app.js";
+import type { DesktopNotification } from "./desktop-notify.js";
+import { Presence } from "./presence.js";
 import { Store } from "./store.js";
 
 let home: string;
@@ -19,6 +21,11 @@ let savedHome: string | undefined;
 let store: Store;
 let app: Hono<{ Bindings: NodeBindings }>;
 let shutdowns: number;
+// A recorder notify sink: every test uses it, so the real macOS notifier never
+// fires a banner during `bun test` on the dev Mac. The desktop-notify suite
+// covers the real tool selection.
+let notifyCalls: DesktopNotification[];
+let presence: Presence;
 
 beforeEach(() => {
   savedHome = process.env.OTACON_HOME;
@@ -32,7 +39,15 @@ beforeEach(() => {
   process.env.OTACON_HOME = home;
   store = new Store();
   shutdowns = 0;
-  app = createApp({ store, onShutdown: () => (shutdowns += 1), uiDir });
+  notifyCalls = [];
+  presence = new Presence();
+  app = createApp({
+    store,
+    onShutdown: () => (shutdowns += 1),
+    uiDir,
+    notify: (n) => notifyCalls.push(n),
+    presence,
+  });
 });
 
 afterEach(() => {
@@ -1495,5 +1510,112 @@ describe("DELETE /api/sessions/:id (otacon clean, M5)", () => {
     expect(frame.event).toBe("session");
     expect((frame.data as { session: { id: string } }).session.id).toBe(survivor.id);
     await index.cancel();
+  });
+});
+
+describe("desktop attention notifications (M6)", () => {
+  const submit = (id: string) =>
+    app.request(`/api/sessions/${id}/submit`, { method: "POST", body: validPlanFor(id) });
+  const ask = (id: string, body: unknown) => postJson(`/api/sessions/${id}/ask`, body);
+  const presencePost = (id: string, visible: unknown) =>
+    postJson(`/api/sessions/${id}/presence`, { visible });
+  const reviewUrl = (id: string) => `http://127.0.0.1:${otaconPort()}/s/${id}`;
+
+  test("a submitted revision fires a 'ready for review' banner", async () => {
+    const session = mintSession();
+    expect((await submit(session.id)).status).toBe(200);
+    expect(notifyCalls).toEqual([
+      { title: session.title, message: "Revision r1 ready for review", url: reviewUrl(session.id) },
+    ]);
+  });
+
+  test("a grill question fires a banner carrying the question text", async () => {
+    const session = mintSession();
+    await ask(session.id, { question: "RS256 or HS256?", options: ["RS256", "HS256"] });
+    expect(notifyCalls).toEqual([
+      { title: session.title, message: "RS256 or HS256?", url: reviewUrl(session.id) },
+    ]);
+  });
+
+  test("a batch of questions coalesces to one 'N questions' banner", async () => {
+    const session = mintSession();
+    await ask(session.id, {
+      questions: [{ question: "a?" }, { question: "b?" }, { question: "c?" }],
+    });
+    expect(notifyCalls).toEqual([
+      { title: session.title, message: "3 questions need your answer", url: reviewUrl(session.id) },
+    ]);
+  });
+
+  test("a single-member batch reads as one question, not '1 questions'", async () => {
+    const session = mintSession();
+    await ask(session.id, { questions: [{ question: "lone?" }] });
+    expect(notifyCalls[0]?.message).toBe("lone?");
+  });
+
+  test("a long question snippet is truncated to 80 chars with an ellipsis", async () => {
+    const session = mintSession();
+    await ask(session.id, { question: "x".repeat(200) });
+    expect(notifyCalls[0]?.message).toBe(`${"x".repeat(79)}…`);
+    expect(notifyCalls[0]?.message.length).toBe(80);
+  });
+
+  test("suppressed while the review is visible (ask and submit alike)", async () => {
+    const session = mintSession();
+    expect((await presencePost(session.id, true)).status).toBe(200);
+    await ask(session.id, { question: "anybody home?" });
+    await submit(session.id);
+    expect(notifyCalls).toEqual([]);
+  });
+
+  test("an explicit hidden ping un-suppresses immediately", async () => {
+    const session = mintSession();
+    await presencePost(session.id, true);
+    await presencePost(session.id, false);
+    await ask(session.id, { question: "back now?" });
+    expect(notifyCalls).toHaveLength(1);
+  });
+
+  test("a crashed visible tab self-expires after the TTL; banners fire again", async () => {
+    // A hand-cranked clock makes expiry deterministic, never wall-time-bound.
+    let t = 1000;
+    const calls: DesktopNotification[] = [];
+    const ownApp = createApp({
+      store,
+      uiDir,
+      notify: (n) => calls.push(n),
+      presence: new Presence(() => t, 45_000),
+    });
+    const session = mintSession();
+    const post = (path: string, body: unknown) =>
+      ownApp.request(path, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    await post(`/api/sessions/${session.id}/presence`, { visible: true });
+    await post(`/api/sessions/${session.id}/ask`, { question: "still watching?" });
+    expect(calls).toEqual([]); // visible → suppressed
+    t += 45_001; // the tab crashed; its last heartbeat went stale
+    await post(`/api/sessions/${session.id}/ask`, { question: "now?" });
+    expect(calls).toHaveLength(1);
+  });
+
+  test("silent when notifications.desktop is configured off in the repo", async () => {
+    writeFileSync(
+      join(repo, "otacon.config.json"),
+      JSON.stringify({ notifications: { desktop: false } }),
+    );
+    const session = mintSession();
+    await ask(session.id, { question: "anything?" });
+    await submit(session.id);
+    expect(notifyCalls).toEqual([]);
+  });
+
+  test("presence validation: visible must be a boolean; unknown session 404s", async () => {
+    const session = mintSession();
+    expect((await presencePost(session.id, "yes")).status).toBe(400);
+    expect((await presencePost(session.id, undefined)).status).toBe(400);
+    expect((await presencePost("otc_zzzzzz", true)).status).toBe(404);
   });
 });

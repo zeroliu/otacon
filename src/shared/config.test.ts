@@ -91,6 +91,35 @@ describe("loadConfig", () => {
   });
 });
 
+describe("loadConfig notifications", () => {
+  test("notifications.desktop defaults to true", () => {
+    expect(loadConfig(repo).notifications.desktop).toBe(true);
+  });
+
+  test("global config can turn desktop notifications off", () => {
+    writeGlobal({ notifications: { desktop: false } });
+    expect(loadConfig(repo).notifications.desktop).toBe(false);
+  });
+
+  test("repo config overrides global for notifications", () => {
+    writeGlobal({ notifications: { desktop: false } });
+    writeRepo({ notifications: { desktop: true } });
+    expect(loadConfig(repo).notifications.desktop).toBe(true);
+  });
+
+  test("a non-boolean desktop value is ignored, keeping the default", () => {
+    writeGlobal({ notifications: { desktop: "yes" } });
+    expect(loadConfig(repo).notifications.desktop).toBe(true);
+  });
+
+  test("budgets and notifications merge independently from one file", () => {
+    writeGlobal({ budgets: { summaryLines: 9 }, notifications: { desktop: false } });
+    const config = loadConfig(repo);
+    expect(config.budgets.summaryLines).toBe(9);
+    expect(config.notifications.desktop).toBe(false);
+  });
+});
+
 describe("paths env overrides", () => {
   test("otaconHome honors OTACON_HOME", () => {
     expect(otaconHome()).toBe(home);

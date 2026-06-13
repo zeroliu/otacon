@@ -55,9 +55,9 @@ tailnet in the Tailscale admin console — the one step otacon cannot do for you
 
 ## Roadmap
 
-**Status: v1-complete.** All five milestones are done; the full
-install-and-plan loop (DESIGN.md §16) is proven end to end against the built
-artifact by `bun run accept` (and `playwright test`'s UI acceptance spec).
+**Status: v1-complete; post-v1 enhancements ongoing.** All five v1 milestones are
+done; the full install-and-plan loop (DESIGN.md §16) is proven end to end against
+the built artifact by `bun run accept` (and `playwright test`'s UI acceptance spec).
 
 - **M1 — daemon + CLI core** (sessions, registry, submit + linter, wait/event queues,
   status; testable via curl/CLI) — **done**
@@ -70,5 +70,8 @@ artifact by `bun run accept` (and `playwright test`'s UI acceptance spec).
 - **M5 — install + phone polish** (install/doctor/expose/open/clean, Claude
   Code/Codex/OpenCode wrappers + Stop hook, Tailscale docs; section-menu
   anchoring, sticky bar, session switcher, live clean) — **done**
+- **M6 — desktop attention notifications** (native macOS banner on a grill question
+  or a revision awaiting review, suppressed while the review is visible; on by
+  default, one config toggle; phone Web Push deferred) — **done**
 
-All v1 milestones are complete.
+All v1 milestones are complete; post-v1 work continues per milestone.

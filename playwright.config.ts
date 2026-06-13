@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineConfig, devices } from "@playwright/test";
@@ -16,6 +16,11 @@ process.env.NO_PROXY = [process.env.NO_PROXY, "127.0.0.1,localhost"].filter(Bool
 const port = Number(process.env.OTACON_E2E_PORT ?? "4790");
 const baseURL = `http://127.0.0.1:${port}`;
 
+// Hermetic, like e2e-daemon.sh: disable desktop banners so submitting/asking
+// against the real daemon never pops a native macOS notification on the dev Mac.
+const e2eHome = mkdtempSync(join(tmpdir(), "otacon-ui-e2e-home-"));
+writeFileSync(join(e2eHome, "config.json"), '{"notifications":{"desktop":false}}');
+
 export default defineConfig({
   testDir: "test/ui",
   testMatch: "**/*.e2e.ts",
@@ -28,7 +33,7 @@ export default defineConfig({
     url: `${baseURL}/api/health`,
     reuseExistingServer: false,
     env: {
-      OTACON_HOME: mkdtempSync(join(tmpdir(), "otacon-ui-e2e-home-")),
+      OTACON_HOME: e2eHome,
       OTACON_PORT: String(port),
     },
   },

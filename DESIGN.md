@@ -336,6 +336,11 @@ POST /api/sessions/:id/approve              approve: writes the final artifact, 
 POST /api/sessions/:id/reviewed             mark a revision reviewed ({revision},
                                             default: latest) — the diff baseline;
                                             monotonic, also set by a comment flush
+POST /api/sessions/:id/presence             review-screen visibility ping
+                                            ({visible}); suppresses desktop
+                                            attention banners only while a review
+                                            is visible (below). Ephemeral, no
+                                            status change — callable on any session
 GET  /api/sessions/:id/revisions/:n         raw revision markdown; with Accept:
                                             application/json, {markdown, warnings,
                                             changelog} (lint warnings + the agent
@@ -398,6 +403,28 @@ a foreign `Origin` header are refused 403: the loopback bind alone does not stop
 malicious webpage from firing `fetch()` at 127.0.0.1, and only browsers send `Origin`.
 Event delivery over `/events` is at-least-once: an event is removed from the queue
 only after its response is fully written; a dropped connection requeues it.
+
+### Attention notifications
+
+When the ball moves to your court, the daemon fires a **native macOS desktop
+banner** — at two moments: the agent posts a grill question, and the agent submits
+a revision awaiting review (a batch of questions coalesces to one banner). The
+daemon already runs on the Mac, so it fires the banner directly (not Web Push);
+with `terminal-notifier` on PATH the banner is clickable and opens the review URL,
+otherwise it falls back to `osascript`. Phone (Web Push) is out of scope here and
+deferred (§14).
+
+A banner is **suppressed only while that session's review is actually visible** —
+the review screen pings `POST /presence` with `document.visibilityState` (a
+heartbeat while visible, an explicit hidden ping on blur/unload) and the daemon
+holds a short TTL so a crashed or closed tab self-expires. A hidden, backgrounded,
+or closed tab does NOT suppress (its SSE stream may still be connected — connection
+is not attention). The agent's parked `otacon wait` hits `/events`, never
+`/presence`, so a waiting agent never suppresses your banners.
+
+On by default; toggle with a `notifications.desktop` boolean in
+`~/.otacon/config.json` (repo `otacon.config.json` override allowed), mirroring the
+budgets config. Off macOS the banner is a silent no-op.
 
 ### The full loop
 
@@ -634,7 +661,9 @@ unread-change badge, last activity, accent color. Tap → review screen.
 
 UI updates over SSE (watch status flip from _revising_ to _new revision_, answers
 stream into threads). Mobile-first CSS. Orphaned-comment tray reachable from the
-threads rail.
+threads rail. The review screen reports its visibility to the daemon
+(`POST /presence`) so desktop attention banners (§6) fire only when you are not
+already watching that review.
 
 ---
 
@@ -691,6 +720,9 @@ Session status machine: `draft → in_review ⇄ revising → approved`.
 ### Zero API spend, by construction
 
 - **No process ever calls a model API.** Daemon, CLI, linter, UI are pure TypeScript.
+  The daemon does make **local OS calls** — `osascript`/`terminal-notifier` for desktop
+  attention banners (§6), `git`/`tailscale` for setup — which are not model APIs and
+  leave the zero-API-spend invariant untouched; no plan content leaves the machine.
 - **All intelligence runs inside the interactive session** the user already has open —
   the thing subscriptions price. `otacon wait` is indistinguishable from any other Bash
   call. No headless `claude -p`, no Agent SDK, no second metered surface. This makes
@@ -720,6 +752,11 @@ Session status machine: `draft → in_review ⇄ revising → approved`.
 
 - **`snake`** — the implementer skill: consumes approved plans, executes phase-per-fresh-session.
 - Hosted relay (Cloudflare Worker + DO) — protocol is plain HTTP so this stays a clean lift.
+- **Web Push (phone) attention notifications.** Desktop banners shipped (§6); the phone
+  surface is deferred. Agreed future approach: zero-dependency hand-rolled VAPID
+  (`node:crypto`) + a payload-less wake-up push — the service worker fetches the session
+  detail over Tailscale to build the notification, so plan content never rides the push
+  service. Tracked in TODOs.md.
 - Image/screenshot embeds in plans.
 - PreToolUse hardening hooks (v1.5).
 - Multi-user anything.

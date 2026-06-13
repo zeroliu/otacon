@@ -10,6 +10,7 @@ TMP="$(mktemp -d)"
 HOME_DIR="$TMP/home"
 REPO="$TMP/repo"
 mkdir -p "$HOME_DIR" "$REPO"
+printf '{"notifications":{"desktop":false}}' > "$HOME_DIR/config.json" # hermetic: no real desktop banners
 
 DAEMON_PID=""
 SQUAT_PID=""
