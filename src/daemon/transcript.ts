@@ -67,7 +67,12 @@ export function readTranscript(path: string): TranscriptEntry[] {
 
 /** Durably append one asked question (otacon ask). */
 export function appendEntry(path: string, entry: TranscriptEntry): void {
-  const file: TranscriptFile = { version: 1, entries: [...readTranscript(path), entry] };
+  appendEntries(path, [entry]);
+}
+
+/** Durably append a batch of asked questions in one write (otacon ask --batch). */
+export function appendEntries(path: string, entries: TranscriptEntry[]): void {
+  const file: TranscriptFile = { version: 1, entries: [...readTranscript(path), ...entries] };
   writeFileAtomic(path, stringify(file));
 }
 

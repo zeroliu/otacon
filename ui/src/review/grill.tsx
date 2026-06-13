@@ -100,11 +100,36 @@ function QuestionCard({
       prev.includes(option) ? prev.filter((o) => o !== option) : [...prev, option],
     );
 
+  // The explicit send button (DESIGN.md §8): free text and multi-select always
+  // carry one; single-select grows one only while a custom answer is open — the
+  // "+ add a note" box doubles as the chip-less custom-answer field, so typed
+  // text alone is a valid answer ("Other" parity), or it rides a chip tap.
+  // Built only when shown (null otherwise), so the gate and the object it feeds
+  // stay one expression rather than computing a discarded foot every render.
+  const showFoot = entry.multi === true || !hasOptions || noteOpen;
+  const foot = !showFoot
+    ? null
+    : entry.multi === true
+      ? {
+          label: "send answer",
+          disabled: picked.length === 0 && note === undefined,
+          draft:
+            picked.length > 0
+              ? { question: entry.id, choices: picked, text: note }
+              : { question: entry.id, text: note },
+        }
+      : {
+          // free text, or single-select's custom answer
+          label: hasOptions ? "send custom" : "send answer",
+          disabled: note === undefined,
+          draft: { question: entry.id, text: note },
+        };
+
   return (
     <article className="grill-card" data-q={entry.id} aria-busy={busy}>
       <div className="grill-meta">
         <span className="grill-glyph" aria-hidden="true">
-          ?
+          ▍
         </span>
         <span className="grill-id">{entry.id}</span>
         {entry.multi === true && <span className="grill-mode">pick any</span>}
@@ -180,21 +205,15 @@ function QuestionCard({
           </button>
         ))}
 
-      {(entry.multi === true || !hasOptions) && (
+      {foot && (
         <div className="grill-foot">
           <button
             type="button"
             className="btn btn-primary grill-send"
-            disabled={busy || (entry.multi === true ? picked.length === 0 : note === undefined)}
-            onClick={() =>
-              send(
-                entry.multi === true
-                  ? { question: entry.id, choices: picked, text: note }
-                  : { question: entry.id, text: note },
-              )
-            }
+            disabled={busy || foot.disabled}
+            onClick={() => send(foot.draft)}
           >
-            {busy ? "sending…" : "send answer"}
+            {busy ? "sending…" : foot.label}
           </button>
         </div>
       )}

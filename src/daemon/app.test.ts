@@ -1014,6 +1014,52 @@ describe("the grill loop: ask, answers, transcript, L3 (M4)", () => {
     expect((await ask("otc_zzzzzz", { question: "x" })).status).toBe(404);
   });
 
+  test("a batch mints N independent cards atomically and shares the q counter", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/questions`, { body: "user asks first" }); // q1
+    const res = await ask(session.id, {
+      questions: [
+        { question: "free text?" },
+        { question: "pick one?", options: ["A", "B"], recommend: "B" },
+        { question: "pick any?", options: ["x", "y", "z"], multi: true },
+      ],
+    });
+    expect(res.status).toBe(201);
+    // The batch reports every minted id, continuing the shared q counter.
+    expect(await res.json()).toEqual({ ok: true, session: session.id, ids: ["q2", "q3", "q4"] });
+
+    const listed = (await (await app.request(`/api/sessions/${session.id}/transcript`)).json()) as {
+      transcript: Record<string, unknown>[];
+    };
+    expect(listed.transcript.map((e) => e.id)).toEqual(["q2", "q3", "q4"]);
+    expect(listed.transcript[1]).toMatchObject({ id: "q3", options: ["A", "B"], recommend: "B" });
+    expect(listed.transcript[2]).toMatchObject({ id: "q4", multi: true });
+    expect(listed.transcript[0]).not.toHaveProperty("options"); // free text
+  });
+
+  test("a malformed batch member fails the whole batch — no partial queue", async () => {
+    const session = mintSession();
+    expect((await ask(session.id, { questions: [] })).status).toBe(400);
+    expect((await ask(session.id, { questions: "nope" })).status).toBe(400);
+    // First member is fine, second is bad: the whole batch rejects.
+    const res = await ask(session.id, {
+      questions: [{ question: "ok" }, { question: "x", options: ["only one"] }],
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { message: string } }).error.message).toContain(
+      "questions[1]",
+    );
+    // Nothing was minted — the transcript is still empty (no burned ids either).
+    const listed = (await (await app.request(`/api/sessions/${session.id}/transcript`)).json()) as {
+      transcript: unknown[];
+    };
+    expect(listed.transcript).toEqual([]);
+    // A subsequent single ask still mints q1 — the failed batch burned no counter.
+    expect(((await (await ask(session.id, { question: "ok now" })).json()) as { id: string }).id).toBe(
+      "q1",
+    );
+  });
+
   test("an answer lands on the transcript and wakes the agent with an answer event", async () => {
     const session = mintSession();
     await ask(session.id, { question: "algo?", options: ["RS256", "HS256"] });
@@ -1055,6 +1101,38 @@ describe("the grill loop: ask, answers, transcript, L3 (M4)", () => {
 
     expect((await answers(session.id, { question: "q2", choices: ["A", "C"] })).status).toBe(202);
     expect((await answers(session.id, { question: "q3", text: "like so" })).status).toBe(202);
+  });
+
+  test("a custom free-form answer with no chip lands on option questions (single + multi)", async () => {
+    const session = mintSession();
+    await ask(session.id, { question: "single", options: ["A", "B"], recommend: "A" });
+    await ask(session.id, { question: "multi", options: ["A", "B", "C"], multi: true });
+
+    // Native-"Other" parity: text alone is a valid answer on an option question.
+    const single = await answers(session.id, { question: "q1", text: "none of these — option D" });
+    expect(single.status).toBe(202);
+    const multi = await answers(session.id, { question: "q2", text: "a different cut entirely" });
+    expect(multi.status).toBe(202);
+
+    const listed = (await (await app.request(`/api/sessions/${session.id}/transcript`)).json()) as {
+      transcript: {
+        answer?: { choice?: string; choices?: string[]; text?: string; answeredAt?: string };
+      }[];
+    };
+    // The custom answer carries text with no choice/choices.
+    expect(listed.transcript[0]?.answer).toEqual({
+      text: "none of these — option D",
+      answeredAt: expect.any(String),
+    });
+    expect(listed.transcript[1]?.answer).toEqual({
+      text: "a different cut entirely",
+      answeredAt: expect.any(String),
+    });
+
+    // No chip-less empty answers: whitespace/empty/absent text still rejects.
+    expect((await answers(session.id, { question: "q1", text: "   " })).status).toBe(400);
+    expect((await answers(session.id, { question: "q1" })).status).toBe(400);
+    expect((await answers(session.id, { question: "q2", text: "" })).status).toBe(400);
   });
 
   test("re-answering overwrites the stored answer (at-least-once)", async () => {

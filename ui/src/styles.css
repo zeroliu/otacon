@@ -203,50 +203,34 @@ body::before {
 
 /* ───────────────────────── session cards ───────────────────────── */
 
+/* Hairline-telemetry list: rows divided by thin rules, no boxes (DESIGN.md §10). */
 .cards {
   display: grid;
-  gap: 12px;
+  gap: 0;
 }
 
 .card {
   position: relative;
   display: block;
-  overflow: hidden;
-  padding: 14px 16px 13px 19px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 10px;
+  padding: 14px 4px 15px;
+  border-top: 1px solid var(--line);
   color: inherit;
   text-decoration: none;
   animation: card-in 0.4s cubic-bezier(0.22, 0.7, 0.3, 1) both;
   animation-delay: calc(var(--i, 0) * 45ms);
-  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
-}
-
-/* The session's accent: a blade down the left edge. */
-.card::before {
-  content: "";
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 3px;
-  background: var(--accent);
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
 
 @media (hover: hover) {
   .card:hover {
-    transform: translateY(-1px);
-    border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
-    box-shadow: var(--shadow);
+    background: color-mix(in srgb, var(--accent) 4%, transparent);
+    border-top-color: color-mix(in srgb, var(--accent) 55%, var(--line));
   }
-}
-
-.card:active {
-  transform: translateY(0);
 }
 
 .card:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 
 @keyframes card-in {
@@ -314,7 +298,13 @@ body::before {
 .card-meta {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 9px;
+}
+
+/* The session accent, carried as a mono tag now the left blade is gone. */
+.card-sig {
+  font: 13px/1 var(--mono);
+  color: var(--accent);
 }
 
 .card-time {
@@ -387,8 +377,7 @@ body::before {
 .empty {
   margin-top: 10px;
   padding: 46px 24px;
-  border: 1.5px dashed var(--line-strong);
-  border-radius: 14px;
+  border: 1px dashed var(--line-strong);
   text-align: center;
   color: var(--ink-soft);
 }
@@ -445,13 +434,13 @@ code {
   color: var(--ink);
 }
 
+/* The session's identity surface: flat panel, accent carried by a top rule
+ * (the §10 hairline-telemetry treatment) instead of a fat left blade. */
 .session-head {
-  padding: 18px 18px 16px;
-  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
-  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
-  border-left: 4px solid var(--accent);
-  border-radius: 12px;
-  box-shadow: var(--shadow);
+  padding: 15px 16px 16px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
+  border: 1px solid var(--line);
+  border-top: 2px solid var(--accent);
   animation: card-in 0.4s cubic-bezier(0.22, 0.7, 0.3, 1) both;
 }
 
@@ -500,8 +489,8 @@ code {
 .review-wait {
   margin-top: 20px;
   padding: 22px;
-  border: 1.5px dashed var(--line-strong);
-  border-radius: 12px;
+  border: 1px dashed var(--line-strong);
+  border-top: 2px solid color-mix(in srgb, var(--accent) 60%, var(--line-strong));
   color: var(--ink-soft);
   font-size: 14px;
   line-height: 1.65;
@@ -672,12 +661,10 @@ code {
 /* ── phases: the carded schema ── */
 
 .phase {
-  margin: 0 0 16px;
-  padding: 16px 18px 15px;
+  margin: 0 0 14px;
+  padding: 15px 16px 15px;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-left: 3px solid color-mix(in srgb, var(--accent) 60%, var(--line));
-  border-radius: 10px;
 }
 
 .phase:last-child {
@@ -769,7 +756,6 @@ code {
 .details {
   margin-top: 14px;
   border: 1px solid var(--line);
-  border-radius: 8px;
   background: color-mix(in srgb, var(--ink) 2.5%, var(--surface));
 }
 
@@ -792,7 +778,6 @@ code {
 .details-summary:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
-  border-radius: 8px;
 }
 
 .details-caret {
@@ -847,7 +832,6 @@ code {
 .fence {
   margin: 14px 0;
   border: 1px solid var(--line);
-  border-radius: 8px;
   background: var(--code-bg);
   overflow: hidden;
 }
@@ -1138,9 +1122,8 @@ code {
   width: min(380px, calc(100vw - 24px));
   padding: 11px 13px 12px;
   background: var(--surface);
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line-strong));
-  border-left: 3px solid var(--accent);
-  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+  border-top: 2px solid var(--accent);
   box-shadow: var(--shadow), 0 18px 48px rgb(0 0 0 / 14%);
   animation: composer-in 0.16s cubic-bezier(0.22, 0.7, 0.3, 1) both;
 }
@@ -1328,7 +1311,6 @@ code {
   gap: 12px;
   max-width: calc(100vw - 24px);
   padding: 8px 10px 8px 12px;
-  border-radius: 12px;
   animation: drawer-in 0.25s cubic-bezier(0.22, 0.7, 0.3, 1) both;
 }
 
@@ -1415,7 +1397,6 @@ code {
   max-height: 44vh;
   overflow-y: auto;
   padding: 8px;
-  border-radius: 12px;
   display: grid;
   gap: 8px;
   animation: drawer-in 0.18s cubic-bezier(0.22, 0.7, 0.3, 1) both;
@@ -1425,8 +1406,6 @@ code {
   padding: 9px 11px 10px;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-left: 3px solid color-mix(in srgb, var(--accent) 60%, var(--line));
-  border-radius: 9px;
 }
 
 .pending-meta {
@@ -1528,8 +1507,7 @@ code {
 .rail-empty {
   margin: 0;
   padding: 18px 14px;
-  border: 1.5px dashed var(--line-strong);
-  border-radius: 10px;
+  border: 1px dashed var(--line-strong);
   font: 11px/1.7 var(--mono);
   letter-spacing: 0.04em;
   color: var(--ink-soft);
@@ -1539,8 +1517,6 @@ code {
   padding: 10px 12px 11px;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-left: 2px solid color-mix(in srgb, var(--accent) 55%, var(--line));
-  border-radius: 9px;
   animation: card-in 0.3s cubic-bezier(0.22, 0.7, 0.3, 1) both;
 }
 
@@ -1598,7 +1574,6 @@ code {
   margin-top: 9px;
   padding: 8px 10px;
   background: color-mix(in srgb, var(--accent) 6%, var(--surface));
-  border-radius: 7px;
   animation: details-in 0.3s ease-out both;
 }
 
@@ -1820,12 +1795,10 @@ code {
 
 .rev-banner {
   margin-top: 14px;
-  padding: 13px 15px 13px 16px;
-  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
-  border-left: 4px solid var(--accent);
-  border-radius: 12px;
-  box-shadow: var(--shadow);
+  padding: 12px 15px 13px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
+  border: 1px solid var(--line);
+  border-top: 2px solid var(--accent);
   animation: card-in 0.35s cubic-bezier(0.22, 0.7, 0.3, 1) both;
 }
 
@@ -1959,7 +1932,6 @@ code {
   padding: 9px 0;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 10px;
   overflow: hidden;
 }
 
@@ -2023,7 +1995,7 @@ code {
 
 .thread-resolved {
   padding: 0;
-  border-left-color: color-mix(in srgb, var(--chip-approved-ink) 55%, var(--line));
+  /* resolved reads green from its ✓ + word; no blade needed (§10 hairline) */
 }
 
 .resolved-summary {
@@ -2095,8 +2067,7 @@ code {
   align-items: baseline;
   gap: 8px;
   padding: 9px 12px;
-  border: 1.5px dashed color-mix(in srgb, var(--chip-await-ink) 50%, var(--line-strong));
-  border-radius: 9px;
+  border: 1px dashed color-mix(in srgb, var(--chip-await-ink) 50%, var(--line-strong));
   background: color-mix(in srgb, var(--chip-await-ink) 5%, transparent);
   color: var(--chip-await-ink);
   font: 600 10.5px/1 var(--mono);
@@ -2154,7 +2125,6 @@ code {
   padding: 10px 12px 11px;
   background: color-mix(in srgb, var(--chip-await-ink) 4%, var(--surface));
   border: 1px dashed color-mix(in srgb, var(--chip-await-ink) 45%, var(--line-strong));
-  border-radius: 9px;
   cursor: pointer;
   animation: card-in 0.3s cubic-bezier(0.22, 0.7, 0.3, 1) both;
 }
@@ -2232,13 +2202,14 @@ code {
   letter-spacing: 0.1em;
 }
 
+/* Incoming transmission, hairline-telemetry: flat panel, accent as a top rule
+ * + the ▍ meta tag (not a fat left blade), meta divided from the question by a
+ * thin rule — a real-instrument readout (DESIGN.md §10). */
 .grill-card {
-  padding: 14px 15px 14px 16px;
-  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
-  border-left: 4px solid var(--accent);
-  border-radius: 12px;
-  box-shadow: var(--shadow);
+  padding: 13px 15px 14px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
+  border: 1px solid var(--line);
+  border-top: 2px solid var(--accent);
   animation: card-in 0.35s cubic-bezier(0.22, 0.7, 0.3, 1) both;
 }
 
@@ -2246,6 +2217,8 @@ code {
   display: flex;
   align-items: baseline;
   gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
   font: 600 10px/1 var(--mono);
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -2269,7 +2242,7 @@ code {
 }
 
 .grill-question {
-  margin: 9px 0 0;
+  margin: 11px 0 0;
   font-size: 16px;
   font-weight: 550;
   line-height: 1.5;
@@ -2418,16 +2391,18 @@ code {
   margin: 9px 0 0;
 }
 
-/* Answered: the card settles — calm, green-checked, the answer echoed. */
+/* Answered: the card settles — calm, green-checked, the answer echoed. The
+ * accent top rule cools to approved-green; no fill, no blade (§10 hairline). */
 .grill-settled {
   padding: 11px 14px 12px;
   background: var(--surface);
-  border: 1px dashed color-mix(in srgb, var(--chip-approved-ink) 45%, var(--line-strong));
-  border-left: 4px solid color-mix(in srgb, var(--chip-approved-ink) 55%, var(--line));
-  box-shadow: none;
+  border: 1px solid var(--line);
+  border-top: 2px solid color-mix(in srgb, var(--chip-approved-ink) 55%, var(--line));
 }
 
+/* Settled meta is quiet: the divider under it calms, the ink softens. */
 .grill-settled .grill-meta {
+  padding-bottom: 9px;
   color: var(--ink-soft);
 }
 
@@ -2467,7 +2442,6 @@ code {
 .interview {
   margin-top: 14px;
   border: 1px solid var(--line);
-  border-radius: 12px;
   background: color-mix(in srgb, var(--ink) 2.5%, var(--surface));
 }
 
@@ -2479,7 +2453,6 @@ code {
   min-height: 44px;
   padding: 12px 14px;
   border: none;
-  border-radius: 12px;
   background: none;
   color: var(--ink-soft);
   font: 600 11px/1 var(--mono);
@@ -2593,7 +2566,6 @@ code {
   margin-top: 9px;
   padding: 8px 10px;
   background: color-mix(in srgb, var(--accent) 6%, var(--surface));
-  border-radius: 7px;
 }
 
 .iv-answer-label {
@@ -2723,9 +2695,8 @@ code {
   width: min(440px, calc(100vw - 24px));
   padding: 14px 16px 15px;
   background: var(--surface);
-  border: 1px solid color-mix(in srgb, var(--chip-approved-ink) 40%, var(--line-strong));
-  border-left: 4px solid var(--chip-approved-ink);
-  border-radius: 14px;
+  border: 1px solid var(--line-strong);
+  border-top: 2px solid var(--chip-approved-ink);
   box-shadow: var(--shadow), 0 18px 48px rgb(0 0 0 / 18%);
   animation: composer-in 0.18s cubic-bezier(0.22, 0.7, 0.3, 1) both;
 }
@@ -2741,7 +2712,7 @@ code {
 /* The warn state re-inks the sheet in amber: a different question is being asked. */
 .approve-warning {
   border-color: color-mix(in srgb, var(--chip-await-ink) 50%, var(--line-strong));
-  border-left-color: var(--chip-await-ink);
+  border-top-color: var(--chip-await-ink);
 }
 
 .approve-head {
@@ -2824,7 +2795,7 @@ code {
   margin-top: 14px;
   padding: 11px 14px;
   border: 1px dashed color-mix(in srgb, var(--chip-approved-ink) 45%, var(--line-strong));
-  border-radius: 10px;
+  border-top: 2px solid color-mix(in srgb, var(--chip-approved-ink) 55%, var(--line));
   background: color-mix(in srgb, var(--chip-approved-ink) 5%, transparent);
   font: 600 11.5px/1.5 var(--mono);
   letter-spacing: 0.04em;
@@ -2909,9 +2880,8 @@ code {
   min-height: 44px;
   padding: 8px 13px;
   background: color-mix(in srgb, var(--accent) 6%, var(--surface));
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
-  border-left: 3px solid var(--accent);
-  border-radius: 10px;
+  border: 1px solid var(--line);
+  border-top: 2px solid var(--accent);
   color: inherit;
   text-decoration: none;
   font: 600 12px/1.2 var(--mono);
@@ -2990,9 +2960,8 @@ code {
   display: grid;
   padding: 9px 8px 8px;
   background: var(--surface);
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line-strong));
-  border-left: 3px solid var(--accent);
-  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+  border-top: 2px solid var(--accent);
   box-shadow: var(--shadow), 0 18px 48px rgb(0 0 0 / 14%);
 }
 

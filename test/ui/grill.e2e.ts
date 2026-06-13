@@ -165,6 +165,85 @@ test("multi-select toggles chips and arms a send; free text answers optionless q
   await expect(page.locator(".grill-open-count")).toHaveCount(0);
 });
 
+test("option cards take a chip-less custom answer: single 'send custom', multi text-only", async ({
+  page,
+  request,
+}) => {
+  const session = await createSession(request, uniqueTitle("custom-answer"));
+  const singleId = await ask(request, session.id, {
+    question: "Which scope?",
+    options: ["just the fix", "both"],
+    recommend: "just the fix",
+  });
+  const multiId = await ask(request, session.id, {
+    question: "Which signals?",
+    options: ["logs", "metrics"],
+    multi: true,
+  });
+  await page.goto(`/s/${session.id}`);
+
+  // Single-select: the note box doubles as the custom-answer field — typed
+  // text alone, no chip, is a valid answer (native-"Other" parity).
+  const single = page.locator(`.grill-card[data-q="${singleId}"]`);
+  await expect(single.locator(".grill-foot")).toHaveCount(0); // no foot until a custom answer opens
+  await single.locator(".grill-note-toggle").click();
+  const custom = single.locator(".grill-send");
+  await expect(custom).toHaveText("send custom");
+  await expect(custom).toBeDisabled();
+  await single.locator(".grill-note").fill("none of these — ship neither yet");
+
+  let parked = runCli(["wait", "--timeout", "30", "--session", session.id]);
+  await custom.click();
+  let result = await parked;
+  expect(result.code).toBe(0);
+  let event = JSON.parse(result.stdout) as { question: string; choice?: string; text?: string };
+  expect(event.question).toBe(singleId);
+  expect(event.choice).toBeUndefined(); // text-only, no chip
+  expect(event.text).toBe("none of these — ship neither yet");
+  await expect(page.locator(`.grill-settled[data-q="${singleId}"]`)).toBeVisible();
+
+  // Multi-select: send arms on non-empty custom text even with no chip picked.
+  const multi = page.locator(`.grill-card[data-q="${multiId}"]`);
+  const send = multi.locator(".grill-send");
+  await expect(send).toBeDisabled();
+  await multi.locator(".grill-note-toggle").click();
+  await multi.locator(".grill-note").fill("trace spans, actually");
+  await expect(send).toBeEnabled();
+
+  parked = runCli(["wait", "--timeout", "30", "--session", session.id]);
+  await send.click();
+  result = await parked;
+  expect(result.code).toBe(0);
+  event = JSON.parse(result.stdout) as { question: string; text?: string } & { choices?: string[] };
+  expect(event.question).toBe(multiId);
+  expect((event as { choices?: string[] }).choices).toBeUndefined();
+  expect(event.text).toBe("trace spans, actually");
+});
+
+test("the Interview archive renders a chip-less custom answer: no option highlighted, custom text echoed", async ({
+  page,
+  request,
+}) => {
+  const session = await createSession(request, uniqueTitle("custom-archive"));
+  const qid = await ask(request, session.id, {
+    question: "Which store?",
+    options: ["sqlite", "json"],
+    recommend: "sqlite",
+  });
+  // "Other" parity (DESIGN.md §8): answer an option question with text alone.
+  await answer(request, session.id, { question: qid, text: "postgres, actually" });
+  await page.goto(`/s/${session.id}`);
+
+  await page.locator(".interview-toggle").click();
+  const entry = page.locator(`.iv-entry[data-iv="${qid}"]`);
+  await expect(entry).toBeVisible();
+  // The offered options still show, but none is marked chosen — the answer was
+  // custom — and the typed text is echoed as what the user actually said.
+  await expect(entry.locator(".iv-opt")).toHaveCount(2);
+  await expect(entry.locator(".iv-opt-chosen")).toHaveCount(0);
+  await expect(entry.locator(".iv-answer-body")).toHaveText("postgres, actually");
+});
+
 test("decision citations deep-link into the Interview panel; [assumed] wears the veto tag", async ({
   page,
   request,

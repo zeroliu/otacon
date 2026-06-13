@@ -1,6 +1,10 @@
 // Cross-layer types shared by the daemon and the CLI.
 // Wire shapes (EventPayload) follow DESIGN.md §6 exactly.
 
+import type { QuestionSpec } from "./question-spec.js";
+
+export type { QuestionSpec };
+
 export type SessionStatus = "draft" | "in_review" | "revising" | "approved";
 
 export const SESSION_STATUSES: readonly SessionStatus[] = [
@@ -135,14 +139,11 @@ export interface GrillAnswer {
  * One grill Q&A, persisted in .otacon/<id>/transcript.json (DESIGN.md §8) —
  * distinct from user-question threads (threads.json); ids share the q counter
  * so citations (`D3 ← q7`, lint L3) and deep links are one unambiguous space.
+ * The asked shape is the `QuestionSpec` the agent posted, plus the minted id,
+ * timestamp, and (once answered) the user's answer.
  */
-export interface TranscriptEntry {
+export interface TranscriptEntry extends QuestionSpec {
   id: string; // q<n>
-  question: string;
-  /** Option labels in the agent's order; the UI puts `recommend` first. */
-  options?: string[];
-  recommend?: string;
-  multi?: boolean;
   askedAt: string;
   answer?: GrillAnswer;
 }

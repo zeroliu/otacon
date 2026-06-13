@@ -74,6 +74,9 @@ function SessionCard({ session, index }: { session: LiveSession; index: number }
         {session.branch !== "" && <span className="card-branch"> · {session.branch}</span>}
       </p>
       <div className="card-meta">
+        <span className="card-sig" aria-hidden="true">
+          ▍
+        </span>
         <StatusChip status={session.status} openQuestions={session.openQuestions} />
         <span className="card-time">{relativeTime(session.updatedAt)}</span>
       </div>

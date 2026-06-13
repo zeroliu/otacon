@@ -15,12 +15,14 @@ import type { Context } from "hono";
 import type { ServerResponse } from "node:http";
 import { isAbsolute, join } from "node:path";
 import { loadConfig } from "../shared/config.js";
+import { parseQuestionSpec } from "../shared/question-spec.js";
 import type {
   Anchor,
   CommentItem,
   DiffPayload,
   EventPayload,
   GrillAnswer,
+  QuestionSpec,
   QueuedEvent,
   RegistrySession,
   Resolutions,
@@ -45,7 +47,7 @@ import {
   commentThreadStates,
   readThreads,
 } from "./threads.js";
-import { answerEntry, appendEntry, readTranscript } from "./transcript.js";
+import { answerEntry, appendEntries, appendEntry, readTranscript } from "./transcript.js";
 import { registerUiRoutes } from "./ui.js";
 
 /** Provided by @hono/node-server; absent under app.request() in tests. */
@@ -136,6 +138,13 @@ function parseResolutions(raw: unknown): Resolutions | undefined {
     }
   }
   return out;
+}
+
+/** Build a transcript entry from a validated spec and its minted q<n> id. */
+function entryFromSpec(id: string, spec: QuestionSpec, askedAt: string): TranscriptEntry {
+  // `spec` is already normalized (no absent/false keys), so spreading it is the
+  // whole asked shape — keep this in lockstep with QuestionSpec, not field-wise.
+  return { id, ...spec, askedAt };
 }
 
 /** True when the Origin header names this daemon itself (the M2 web UI). */
@@ -638,41 +647,44 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
 
   // The agent's grill question (otacon ask, DESIGN.md §6, §8): persisted in
   // the transcript and pushed to the UI as a card; no agent event is queued —
-  // the asker goes straight back to `otacon wait` for the answer.
+  // the asker goes straight back to `otacon wait` for the answer. Accepts a
+  // single question body or a batch (`{questions:[…]}`) of independent
+  // questions — independent siblings the agent posts in one call (§8); they
+  // render as ordinary cards, each answered instantly.
   app.post("/api/sessions/:id/ask", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
     const body = (await readJsonBody(c)) ?? {};
     if (sessionEnded(session.id)) return sessionOver(c, session.id);
-    const { question, options, recommend, multi } = body;
-    if (typeof question !== "string" || question.trim() === "") {
-      return badRequest(c, "question must be a non-empty string");
-    }
-    if (options !== undefined) {
-      const ok =
-        Array.isArray(options) &&
-        options.length >= 2 &&
-        options.every((o) => typeof o === "string" && o.trim() !== "") &&
-        new Set(options).size === options.length;
-      if (!ok) return badRequest(c, "options must be 2+ distinct non-empty strings");
-    }
-    if (recommend !== undefined) {
-      if (!Array.isArray(options) || typeof recommend !== "string" || !options.includes(recommend)) {
-        return badRequest(c, "recommend must name one of the options");
+
+    // Batch: validate every member first, then mint all ids in one counter
+    // bump and append them in one write — a malformed member fails the whole
+    // batch, so the queue never holds a partial set (DECISIONS.md).
+    if (body.questions !== undefined) {
+      const raw = body.questions;
+      if (!Array.isArray(raw) || raw.length === 0) {
+        return badRequest(c, "questions must be a non-empty array of question objects");
       }
+      const specs: QuestionSpec[] = [];
+      for (let i = 0; i < raw.length; i++) {
+        const spec = parseQuestionSpec(raw[i]);
+        if (typeof spec === "string") return badRequest(c, `questions[${i}] ${spec}`);
+        specs.push(spec);
+      }
+      const counters = store.bumpCounters(session.id, { question: specs.length });
+      const first = counters.question - specs.length;
+      const askedAt = new Date().toISOString();
+      const entries = specs.map((spec, i) => entryFromSpec(`q${first + i + 1}`, spec, askedAt));
+      appendEntries(store.transcriptPath(session.id), entries);
+      for (const entry of entries) publishGrill(session.id, entry);
+      publishSession(store.getSession(session.id) ?? session);
+      return c.json({ ok: true, session: session.id, ids: entries.map((e) => e.id) }, 201);
     }
-    if (multi !== undefined && (typeof multi !== "boolean" || (multi && options === undefined))) {
-      return badRequest(c, "multi must be a boolean and requires options");
-    }
+
+    const spec = parseQuestionSpec(body);
+    if (typeof spec === "string") return badRequest(c, spec);
     const counters = store.bumpCounters(session.id, { question: 1 });
-    const entry: TranscriptEntry = {
-      id: `q${counters.question}`,
-      question,
-      ...(options !== undefined ? { options: options as string[] } : {}),
-      ...(recommend !== undefined ? { recommend: recommend as string } : {}),
-      ...(multi === true ? { multi: true } : {}),
-      askedAt: new Date().toISOString(),
-    };
+    const entry = entryFromSpec(`q${counters.question}`, spec, new Date().toISOString());
     appendEntry(store.transcriptPath(session.id), entry);
     publishGrill(session.id, entry);
     // The summary's openQuestions just moved: the index's "questions pending"
@@ -709,14 +721,27 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       return badRequest(c, "text must be a string");
     }
     // The answer must fit the question's shape: chips for option questions
-    // (one chip, or 1+ under --multi), free text for optionless ones.
-    if (asked.options === undefined) {
-      if (choice !== undefined || choices !== undefined) {
-        return badRequest(c, `${question} has no options — answer with text only`);
+    // (one chip, or 1+ under --multi), free text for optionless ones. A
+    // non-empty custom answer with no chip is valid on option questions too
+    // (native-AskUserQuestion "Other" parity, DESIGN.md §8) — and text may
+    // still ride a chosen chip as a note.
+    const customText = typeof text === "string" && text.trim() !== "";
+    const noChips = choice === undefined && choices === undefined;
+    if (noChips) {
+      // "Other" parity (DESIGN.md §8): a non-empty custom answer with no chip
+      // is valid on ANY question shape — the one branch-independent rule, so it
+      // lives here, not re-stated per shape. Only the hint names the shape.
+      if (!customText) {
+        const need =
+          asked.options === undefined
+            ? "a non-empty text answer"
+            : asked.multi === true
+              ? "chosen choices or a non-empty custom answer"
+              : "a single choice from its options or a non-empty custom answer";
+        return badRequest(c, `${question} needs ${need}`);
       }
-      if (typeof text !== "string" || text.trim() === "") {
-        return badRequest(c, `${question} needs a non-empty text answer`);
-      }
+    } else if (asked.options === undefined) {
+      return badRequest(c, `${question} has no options — answer with text only`);
     } else if (asked.multi === true) {
       const ok =
         choice === undefined &&
@@ -727,17 +752,14 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       if (!ok) {
         return badRequest(c, `${question} is multi-choice — pass distinct choices from its options`);
       }
-    } else if (
-      choices !== undefined ||
-      typeof choice !== "string" ||
-      !asked.options.includes(choice)
-    ) {
+    } else if (choices !== undefined || typeof choice !== "string" || !asked.options.includes(choice)) {
+      // Single-choice with a chip: exactly one valid `choice`, never `choices`.
       return badRequest(c, `${question} needs a single choice from its options`);
     }
     const answer: GrillAnswer = {
       ...(typeof choice === "string" ? { choice } : {}),
       ...(Array.isArray(choices) ? { choices: choices as string[] } : {}),
-      ...(typeof text === "string" && text.trim() !== "" ? { text } : {}),
+      ...(customText ? { text: text as string } : {}),
       answeredAt: new Date().toISOString(),
     };
     // Re-answering overwrites (at-least-once: a duplicate POST is legitimate);

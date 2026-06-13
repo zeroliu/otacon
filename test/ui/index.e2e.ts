@@ -91,11 +91,12 @@ test("the /s/:id shell renders the session header in its accent color", async ({
     .locator(".page")
     .evaluate((el) => el.style.getPropertyValue("--hue"));
   expect(Number(hue)).toBe(expectedHue(session.id));
-  // ...and the hue actually lands on the painted header edge. getComputedStyle
-  // is reached through the element so no DOM globals leak into the tsconfig.
+  // ...and the hue actually lands on the accent rule along the header's top
+  // edge (the hairline-telemetry treatment; §10). getComputedStyle is reached
+  // through the element so no DOM globals leak into the tsconfig.
   const edge = await page
     .locator(".session-head")
-    .evaluate((el) => el.ownerDocument.defaultView!.getComputedStyle(el).borderLeftColor);
+    .evaluate((el) => el.ownerDocument.defaultView!.getComputedStyle(el).borderTopColor);
   expect(edge).toMatch(/^(rgb|color|lab|okl)/);
   expect(edge).not.toBe("rgba(0, 0, 0, 0)");
 });

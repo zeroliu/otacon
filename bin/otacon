@@ -4,9 +4,19 @@
 # parser, CLI). No build, no publish, no global install: it always reflects
 # current source. The daemon auto-spawns from source too (client.ts .ts fallback).
 #
-# After editing DAEMON source (src/daemon/**), restart the running daemon so the
-# next command respawns it fresh:
-#   curl -fsS -X POST "http://127.0.0.1:${OTACON_PORT:-4747}/api/shutdown"
+# Per-worktree daemon isolation: a linked git worktree has `.git` as a FILE (the
+# main checkout has it as a directory). In a worktree this shim derives a stable
+# OTACON_PORT + OTACON_HOME from the worktree path, so each worktree gets its OWN
+# daemon from its OWN src/daemon/**. Otherwise all worktrees would share one
+# daemon (the port is the lock) and — since every worktree carries the same
+# VERSION — the version handshake would never restart it across worktrees, so a
+# worktree would silently reuse whichever one spawned the daemon first. The main
+# checkout is untouched (4747 / ~/.otacon). Explicit OTACON_PORT / OTACON_HOME
+# always win. See DECISIONS.md "Per-worktree daemon isolation in the dogfood shim".
+#
+# After editing DAEMON source (src/daemon/**), restart this worktree's daemon so
+# the next command respawns it fresh (the handshake won't — same VERSION):
+#   ./bin/otacon restart
 #
 # Resolve through any symlink chain so this works whether invoked as ./bin/otacon
 # or via a symlink placed on PATH.
@@ -17,4 +27,33 @@ while [ -L "$src" ]; do
   case $src in /*) ;; *) src=$dir/$src ;; esac
 done
 root=$(cd -P -- "$(dirname -- "$src")/.." && pwd)
+
+# In a linked worktree (.git is a file), isolate this worktree's daemon unless the
+# caller already pinned the port/home. cksum(root) gives a stable per-path number;
+# the 1000-wide range keeps it in otacon's ~4.8k neighbourhood, clear of 4747.
+if [ -f "$root/.git" ]; then
+  wt_hash=$(printf '%s' "$root" | cksum | cut -d' ' -f1)
+  if [ -z "$OTACON_PORT" ]; then
+    OTACON_PORT=$((4800 + wt_hash % 1000))
+    export OTACON_PORT
+  fi
+  if [ -z "$OTACON_HOME" ]; then
+    OTACON_HOME="$HOME/.otacon-worktrees/$(basename "$root")-$wt_hash"
+    export OTACON_HOME
+  fi
+fi
+
+# `./bin/otacon restart` — shut down the daemon this worktree talks to (resolved
+# port) so the next command respawns it from current source. Works in the main
+# checkout too (defaults to :4747).
+if [ "$1" = restart ]; then
+  port=${OTACON_PORT:-4747}
+  if curl -sS -X POST "http://127.0.0.1:$port/api/shutdown" >/dev/null 2>&1; then
+    echo "otacon: daemon on :$port shutting down; next command respawns from current source" >&2
+  else
+    echo "otacon: no daemon answered on :$port (already down); next command spawns fresh" >&2
+  fi
+  exit 0
+fi
+
 exec bun run "$root/src/cli/main.ts" "$@"

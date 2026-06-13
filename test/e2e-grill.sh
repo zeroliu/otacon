@@ -183,4 +183,41 @@ if (!w || w.severity !== "warning" || w.rule !== "L3") process.exit(1);
 ' "$TMP/quicksubmit.json" || fail "quick submit did not downgrade L3 to a warning"
 ok "--quick session accepted the untraced decision with an L3 warning"
 
+# --- 9. otacon ask --batch posts several independent cards in one call ---------
+otacon start --quick --title "batch grill" > "$TMP/batch.json" 2> /dev/null
+BSID="$(json_field session "$TMP/batch.json")"
+otacon ask --batch - --session "$BSID" > "$TMP/askbatch.json" <<'JSON'
+[
+  {"question": "Free text edge?"},
+  {"question": "Which store?", "options": ["sqlite", "json"], "recommend": "json"},
+  {"question": "Which signals?", "options": ["logs", "metrics", "traces"], "multi": true}
+]
+JSON
+node -e '
+const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+if (r.ok !== true || JSON.stringify(r.ids) !== JSON.stringify(["q1", "q2", "q3"])) process.exit(1);
+' "$TMP/askbatch.json" || fail "batch ask did not mint q1,q2,q3 in one call"
+curl -s "$BASE/api/sessions/$BSID/transcript" > "$TMP/batchtrans.json"
+node -e '
+const t = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).transcript;
+if (t.length !== 3 || t[0].options !== undefined) process.exit(1);
+if (t[1].recommend !== "json" || t[1].options.join("|") !== "sqlite|json") process.exit(2);
+if (t[2].multi !== true) process.exit(3);
+' "$TMP/batchtrans.json" || fail "batch transcript does not carry the three independent cards"
+# A malformed member fails the whole batch (no partial queue).
+HTTP=$(curl -s -o "$TMP/badbatch.json" -w '%{http_code}' \
+  -X POST "$BASE/api/sessions/$BSID/ask" -H 'content-type: application/json' \
+  -d '{"questions":[{"question":"ok"},{"question":"x","options":["only one"]}]}')
+[ "$HTTP" = "400" ] || fail "a malformed batch member answered $HTTP, expected 400"
+# The agent loops wait to drain a batch one answer at a time.
+otacon wait --timeout 30 --session "$BSID" > "$TMP/bwait.json" &
+WAIT_PID=$!
+sleep 1
+curl -s -X POST "$BASE/api/sessions/$BSID/answers" -H 'content-type: application/json' \
+  -d '{"question":"q2","choice":"json"}' > /dev/null
+wait "$WAIT_PID" || fail "parked wait exited nonzero"
+WAIT_PID=""
+[ "$(json_field question "$TMP/bwait.json")" = "q2" ] || fail "batch answer for q2 never woke wait"
+ok "otacon ask --batch minted 3 independent cards in one call; a bad member rejected the batch; wait drained an answer"
+
 echo "# e2e-grill: all $PASS checks passed"

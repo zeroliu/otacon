@@ -15,8 +15,10 @@ state lives in the gitignored `.otacon/`; the approved plan is committed to
 `docs/plans/`.
 
 After editing **daemon** source (`src/daemon/**`) mid-session, restart the running
-daemon so your change loads: `curl -fsS -X POST http://127.0.0.1:${OTACON_PORT:-4747}/api/shutdown`
-(the next `otacon` command respawns it). CLI/linter/parser edits need no restart.
+daemon so your change loads: `otacon restart` (the next `otacon` command respawns it
+from current source). Use `otacon restart`, not a raw curl to a fixed port — in a git
+worktree the shim runs the daemon on a derived port, and `restart` always targets the
+one this checkout talks to. CLI/linter/parser edits need no restart.
 
 The spec these commands implement is otacon's own DESIGN.md (§6 loop, §8 grill, §13
 failure habits); the canonical wrapper text lives in `src/cli/install/assets.ts`.
@@ -41,7 +43,13 @@ machine-readable error you can fix (read the JSON); exit 2 = you invoked it wron
    code can answer.
    - `otacon ask --question "..." --options "A|B|C" --recommend A` — always lead
      with your recommended answer. `--multi` for multi-select; omit `--options`
-     for free text.
+     for free text. The user can always answer with free-form custom text instead
+     of (or alongside) the chips, so frame options as a starting point, not a cage.
+   - Independent questions whose answers don't shape each other? Post them in one
+     call: `otacon ask --batch questions.json` (or `--batch -` for stdin) — a JSON
+     array of the same specs (`{question, options?, recommend?, multi?}`). They land
+     as ordinary cards; loop `wait` to collect each answer. Dependent questions
+     still go one at a time.
    - Park for the answer: `otacon wait --timeout 540` (set the Bash tool timeout
      to 600000 ms). The answer arrives as `{"event":"answer","question":"q<n>",...}`.
 4. **Draft** the plan at `.otacon/<session>/plan.md` in the schema below, then
@@ -79,6 +87,7 @@ introduce new scope.
 
 - Never use native plan mode, AskUserQuestion, or any built-in question UI while
   the session is open — every question goes through `otacon ask`.
-- One question per ask; recommended option first; the phone is the review surface.
+- Dependencies first, one question at a time; only batch independent siblings.
+  Recommended option first; the phone is the review surface.
 - Long review ahead? Remind the user to keep the Mac awake: `caffeinate -i`
   while the session runs.

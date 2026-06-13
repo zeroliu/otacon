@@ -249,7 +249,7 @@ the model is suspended — no inference, no token spend.
 | `otacon start --title <t> [--quick]`                                        | Mint session, register it, print review URL. Writes `.otacon/current-session` |
 | `otacon submit [plan.md] [--resolutions res.json]`                          | Lint → reject with errors, or store revision N, notify UI                     |
 | `otacon wait [--timeout 540] [--session <id>]`                              | Long-poll this session's queue; print next event as JSON                      |
-| `otacon ask --question "…" [--options "A\|B\|C"] [--recommend A] [--multi]` | Post agent question card to UI; answer arrives via `wait`                     |
+| `otacon ask --question "…" [--options "A\|B\|C"] [--recommend A] [--multi]` | Post agent question card to UI (or a batch of independent questions via `--batch <file\|->`); answer arrives via `wait` |
 | `otacon answer <question-id> (--body "…" \| --file f.md)`                   | Answer a user question; no revision                                           |
 | `otacon status [--all]`                                                     | Session state + undelivered event count (crash/resume entry point)            |
 | `otacon open [--session <id>]`                                              | Print the review URL — the index URL when no session resolves; never launches a browser |
@@ -286,7 +286,10 @@ replies are refused 400 before linting.
 Every payload carries `session` so the agent can sanity-check it is handling its own plan.
 An `answer` to a `--multi` question carries `choices` (an array) instead of `choice`; an
 answer to an optionless question carries only `text` (`text` may also accompany a choice
-as extra context). `approved.path` is repo-relative — the agent commits that file.
+as extra context). An option question also accepts a **free-form custom answer** — a
+non-empty `text` with no `choice`/`choices` (native-AskUserQuestion "Other" parity), so
+the user is never trapped by the offered chips. `approved.path` is repo-relative — the
+agent commits that file.
 
 ### HTTP API (daemon, 127.0.0.1 only)
 
@@ -309,13 +312,19 @@ POST /api/sessions/:id/questions/:qid/answer  agent's answer to a user question
 GET  /api/sessions/:id/threads              comment + question threads (the UI's rail)
 POST /api/sessions/:id/ask                  agent grill question (otacon ask):
                                             {question, options?, recommend?, multi?}
-                                            → 201 {id: "q<n>"}; persisted in the
-                                            transcript, no agent event queued
+                                            → 201 {id: "q<n>"}, or a batch
+                                            {questions:[…]} of the same specs →
+                                            201 {ids:[…]} minted atomically (a
+                                            bad member fails the whole batch);
+                                            persisted in the transcript, no
+                                            agent event queued
 GET  /api/sessions/:id/transcript           the grill transcript (asked + answered)
 POST /api/sessions/:id/answers              user's answer to an agent question:
                                             {question, choice|choices, text?} —
                                             validated against the question's options
-                                            and multi-ness; queues the answer event
+                                            and multi-ness; an option question also
+                                            takes a non-empty text-only custom answer
+                                            (no chip); queues the answer event
 POST /api/sessions/:id/approve              approve: writes the final artifact, flips
                                             the session approved, queues `approved`.
                                             Unresolved threads (comments without a
@@ -448,13 +457,17 @@ agent-question cards, so rapid phone switching can't post feedback to the wrong 
 ## 8. The grill phase
 
 The grill-me discipline is a mandatory protocol phase, not a separate skill: before
-drafting, the agent walks the design tree **one question at a time**, resolving
-dependencies in order, recommended answer first, exploring the codebase instead of
-asking whenever the code can answer.
+drafting, the agent walks the design tree **dependencies first, one question at a
+time**, recommended answer first, exploring the codebase instead of asking whenever
+the code can answer. Independent sibling questions — ones whose answers don't shape
+each other — may be posted together in one `otacon ask --batch` call; they render as
+ordinary cards, each answered instantly, and the agent loops `wait` to collect them.
 
 Transport is `otacon ask` → question card in the UI (option chips, recommended option
 first, free text) → answer via `wait`. **Grilling works from the phone, one thumb,
-while walking.**
+while walking.** An option question is never a trap: every card also takes a free-form
+custom answer — typed text alone (native-AskUserQuestion "Other" parity), or riding a
+chosen chip as a note.
 
 The transcript persists in `.otacon/<session>/transcript.json` — distinct from the
 user-question threads in `threads.json` (different surface, different lifecycle: the
@@ -513,6 +526,19 @@ older baselines stay reachable through the diff endpoint's `?from=`.
 ## 10. UI/UX
 
 Two screens only. No settings UI in v1 — config is a file.
+
+**Visual language: hairline telemetry.** The codec identity — mono operational type,
+the masthead, the faint scanlines, the per-session accent hue — stays, but surfaces
+are *flat panels split by thin rules*, never rounded-rect cards with a fat painted
+left-border and a soft drop-shadow. The session accent shows as a small mark — a 1ch
+mono `▍` tag in a card's meta row, a 2px rule along a panel's top edge, an accent-inked
+glyph or label — not a 3–4px blade down the side. Containers drop their corner radius;
+in-flow cards (index rows, the grill card, the revision banner, threads, phases) carry
+no shadow, while floating overlays (the composer, the section menu, the approve and
+bottom sheets, the drawer) keep a shadow to lift off the page. Controls keep their own
+treatment: chips (with the `★rec` star and on/off states), buttons, inputs, and pills
+are hit targets, not container chrome, and are unchanged. The index is a top-ruled
+telemetry list rather than a stack of boxes.
 
 ### Index (the phone bookmark)
 

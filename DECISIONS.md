@@ -136,6 +136,27 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   and an escape hatch for port conflicts. Harmless otherwise.
 - **Revisit when:** Real config wants to subsume them.
 
+## Per-worktree daemon isolation in the dogfood shim
+
+- **Decision:** `bin/otacon` detects a linked git worktree (`.git` is a *file*, not a
+  directory) and — unless the caller already set them — derives a stable per-worktree
+  `OTACON_PORT` (`4800 + cksum(root) % 1000`) and `OTACON_HOME`
+  (`~/.otacon-worktrees/<basename>-<cksum>`) before exec'ing the CLI. The main checkout
+  (`.git` is a directory) is left on 4747 / `~/.otacon`. The shim also intercepts
+  `./bin/otacon restart`, POSTing `/api/shutdown` at the resolved port.
+- **Why:** One shared daemon (the port is the lock) is fine for parallel *planning* —
+  sessions are already isolated by repo root (DESIGN.md §7). But it defeats testing
+  *divergent daemon source* across worktrees: the version handshake only restarts on a
+  version *mismatch*, and every worktree carries the same `VERSION`, so a worktree would
+  silently reuse whichever one spawned the daemon first — exercising the wrong
+  `src/daemon/**`. Isolating port + home per worktree gives each its own daemon from its
+  own source. This lives only in the dev shim; the product CLI/daemon defaults are
+  unchanged, so DESIGN.md's one-daemon model still holds for installed otacon. `restart`
+  exists because the same-`VERSION` handshake can't auto-restart after a daemon-source
+  edit, and the raw `curl … :4747` it replaces would hit the wrong daemon in a worktree.
+- **Revisit when:** Worktree port collisions actually bite (the cksum range is 1000
+  wide), or the CLI grows a real `restart` subcommand the shim's intercept would shadow.
+
 ## Multiple waiters: FIFO, one event each
 
 - **Decision:** Concurrent `wait` calls on one session queue up; each delivered event
@@ -1129,3 +1150,72 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   prebuilt `dist/` via `files`, so neither the committed `dist/` nor `prepare` is
   needed for that path; the committed `dist/` is a `zero/prototype`-only convenience
   for installing an unpublished branch.
+
+## Option grill cards accept a free-form custom answer ("Other" parity)
+
+- **Decision:** `POST /answers` accepts a non-empty trimmed `text` with neither
+  `choice` nor `choices` on an option question (single AND multi) as a complete
+  answer; the chip path (one `choice`, or 1+ `choices` under `--multi`, optionally
+  with `text` as a note) is unchanged. The UI mirrors this: a single-select card's
+  "+ add a note" box doubles as the custom-answer field with a "send custom" button,
+  and a multi-select's send arms on non-empty text even with no chip picked.
+- **Why:** Native AskUserQuestion always offers an escape-hatch "Other"; otacon's
+  chips did not, so a user who disagreed with every offered option had no way to say
+  so without the agent re-asking — the exact friction that surfaced live while
+  grilling this very feature. Relaxing validation to text-only closes the gap with
+  one rule and no schema change (`GrillAnswer.text` already existed). The guard
+  against garbage is narrow — `text.trim() !== ""` — and the choice/choices branches
+  stay byte-for-byte, so the instant single-tap answer the user called "nice" is
+  untouched.
+- **Revisit when:** Custom answers need their own provenance in the transcript
+  (today they are indistinguishable from a note that rode a chip), or a question
+  type wants to forbid free-form override (none does yet).
+
+## Batch ask mints N ordinary cards — no grouping, no new transcript field
+
+- **Decision:** `otacon ask --batch <file|->` (and `POST /ask {questions:[…]}`)
+  posts several **independent** questions in one call. The daemon validates every
+  member, then mints all ids in one counter bump and one transcript write — a
+  malformed member fails the whole batch (no partial queue). The minted entries are
+  *ordinary* `TranscriptEntry` cards: no batch id, no group field, no new SSE frame
+  type. They render and answer exactly like standalone questions, and `wait` stays
+  one-answer-at-a-time (the agent loops it to drain the batch). A `wait --all` that
+  blocks until a whole batch is answered is deferred — the per-answer loop suffices.
+- **Why:** Asking one round-trip at a time is slow when several questions are truly
+  independent. Batching is purely an *ask-time* convenience: dependency-first
+  grilling is unchanged (only siblings whose answers don't shape each other batch),
+  and the user-facing flow — instant single-tap, settle-in-place — is the one the
+  user already called "nice", so it must not change. Minting ordinary cards keeps
+  the entire UI, transcript, citation, and approve surface untouched; the only new
+  surface is the ask route's body and the CLI flag. Atomic mint mirrors the comment
+  batch (`POST /comments`): validate the whole set, then one counter write, so a
+  rejected batch burns neither ids nor disk.
+- **Revisit when:** A batch needs to render as a visually grouped set (a header /
+  group submit), or `wait --all` proves necessary because draining a large batch
+  one answer at a time grates in practice.
+
+## Card system is hairline telemetry, not rounded-rect + fat left-border
+
+- **Decision:** The repeated house card pattern — rounded rectangle, 3–4px painted
+  accent left-border, soft drop-shadow — is replaced system-wide with flat panels
+  split by thin rules. Containers drop `border-radius` (to 0); the accent becomes a
+  small mark (a mono `▍` tag in the meta row, or a 2px accent rule along the top
+  edge), never a side blade; in-flow cards (index rows, grill card, revision banner,
+  threads, phases, dossier containers) drop their shadow; floating overlays
+  (composer, section menu, approve/bottom sheets, drawer) keep a shadow to lift off
+  the page. The index becomes a top-ruled telemetry list. The codec identity
+  (masthead, mono type, scanlines, per-session hue) and all controls (chips with the
+  `★rec` star + on/off states, buttons, inputs, pills, every ≥44px hit target) are
+  unchanged — only container chrome moves.
+- **Why:** The rounded-card + fat-left-border + shadow pattern reads as generic
+  "AI-slop" dashboard, not the Metal-Gear codec instrument otacon is identity-wise.
+  Hairline telemetry executes the *same* codec aesthetic sharply: denser, flatter,
+  reads like a real readout. Keeping the accent as a thin mark (rather than removing
+  it) preserves per-session identity and the "agent is transmitting" signal on the
+  grill card and banner. Controls are deliberately exempt — they are touch targets a
+  thumb hits while walking (§8, §10), so their shape and feedback must not change;
+  the refresh is purely the panels *around* them. Floating surfaces keep shadows
+  because depth-from-the-page is functional there, not decoration.
+- **Revisit when:** The accent mark's final form is judged on a live screen and a
+  different indicator (dot vs tag vs underline) wins, or a surface needs more than a
+  hairline to separate from dense neighbors.
