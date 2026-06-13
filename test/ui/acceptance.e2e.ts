@@ -67,7 +67,7 @@ test("UI acceptance: the whole §6 loop renders and round-trips in the browser",
   await page.goto("/");
   const card = page.locator(".card", { hasText: session.title });
   await expect(card).toBeVisible();
-  await expect(card.locator(".chip")).toHaveText("agent drafting");
+  await expect(card.locator(".chip")).toHaveText("agent working");
 
   // ── 2. Grill: an `otacon ask` card is answerable; it wakes a parked wait ──
   await page.goto(`/s/${session.id}`);

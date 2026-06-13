@@ -251,6 +251,7 @@ the model is suspended — no inference, no token spend.
 | `otacon wait [--timeout 540] [--session <id>]`                              | Long-poll this session's queue; print next event as JSON                      |
 | `otacon ask --question "…" [--options "A\|B\|C"] [--recommend A] [--multi]` | Post agent question card to UI (or a batch of independent questions via `--batch <file\|->`); answer arrives via `wait` |
 | `otacon answer <question-id> (--body "…" \| --file f.md)`                   | Answer a user question; no revision                                           |
+| `otacon progress "<note>" [--session <id>]`                                 | Append a narration note to the live activity feed (UI-only; non-blocking, never parks, never an event) |
 | `otacon status [--all]`                                                     | Session state + undelivered event count (crash/resume entry point)            |
 | `otacon open [--session <id>]`                                              | Print the review URL — the index URL when no session resolves; never launches a browser |
 | `otacon clean [--all]`                                                      | Archive ended sessions' working state to `.otacon/archive/` and prune the registry (§12) |
@@ -319,6 +320,13 @@ POST /api/sessions/:id/ask                  agent grill question (otacon ask):
                                             persisted in the transcript, no
                                             agent event queued
 GET  /api/sessions/:id/transcript           the grill transcript (asked + answered)
+POST /api/sessions/:id/progress             agent narration (otacon progress):
+                                            {note} → 200 {ok, session, note}; the
+                                            note is trimmed to a configured max,
+                                            appended to the capped activity feed,
+                                            and pushed as an `activity` SSE frame
+                                            (+ a `session` frame for the chip). No
+                                            agent event is queued — UI-only telemetry
 POST /api/sessions/:id/answers              user's answer to an agent question:
                                             {question, choice|choices, text?} —
                                             validated against the question's options
@@ -368,19 +376,21 @@ line numbers are 1-based within the unit.
 `/api` errors are machine-readable JSON — `{"error":{"code":…,"message":…}}` — except
 a failed submit, which returns 422 carrying the linter's `errors`/`warnings` arrays.
 Every state-mutating session verb (submit, comments, questions and their answers,
-ask, answers, approve) refuses an approved session with 409 `E_SESSION_OVER` — the
+ask, answers, progress, approve) refuses an approved session with 409 `E_SESSION_OVER` — the
 status machine's terminal state is enforced on the daemon, not just by the CLI's
 session-resolution rules.
 `/` and `/s/:id` serve the SPA shell (static assets under `/assets/`); an unknown
 session id renders as a client-side not-found state. Each SSE stream opens with a
-`snapshot` frame (the per-session stream's snapshot carries the thread list and the
-grill transcript), then pushes `session` / `revision` / `queue` / `thread` / `grill`
-/ `removed` frames as state changes — a
+`snapshot` frame (the per-session stream's snapshot carries the thread list, the
+grill transcript, and the activity feed), then pushes `session` / `revision` /
+`queue` / `thread` / `grill` / `activity` / `removed` frames as state changes — a
 `revision` frame carries the revision number and its changelog; a `thread` frame is
 an upsert: a new comment/question thread, or an existing thread changing (a question
 gaining its answer, a comment gaining its resolution, an anchor re-anchoring or
 orphaning); a `grill` frame is the transcript's upsert: a question asked via
-`otacon ask`, or an entry gaining the user's answer; a `removed` frame is terminal —
+`otacon ask`, or an entry gaining the user's answer; an `activity` frame carries one
+new progress note appended to the per-session activity log (the draft chip rides the
+`session` frame's `latestActivity` instead); a `removed` frame is terminal —
 the session left the registry (`otacon clean`): the index and the session switcher
 drop it live, an open review screen flips to a quiet "session cleaned" state and
 closes its stream (a reconnect against the deregistered id could only 404), and the
@@ -392,7 +402,15 @@ Session payloads (snapshot, `session` frames, session detail) carry
 `lastReviewedRevision` alongside `revision`, and `openQuestions` — the count of
 transcript entries still awaiting the user's answer, from which the index's
 "questions pending" chip derives (§10); every transcript change (ask, answer)
-publishes a fresh `session` frame so that count is always live.
+publishes a fresh `session` frame so that count is always live. They also carry
+`latestActivity` (the newest progress note, driving the draft chip), plus the
+agent-presence pair `parked` (a live `otacon wait` long-poll exists) and
+`lastContactAt` (epoch-ms of the agent's last contact — any mutating verb or each
+`wait` park bumps it). Presence is in-memory and ephemeral: the daemon keeps no
+timer, the UI derives live/offline from `parked || recency`, and a daemon restart
+reads offline until the next contact (correct). A `wait` park publishes a `session`
+frame so the refreshed `lastContactAt` and `parked` reach the dot within one park
+slice.
 State-changing `/api` requests carrying
 a foreign `Origin` header are refused 403: the loopback bind alone does not stop a
 malicious webpage from firing `fetch()` at 127.0.0.1, and only browsers send `Origin`.
@@ -401,7 +419,10 @@ only after its response is fully written; a dropped connection requeues it.
 
 ### The full loop
 
-1. **Start.** Skill triggers; agent researches the codebase; `otacon start`.
+1. **Start (first).** Skill triggers; `otacon start` mints the session and prints the
+   review URL *before* research, so the user can watch from the first second. The
+   agent then researches the codebase, narrating at checkpoints with `otacon progress`
+   — each note feeds the live activity log and the draft chip (UI-only; never an event).
 2. **Grill** (§8). Agent walks the design tree via `otacon ask` + `wait`, one question
    at a time. Skipped with `--quick`.
 3. **Draft.** Agent writes `plan.md`, runs `otacon submit`; loops on lint errors until clean.
@@ -542,9 +563,18 @@ telemetry list rather than a stack of boxes.
 
 ### Index (the phone bookmark)
 
-Card per session: title, repo + branch, status chip (`agent drafting` /
-`awaiting your review` / `agent revising` / `questions pending` / `approved`),
-unread-change badge, last activity, accent color. Tap → review screen.
+Card per session: title, repo + branch, status chip, agent-presence dot,
+unread-change badge, last activity, accent color. Tap → review screen. The status
+chip is `awaiting your review` / `agent revising` / `questions pending` /
+`approved`, plus an **activity-driven draft chip**: while a session is in `draft`
+(it sits there through research + drafting, before revision 1 exists) the chip
+shows the latest `otacon progress` note (truncated), falling back to `agent
+working` until the agent narrates — so the chip never claims "drafting" while the
+agent is still reading. The **agent-presence dot** (live/offline) sits beside the
+chip — a subtle "is the agent still on the line?" mark, distinct from the
+browser↔daemon link dot (labelled `agent` vs `link`); the status chip stays the
+primary "your turn" signal. The dot is live while the agent is parked in
+`otacon wait` or its last contact is recent, and is hidden on approved sessions.
 
 ### Review screen — desktop (Google-Docs margin model)
 
@@ -597,6 +627,11 @@ unread-change badge, last activity, accent color. Tap → review screen.
 - Collapsed Details show size badges ("▸ 34 lines · 1 diagram · 2 code blocks") —
   skipping is a conscious choice. L6 warnings render here.
 - Collapsible "Interview" panel: grill transcript; decisions deep-link into it.
+- Collapsible "Activity" log: the agent's `otacon progress` narration as an
+  append-only feed (newest first), so work is visible during research + drafting.
+  Compact and collapsed on the review screen; the pre-plan placeholder ("no
+  revision yet") leads with it open, since before a plan exists it is the main
+  thing to watch. The header also carries the agent-presence dot.
 - Keyboard: `j/k` jump changed sections, `c` comment, `q` ask. **No shortcut for
   Approve, on purpose.** Approve warns on unresolved threads.
 
@@ -654,7 +689,7 @@ Operational requirement: the Mac stays awake while a plan is in review
 
 | Location                                 | Contents                                                                                                       | Git                                        |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `<repo>/.otacon/`                        | Working state under `<id>/`: `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), threads (`threads.json`: comment + question threads with answers, resolutions, and anchor states inline), the grill transcript (`transcript.json`), queues | **gitignored**                             |
+| `<repo>/.otacon/`                        | Working state under `<id>/`: `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), threads (`threads.json`: comment + question threads with answers, resolutions, and anchor states inline), the grill transcript (`transcript.json`), the capped live-activity feed (`activity.json`: the newest ~N `otacon progress` notes), queues | **gitignored**                             |
 | `<repo>/docs/plans/YYYY-MM-DD-<slug>.md` | Final approved plan (`status: approved` frontmatter + grill transcript)                                        | **committed** (by the agent, post-approve) |
 | `~/.otacon/registry.json`                | Session registry: ID → repo, branch, title, status                                                             | n/a (global)                               |
 
@@ -729,6 +764,9 @@ Session status machine: `draft → in_review ⇄ revising → approved`.
 ## 15. Open items
 
 - Budget numbers (L2/L6) and fence-per-section caps are config; expect a week of tuning.
+- Activity feed cap and the note max-length are config (`activity.cap`,
+  `activity.noteMaxChars`); the agent live/offline threshold is a UI constant that
+  must exceed `wait`'s 240s park slice — all first-week tuning guesses.
 - Lint L4 heuristics will grow from observed smuggle vectors.
 - Wrapper text tuning from observed agent behavior (the protocol card is one shared
   text written by `otacon install`; see §16).
@@ -766,6 +804,15 @@ first change (unparseable settings are refused, never clobbered). `otacond` is n
 installed or started by hand — any `otacon` command auto-spawns it if it isn't
 running, and the CLI restarts a stale daemon on version mismatch (version handshake
 on every call).
+
+**Single source for the protocol card.** The card text is built once, parametrized
+only by command prefix (`protocolCard(cmd)` in `src/cli/install/assets.ts`): the
+installed wrappers use `otacon`, while this repo's own committed dogfood wrapper
+(`.claude/skills/otacon/SKILL.md`) uses the run-from-source `./bin/otacon` prefix and
+prepends a repo preamble. The dogfood file is **generated** from `dogfoodSkillMd()`,
+not hand-edited, and a test (`assets.test.ts`) asserts the committed file equals that
+output — so a protocol change can never silently drift between what `otacon install`
+writes elsewhere and what this repo runs.
 
 ### Per-repo setup
 

@@ -44,6 +44,39 @@ export interface SessionSummary extends RegistrySession {
    * never from a stored status.
    */
   openQuestions: number;
+  /**
+   * The newest progress note (DESIGN.md §6 `otacon progress`); absent until the
+   * agent narrates. The `draft` chip reads it (latest note, falling back to
+   * "agent working"); the full feed lives on the per-session activity stream.
+   */
+  latestActivity?: ActivityNote;
+  /**
+   * Epoch-ms of the agent's last contact this daemon lifetime (any mutating CLI
+   * call or `wait` park) — ephemeral, in-memory only; absent until first
+   * contact (a fresh daemon shows offline until the agent calls again, which is
+   * correct). The UI derives live/offline from its recency, so the daemon needs
+   * no timer.
+   */
+  lastContactAt?: number;
+  /** True while the agent is parked in `otacon wait` (a live long-poll connection). */
+  parked: boolean;
+}
+
+/**
+ * One entry in a session's append-only activity feed (DESIGN.md §6) — a
+ * timestamped progress note the agent emits with `otacon progress`. `text` is
+ * length-capped server-side so a long note never bloats payloads or fails.
+ */
+export interface ActivityNote {
+  /** ISO timestamp the daemon stamped on receipt. */
+  at: string;
+  text: string;
+}
+
+/** .otacon/<id>/activity.json — the capped, newest-last progress feed (DESIGN.md §12). */
+export interface ActivityFile {
+  version: 1;
+  notes: ActivityNote[];
 }
 
 /** W3C-annotation-style anchor; null anchor on an event item = whole-plan. */

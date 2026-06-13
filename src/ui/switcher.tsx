@@ -9,9 +9,10 @@ import type { MouseEvent } from "react";
 import { accentStyle } from "./accent";
 import type { LiveSession, SessionStatus } from "./api";
 import { useSessions } from "./api";
-import { questionsPending } from "./chip";
+import { AgentDot, questionsPending } from "./chip";
 import { navigate } from "./router";
 import { unreadCount } from "./seen";
+import { useNow } from "./tick";
 
 const GLYPHS: Record<SessionStatus, { glyph: string; word: string }> = {
   draft: { glyph: "✎", word: "drafting" },
@@ -31,6 +32,7 @@ function stateOf(session: LiveSession): { glyph: string; word: string } {
 
 export function SessionSwitcher({ current }: { current: string }) {
   const { sessions: byActivity } = useSessions();
+  const now = useNow(30_000);
   if (byActivity.length === 0) return null;
   // The chip you are on leads the strip (§7's sketch): the "you are here"
   // anchor never scrolls out of reach; the rest keep their activity order.
@@ -85,6 +87,7 @@ export function SessionSwitcher({ current }: { current: string }) {
             session={session}
             unread={unread}
             current={session.id === current}
+            now={now}
           />
         ))}
       </div>
@@ -96,11 +99,13 @@ function SwitchChip({
   session,
   unread,
   current,
+  now,
 }: {
   session: LiveSession;
   /** Pre-derived by the switcher (zero for the current chip). */
   unread: number;
   current: boolean;
+  now: number;
 }) {
   const { glyph, word } = stateOf(session);
   const href = `/s/${session.id}`;
@@ -119,6 +124,14 @@ function SwitchChip({
       onClick={onClick}
     >
       <span className="switch-name">{session.title}</span>
+      {/* Compact presence dot (no label — the chip is tight); approved hides it. */}
+      <AgentDot
+        status={session.status}
+        parked={session.parked}
+        lastContactAt={session.lastContactAt}
+        now={now}
+        label={false}
+      />
       <span className="switch-state" aria-label={word}>
         {glyph}
       </span>

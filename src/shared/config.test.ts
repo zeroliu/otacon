@@ -89,6 +89,19 @@ describe("loadConfig", () => {
     writeGlobal({ somethingElse: true });
     expect(loadConfig(repo)).toEqual(DEFAULT_CONFIG);
   });
+
+  test("activity tuning overrides the same way budgets do", () => {
+    writeGlobal({ activity: { cap: 50 } });
+    writeRepo({ activity: { noteMaxChars: 120 } });
+    const config = loadConfig(repo);
+    expect(config.activity.cap).toBe(50); // from global
+    expect(config.activity.noteMaxChars).toBe(120); // repo overrides
+  });
+
+  test("invalid activity values are ignored, keeping defaults", () => {
+    writeGlobal({ activity: { cap: 0, noteMaxChars: -5, unknownKey: 3 } });
+    expect(loadConfig(repo).activity).toEqual(DEFAULT_CONFIG.activity);
+  });
 });
 
 describe("paths env overrides", () => {

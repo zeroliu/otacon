@@ -40,7 +40,7 @@ test("index renders session cards with the correct status chips", async ({ page,
   await postComment(request, revising.id);
 
   await page.goto("/");
-  await expect(cardFor(page, drafting).locator(".chip")).toHaveText("agent drafting");
+  await expect(cardFor(page, drafting).locator(".chip")).toHaveText("agent working");
   await expect(cardFor(page, awaiting).locator(".chip")).toHaveText("awaiting your review");
   await expect(cardFor(page, revising).locator(".chip")).toHaveText("agent revising");
   // repo + branch metadata renders on the card
@@ -67,7 +67,7 @@ test("a status change flips the chip live and raises the unread badge", async ({
   const session = await createSession(request, uniqueTitle("flip"));
   await page.goto("/");
   const card = cardFor(page, session);
-  await expect(card.locator(".chip")).toHaveText("agent drafting");
+  await expect(card.locator(".chip")).toHaveText("agent working");
   await plantMarker(page);
 
   await submitPlan(request, session.id);
@@ -84,7 +84,7 @@ test("the /s/:id shell renders the session header in its accent color", async ({
   await page.goto(`/s/${session.id}`);
 
   await expect(page.locator(".session-title")).toHaveText(session.title);
-  await expect(page.locator(".chip")).toHaveText("agent drafting");
+  await expect(page.locator(".chip")).toHaveText("agent working");
   await expect(page.locator(".session-rev")).toHaveText("r0");
 
   const hue = await page

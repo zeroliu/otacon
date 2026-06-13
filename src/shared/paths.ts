@@ -60,6 +60,11 @@ export function transcriptPath(repoRoot: string, id: string): string {
   return join(sessionDir(repoRoot, id), "transcript.json");
 }
 
+/** The append-only live-activity feed (DESIGN.md §6, §12) — `otacon progress` notes. */
+export function activityPath(repoRoot: string, id: string): string {
+  return join(sessionDir(repoRoot, id), "activity.json");
+}
+
 /** Where approved plan artifacts land (DESIGN.md §12). */
 export function plansDir(repoRoot: string): string {
   return join(repoRoot, "docs", "plans");

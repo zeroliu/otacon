@@ -14,10 +14,11 @@
 import type { MouseEvent, ReactNode, RefObject } from "react";
 import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { accentStyle } from "./accent";
-import type { Anchor, CommentDraft, LiveSession, Thread, TranscriptEntry } from "./api";
+import type { ActivityNote, Anchor, CommentDraft, LiveSession, Thread, TranscriptEntry } from "./api";
 import { postComments, postQuestion, postReviewed, useDiff, useRevision, useSession } from "./api";
-import { LinkState, StatusChip } from "./chip";
+import { AgentDot, LinkState, StatusChip } from "./chip";
 import { relativeTime, repoName } from "./format";
+import { ActivityLog } from "./review/activity";
 import { captureSelection, flashAnchor, motionSafeScroll } from "./review/anchor";
 import type { CapturedSelection } from "./review/anchor";
 import { ApproveDialog, ApprovedNote } from "./review/approve";
@@ -37,6 +38,7 @@ import { SectionMenu } from "./review/section-menu";
 import { navigate } from "./router";
 import { markSeen } from "./seen";
 import { SessionSwitcher } from "./switcher";
+import { useNow } from "./tick";
 
 const PlanView = lazy(() => import("./plan/plan-view"));
 
@@ -80,7 +82,15 @@ class RendererBoundary extends Component<{ children: ReactNode }, { failed: bool
   }
 }
 
-function SessionHead({ session, connected }: { session: LiveSession; connected: boolean }) {
+function SessionHead({
+  session,
+  connected,
+  now,
+}: {
+  session: LiveSession;
+  connected: boolean;
+  now: number;
+}) {
   return (
     <header className="session-head">
       <div className="session-head-top">
@@ -92,8 +102,18 @@ function SessionHead({ session, connected }: { session: LiveSession; connected: 
         {session.branch !== "" && <span> · {session.branch}</span>}
       </p>
       <div className="session-meta">
-        <StatusChip status={session.status} openQuestions={session.openQuestions} />
-        <span className="card-time">{relativeTime(session.updatedAt)}</span>
+        <StatusChip
+          status={session.status}
+          openQuestions={session.openQuestions}
+          latestActivity={session.latestActivity}
+        />
+        <AgentDot
+          status={session.status}
+          parked={session.parked}
+          lastContactAt={session.lastContactAt}
+          now={now}
+        />
+        <span className="card-time">{relativeTime(session.updatedAt, now)}</span>
         <LinkState connected={connected} />
       </div>
     </header>
@@ -110,17 +130,22 @@ const COMPOSER_GUESS_HEIGHT = 240;
 // opened a desktop popover anchored off-thumb would otherwise sit at 560–639px.
 const SHEET_VIEWPORT = 640;
 
-/** The review loop: plan + rail + grill + interview + approve + composer + drawer. */
+/** The review loop: plan + rail + grill + interview + activity + approve + composer + drawer. */
 function ReviewLoop({
   session,
   threads,
   transcript,
+  activity,
   connected,
+  now,
 }: {
   session: LiveSession;
   threads: Thread[];
   transcript: TranscriptEntry[];
+  activity: ActivityNote[];
   connected: boolean;
+  /** A ticking clock for the presence dot + activity timestamps. */
+  now: number;
 }) {
   const planRef = useRef<HTMLElement | null>(null);
   const keyRef = useRef(0);
@@ -403,7 +428,7 @@ function ReviewLoop({
     <>
       <div className="review-layout">
         <div className="review-main">
-          <SessionHead session={session} connected={connected} />
+          <SessionHead session={session} connected={connected} now={now} />
           {over && <ApprovedNote path={approvedPath} />}
           {hasPlan && (
             <ReviewControls
@@ -451,6 +476,9 @@ function ReviewLoop({
             onToggle={toggleInterview}
             target={ivTarget}
           />
+          {/* The review screen keeps the feed as a compact collapsible panel;
+              the pre-plan placeholder leads with it open (below). */}
+          {hasPlan && <ActivityLog activity={activity} now={now} />}
           {hasPlan ? (
             <main
               className={over ? "review review-over" : "review"}
@@ -480,6 +508,9 @@ function ReviewLoop({
           ) : (
             <main className="review-wait">
               <p className="wait-line">// no revision yet</p>
+              {/* During research + drafting the activity log is the main thing
+                  to watch, so the placeholder leads with it open (DESIGN.md §10). */}
+              <ActivityLog activity={activity} now={now} defaultOpen />
               <p>
                 The agent interviews before it drafts — questions land above as cards, one at a
                 time. The plan renders here the moment revision 1 passes the linter; this screen
@@ -553,7 +584,10 @@ function ReviewLoop({
 }
 
 export function SessionScreen({ id }: { id: string }) {
-  const { session, threads, transcript, missing, cleaned, connected } = useSession(id);
+  const { session, threads, transcript, activity, missing, cleaned, connected } = useSession(id);
+  // One ticking clock for the presence dot + activity/relative timestamps, so
+  // they stay honest while the screen idles between SSE frames.
+  const now = useNow(30_000);
 
   const revision = session?.revision;
   useEffect(() => {
@@ -614,7 +648,9 @@ export function SessionScreen({ id }: { id: string }) {
         session={session}
         threads={threads}
         transcript={transcript}
+        activity={activity}
         connected={connected}
+        now={now}
       />
     </div>
   );

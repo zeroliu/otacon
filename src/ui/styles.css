@@ -183,6 +183,38 @@ body::before {
   }
 }
 
+/* Agent presence (DESIGN.md §10, D4): a small live/offline dot beside the
+ * status chips — the "is the agent on the line?" signal. Deliberately distinct
+ * from .link-state (the browser↔daemon link): a hollow ring that fills + pulses
+ * when live, vs the link dot's solid fill. Labelled "agent" vs "link". */
+.agent-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: 10px/1 var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.agent-dot-mark {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line-strong);
+  background: transparent;
+}
+
+.agent-dot.is-live {
+  color: color-mix(in srgb, var(--live) 78%, var(--ink-soft));
+}
+
+.agent-dot.is-live .agent-dot-mark {
+  border-color: var(--live);
+  background: var(--live);
+  animation: live-pulse 2.4s ease-out infinite;
+}
+
 .list-head {
   display: flex;
   justify-content: space-between;
@@ -370,6 +402,19 @@ body::before {
   50% {
     opacity: 0.35;
   }
+}
+
+/* The draft chip is activity-driven (D3): the latest progress note, truncated
+ * so a long note (already ≤cap server-side) can never stretch the card. Natural
+ * case + tighter tracking so free-text narration reads cleanly in the chip. */
+.chip-activity {
+  display: inline-block;
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: none;
+  letter-spacing: 0.02em;
 }
 
 /* ───────────────────────── empty / loading ───────────────────────── */
@@ -2492,6 +2537,118 @@ code {
   padding: 2px 15px 13px;
   border-top: 1px dashed var(--line-strong);
   animation: details-in 0.2s ease-out both;
+}
+
+/* ───────────────────────── the activity log ─────────────────────────
+ * The agent's `otacon progress` narration as live telemetry (DESIGN.md §6,
+ * §10): a compact collapsible panel on the review screen, led-with open on the
+ * pre-plan placeholder. Newest-on-top via column-reverse over a DOM that stays
+ * oldest→newest, so append-only keys never churn.
+ */
+
+.activity {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--ink) 2.5%, var(--surface));
+}
+
+.activity-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 44px;
+  padding: 12px 14px;
+  border: none;
+  background: none;
+  color: var(--ink-soft);
+  font: 600 11px/1 var(--mono);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  cursor: pointer;
+  text-align: left;
+}
+
+.activity-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.activity-toggle:hover {
+  color: var(--ink);
+}
+
+.activity-glyph {
+  flex: none;
+  color: var(--accent);
+}
+
+.activity-word {
+  flex: none;
+  color: var(--ink);
+}
+
+/* The latest note shown inline while collapsed: natural case, truncated, soft. */
+.activity-latest {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: none;
+  letter-spacing: 0.01em;
+  font-weight: 500;
+  color: var(--ink-soft);
+}
+
+.activity-caret {
+  margin-left: auto;
+  flex: none;
+  color: var(--accent);
+}
+
+.activity-body {
+  display: flex;
+  flex-direction: column-reverse;
+  margin: 0;
+  padding: 4px 15px 12px;
+  list-style: none;
+  border-top: 1px dashed var(--line-strong);
+  max-height: 260px;
+  overflow-y: auto;
+  animation: details-in 0.2s ease-out both;
+}
+
+.act-entry {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 5px 0;
+  border-bottom: 1px dashed var(--line);
+}
+
+/* In column-reverse the first DOM child sits at the bottom (oldest): drop its
+ * rule so the panel doesn't end on a dangling divider. */
+.act-entry:first-child {
+  border-bottom: none;
+}
+
+.act-when {
+  flex: none;
+  width: 5.5em;
+  font: 10.5px/1.4 var(--mono);
+  letter-spacing: 0.02em;
+  color: var(--ink-soft);
+  text-align: right;
+}
+
+.act-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--ink);
+  overflow-wrap: anywhere;
 }
 
 .iv-entry {

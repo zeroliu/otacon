@@ -242,6 +242,7 @@ describe("L2 budgets", () => {
     const summary = `## Summary\n\n${"line\n".repeat(6)}`;
     const config: OtaconConfig = {
       budgets: { ...DEFAULT_CONFIG.budgets, summaryLines: 10 },
+      activity: { ...DEFAULT_CONFIG.activity },
     };
     expect(run(doc({ summary }), { session: SESSION }, config).ok).toBeTrue();
   });

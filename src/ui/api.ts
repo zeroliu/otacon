@@ -5,6 +5,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type {
+  ActivityNote,
   Anchor,
   DiffHunk,
   DiffPayload,
@@ -19,6 +20,7 @@ import type {
 } from "../shared/types";
 
 export type {
+  ActivityNote,
   Anchor,
   DiffHunk,
   DiffPayload,
@@ -31,6 +33,13 @@ export type {
   Thread,
   TranscriptEntry,
 };
+
+/**
+ * Newest progress notes the client keeps live (DESIGN.md §6). The daemon caps
+ * the feed (config; default 20) and the snapshot reflects that — this is a
+ * generous client safety bound so a tuned-up server cap still renders in full.
+ */
+const ACTIVITY_VIEW_CAP = 60;
 
 /** A summary plus the client-side "this card just changed" timestamp. */
 export interface LiveSession extends SessionSummary {
@@ -98,6 +107,8 @@ export interface SessionDetail {
   threads: Thread[];
   /** The grill transcript, oldest first; live over `grill` frames (DESIGN.md §8). */
   transcript: TranscriptEntry[];
+  /** The live-activity feed, oldest first; live over `activity` frames (DESIGN.md §6). */
+  activity: ActivityNote[];
   missing: boolean;
   /** True once a `removed` frame lands: otacon clean archived this session. */
   cleaned: boolean;
@@ -117,6 +128,7 @@ export function useSession(id: string): SessionDetail {
   const [session, setSession] = useState<LiveSession>();
   const [threads, setThreads] = useState<Thread[]>([]);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
+  const [activity, setActivity] = useState<ActivityNote[]>([]);
   const [missing, setMissing] = useState(false);
   const [cleaned, setCleaned] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -125,6 +137,7 @@ export function useSession(id: string): SessionDetail {
     setSession(undefined);
     setThreads([]);
     setTranscript([]);
+    setActivity([]);
     setMissing(false);
     setCleaned(false);
     setConnected(false);
@@ -153,15 +166,17 @@ export function useSession(id: string): SessionDetail {
           // Threads and the transcript ride the snapshot (no separate fetch to
           // race) and arrive as upserts after that: an existing id is the
           // agent's answer (thread) or the user's answer (grill) landing.
-          on<{ session: SessionSummary; threads?: Thread[]; transcript?: TranscriptEntry[] }>(
-            source,
-            "snapshot",
-            (data) => {
-              setSession(data.session);
-              setThreads(data.threads ?? []);
-              setTranscript(data.transcript ?? []);
-            },
-          );
+          on<{
+            session: SessionSummary;
+            threads?: Thread[];
+            transcript?: TranscriptEntry[];
+            activity?: ActivityNote[];
+          }>(source, "snapshot", (data) => {
+            setSession(data.session);
+            setThreads(data.threads ?? []);
+            setTranscript(data.transcript ?? []);
+            setActivity(data.activity ?? []);
+          });
           on<{ session: SessionSummary }>(source, "session", (data) =>
             setSession({ ...data.session, changedAt: Date.now() }),
           );
@@ -176,6 +191,11 @@ export function useSession(id: string): SessionDetail {
           );
           on<{ session: string; entry: TranscriptEntry }>(source, "grill", ({ entry }) =>
             setTranscript((prev) => upsertById(prev, entry)),
+          );
+          // Append-only feed: trim to the client view cap so a long session
+          // can't grow it without bound (DESIGN.md §6).
+          on<{ session: string; note: ActivityNote }>(source, "activity", ({ note }) =>
+            setActivity((prev) => [...prev, note].slice(-ACTIVITY_VIEW_CAP)),
           );
           // Terminal: otacon clean archived this session. Close the stream —
           // a reconnect would 404-loop against the deregistered id — and let
@@ -199,7 +219,7 @@ export function useSession(id: string): SessionDetail {
     };
   }, [id]);
 
-  return { session, threads, transcript, missing, cleaned, connected };
+  return { session, threads, transcript, activity, missing, cleaned, connected };
 }
 
 /** A drawer item not yet flushed to the daemon (DESIGN.md §9 batching). */
