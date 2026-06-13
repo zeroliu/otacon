@@ -1101,30 +1101,31 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Sessions gain other terminal removals (abandon/expire), which
   should reuse this frame rather than mint new ones.
 
-## Git installs build `dist/` via a guarded `prepare` script
+## `zero/prototype` ships a committed `dist/` so `npm i -g github:…#zero/prototype` works
 
-- **Decision:** `package.json` carries `"prepare": "test -f dist/cli/main.js ||
-  (node ./node_modules/typescript/bin/tsc -p tsconfig.build.json && node
-  ./node_modules/vite/bin/vite.js build ui)"` — the build tools invoked through
-  `node` by explicit path, NOT via `npm run build` or bare `tsc`/`vite`. `dist/`
-  stays gitignored. The `bin` entries still point at `dist/cli/main.js` /
-  `dist/daemon/main.js`.
-- **Why:** `npm install -g github:zeroliu/otacon` clones source, not the built
-  artifact (`dist/` is gitignored and `files: ["dist"]` only governs npm-registry
-  tarballs). With no build step the bin targets are absent, so the global `otacon`
-  symlink dangles — "unknown path." `prepare` runs after a git install (npm
-  installs devDeps, runs it, then prunes them), so `dist/` is built on the user's
-  machine. The `test -f … ||` guard makes it a no-op for local `bun install` when a
-  build already exists, so day-to-day dev installs don't trigger a full UI rebuild.
-- **Why `node ./node_modules/...`, not a bare command:** during a `-g` git install
-  the dep is prepared in a cache temp dir. npm's git-prep installs devDeps
-  (typescript/vite land in `node_modules/.bin`) but runs `prepare` **without
-  `node_modules/.bin` on PATH** — so both bare `tsc` and a nested `npm run build`
-  fail with "tsc: command not found", and the whole install aborts. Invoking the
-  tools through `node` by explicit module path sidesteps PATH and the `.bin`
-  shim/`.cmd` layer entirely, so it resolves wherever `prepare` runs. (A plain
-  local `npm install` worked with any form — only the `-g` git-prep path was
-  brittle; verified by reproducing npm's exact prep flags.)
+- **Decision:** The `zero/prototype` branch tracks a prebuilt `dist/` (force-added
+  past the `dist/` gitignore entry). `npm run pack:dist` rebuilds and re-stages it
+  (`rm -rf dist && npm run build && git add -f -A dist`); refresh it (commit +
+  push) whenever the global install should pick up new source. `package.json` also
+  keeps a guarded `"prepare": "test -f dist/cli/main.js || (node
+  ./node_modules/typescript/bin/tsc … && node ./node_modules/vite/bin/vite.js build
+  ui)"` as a fallback for **non-global** installs.
+- **Why committed, not built-on-install:** `npm install -g github:…` clones source
+  (not the npm-registry tarball that `files: ["dist"]` governs), and a **global**
+  install implies `omit=dev`. npm's git-prep honors that omit even against the
+  `--include=dev` it spawns — verified from its debug log: only the production deps
+  (`hono`, `@hono/node-server`) are placed; `typescript`/`vite` never install, so
+  no `prepare` build can ever find them ("Cannot find module …/typescript/bin/tsc").
+  A global git install therefore **cannot** build from source. Shipping a built
+  `dist/` on the branch sidesteps the build entirely: the `prepare` guard sees
+  `dist/cli/main.js` and no-ops, and the `bin` targets exist straight from the
+  clone. (Live dogfooding doesn't use this — `./bin/otacon` runs from `src/`.)
+- **Why the `prepare` fallback still uses `node ./node_modules/...`:** for the
+  paths where a build *does* run (a local `npm install`/`bun install` in a clone
+  with no committed `dist/`), invoking the tools through `node` by explicit module
+  path avoids npm's git-prep PATH quirk (it runs `prepare` without
+  `node_modules/.bin` on PATH, so bare `tsc` / nested `npm run build` fail).
 - **Revisit when:** Publishing to the npm registry — a registry tarball ships
-  prebuilt `dist/` via `files`, so `prepare` becomes redundant for that path (it
-  stays correct and harmless; only git installs still need it).
+  prebuilt `dist/` via `files`, so neither the committed `dist/` nor `prepare` is
+  needed for that path; the committed `dist/` is a `zero/prototype`-only convenience
+  for installing an unpublished branch.
