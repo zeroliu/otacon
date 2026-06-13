@@ -5,7 +5,7 @@
 // input. Runs under the root tsconfig/bun (no DOM needed).
 
 import { describe, expect, test } from "bun:test";
-import { parsePlan as linterParse } from "../../../src/daemon/linter/parse.js";
+import { parsePlan as linterParse } from "../../daemon/linter/parse.js";
 import { parsePlan, slugify } from "./parse.js";
 
 const plan = (phasesBody: string, preamble = "# t\n"): string => `---

@@ -7,8 +7,8 @@
 
 import type { CSSProperties } from "react";
 import { memo, useMemo } from "react";
-import type { LintIssue } from "../../../src/shared/types";
-import { CITATION_RE } from "../../../src/shared/types";
+import type { LintIssue } from "../../shared/types";
+import { CITATION_RE } from "../../shared/types";
 import { CodeFence, MermaidFigure, PairFences } from "./code";
 import { Markdown } from "./markdown";
 import type { Block, PlanDetails, PlanPhase, PlanSection } from "./parse";

@@ -12,7 +12,7 @@ marked.use({ gfm: true });
 // The {__html} wrapper identity is what matters here: react-dom re-assigns
 // innerHTML whenever the wrapper object is new, which rebuilds the text nodes
 // and collapses any user selection inside them — the review loop anchors
-// selections to exactly these nodes (ui/src/review/anchor.ts). The useMemo
+// selections to exactly these nodes (src/ui/review/anchor.ts). The useMemo
 // keeps the wrapper stable across re-renders at the mechanism level; memo on
 // top skips the re-render entirely.
 export const Markdown = memo(function Markdown({ source }: { source: string }) {

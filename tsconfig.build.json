@@ -7,6 +7,6 @@
     "sourceMap": true,
     "types": ["node"]
   },
-  "include": ["src"],
+  "include": ["src/cli", "src/daemon", "src/shared"],
   "exclude": ["**/*.test.ts"]
 }

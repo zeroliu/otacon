@@ -15,11 +15,11 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && vite build ui && chmod +x dist/cli/main.js dist/daemon/main.js",
-    "typecheck": "tsc --noEmit && tsc -p ui",
+    "build": "tsc -p tsconfig.build.json && vite build src/ui && chmod +x dist/cli/main.js dist/daemon/main.js",
+    "typecheck": "tsc --noEmit && tsc -p src/ui",
     "test": "bun test",
     "dev:daemon": "bun run src/daemon/main.ts",
-    "dev:ui": "vite ui",
+    "dev:ui": "vite src/ui",
     "e2e": "bash test/e2e-daemon.sh",
     "e2e:cli": "bash test/e2e-cli.sh",
     "e2e:revise": "bash test/e2e-revise.sh",

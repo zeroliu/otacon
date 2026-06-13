@@ -32,7 +32,7 @@ or as a note on a chosen chip — closing the chip-less-feedback gap. The instan
 chip-tap answer is untouched.
 Files:
 
-- ui/src/review/grill.tsx — QuestionCard: custom-answer textarea + "send custom" on single-select; allow text-only submit on multi; note still rides a chip tap
+- src/ui/review/grill.tsx — QuestionCard: custom-answer textarea + "send custom" on single-select; allow text-only submit on multi; note still rides a chip tap
 - src/daemon/app.ts — /answers route: accept non-empty `text` with no choice/choices on option questions
 - src/daemon/app.test.ts — custom-answer cases (single, multi, empty-text rejection)
 - DESIGN.md §8, DECISIONS.md — the relaxed answer model
@@ -87,8 +87,8 @@ flat panels split by hairline rules and accent-as-mono-tag/dot/underline. Pure
 visual + small markup; no behavior change.
 Files:
 
-- ui/src/styles.css — card, grill-card, threads, banner, composer, approve, section-menu, drawer treatments
-- ui/src/index-screen.tsx, ui/src/review/{grill,rail,banner}.tsx — small markup for the accent tag/dot where a fat left-border carried it
+- src/ui/styles.css — card, grill-card, threads, banner, composer, approve, section-menu, drawer treatments
+- src/ui/index-screen.tsx, src/ui/review/{grill,rail,banner}.tsx — small markup for the accent tag/dot where a fat left-border carried it
 - DESIGN.md §10, DECISIONS.md — the visual-language decision (codec identity kept, card treatment replaced)
 
 Verification: `bunx playwright test` UI spec (behavior unchanged) + `bun run

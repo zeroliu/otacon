@@ -404,9 +404,9 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 ## UI toolchain: Vite builds into dist/, React stays a devDependency
 
-- **Decision:** `ui/` is a Vite root built by `vite build ui` into `dist/ui`;
+- **Decision:** `src/ui/` is a Vite root built by `vite build src/ui` into `dist/ui`;
   react/react-dom/vite/@vitejs/plugin-react are devDependencies; runtime deps stay
-  hono + @hono/node-server. `ui/` has its own tsconfig (DOM libs, JSX, bundler
+  hono + @hono/node-server. `src/ui/` has its own tsconfig (DOM libs, JSX, bundler
   resolution); `bun run typecheck` checks both projects. The SPA imports wire types
   type-only from `src/shared/types.ts`.
 - **Why:** The shipped artifact is static bytes under `dist/` — `files: ["dist"]`
@@ -451,7 +451,7 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 ## Review screen renders via a ported line grammar, not the linter parser
 
-- **Decision:** The UI has its own plan parser (`ui/src/plan/parse.ts`) implementing
+- **Decision:** The UI has its own plan parser (`src/ui/plan/parse.ts`) implementing
   the identical line grammar as the linter's (`src/daemon/linter/parse.ts` —
   headings, phase/field regexes, fences, the same slug and Details line-count
   algorithms) but building a render model that *keeps* content where the linter only

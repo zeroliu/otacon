@@ -18,7 +18,7 @@ async function postComment(request: APIRequestContext, id: string): Promise<void
   expect(res.status()).toBe(202);
 }
 
-/** Mirrors ui/src/accent.ts — the test locks the algorithm in place. */
+/** Mirrors src/ui/accent.ts — the test locks the algorithm in place. */
 function expectedHue(sessionId: string): number {
   let hash = 0x811c9dc5;
   for (let i = 0; i < sessionId.length; i++) {

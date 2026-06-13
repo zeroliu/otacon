@@ -46,6 +46,7 @@ script) — never `*.test.ts` files. Test files are excluded from the published 
 - `src/shared/` — types, path helpers, config (used by both daemon and CLI)
 - `src/daemon/` — otacond: HTTP server, session store, event queues, plan linter
 - `src/cli/` — otacon: thin client that coding agents drive via their Bash tool
+- `src/ui/` — the React + Vite SPA, built into `dist/ui` and served by the daemon
 - `test/` — cross-cutting assets: fixtures and the end-to-end smoke script
 
 Verification commands: `bun test` (unit), `bun run typecheck`, `bun run build` (output

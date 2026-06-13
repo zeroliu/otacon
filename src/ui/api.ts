@@ -16,7 +16,7 @@ import type {
   SessionSummary,
   Thread,
   TranscriptEntry,
-} from "../../src/shared/types";
+} from "../shared/types";
 
 export type {
   Anchor,
