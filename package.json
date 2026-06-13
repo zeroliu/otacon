@@ -28,7 +28,7 @@
     "e2e:ui": "bun run build && playwright test",
     "smoke": "bash test/smoke.sh",
     "accept": "bash test/acceptance.sh",
-    "verify:wt": "bash test/verify-worktree.sh"
+    "verify:branch": "bash test/verify-branch.sh"
   },
   "dependencies": {
     "@hono/node-server": "^1",

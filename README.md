@@ -52,23 +52,3 @@ devices, and the tailnet is the auth:
 
 If `tailscale serve` complains about certificates, enable MagicDNS + HTTPS for the
 tailnet in the Tailscale admin console — the one step otacon cannot do for you.
-
-## Roadmap
-
-**Status: v1-complete.** All five milestones are done; the full
-install-and-plan loop (DESIGN.md §16) is proven end to end against the built
-artifact by `bun run accept` (and `playwright test`'s UI acceptance spec).
-
-- **M1 — daemon + CLI core** (sessions, registry, submit + linter, wait/event queues,
-  status; testable via curl/CLI) — **done**
-- **M2 — web UI core** (index, plan rendering, SSE, desktop comment/question flow,
-  batch send) — **done**
-- **M3 — revisions** (diff vs last-reviewed, gutter markers, changelog, threads +
-  resolutions, orphan tray) — **done**
-- **M4 — grill + approve** (ask/answer cards, transcript panel, traceability lint,
-  approve flow + artifact write-out) — **done**
-- **M5 — install + phone polish** (install/doctor/expose/open/clean, Claude
-  Code/Codex/OpenCode wrappers + Stop hook, Tailscale docs; section-menu
-  anchoring, sticky bar, session switcher, live clean) — **done**
-
-All v1 milestones are complete.

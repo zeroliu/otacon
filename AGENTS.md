@@ -1,6 +1,8 @@
-# AGENTS.md — working conventions for agent sessions
+# AGENTS rules
 
-Otacon is a personal tool (owner: Zero). These conventions are mandatory for any agent
+Otacon is a tool to enrich the agent plan review, making plans easy to process with rich format in HTML and visualization, inline comments and asks, and review diffs. It's compatible with any coding agents and can be integrated as a skill.
+
+The following conventions are mandatory for any agent
 working in this repo.
 
 ## Documentation contract
@@ -13,15 +15,6 @@ working in this repo.
 - **DECISIONS.md records why.** Every tradeoff decision — anything a future reader
   could not reconstruct from the code alone — gets an entry there (**Decision / Why /
   Revisit when**) in the same commit that makes it.
-- **Implementation work is tracked in `.otacon/YYYY-MM-DD-<title>.md`** plan files
-  written in otacon's own plan schema (DESIGN.md §4), as if otacon were already built.
-  Exactly one plan file per milestone work stream; its sub-milestones are the plan's
-  phases. Create the next milestone's plan only when its work starts — never detail
-  future milestones upfront. As commits land, record progress in the active plan (a
-  `#### Details` note on the completed phase + a frontmatter `revision` bump).
-  `.otacon/` is gitignored by design — these are local working state.
-- **README.md's Roadmap section is the committed milestone overview** — one line per
-  milestone with status. Update it when a milestone starts or finishes.
 
 ## Change-size discipline
 
@@ -53,23 +46,9 @@ Verification commands: `bun test` (unit), `bun run typecheck`, `bun run build` (
 must stay Node-runnable: `node dist/cli/main.js`), `bun run smoke` (end-to-end, once it
 exists).
 
-## Worktrees
+## Manual E2E Tests
 
-Feature worktrees live OUTSIDE the repo at `~/worktrees/otacon/<name>` (branch
-`worktree-<name>`) — never under `.claude/`, so the location is agent-neutral (Claude,
-codex, …) and a second copy of the tree never pollutes the main checkout's tooling or
-`git status`. `bin/otacon` derives an isolated daemon port + home from each worktree's
-own path, so worktrees run side-by-side without colliding. Keep a worktree current with
-`main` (cut it from `main`, or rebase older ones onto it once) — a source-run daemon
-only serves the built UI with main's UI-serve fix present.
-
-Manually e2e a worktree from the main checkout with `bun run verify:wt <name> [flavor]`
-(`full`/`visuals`/`notify`/`activity`): it builds the worktree, restarts its daemon, and
-populates a realistic review session, then opens it. See `test/verify-worktree.sh` +
-`test/populate-session.sh`.
-
-## Hard invariant
-
-No process in this repo ever calls a model API (DESIGN.md §13). The daemon, CLI,
-linter, and UI are pure TypeScript; all intelligence runs in the user's interactive
-agent session.
+Manually e2e the current checkout with
+`bun run verify:branch [flavor]` (`full`/`visuals`/`notify`/`activity`): it builds this
+checkout, restarts its isolated daemon, and populates a realistic review session, then
+opens it. See `test/verify-branch.sh` + `test/populate-session.sh`.
