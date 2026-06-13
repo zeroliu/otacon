@@ -1,7 +1,9 @@
 import type { SessionStatus } from "./api";
 
-// DESIGN.md §10 status chips. "questions pending" is derived state that
-// arrives with the ask/answer flow (M4); until then chips map status 1:1.
+// DESIGN.md §10 status chips. "questions pending" is derived state, not a
+// stored status: it lights while unanswered agent grill questions exist
+// (summary.openQuestions > 0) on a live session — answering is the user's
+// move, so it outranks the agent-side statuses until the session is over.
 const CHIPS: Record<SessionStatus, { label: string; tone: string }> = {
   draft: { label: "agent drafting", tone: "draft" },
   in_review: { label: "awaiting your review", tone: "await" },
@@ -9,7 +11,22 @@ const CHIPS: Record<SessionStatus, { label: string; tone: string }> = {
   approved: { label: "approved", tone: "approved" },
 };
 
-export function StatusChip({ status }: { status: SessionStatus }) {
+export function StatusChip({
+  status,
+  openQuestions = 0,
+}: {
+  status: SessionStatus;
+  /** Unanswered agent questions (summary.openQuestions); flips the chip. */
+  openQuestions?: number;
+}) {
+  if (status !== "approved" && openQuestions > 0) {
+    return (
+      <span className="chip chip-questions" data-status="questions_pending">
+        <span className="chip-dot" aria-hidden="true" />
+        questions pending
+      </span>
+    );
+  }
   const chip = CHIPS[status];
   return (
     <span className={`chip chip-${chip.tone}`} data-status={status}>

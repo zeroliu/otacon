@@ -34,6 +34,12 @@ export interface SessionSummary extends RegistrySession {
   revision: number;
   lastReviewedRevision: number;
   pendingEvents: number;
+  /**
+   * Unanswered agent grill questions (transcript entries without an answer) —
+   * the index's "questions pending" chip derives from this (DESIGN.md §10),
+   * never from a stored status.
+   */
+  openQuestions: number;
 }
 
 /** W3C-annotation-style anchor; null anchor on an event item = whole-plan. */

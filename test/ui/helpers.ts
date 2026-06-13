@@ -15,6 +15,8 @@ const fixturesDir = join(dirname(fileURLToPath(import.meta.url)), "..", "fixture
 export interface Session {
   id: string;
   title: string;
+  /** The throwaway repo root — approve's docs/plans/ artifact lands here. */
+  repo: string;
 }
 
 export const uniqueTitle = (label: string) =>
@@ -29,7 +31,7 @@ export async function createSession(
     data: { title, repo, branch: "zero/prototype" },
   });
   expect(res.status()).toBe(201);
-  return (await res.json()) as Session;
+  return { ...((await res.json()) as { id: string; title: string }), repo };
 }
 
 /**

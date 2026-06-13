@@ -371,7 +371,10 @@ orphaning); a `grill` frame is the transcript's upsert: a question asked via
 `otacon ask`, or an entry gaining the user's answer — with a comment heartbeat to
 keep idle proxies from closing the stream.
 Session payloads (snapshot, `session` frames, session detail) carry
-`lastReviewedRevision` alongside `revision`.
+`lastReviewedRevision` alongside `revision`, and `openQuestions` — the count of
+transcript entries still awaiting the user's answer, from which the index's
+"questions pending" chip derives (§10); every transcript change (ask, answer)
+publishes a fresh `session` frame so that count is always live.
 State-changing `/api` requests carrying
 a foreign `Origin` header are refused 403: the loopback bind alone does not stop a
 malicious webpage from firing `fetch()` at 127.0.0.1, and only browsers send `Origin`.

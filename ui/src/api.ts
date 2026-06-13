@@ -8,24 +8,28 @@ import type {
   Anchor,
   DiffHunk,
   DiffPayload,
+  GrillAnswer,
   LintIssue,
   RevisionPayload,
   SectionDiff,
   SessionStatus,
   SessionSummary,
   Thread,
+  TranscriptEntry,
 } from "../../src/shared/types";
 
 export type {
   Anchor,
   DiffHunk,
   DiffPayload,
+  GrillAnswer,
   LintIssue,
   RevisionPayload,
   SectionDiff,
   SessionStatus,
   SessionSummary,
   Thread,
+  TranscriptEntry,
 };
 
 /** A summary plus the client-side "this card just changed" timestamp. */
@@ -83,6 +87,8 @@ export interface SessionDetail {
   session?: LiveSession;
   /** Review threads, oldest first; live over the stream's `thread` frames. */
   threads: Thread[];
+  /** The grill transcript, oldest first; live over `grill` frames (DESIGN.md §8). */
+  transcript: TranscriptEntry[];
   missing: boolean;
   connected: boolean;
 }
@@ -90,12 +96,14 @@ export interface SessionDetail {
 export function useSession(id: string): SessionDetail {
   const [session, setSession] = useState<LiveSession>();
   const [threads, setThreads] = useState<Thread[]>([]);
+  const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [missing, setMissing] = useState(false);
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
     setSession(undefined);
     setThreads([]);
+    setTranscript([]);
     setMissing(false);
     setConnected(false);
     let source: EventSource | undefined;
@@ -120,12 +128,18 @@ export function useSession(id: string): SessionDetail {
           source = new EventSource(`/api/sessions/${id}/stream`);
           source.onopen = () => setConnected(true);
           source.onerror = () => setConnected(false);
-          // Threads ride the snapshot (no separate fetch to race) and arrive
-          // as upserts after that: an existing id is the agent's answer landing.
-          on<{ session: SessionSummary; threads?: Thread[] }>(source, "snapshot", (data) => {
-            setSession(data.session);
-            setThreads(data.threads ?? []);
-          });
+          // Threads and the transcript ride the snapshot (no separate fetch to
+          // race) and arrive as upserts after that: an existing id is the
+          // agent's answer (thread) or the user's answer (grill) landing.
+          on<{ session: SessionSummary; threads?: Thread[]; transcript?: TranscriptEntry[] }>(
+            source,
+            "snapshot",
+            (data) => {
+              setSession(data.session);
+              setThreads(data.threads ?? []);
+              setTranscript(data.transcript ?? []);
+            },
+          );
           on<{ session: SessionSummary }>(source, "session", (data) =>
             setSession({ ...data.session, changedAt: Date.now() }),
           );
@@ -144,6 +158,15 @@ export function useSession(id: string): SessionDetail {
               return next;
             }),
           );
+          on<{ session: string; entry: TranscriptEntry }>(source, "grill", ({ entry }) =>
+            setTranscript((prev) => {
+              const at = prev.findIndex((e) => e.id === entry.id);
+              if (at === -1) return [...prev, entry];
+              const next = [...prev];
+              next[at] = entry;
+              return next;
+            }),
+          );
         })
         .catch(() => {
           // daemon unreachable: keep probing so recovery is automatic
@@ -158,7 +181,7 @@ export function useSession(id: string): SessionDetail {
     };
   }, [id]);
 
-  return { session, threads, missing, connected };
+  return { session, threads, transcript, missing, connected };
 }
 
 /** A drawer item not yet flushed to the daemon (DESIGN.md §9 batching). */
@@ -189,6 +212,55 @@ export function postComments(id: string, items: CommentDraft[]): Promise<boolean
 /** Fire a question instantly (DESIGN.md §9); the answer arrives as a thread frame. */
 export function postQuestion(id: string, anchor: Anchor | null, body: string): Promise<boolean> {
   return post202(`/api/sessions/${id}/questions`, { anchor, body });
+}
+
+/** The user's side of a grill question (DESIGN.md §8): chip choice(s) and/or text. */
+export interface AnswerDraft {
+  question: string;
+  choice?: string;
+  choices?: string[];
+  text?: string;
+}
+
+/** Answer an agent grill question; the card settles via the `grill` SSE frame. */
+export function postAnswer(id: string, draft: AnswerDraft): Promise<boolean> {
+  return post202(`/api/sessions/${id}/answers`, draft);
+}
+
+/**
+ * The approve outcome (DESIGN.md §6 step 6): success carries the artifact's
+ * repo-relative path; E_UNRESOLVED_THREADS carries the count the confirm
+ * sheet warns with before retrying with force.
+ */
+export type ApproveResult =
+  | { ok: true; path: string; revision: number }
+  | { ok: false; code: string; message?: string; unresolved?: number };
+
+export async function postApprove(id: string, force: boolean): Promise<ApproveResult> {
+  try {
+    const res = await fetch(`/api/sessions/${id}/approve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(force ? { force: true } : {}),
+    });
+    const body = (await res.json()) as {
+      path?: string;
+      revision?: number;
+      unresolved?: number;
+      error?: { code?: string; message?: string };
+    };
+    if (res.ok && typeof body.path === "string") {
+      return { ok: true, path: body.path, revision: body.revision ?? 0 };
+    }
+    return {
+      ok: false,
+      code: body.error?.code ?? "E_INTERNAL",
+      message: body.error?.message,
+      unresolved: body.unresolved,
+    };
+  } catch {
+    return { ok: false, code: "E_UNREACHABLE" };
+  }
 }
 
 /**

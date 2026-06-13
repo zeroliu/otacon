@@ -93,6 +93,7 @@ export function ReviewControls({
   showChangelog,
   changelogOpen,
   onToggleChangelog,
+  onApprove,
 }: {
   view: ReviewView;
   onView: (view: ReviewView) => void;
@@ -105,6 +106,11 @@ export function ReviewControls({
   showChangelog: boolean;
   changelogOpen: boolean;
   onToggleChangelog: () => void;
+  /**
+   * Opens the approve confirm sheet (DESIGN.md §10) — undefined on an
+   * approved session. Click-only: no keyboard shortcut exists, on purpose.
+   */
+  onApprove?: () => void;
 }) {
   // Prior revisions, newest first, down to the always-reachable empty plan;
   // last-reviewed keeps its seat even when it equals the current revision.
@@ -169,6 +175,11 @@ export function ReviewControls({
           onClick={onToggleChangelog}
         >
           changelog
+        </button>
+      )}
+      {onApprove && (
+        <button type="button" className="ctrl-approve" onClick={onApprove}>
+          <span aria-hidden="true">✓</span> approve
         </button>
       )}
     </div>

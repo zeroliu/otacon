@@ -96,6 +96,39 @@ function PhaseCard({
   );
 }
 
+// Mirrors the linter's L3 citation grammar (src/daemon/linter/rules.ts): the
+// q ids are \d+-only capture groups, so the injected markup carries no
+// attacker-controlled text — and the whole render still passes DOMPurify.
+const CITATION_RE = /(?:←|<-)\s*(q\d+(?:\s*,\s*q\d+)*)/g;
+
+/**
+ * Decision traceability chrome (DESIGN.md §4, §8): `← q7` citations become
+ * deep-links into the Interview panel (the click is delegated in
+ * session-screen, so this stays a pure text transform and PlanView's memo
+ * survives), and `[assumed]` becomes the visible "veto me" tag.
+ */
+export function markDecisionTraces(text: string): string {
+  return text
+    .replace(CITATION_RE, (_match, ids: string) => {
+      const links = ids
+        .split(",")
+        .map((raw) => raw.trim())
+        .map((id) => `<a href="#interview" class="q-cite" data-q="${id}">${id}</a>`)
+        .join(", ");
+      return `← ${links}`;
+    })
+    .replace(
+      /\[assumed\]/g,
+      '<span class="assumed-tag" title="decided without asking — veto me">assumed</span>',
+    );
+}
+
+function decisionBlocks(blocks: Block[]): Block[] {
+  return blocks.map((block) =>
+    block.kind === "markdown" ? { ...block, text: markDecisionTraces(block.text) } : block,
+  );
+}
+
 function SectionBlock({
   section,
   index,
@@ -107,6 +140,8 @@ function SectionBlock({
   warnings: LintIssue[];
   changed: ReadonlySet<string>;
 }) {
+  const blocks =
+    section.id === "decisions" ? decisionBlocks(section.blocks) : section.blocks;
   return (
     <section
       id={section.id}
@@ -118,7 +153,7 @@ function SectionBlock({
         <span className="rail-line" aria-hidden="true" />
         <span className="anchor-slug">#{section.id}</span>
       </header>
-      {section.blocks.length > 0 && <Blocks blocks={section.blocks} />}
+      {blocks.length > 0 && <Blocks blocks={blocks} />}
       {section.phases.map((phase) => (
         <PhaseCard key={phase.id} phase={phase} warnings={warnings} changed={changed} />
       ))}

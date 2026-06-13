@@ -1115,19 +1115,44 @@ describe("the grill loop: ask, answers, transcript, L3 (M4)", () => {
     const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
     const snapshot = await reader.next();
     expect((snapshot.data as { transcript: unknown[] }).transcript).toEqual([]);
+    expect((snapshot.data as { session: { openQuestions: number } }).session.openQuestions).toBe(0);
 
     await ask(session.id, { question: "algo?", options: ["A", "B"] });
     const askedFrame = await reader.next();
     expect(askedFrame.event).toBe("grill");
     expect((askedFrame.data as { entry: { id: string } }).entry.id).toBe("q1");
+    // The transcript change publishes a session frame: openQuestions feeds the
+    // index's "questions pending" chip (DESIGN.md §10).
+    const askedSession = await reader.next();
+    expect(askedSession.event).toBe("session");
+    expect((askedSession.data as { session: { openQuestions: number } }).session.openQuestions).toBe(1);
 
     await answers(session.id, { question: "q1", choice: "A" });
-    // queue frame (the enqueue) then the grill upsert carrying the answer.
+    // queue frame (the enqueue), the grill upsert carrying the answer, then
+    // the session frame with openQuestions back at 0.
     expect((await reader.next()).event).toBe("queue");
     const answeredFrame = await reader.next();
     expect(answeredFrame.event).toBe("grill");
     expect((answeredFrame.data as { entry: { answer?: { choice: string } } }).entry.answer?.choice).toBe("A");
+    const answeredSession = await reader.next();
+    expect(answeredSession.event).toBe("session");
+    expect((answeredSession.data as { session: { openQuestions: number } }).session.openQuestions).toBe(0);
     await reader.cancel();
+  });
+
+  test("session detail counts unanswered grill questions as openQuestions", async () => {
+    const session = mintSession();
+    await ask(session.id, { question: "one?", options: ["A", "B"] });
+    await ask(session.id, { question: "two?" });
+    const before = (await (await app.request(`/api/sessions/${session.id}`)).json()) as {
+      openQuestions: number;
+    };
+    expect(before.openQuestions).toBe(2);
+    await answers(session.id, { question: "q1", choice: "A" });
+    const after = (await (await app.request(`/api/sessions/${session.id}`)).json()) as {
+      openQuestions: number;
+    };
+    expect(after.openQuestions).toBe(1);
   });
 });
 

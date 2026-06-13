@@ -25,6 +25,6 @@ an LLM.
 - **M3 — revisions** (diff vs last-reviewed, gutter markers, changelog, threads +
   resolutions, orphan tray) — **done**
 - **M4 — grill + approve** (ask/answer cards, transcript panel, traceability lint,
-  approve flow + artifact write-out) — **in progress**
+  approve flow + artifact write-out) — **done**
 - **M5 — phone polish + agent wrappers** (section-menu anchoring, sticky bar, Tailscale
   docs, Claude Code/Codex/OpenCode wrappers + Stop hook)

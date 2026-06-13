@@ -855,3 +855,57 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   surface; moving directories under a live queue would be a race for zero gain.
 - **Revisit when:** `otacon clean` lands (it owns the physical move), or `snake`
   needs structured (non-markdown) access to the interview.
+
+## "questions pending" is derived from openQuestions, never a stored status
+
+- **Decision:** Session summaries carry `openQuestions` (transcript entries
+  without an answer, counted at read time); the UI chip shows "questions
+  pending" whenever it is non-zero on a non-approved session, outranking the
+  stored status. Every transcript change (ask, answer) publishes a `session`
+  frame so the count stays live on the index and the review header.
+- **Why:** §10 lists the chip but the status machine (§12) has no such state —
+  an open question is the user's move regardless of whether the agent is
+  drafting or revising underneath, and deriving it means it can never go stale
+  or contradict the registry the way a fifth stored status could. Riding
+  `session` frames (not a new frame type) keeps the index's existing listener
+  the only consumer.
+- **Revisit when:** Summaries grow more derived counts (unread threads?) and
+  recomputing the transcript on every summary read shows up in profiles.
+
+## Grill cards: one-tap single answers; settled cards persist per mount only
+
+- **Decision:** On a single-choice card the chip tap IS the answer — no arm/
+  confirm step; multi-select and free text arm an explicit send. An answered
+  card settles in place (green-checked, answer echoed) rather than vanishing,
+  but only for questions this mount watched while open; on reload, answered
+  entries render solely in the Interview panel. An optional note rides any
+  chip answer as `text`.
+- **Why:** §8 says grilling happens one-thumbed while walking — a confirm step
+  on the 90% path (tap the recommended chip) doubles every interaction for no
+  information, while the settle-in-place flip is the answer's only visible
+  confirmation (the POST has no UI of its own). Settled cards expire with the
+  mount because the queue is an action surface, not an archive: re-rendering
+  every answered question above the plan forever would bury the open ones the
+  card queue exists to surface.
+- **Revisit when:** Re-answering from the card (not just the API) is wanted, or
+  the agent asks faster than one-at-a-time and the queue needs grouping.
+
+## Decision citations: pre-render text transform, delegated clicks, ephemeral path
+
+- **Decision:** `← q<n>` citations (and `[assumed]`) become deep-link/veto
+  chrome via a text transform on the Decisions section's markdown before the
+  sanitized render — the injected markup carries only `\d+`-derived ids, and
+  the click is handled by one delegated listener on the plan container that
+  ignores ids missing from the transcript. The approve response's artifact
+  path lives only in the tab that approved; after a reload the approved notice
+  names the destination folder, not the file.
+- **Why:** A renderer plugin or per-link React callback would thread props into
+  the memo'd PlanView and rebuild the DOM mid-selection (DECISIONS "The plan
+  renderer is memo'd"); the transform keeps PlanView pure and the listener
+  survives re-renders. Mirroring L3's citation grammar means the UI and linter
+  can never disagree about what a citation is. The path is not persisted on
+  the summary because the artifact is committed into the user's repo — the
+  repo is the durable record, and a daemon-side copy would be a second source
+  of truth that goes stale the moment the file is moved or renamed.
+- **Revisit when:** Citations want hover previews (the transform would need
+  real components), or sessions list their artifact post-approve (M5 `clean`).

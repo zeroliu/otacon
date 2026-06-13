@@ -2,21 +2,25 @@
 // live over its SSE stream, rendering the latest stored revision as the plan
 // dossier (DESIGN.md §10) — with the review loop's desktop verbs (select text
 // → toolbar, comments batch in the drawer, questions fire instantly, threads
-// in the rail) and M3's re-review layer: the new-revision banner, the
-// [clean|diff] toggle with its baseline picker, gutter markers on sections
-// changed since last-reviewed, and j/k jumping between them. Keyboard:
+// in the rail), M3's re-review layer (banner, [clean|diff] + baseline picker,
+// gutter markers, j/k), and M4's grill + approve surfaces: agent-question
+// cards pinned above the plan (useful pre-plan — the grill happens before
+// drafting), the collapsible Interview panel that decision citations
+// deep-link into, and the warn-then-force Approve control. Keyboard:
 // c = comment, q = ask, j/k = changed sections; no Approve shortcut exists,
-// deliberately (§10). The renderer stays a lazy chunk; approve is M4.
+// deliberately (§10). Approved sessions render read-only behind the quiet
+// approved notice. The renderer stays a lazy chunk.
 
 import type { MouseEvent, ReactNode, RefObject } from "react";
 import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { accentStyle } from "./accent";
-import type { Anchor, CommentDraft, LiveSession, Thread } from "./api";
+import type { Anchor, CommentDraft, LiveSession, Thread, TranscriptEntry } from "./api";
 import { postComments, postQuestion, postReviewed, useDiff, useRevision, useSession } from "./api";
 import { LinkState, StatusChip } from "./chip";
 import { relativeTime, repoName } from "./format";
 import { captureSelection, flashAnchor } from "./review/anchor";
 import type { CapturedSelection } from "./review/anchor";
+import { ApproveDialog, ApprovedNote } from "./review/approve";
 import type { ReviewView } from "./review/banner";
 import { ReviewControls, RevisionBanner } from "./review/banner";
 import { DiffView } from "./review/diff";
@@ -24,6 +28,9 @@ import type { PendingComment } from "./review/drawer";
 import { CommentDrawer } from "./review/drawer";
 import type { ComposerState } from "./review/feedback";
 import { Composer, SelectionToolbar, useSelection } from "./review/feedback";
+import { GrillQueue } from "./review/grill";
+import type { InterviewTarget } from "./review/interview";
+import { InterviewPanel } from "./review/interview";
 import { ThreadsRail } from "./review/rail";
 import { navigate } from "./router";
 import { markSeen } from "./seen";
@@ -82,7 +89,7 @@ function SessionHead({ session, connected }: { session: LiveSession; connected: 
         {session.branch !== "" && <span> · {session.branch}</span>}
       </p>
       <div className="session-meta">
-        <StatusChip status={session.status} />
+        <StatusChip status={session.status} openQuestions={session.openQuestions} />
         <span className="card-time">{relativeTime(session.updatedAt)}</span>
         <LinkState connected={connected} />
       </div>
@@ -93,14 +100,16 @@ function SessionHead({ session, connected }: { session: LiveSession; connected: 
 const COMPOSER_WIDTH = 380;
 const COMPOSER_GUESS_HEIGHT = 240;
 
-/** The review loop: plan + rail + selection toolbar + composer + drawer. */
+/** The review loop: plan + rail + grill + interview + approve + composer + drawer. */
 function ReviewLoop({
   session,
   threads,
+  transcript,
   connected,
 }: {
   session: LiveSession;
   threads: Thread[];
+  transcript: TranscriptEntry[];
   connected: boolean;
 }) {
   const planRef = useRef<HTMLElement | null>(null);
@@ -118,11 +127,26 @@ function ReviewLoop({
   // a number = the user picked another baseline from the diff controls.
   const [baseline, setBaseline] = useState<number | null>(null);
   const [changelogOpen, setChangelogOpen] = useState(false);
+  // The Interview panel (DESIGN.md §8): open state is screen-local; a
+  // decision citation sets `ivTarget` (nonce re-fires repeat clicks) and
+  // opens the panel in the same commit, so the entry exists when its
+  // deep-link effect runs.
+  const [interviewOpen, setInterviewOpen] = useState(false);
+  const [ivTarget, setIvTarget] = useState<InterviewTarget | null>(null);
+  const ivNonce = useRef(0);
+  const [approveOpen, setApproveOpen] = useState(false);
+  // The artifact path from this tab's approve response; after a reload the
+  // notice falls back to the destination folder (the path is not persisted
+  // on the session summary — DECISIONS.md).
+  const [approvedPath, setApprovedPath] = useState<string | null>(null);
   const hasPlan = session.revision > 0;
+  // Approved = the session is over (DESIGN.md §12): the whole screen goes
+  // read-only — no selection anchoring, no composer, no drawer, no cards.
+  const over = session.status === "approved";
   // Selections only anchor in the clean view: diff lines are change telemetry,
   // not plan text the agent could re-locate (same honesty rule as the
   // chrome-selector guard in anchor.ts).
-  const selection = useSelection(planRef, composer === null && view === "clean");
+  const selection = useSelection(planRef, composer === null && view === "clean" && !over);
 
   const payload = useRevision(session.id, session.revision);
   const from = Math.min(baseline ?? session.lastReviewedRevision, session.revision);
@@ -170,7 +194,9 @@ function ReviewLoop({
     [jumpIds],
   );
 
-  const fresh = hasPlan && session.revision >= 2 && session.lastReviewedRevision < session.revision;
+  // No re-review prompt on an approved session: the review is over.
+  const fresh =
+    !over && hasPlan && session.revision >= 2 && session.lastReviewedRevision < session.revision;
   // The banner must quote the *landed* revision's changelog; while the
   // payload refetch is in flight the previous revision stays rendered, so
   // gate on the revision number instead of showing the stale changelog.
@@ -223,7 +249,7 @@ function ReviewLoop({
         return;
       }
       if (event.key !== "c" && event.key !== "q") return;
-      if (view !== "clean") return; // diff lines are not anchorable plan text
+      if (view !== "clean" || over) return; // diff lines / ended sessions are not anchorable
       const plan = planRef.current;
       const sel = plan ? captureSelection(plan) : null;
       if (!sel) return;
@@ -232,7 +258,7 @@ function ReviewLoop({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [openComposer, jumpChanged, view]);
+  }, [openComposer, jumpChanged, view, over]);
 
   const stack = (body: string) => {
     if (!composer) return;
@@ -303,11 +329,30 @@ function ReviewLoop({
     if (planRef.current) flashAnchor(planRef.current, anchor);
   }, []);
 
+  // Decision deep-links (DESIGN.md §8): `← q7` citations render as
+  // `a.q-cite[data-q]` (plan-view's text transform); the click is delegated
+  // here so PlanView takes no callback prop and its memo survives.
+  const onPlanClick = useCallback(
+    (event: MouseEvent<HTMLElement>) => {
+      const cite = (event.target as Element | null)?.closest?.("a.q-cite");
+      if (!cite) return;
+      event.preventDefault();
+      const id = (cite as HTMLElement).dataset.q;
+      if (id === undefined || !transcript.some((entry) => entry.id === id)) return;
+      setInterviewOpen(true);
+      setIvTarget({ id, nonce: (ivNonce.current += 1) });
+    },
+    [transcript],
+  );
+
+  const toggleInterview = useCallback(() => setInterviewOpen((value) => !value), []);
+
   return (
     <>
       <div className="review-layout">
         <div className="review-main">
           <SessionHead session={session} connected={connected} />
+          {over && <ApprovedNote path={approvedPath} />}
           {hasPlan && (
             <ReviewControls
               view={view}
@@ -320,6 +365,7 @@ function ReviewLoop({
               showChangelog={!fresh && currentChangelog != null}
               changelogOpen={changelogOpen}
               onToggleChangelog={() => setChangelogOpen((value) => !value)}
+              onApprove={over ? undefined : () => setApproveOpen(true)}
             />
           )}
           {fresh && (
@@ -346,8 +392,15 @@ function ReviewLoop({
               onClose={() => setChangelogOpen(false)}
             />
           )}
+          {!over && <GrillQueue sessionId={session.id} transcript={transcript} />}
+          <InterviewPanel
+            transcript={transcript}
+            open={interviewOpen}
+            onToggle={toggleInterview}
+            target={ivTarget}
+          />
           {hasPlan ? (
-            <main className="review" ref={planRef}>
+            <main className="review" ref={planRef} onClick={onPlanClick}>
               {view === "clean" ? (
                 payload ? (
                   <RendererBoundary>
@@ -372,15 +425,29 @@ function ReviewLoop({
             <main className="review-wait">
               <p className="wait-line">// no revision yet</p>
               <p>
-                The agent is still drafting. The plan renders here the moment revision 1 passes
-                the linter — this screen updates live.
+                The agent interviews before it drafts — questions land above as cards, one at a
+                time. The plan renders here the moment revision 1 passes the linter; this screen
+                updates live.
               </p>
             </main>
           )}
         </div>
         {hasPlan && <ThreadsRail threads={threads} onJump={jump} />}
       </div>
-      {hasPlan && (
+      {approveOpen && !over && (
+        <ApproveDialog
+          sessionId={session.id}
+          revision={session.revision}
+          onClose={() => setApproveOpen(false)}
+          onApproved={(path) => {
+            // The session SSE frame flips the status (and this screen) to
+            // approved; the path renders in the notice.
+            setApprovedPath(path);
+            setApproveOpen(false);
+          }}
+        />
+      )}
+      {hasPlan && !over && (
         <>
           {selection !== null && composer === null && (
             <SelectionToolbar
@@ -419,7 +486,7 @@ function ReviewLoop({
 }
 
 export function SessionScreen({ id }: { id: string }) {
-  const { session, threads, missing, connected } = useSession(id);
+  const { session, threads, transcript, missing, connected } = useSession(id);
 
   const revision = session?.revision;
   useEffect(() => {
@@ -452,7 +519,13 @@ export function SessionScreen({ id }: { id: string }) {
   return (
     <div className="page page-review" style={accentStyle(session.id)}>
       <BackLink />
-      <ReviewLoop key={session.id} session={session} threads={threads} connected={connected} />
+      <ReviewLoop
+        key={session.id}
+        session={session}
+        threads={threads}
+        transcript={transcript}
+        connected={connected}
+      />
     </div>
   );
 }

@@ -183,6 +183,9 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       revision: state.revision,
       lastReviewedRevision: state.lastReviewedRevision,
       pendingEvents: queueFor(session.id).size,
+      openQuestions: readTranscript(store.transcriptPath(session.id)).filter(
+        (e) => e.answer === undefined,
+      ).length,
     };
   };
   const publishSession = (session: RegistrySession): void =>
@@ -638,6 +641,9 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     };
     appendEntry(store.transcriptPath(session.id), entry);
     publishGrill(session.id, entry);
+    // The summary's openQuestions just moved: the index's "questions pending"
+    // chip rides session frames, so every transcript change publishes one.
+    publishSession(store.getSession(session.id) ?? session);
     return c.json({ ok: true, session: session.id, id: entry.id }, 201);
   });
 
@@ -714,6 +720,8 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     queue.enqueue(payload, store.bumpCounter(session.id, "eventSeq"));
     publishQueue(session.id, queue.size);
     if (updated) publishGrill(session.id, updated);
+    // openQuestions dropped (or held, on a re-answer) — keep the chip honest.
+    publishSession(store.getSession(session.id) ?? session);
     return c.json({ ok: true, session: session.id, question }, 202);
   });
 
