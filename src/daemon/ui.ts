@@ -46,13 +46,31 @@ const CONTENT_TYPES: Record<string, string> = {
   ".woff2": "font/woff2",
 };
 
-/** dist/daemon/ui.js → ../ui = dist/ui; a source-tree run under bun falls back to <root>/dist/ui. */
+/**
+ * dist/daemon/ui.js → ../ui = dist/ui; a source-tree run under bun falls back
+ * to <root>/dist/ui. The `assets/` guard is load-bearing: since ui/ moved under
+ * src/ui/ (commit fac1349), the `../ui/` candidate also matches src/ui/ in a
+ * source run — but that dir holds only the Vite *dev* template (a `/main.tsx`
+ * script tag the daemon can't serve), not a build. Requiring a sibling
+ * `assets/` dir disqualifies the source template across every layout (published
+ * package, repo dist/, source run) so only a real build is ever served.
+ */
 function resolveBuiltUiDir(): string | undefined {
   for (const candidate of ["../ui/", "../../dist/ui/"]) {
     const dir = fileURLToPath(new URL(candidate, import.meta.url));
-    if (existsSync(join(dir, "index.html"))) return dir;
+    if (isBuiltUiDir(dir)) return dir;
   }
   return undefined;
+}
+
+/**
+ * True only for a real Vite build: both `index.html` and a sibling `assets/`
+ * dir. The source `src/ui/` holds the dev template (index.html, no assets/), so
+ * this predicate is what keeps a source run from serving it (see
+ * resolveBuiltUiDir). Exported for the regression test.
+ */
+export function isBuiltUiDir(dir: string): boolean {
+  return existsSync(join(dir, "index.html")) && existsSync(join(dir, "assets"));
 }
 
 const encoder = new TextEncoder();
