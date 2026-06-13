@@ -93,6 +93,15 @@ export interface SessionDetail {
   connected: boolean;
 }
 
+/** Upsert frames (thread, grill) carry the full item: replace by id, or append. */
+function upsertById<T extends { id: string }>(prev: T[], item: T): T[] {
+  const at = prev.findIndex((x) => x.id === item.id);
+  if (at === -1) return [...prev, item];
+  const next = [...prev];
+  next[at] = item;
+  return next;
+}
+
 export function useSession(id: string): SessionDetail {
   const [session, setSession] = useState<LiveSession>();
   const [threads, setThreads] = useState<Thread[]>([]);
@@ -150,22 +159,10 @@ export function useSession(id: string): SessionDetail {
             setSession((prev) => (prev ? { ...prev, pendingEvents: data.pending } : prev)),
           );
           on<{ session: string; thread: Thread }>(source, "thread", ({ thread }) =>
-            setThreads((prev) => {
-              const at = prev.findIndex((t) => t.id === thread.id);
-              if (at === -1) return [...prev, thread];
-              const next = [...prev];
-              next[at] = thread;
-              return next;
-            }),
+            setThreads((prev) => upsertById(prev, thread)),
           );
           on<{ session: string; entry: TranscriptEntry }>(source, "grill", ({ entry }) =>
-            setTranscript((prev) => {
-              const at = prev.findIndex((e) => e.id === entry.id);
-              if (at === -1) return [...prev, entry];
-              const next = [...prev];
-              next[at] = entry;
-              return next;
-            }),
+            setTranscript((prev) => upsertById(prev, entry)),
           );
         })
         .catch(() => {

@@ -7,12 +7,14 @@
 // card in place — the flip is the confirmation — but only cards this mount
 // watched being open stay settled here; the Interview panel is the archive.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { AnswerDraft, TranscriptEntry } from "../api";
 import { postAnswer } from "../api";
 import { relativeTime } from "../format";
 
-export function GrillQueue({
+// memo'd like the Interview panel and the rail: the review loop re-renders
+// per selection tick, while sessionId/transcript only change on SSE frames.
+export const GrillQueue = memo(function GrillQueue({
   sessionId,
   transcript,
 }: {
@@ -55,7 +57,7 @@ export function GrillQueue({
       )}
     </section>
   );
-}
+});
 
 /** The agent's options with the recommended one first (DESIGN.md §8). */
 function orderedOptions(entry: TranscriptEntry): string[] {

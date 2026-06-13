@@ -8,6 +8,7 @@
 import type { CSSProperties } from "react";
 import { memo, useMemo } from "react";
 import type { LintIssue } from "../../../src/shared/types";
+import { CITATION_RE } from "../../../src/shared/types";
 import { CodeFence, MermaidFigure, PairFences } from "./code";
 import { Markdown } from "./markdown";
 import type { Block, PlanDetails, PlanPhase, PlanSection } from "./parse";
@@ -96,10 +97,9 @@ function PhaseCard({
   );
 }
 
-// Mirrors the linter's L3 citation grammar (src/daemon/linter/rules.ts): the
+// CITATION_RE is the linter's L3 grammar itself (src/shared/types.ts): the
 // q ids are \d+-only capture groups, so the injected markup carries no
 // attacker-controlled text — and the whole render still passes DOMPurify.
-const CITATION_RE = /(?:←|<-)\s*(q\d+(?:\s*,\s*q\d+)*)/g;
 
 /**
  * Decision traceability chrome (DESIGN.md §4, §8): `← q7` citations become

@@ -1,6 +1,6 @@
 import type { Budgets } from "../../shared/config.js";
 import type { LintIssue, LintSeverity } from "../../shared/types.js";
-import { SESSION_STATUSES } from "../../shared/types.js";
+import { CITATION_RE, SESSION_STATUSES } from "../../shared/types.js";
 import type { ParsedPlan, Phase } from "./parse.js";
 
 // Rule semantics follow DESIGN.md §4-5; resolved edge cases follow
@@ -336,12 +336,11 @@ export interface GrillContext {
 }
 
 const DECISION_RE = /^[-*+]\s+(D\d+):/;
-// "← q7" or "← q7, q9"; "<-" accepted alongside "←" (models emit both arrows,
-// same accommodation as the —/- phase-heading dashes). Global: an entry can
-// carry several citation clauses ("… ← q1; revisit ← q9"), and every cited id
-// must be checked — validating only the first would let a fabricated later
-// clause game traceability invisibly.
-const CITATION_RE = /(?:←|<-)\s*(q\d+(?:\s*,\s*q\d+)*)/g;
+// CITATION_RE (src/shared/types.ts) is shared with the UI's deep-link
+// transform. Global matters here: an entry can carry several citation clauses
+// ("… ← q1; revisit ← q9"), and every cited id must be checked — validating
+// only the first would let a fabricated later clause game traceability
+// invisibly.
 
 /**
  * L3 (DESIGN.md §4, §5, §8): every `- D<n>:` decision entry must cite the
