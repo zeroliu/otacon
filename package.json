@@ -27,7 +27,8 @@
     "e2e:install": "bash test/e2e-install.sh",
     "e2e:ui": "bun run build && playwright test",
     "smoke": "bash test/smoke.sh",
-    "accept": "bash test/acceptance.sh"
+    "accept": "bash test/acceptance.sh",
+    "verify:wt": "bash test/verify-worktree.sh"
   },
   "dependencies": {
     "@hono/node-server": "^1",

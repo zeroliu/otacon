@@ -176,6 +176,9 @@ echo "  phone  :  $OTACON expose       (Tailscale HTTPS)"
 echo "  reset  :  $OTACON restart  |  archive: $OTACON clean"
 echo
 
+# Open it — manual e2e wants eyes on the page (no-op if the browser can't open).
+"$OTACON" open "$SID" >/dev/null 2>&1 || true
+
 # ---- flavor-specific live drivers -------------------------------------------
 case "$FLAVOR" in
   notify)

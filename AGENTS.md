@@ -53,6 +53,21 @@ Verification commands: `bun test` (unit), `bun run typecheck`, `bun run build` (
 must stay Node-runnable: `node dist/cli/main.js`), `bun run smoke` (end-to-end, once it
 exists).
 
+## Worktrees
+
+Feature worktrees live OUTSIDE the repo at `~/worktrees/otacon/<name>` (branch
+`worktree-<name>`) — never under `.claude/`, so the location is agent-neutral (Claude,
+codex, …) and a second copy of the tree never pollutes the main checkout's tooling or
+`git status`. `bin/otacon` derives an isolated daemon port + home from each worktree's
+own path, so worktrees run side-by-side without colliding. Keep a worktree current with
+`main` (cut it from `main`, or rebase older ones onto it once) — a source-run daemon
+only serves the built UI with main's UI-serve fix present.
+
+Manually e2e a worktree from the main checkout with `bun run verify:wt <name> [flavor]`
+(`full`/`visuals`/`notify`/`activity`): it builds the worktree, restarts its daemon, and
+populates a realistic review session, then opens it. See `test/verify-worktree.sh` +
+`test/populate-session.sh`.
+
 ## Hard invariant
 
 No process in this repo ever calls a model API (DESIGN.md §13). The daemon, CLI,
