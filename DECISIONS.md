@@ -1199,3 +1199,67 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** The accent mark's final form is judged on a live screen and a
   different indicator (dot vs tag vs underline) wins, or a surface needs more than a
   hairline to separate from dense neighbors.
+
+## Live agent activity: explicit `otacon progress` narration, not inferred state
+
+- **Decision:** The agent reports what it's doing with a new `otacon progress
+  "<note>"` verb (not the daemon inferring state from existing calls). Notes append
+  to a capped (~20, config) `activity.json` feed, push as an `activity` SSE frame,
+  and the newest one drives the `draft` chip (falling back to "agent working"). No
+  new status value is added; `progress` queues no agent event.
+- **Why:** The daemon only hears from the agent at discrete CLI calls; during a long
+  research or drafting stretch it makes none, so there is nothing live to show.
+  Inference is brittle and silent — explicit checkpoints are accurate and cheap, and
+  keep the zero-API invariant (the agent narrates; no model call). Making the *draft*
+  chip activity-driven (rather than adding a `researching` status) avoids churn in the
+  4-status machine, the linter, and every status surface, while fixing the real
+  problem: `draft` rendered a fixed "agent drafting" that misled during research. A
+  capped append-only feed (vs a single current-note line) gives a readable history
+  without unbounded growth; a UI-only frame (no queued event, like `ask`) keeps it
+  pure telemetry that never wakes the agent.
+- **Revisit when:** Agents reliably forget to call `progress` (then automatic
+  inference becomes worth its complexity), or the feed cap / note length need to be
+  something other than config knobs.
+
+## Agent presence is in-memory and ephemeral, derived UI-side from recency
+
+- **Decision:** Presence is an in-memory `Map<id, lastContactAt>` in the daemon
+  (bumped by every mutating verb and each `wait` park) plus a `parked` flag from the
+  queue's waiter count — exposed on the summary, never persisted. The UI derives
+  live/offline as `parked || (now - lastContactAt < THRESHOLD)`, with a screen tick
+  keeping it honest while idle; the threshold is a UI constant that must exceed
+  `wait`'s 240s park slice. A `wait` park (and its settle) publishes a `session`
+  frame so the dot updates within one slice. The dot is subtle (a small mark beside
+  the chips, labelled "agent" to distinguish it from the "link" dot), not a new
+  first-class status — the chips stay the primary "your turn" signal.
+- **Why:** Liveness is inherently ephemeral — a daemon restart genuinely means "I
+  haven't heard from the agent since," so showing offline until the next contact is
+  correct, and a persisted timestamp would lie across restarts. Deriving in the UI
+  needs no daemon timer. Publishing on park (not only on progress) means the dot
+  stays live across the silent stretches when the agent is parked waiting on the
+  user. Keeping it subtle honors the ask (q4): the existing chips already say "your
+  turn"; presence answers a different question ("is it still on the line?").
+- **Revisit when:** The threshold proves too eager/laggy in practice, presence needs
+  to survive restarts (then it must be persisted with its caveats), or the subtle dot
+  loses to a louder "your turn" treatment.
+
+## Start-first protocol order; one parametrized protocol card feeds both wrappers
+
+- **Decision:** The canonical loop runs `otacon start` *before* research (not after),
+  so the review UI exists from the first second. The protocol card is built once by
+  `protocolCard(cmd)`, parametrized only by command prefix: installed wrappers
+  (`skillMd`/`codexBlock`) use `otacon`; this repo's committed dogfood wrapper
+  (`dogfoodSkillMd`, written to `.claude/skills/otacon/SKILL.md`) uses `./bin/otacon`
+  and prepends a repo preamble. The dogfood file is generated, never hand-edited, and
+  `assets.test.ts` asserts the committed file equals `dogfoodSkillMd()`.
+- **Why:** Start-first is the whole point of live activity — minting the session only
+  after research wastes the watch window the feature exists to provide. Single-source
+  removes the standing risk that the dogfood wrapper and the installed wrapper drift:
+  before, the dogfood SKILL.md was hand-kept "in sync" with `assets.ts` and a protocol
+  edit could silently update one and not the other. The equality test turns that drift
+  into a CI failure. `otacon install` into other repos is unchanged — it writes the
+  plain-`otacon` wrapper, which already works anywhere; only this repo needs the
+  source-mode variant, so no project-scoped install path is added.
+- **Revisit when:** A second repo needs a source-mode wrapper (then generation should
+  be a real CLI subcommand, not a test-guarded committed file), or the two wrappers
+  need to diverge by more than the command prefix + preamble.

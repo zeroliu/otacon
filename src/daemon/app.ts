@@ -32,6 +32,7 @@ import type {
   TranscriptEntry,
 } from "../shared/types.js";
 import { VERSION } from "../shared/version.js";
+import { appendActivity, latestNote, readActivity } from "./activity.js";
 import { composeArtifact, localDate, pickArtifactRelPath } from "./approve.js";
 import { diffPlans } from "./diff.js";
 import { lint } from "./linter/index.js";
@@ -182,6 +183,16 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   // writes is synchronous, so the answer cannot rot again.
   const sessionEnded = (id: string): boolean => store.getSession(id)?.status === "approved";
 
+  // Agent presence (DESIGN.md §6): ephemeral, in-memory liveness only — the
+  // epoch-ms of each session's last agent contact. Every mutating verb and each
+  // `wait` park bumps it; the summary exposes it (plus `parked`) and the UI
+  // derives live/offline from its recency, so the daemon needs no timer. A
+  // restart starts empty (offline until the next call), which is correct.
+  const lastContact = new Map<string, number>();
+  const bumpContact = (id: string): void => {
+    lastContact.set(id, Date.now());
+  };
+
   // UI pub/sub (DECISIONS.md "UI live updates"): every state mutation below
   // publishes, and the SSE routes in ui.ts fan the events out to browsers.
   const notifier = new Notifier();
@@ -195,6 +206,9 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       openQuestions: readTranscript(store.transcriptPath(session.id)).filter(
         (e) => e.answer === undefined,
       ).length,
+      latestActivity: latestNote(store.activityPath(session.id)),
+      lastContactAt: lastContact.get(session.id),
+      parked: queueFor(session.id).waiterCount > 0,
     };
   };
   const publishSession = (session: RegistrySession): void =>
@@ -339,6 +353,9 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
     const queue = queueFor(session.id);
+    // Any events call is the agent on the line; bump presence before deciding
+    // whether to park (covers the fast-path and wait=0 drains too).
+    bumpContact(session.id);
     const raw = Number(c.req.query("wait") ?? "0");
     const waitSeconds = Number.isFinite(raw)
       ? Math.min(Math.max(raw, 0), MAX_WAIT_SECONDS)
@@ -366,6 +383,13 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
         if (timer !== undefined) clearTimeout(timer);
         handle?.cancel();
         signal.removeEventListener("abort", onAbort);
+        // Leaving the park flips `parked` (the waiter is gone): broadcast a
+        // fresh summary so a dropped agent's dot can fall to offline instead
+        // of the last frame's parked=true sticking forever. Re-read the
+        // registry — the session may have flipped (approve) or vanished
+        // (clean) during the park.
+        const current = store.getSession(session.id);
+        if (current) publishSession(current);
         resolve(response);
       };
       // Aborted while parked: cancel the waiter; queued events stay queued.
@@ -373,6 +397,10 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       const onAbort = () => settle(timeoutEvent(c));
       handle = queue.park((event) => settle(respondEvent(c, queue, event)));
       if (!settled) {
+        // Genuinely parked (the queue was empty at take()): broadcast
+        // parked=true + the refreshed lastContactAt so the live dot reaches the
+        // UI within one park slice (DESIGN.md §6).
+        publishSession(session);
         timer = setTimeout(() => settle(timeoutEvent(c)), waitSeconds * 1000);
         signal.addEventListener("abort", onAbort);
       }
@@ -387,6 +415,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     // carries no resolutions, so L5 still rejects it when threads are open.
     let content = await c.req.text();
     if (sessionEnded(session.id)) return sessionOver(c, session.id);
+    bumpContact(session.id);
     let resolutions: Resolutions = {};
     if (c.req.header("content-type")?.includes("json")) {
       let body: unknown;
@@ -519,6 +548,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     const queue = queueFor(session.id); // before any state write: can throw on a corrupt file
     const body = (await readJsonBody(c)) ?? {};
     if (sessionEnded(session.id)) return sessionOver(c, session.id);
+    bumpContact(session.id);
     const rawItems = body.items;
     if (!Array.isArray(rawItems) || rawItems.length === 0) {
       return badRequest(c, "items must be a non-empty array");
@@ -578,6 +608,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     const queue = queueFor(session.id); // before any state write: can throw on a corrupt file
     const body = (await readJsonBody(c)) ?? {};
     if (sessionEnded(session.id)) return sessionOver(c, session.id);
+    bumpContact(session.id);
     const anchor = parseAnchor(body.anchor);
     if (typeof body.body !== "string" || body.body.trim() === "" || anchor === undefined) {
       return badRequest(c, "question needs a non-empty body and a valid anchor (or null)");
@@ -614,6 +645,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
     const body = (await readJsonBody(c)) ?? {};
     if (sessionEnded(session.id)) return sessionOver(c, session.id);
+    bumpContact(session.id);
     if (typeof body.body !== "string" || body.body.trim() === "") {
       return badRequest(c, "answer needs a non-empty body");
     }
@@ -656,6 +688,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
     const body = (await readJsonBody(c)) ?? {};
     if (sessionEnded(session.id)) return sessionOver(c, session.id);
+    bumpContact(session.id);
 
     // Batch: validate every member first, then mint all ids in one counter
     // bump and append them in one write — a malformed member fails the whole
@@ -790,6 +823,39 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     });
   });
 
+  // The agent's narration (otacon progress, DESIGN.md §6, §8): a non-blocking
+  // progress note appended to the capped activity feed and pushed to the UI as
+  // an `activity` frame (the per-session log) plus a `session` frame (the
+  // chip's latestActivity). No agent event is queued — like `ask`, this is
+  // UI-only telemetry, never a wake-up. The note is trimmed to the configured
+  // max so long narration never fails or bloats payloads.
+  app.post("/api/sessions/:id/progress", async (c) => {
+    const session = sessionFor(c);
+    if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    const body = (await readJsonBody(c)) ?? {};
+    if (sessionEnded(session.id)) return sessionOver(c, session.id);
+    const raw = body.note;
+    if (typeof raw !== "string" || raw.trim() === "") {
+      return badRequest(c, "note must be a non-empty string");
+    }
+    const { activity } = loadConfig(session.repo);
+    const trimmed = raw.trim();
+    const text =
+      trimmed.length > activity.noteMaxChars
+        ? `${trimmed.slice(0, Math.max(1, activity.noteMaxChars - 1)).trimEnd()}…`
+        : trimmed;
+    const note = appendActivity(
+      store.activityPath(session.id),
+      text,
+      activity.cap,
+      new Date().toISOString(),
+    );
+    bumpContact(session.id);
+    notifier.publish({ type: "activity", session: session.id, data: { session: session.id, note } });
+    publishSession(session); // latestActivity for the chip; fresh contact for the dot
+    return c.json({ ok: true, session: session.id, note: text });
+  });
+
   // Approve ends the session (DESIGN.md §6 step 6, §12): the daemon writes
   // docs/plans/YYYY-MM-DD-<slug>.md (final revision, status: approved, grill
   // transcript appended), flips the session approved — after which every
@@ -897,6 +963,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     },
     getThreads: (id) => readThreads(store.threadsPath(id)),
     getTranscript: (id) => readTranscript(store.transcriptPath(id)),
+    getActivity: (id) => readActivity(store.activityPath(id)),
     uiDir: options.uiDir,
     heartbeatMs: options.sseHeartbeatMs,
   });

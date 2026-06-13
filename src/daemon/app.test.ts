@@ -1234,6 +1234,110 @@ describe("the grill loop: ask, answers, transcript, L3 (M4)", () => {
   });
 });
 
+describe("progress and live activity (live-agent-activity)", () => {
+  const progress = (id: string, note: unknown) =>
+    postJson(`/api/sessions/${id}/progress`, { note });
+
+  test("POST /progress appends a note and returns {ok, session, note}", async () => {
+    const session = mintSession();
+    const res = await progress(session.id, "reading the auth module");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      ok: true,
+      session: session.id,
+      note: "reading the auth module",
+    });
+    // It lands on the feed: session detail exposes it as latestActivity.
+    const detail = (await (await app.request(`/api/sessions/${session.id}`)).json()) as {
+      latestActivity?: { text: string };
+    };
+    expect(detail.latestActivity?.text).toBe("reading the auth module");
+  });
+
+  test("a progress note pushes an activity frame, then a session frame for the chip", async () => {
+    const session = mintSession();
+    const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
+    const snapshot = await reader.next();
+    expect((snapshot.data as { activity: unknown[] }).activity).toEqual([]);
+
+    await progress(session.id, "drafting plan");
+    const activityFrame = await reader.next();
+    expect(activityFrame.event).toBe("activity");
+    expect((activityFrame.data as { note: { text: string } }).note.text).toBe("drafting plan");
+    // The draft chip rides the session frame's latestActivity (DESIGN.md §10).
+    const sessionFrame = await reader.next();
+    expect(sessionFrame.event).toBe("session");
+    const summary = (
+      sessionFrame.data as { session: { latestActivity?: { text: string }; lastContactAt?: number } }
+    ).session;
+    expect(summary.latestActivity?.text).toBe("drafting plan");
+    expect(typeof summary.lastContactAt).toBe("number");
+    await reader.cancel();
+  });
+
+  test("the per-session snapshot carries the activity feed, oldest first", async () => {
+    const session = mintSession();
+    await progress(session.id, "one");
+    await progress(session.id, "two");
+    const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
+    const snapshot = await reader.next();
+    expect((snapshot.data as { activity: { text: string }[] }).activity.map((n) => n.text)).toEqual([
+      "one",
+      "two",
+    ]);
+    await reader.cancel();
+  });
+
+  test("a long note is trimmed to the configured max and ellipsized", async () => {
+    const session = mintSession();
+    const res = await progress(session.id, "x".repeat(500));
+    const body = (await res.json()) as { note: string };
+    expect(body.note.length).toBeLessThanOrEqual(200);
+    expect(body.note.endsWith("…")).toBeTrue();
+  });
+
+  test("an empty note is refused with 400", async () => {
+    const session = mintSession();
+    const res = await progress(session.id, "   ");
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("E_BAD_REQUEST");
+  });
+
+  test("progress refuses an approved session with E_SESSION_OVER", async () => {
+    const session = mintSession();
+    await app.request(`/api/sessions/${session.id}/submit`, {
+      method: "POST",
+      body: validPlanFor(session.id),
+    });
+    expect((await postJson(`/api/sessions/${session.id}/approve`, { force: true })).status).toBe(200);
+    const res = await progress(session.id, "too late");
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("E_SESSION_OVER");
+  });
+
+  test("a parked wait publishes presence: a session frame with parked=true + fresh lastContactAt", async () => {
+    const session = mintSession();
+    const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
+    const snapshot = await reader.next();
+    expect((snapshot.data as { session: { parked: boolean } }).session.parked).toBeFalse();
+
+    const parked = app.request(`/api/sessions/${session.id}/events?wait=5`);
+    // Entering the park broadcasts presence before any event arrives.
+    const onPark = await reader.next();
+    expect(onPark.event).toBe("session");
+    const parkedSummary = (
+      onPark.data as { session: { parked: boolean; lastContactAt?: number } }
+    ).session;
+    expect(parkedSummary.parked).toBeTrue();
+    expect(typeof parkedSummary.lastContactAt).toBe("number");
+
+    // Wake it so the parked request resolves (and the test doesn't dangle).
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ body: "wake" }] });
+    await parked;
+    await reader.cancel();
+  });
+});
+
 describe("approve and the status machine (M4)", () => {
   const submitValid = async (id: string) => {
     const res = await app.request(`/api/sessions/${id}/submit`, {
@@ -1409,6 +1513,7 @@ describe("approve and the status machine (M4)", () => {
       ["question answer", postJson(`/api/sessions/${session.id}/questions/q1/answer`, { body: "x" })],
       ["ask", postJson(`/api/sessions/${session.id}/ask`, { question: "x" })],
       ["answers", postJson(`/api/sessions/${session.id}/answers`, { question: "q1", text: "x" })],
+      ["progress", postJson(`/api/sessions/${session.id}/progress`, { note: "x" })],
       ["approve", approve(session.id, { force: true })],
     ];
     for (const [verb, pending] of attempts) {

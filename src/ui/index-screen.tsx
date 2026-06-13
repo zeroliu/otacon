@@ -2,27 +2,20 @@
 // status chip, unread badge, last activity, session accent. Live over SSE.
 
 import type { CSSProperties, MouseEvent } from "react";
-import { useEffect, useState } from "react";
 import { accentStyle } from "./accent";
 import type { LiveSession } from "./api";
 import { useSessions } from "./api";
-import { LinkState, StatusChip } from "./chip";
+import { AgentDot, LinkState, StatusChip } from "./chip";
 import { relativeTime, repoName } from "./format";
 import { navigate } from "./router";
 import { unreadCount } from "./seen";
-
-/** Re-render every `ms` so "3m ago" stays honest while the page idles. */
-function useTick(ms: number): void {
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    const timer = setInterval(() => setTick((t) => t + 1), ms);
-    return () => clearInterval(timer);
-  }, [ms]);
-}
+import { useNow } from "./tick";
 
 export function IndexScreen() {
   const { sessions, connected } = useSessions();
-  useTick(30_000);
+  // One ticking clock for the whole list: keeps "3m ago" and every card's
+  // agent-presence dot honest while the page idles between SSE frames.
+  const now = useNow(30_000);
   return (
     <div className="page">
       <header className="masthead">
@@ -43,7 +36,7 @@ export function IndexScreen() {
       ) : (
         <main className="cards">
           {sessions.map((session, index) => (
-            <SessionCard key={session.id} session={session} index={index} />
+            <SessionCard key={session.id} session={session} index={index} now={now} />
           ))}
         </main>
       )}
@@ -51,7 +44,15 @@ export function IndexScreen() {
   );
 }
 
-function SessionCard({ session, index }: { session: LiveSession; index: number }) {
+function SessionCard({
+  session,
+  index,
+  now,
+}: {
+  session: LiveSession;
+  index: number;
+  now: number;
+}) {
   const unread = unreadCount(session.id, session.revision) > 0;
   const href = `/s/${session.id}`;
   const style = { ...accentStyle(session.id), "--i": index } as CSSProperties;
@@ -77,8 +78,18 @@ function SessionCard({ session, index }: { session: LiveSession; index: number }
         <span className="card-sig" aria-hidden="true">
           ▍
         </span>
-        <StatusChip status={session.status} openQuestions={session.openQuestions} />
-        <span className="card-time">{relativeTime(session.updatedAt)}</span>
+        <StatusChip
+          status={session.status}
+          openQuestions={session.openQuestions}
+          latestActivity={session.latestActivity}
+        />
+        <AgentDot
+          status={session.status}
+          parked={session.parked}
+          lastContactAt={session.lastContactAt}
+          now={now}
+        />
+        <span className="card-time">{relativeTime(session.updatedAt, now)}</span>
       </div>
     </a>
   );

@@ -4,7 +4,7 @@
 // in-process Notifier, snapshot-first SSE, no replay").
 
 import { EventEmitter } from "node:events";
-import type { SessionSummary, Thread, TranscriptEntry } from "../shared/types.js";
+import type { ActivityNote, SessionSummary, Thread, TranscriptEntry } from "../shared/types.js";
 
 /**
  * One UI event: `type` becomes the SSE event name, `session` is the routing
@@ -12,7 +12,9 @@ import type { SessionSummary, Thread, TranscriptEntry } from "../shared/types.js
  * frame carries the full thread — both a new thread (comment/question posted)
  * and an updated one (the agent's answer landing); the UI upserts by id. A
  * `grill` frame is the transcript's equivalent: a question asked, or an
- * existing entry gaining its answer. A `removed` frame is terminal: the
+ * existing entry gaining its answer. An `activity` frame carries one new
+ * progress note for the per-session activity log (the chip rides `session`
+ * frames' `latestActivity` instead). A `removed` frame is terminal: the
  * session left the registry (otacon clean) — the index drops its card and an
  * open review screen flips to its cleaned state (DESIGN.md §12).
  */
@@ -26,7 +28,8 @@ export type UiEvent =
     }
   | { type: "queue"; session: string; data: { session: string; pending: number } }
   | { type: "thread"; session: string; data: { session: string; thread: Thread } }
-  | { type: "grill"; session: string; data: { session: string; entry: TranscriptEntry } };
+  | { type: "grill"; session: string; data: { session: string; entry: TranscriptEntry } }
+  | { type: "activity"; session: string; data: { session: string; note: ActivityNote } };
 
 export class Notifier {
   private readonly emitter = new EventEmitter();

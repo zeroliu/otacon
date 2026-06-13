@@ -70,5 +70,8 @@ artifact by `bun run accept` (and `playwright test`'s UI acceptance spec).
 - **M5 — install + phone polish** (install/doctor/expose/open/clean, Claude
   Code/Codex/OpenCode wrappers + Stop hook, Tailscale docs; section-menu
   anchoring, sticky bar, session switcher, live clean) — **done**
+- **Post-v1 — live agent activity** (`otacon progress` narration → live activity
+  log + activity-driven draft chip + agent-presence dot; start-first protocol loop;
+  single-source protocol wrappers) — **done**
 
-All v1 milestones are complete.
+All v1 milestones are complete; post-v1 work lands as the milestones above.

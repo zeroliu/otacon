@@ -50,7 +50,7 @@ test("pre-plan grill: `otacon ask` raises a live card, recommended chip first, o
   await page.goto(`/s/${session.id}`);
   // Zero revisions: the screen is already useful — the wait copy says so.
   await expect(page.locator(".review-wait")).toContainText("interviews before it drafts");
-  await expect(page.locator(".chip")).toHaveText("agent drafting");
+  await expect(page.locator(".chip")).toHaveText("agent working");
   await plantMarker(page);
 
   // The REAL CLI asks; the card lands over SSE, no reload.
@@ -109,7 +109,7 @@ test("pre-plan grill: `otacon ask` raises a live card, recommended chip first, o
   await expect(settled).toBeVisible();
   await expect(settled.locator(".settled-choice")).toHaveText("HS256");
   await expect(page.locator(".grill-open-count")).toHaveCount(0);
-  await expect(page.locator(".chip")).toHaveText("agent drafting");
+  await expect(page.locator(".chip")).toHaveText("agent working");
 });
 
 test("multi-select toggles chips and arms a send; free text answers optionless questions", async ({
@@ -361,7 +361,7 @@ test("index chips: questions pending lights live on an open question, approved s
   const session = await createSession(request, uniqueTitle("chip-light"));
   await page.goto("/");
   const card = page.locator(".card", { hasText: session.title });
-  await expect(card.locator(".chip")).toHaveText("agent drafting");
+  await expect(card.locator(".chip")).toHaveText("agent working");
   await plantMarker(page);
 
   // An open agent question outranks the stored status (derived, §10)…
@@ -369,7 +369,7 @@ test("index chips: questions pending lights live on an open question, approved s
   await expect(card.locator(".chip")).toHaveText("questions pending");
   // …and answering hands the turn back.
   await answer(request, session.id, { question: qid, text: "the staging deploy" });
-  await expect(card.locator(".chip")).toHaveText("agent drafting");
+  await expect(card.locator(".chip")).toHaveText("agent working");
 
   await submitFixturePlan(request, session.id, "valid-plan.md");
   await expect(card.locator(".chip")).toHaveText("awaiting your review");

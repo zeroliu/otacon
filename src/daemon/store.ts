@@ -387,6 +387,11 @@ export class Store {
     return paths.transcriptPath(this.require(id).repo, id);
   }
 
+  /** Where this session's live-activity feed persists (src/daemon/activity.ts). */
+  activityPath(id: string): string {
+    return paths.activityPath(this.require(id).repo, id);
+  }
+
   private require(id: string): RegistrySession {
     const session = this.registry.sessions[id];
     if (!session) throw new Error(`unknown session: ${id}`);
