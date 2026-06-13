@@ -72,3 +72,6 @@ artifact by `bun run accept` (and `playwright test`'s UI acceptance spec).
   anchoring, sticky bar, session switcher, live clean) — **done**
 
 All v1 milestones are complete.
+
+- **M6 — expressive plan visuals** (markdown-native callouts, decision matrix, inline
+  scope pills + wrapper guidance that pushes their use) — **in progress**

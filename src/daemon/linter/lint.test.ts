@@ -245,6 +245,40 @@ describe("L2 budgets", () => {
     };
     expect(run(doc({ summary }), { session: SESSION }, config).ok).toBeTrue();
   });
+
+  test("visual cap: two callouts pass, a third fails", () => {
+    const callout = (type: string, body: string) => `> [!${type}]\n> ${body}\n`;
+    const atCap = `## Summary\n\nShip it.\n\n${callout("risk", "a")}\n${callout("note", "b")}`;
+    expect(run(doc({ summary: atCap })).ok).toBeTrue();
+
+    const overCap = `${atCap}\n${callout("decision", "c")}`;
+    const result = run(doc({ summary: overCap }));
+    expect(result.errors.find((e) => e.code === "E_VISUAL_CAP")).toMatchObject({
+      section: "summary",
+      budget: 2,
+      actual: 3,
+    });
+  });
+
+  test("visual cap applies to a phase's read path but not Details", () => {
+    const overCap =
+      "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n- a.ts\nVerification: t\n\n> [!risk]\n> a\n\n> [!note]\n> b\n\n> [!decision]\n> c\n";
+    expect(run(doc({ phases: overCap })).errors.find((e) => e.code === "E_VISUAL_CAP")).toMatchObject({
+      section: "phase-1",
+    });
+
+    const inDetails =
+      "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n- a.ts\nVerification: t\n\n#### Details\n\n> [!risk]\n> a\n\n> [!note]\n> b\n\n> [!decision]\n> c\n";
+    expect(run(doc({ phases: inDetails })).ok).toBeTrue();
+  });
+
+  test("visual cap is config-driven", () => {
+    const summary = `## Summary\n\nShip it.\n\n> [!risk]\n> a\n\n> [!note]\n> b\n\n> [!decision]\n> c\n`;
+    const config: OtaconConfig = {
+      budgets: { ...DEFAULT_CONFIG.budgets, maxVisualsPerReadSection: 3 },
+    };
+    expect(run(doc({ summary }), { session: SESSION }, config).ok).toBeTrue();
+  });
 });
 
 describe("L6 details soft cap", () => {

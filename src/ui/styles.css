@@ -620,6 +620,53 @@ code {
   color: var(--ink-soft);
 }
 
+/* ── callouts: semantic ink (DESIGN.md §4 visuals, §10) ──
+ * A typed blockquote (`> [!risk]`) renders flat: a 2px top rule and a
+ * glyph+label inked in the type's hue, no fill and no radius. Hues are drawn
+ * only from the tested chip/accent palette, so contrast holds in light + dark
+ * and only `decision` leans on the per-session accent (by design). */
+.callout {
+  --callout-ink: var(--ink-soft);
+  margin: 0 0 0.85em;
+  padding: 9px 0 1px;
+  border-top: 2px solid var(--callout-ink);
+}
+
+.callout-risk {
+  --callout-ink: var(--chip-await-ink);
+}
+
+.callout-note {
+  --callout-ink: var(--chip-revise-ink);
+}
+
+.callout-decision {
+  --callout-ink: var(--accent);
+}
+
+.callout-assumption {
+  --callout-ink: var(--ink-soft);
+}
+
+/* Chrome: the marker line. Unselectable so it never lands inside a comment
+ * anchor (the body text below carries the anchor instead). */
+.callout-label {
+  margin: 0 0 0.4em;
+  font: 600 10.5px/1.2 var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--callout-ink);
+  user-select: none;
+}
+
+.callout-body > :first-child {
+  margin-top: 0;
+}
+
+.callout-body > :last-child {
+  margin-bottom: 0;
+}
+
 .md h1,
 .md h2,
 .md h3,

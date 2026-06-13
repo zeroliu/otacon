@@ -9,6 +9,8 @@ export interface Budgets {
   risksMaxItems: number;
   riskEntryLines: number;
   maxFencesPerReadSection: number;
+  /** Markdown-native visuals (callouts, decision matrices) per read-path section. */
+  maxVisualsPerReadSection: number;
   detailsSoftCapLines: number;
 }
 
@@ -25,6 +27,7 @@ export const DEFAULT_CONFIG: OtaconConfig = {
     risksMaxItems: 5,
     riskEntryLines: 2,
     maxFencesPerReadSection: 1,
+    maxVisualsPerReadSection: 2,
     detailsSoftCapLines: 80,
   },
 };
