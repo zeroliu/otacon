@@ -705,6 +705,20 @@ code {
   color: var(--ink-soft);
 }
 
+/* Decision matrix: the chosen row (first cell ✓) is accent-inked so the winner
+ * reads at a glance — a 2px accent rule on the marker cell plus a faint wash,
+ * staying in the semantic-ink vocabulary (DESIGN.md §4, §10). Tables with no
+ * ✓ row are untouched and read as ordinary tables. */
+.md tbody tr.chosen > td {
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.md tbody tr.chosen > td:first-child {
+  color: var(--accent);
+  border-left: 2px solid var(--accent);
+}
+
 /* ── phases: the carded schema ── */
 
 .phase {

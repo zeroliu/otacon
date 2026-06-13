@@ -263,3 +263,45 @@ describe("callout detection", () => {
     expect(phase.details!.lineCount).toBeGreaterThan(0);
   });
 });
+
+describe("table (decision matrix) detection", () => {
+  test("a GFM table is budget-exempt and counts as one visual", () => {
+    const plan = parsePlan(
+      planWith("## Summary\n\nShip it.\n\n| Pick | Option |\n| --- | --- |\n| ✓ | A |\n| | B |\n"),
+    );
+    const summary = plan.sections[0]!;
+    expect(summary.budgetedLineCount).toBe(1); // only "Ship it." counts
+    expect(summary.visualCount).toBe(1);
+  });
+
+  test("a pipe in prose without a delimiter row is not a table", () => {
+    const plan = parsePlan(planWith("## Summary\n\nuse a | b style\nplain prose\n"));
+    expect(plan.sections[0]!.budgetedLineCount).toBe(2);
+    expect(plan.sections[0]!.visualCount).toBe(0);
+  });
+
+  test("a table in a phase read path counts toward the phase, not Details", () => {
+    const inRead = parsePlan(
+      planWith(
+        "## Phases\n\n### Phase 1 — x\n\nGoal: g\nFiles:\n- a.ts\nVerification: t\n\n| Opt | x |\n| - | - |\n| ✓ | A |\n",
+      ),
+    );
+    expect(inRead.sections[0]!.phases![0]!.visualCount).toBe(1);
+
+    const inDetails = parsePlan(
+      planWith(
+        "## Phases\n\n### Phase 1 — x\n\nGoal: g\n\n#### Details\n\n| Opt | x |\n| - | - |\n| A | 1 |\n",
+      ),
+    );
+    expect(inDetails.sections[0]!.phases![0]!.visualCount).toBe(0);
+  });
+
+  test("callouts and tables share the per-section visual count", () => {
+    const plan = parsePlan(
+      planWith(
+        "## Summary\n\n> [!note]\n> n\n\n| a | b |\n| - | - |\n| 1 | 2 |\n",
+      ),
+    );
+    expect(plan.sections[0]!.visualCount).toBe(2);
+  });
+});

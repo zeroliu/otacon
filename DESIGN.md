@@ -181,6 +181,9 @@ to readable text if rendering ever fails:
 - **Callouts** — a blockquote whose first line is `[!risk]`, `[!note]`, `[!decision]`,
   or `[!assumption]` renders as a flat semantic-ink panel (§10). Unknown types stay
   ordinary blockquotes.
+- **Decision matrix** — a GFM table whose chosen row leads with a `✓` first cell; the
+  renderer accent-inks that row so the winner reads at a glance (§10). Any table with no
+  `✓` row degrades to a plain table.
 
 These are exempt from line budgets but counted against a per-read-path-section **visual
 cap** (default 2, tunable — the same shape as the one-fence rule, and uncapped inside
@@ -558,7 +561,9 @@ flat panel with a 2px top rule and a glyph+label inked in the type's hue — ris
 note blue, decision accent, assumption muted — no fill, no radius, drawn only from the
 tested chip/accent palette so the codec discipline and light/dark contrast both hold.
 The marker line is chrome (unselectable, never anchored); the body stays anchorable
-markdown so a comment pins to one specific callout.
+markdown so a comment pins to one specific callout. A **decision matrix** is a plain
+GFM table; the chosen row (first cell `✓`) gets a 2px accent rule on the marker cell
+and a faint accent wash — the winner inked, the alternatives left as ordinary rows.
 
 ### Index (the phone bookmark)
 

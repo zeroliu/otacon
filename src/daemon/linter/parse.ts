@@ -84,6 +84,16 @@ const LIST_ITEM_RE = /^[-*+]\s+/;
 // blockquote (or an unknown `[!type]`) stays ordinary budgeted prose.
 const QUOTE_RE = /^\s*>/;
 const CALLOUT_RE = /^\s*>\s*\[!(?:risk|note|decision|assumption)\]\s*$/i;
+
+// A GFM table: a header row (has a pipe) immediately followed by a delimiter
+// row (pipes plus only `-:` and spaces, with at least one `-`). The renderer
+// styles such tables as decision matrices; the parser exempts their lines from
+// the line budget and counts the table as one visual, like a callout.
+const TABLE_ROW_RE = /\|/;
+function isTableDelimiter(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.includes("-") && trimmed.includes("|") && /^[|\s:-]+$/.test(trimmed);
+}
 const FRONTMATTER_KEY_RE = /^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/;
 
 export function slugify(title: string): string {
@@ -135,6 +145,9 @@ export function parsePlan(content: string): ParsedPlan {
   // Open blockquote run: a callout (budget-exempt, counts as one visual) or a
   // plain quote (ordinary budgeted prose). Reset by any structural boundary.
   let quote: { callout: boolean } | null = null;
+  // Open GFM table run (a decision matrix): budget-exempt, counts as one
+  // visual. Reset by any structural boundary.
+  let inTable = false;
   let inDetails = false;
   let openDetails: DetailsBlock | null = null;
   let detailsLastContent = 0;
@@ -180,6 +193,7 @@ export function parsePlan(content: string): ParsedPlan {
       fence = fenceMatch[1]!;
       fenceOpenLine = lineNo;
       quote = null;
+      inTable = false;
       closeItem();
       if (inDetails) detailsLastContent = lineNo;
       else if (phase) phase.fenceCount++;
@@ -190,6 +204,7 @@ export function parsePlan(content: string): ParsedPlan {
     const heading = HEADING_RE.exec(line);
     if (heading) {
       quote = null; // a heading ends any open blockquote run
+      inTable = false;
       const level = heading[1]!.length;
       const title = heading[2]!;
       if (level === 2) {
@@ -268,6 +283,20 @@ export function parsePlan(content: string): ParsedPlan {
       } else if (!phase && section) {
         section.budgetedLineCount++;
       }
+      continue;
+    }
+
+    // GFM table runs (outside Details): budget-exempt, one visual each. A table
+    // starts where a pipe-bearing line is followed by a delimiter row.
+    if (inTable) {
+      if (TABLE_ROW_RE.test(line)) continue;
+      inTable = false; // a non-row line ends the table; fall through
+    }
+    if (TABLE_ROW_RE.test(line) && isTableDelimiter(lines[idx + 1] ?? "")) {
+      inTable = true;
+      closeItem();
+      if (phase) phase.visualCount++;
+      else if (section) section.visualCount++;
       continue;
     }
 

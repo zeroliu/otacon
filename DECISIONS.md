@@ -39,11 +39,13 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 ## Plan visuals: markdown-native, semantic-ink, budget-capped
 
-- **Decision:** Review-oriented plan visuals (v1: typed callouts) are authored as plain
-  markdown the renderer styles — a `> [!type]` blockquote, not a fenced DSL. Type is
-  encoded with semantic ink (a 2px top rule + glyph in a per-type hue drawn from the
-  tested chip/accent palette), no fills, no radius. Visuals are exempt from line budgets
-  but capped per read-path section (default 2, tunable), parallel to the one-fence rule.
+- **Decision:** Review-oriented plan visuals (v1: typed callouts, decision matrices, and
+  inline scope pills) are authored as plain markdown the renderer styles — a `> [!type]`
+  blockquote, a `✓`-led GFM table, bracket tokens — not fenced DSLs. Type/winner is
+  encoded with semantic ink (a 2px accent rule + glyph/hue drawn from the tested
+  chip/accent palette), no heavy fills, no radius. The block visuals are exempt from line
+  budgets but capped per read-path section (default 2, tunable), parallel to the one-fence
+  rule; inline pills are always free.
 - **Why:** Markdown-native keeps every element comment-anchorable (a comment pins to one
   risk), diff-able, and degrading to readable text if rendering fails — a fenced DSL
   would anchor only at section level and sit outside the budget/diff machinery. Semantic
