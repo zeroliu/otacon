@@ -174,6 +174,25 @@ A before/after pair is two adjacent fences whose info strings carry `before` and
 them side-by-side on desktop, stacked on phones; an unpaired tag renders as an
 ordinary fence. The plan stays plain renderable markdown everywhere else.
 
+**Review visuals (markdown-native).** Beyond fences, a set of primitives the renderer
+styles from plain markdown — so each stays comment-anchorable, diff-able, and degrades
+to readable text if rendering ever fails:
+
+- **Callouts** — a blockquote whose first line is `[!risk]`, `[!note]`, `[!decision]`,
+  or `[!assumption]` renders as a flat semantic-ink panel (§10). Unknown types stay
+  ordinary blockquotes.
+- **Decision matrix** — a GFM table whose chosen row leads with a `✓` first cell; the
+  renderer accent-inks that row so the winner reads at a glance (§10). Any table with no
+  `✓` row degrades to a plain table.
+- **Inline scope pills** — a closed set of bracket tokens (`[new]`, `[breaking]`,
+  `[risky]`, `[deletes]`) renders as small mono tags inline in prose (§10). Markdown
+  links and the `[assumed]` decision tag are left untouched.
+
+The two block visuals are exempt from line budgets but counted against a
+per-read-path-section **visual cap** (default 2, tunable — the same shape as the
+one-fence rule, and uncapped inside Details), so a 2-line risk can _be_ a callout without
+a section becoming a wall of widgets. **Inline pills are always free** (never counted).
+
 ### Anchoring (for comments)
 
 Comments anchor to **section ID + text quote** (exact text + prefix/suffix context),
@@ -587,6 +606,19 @@ bottom sheets, the drawer) keep a shadow to lift off the page. Controls keep the
 treatment: chips (with the `★rec` star and on/off states), buttons, inputs, and pills
 are hit targets, not container chrome, and are unchanged. The index is a top-ruled
 telemetry list rather than a stack of boxes.
+
+**Callouts** apply this vocabulary to plan prose: a `> [!risk]` blockquote becomes a
+flat panel with a 2px top rule and a glyph+label inked in the type's hue — risk amber,
+note blue, decision accent, assumption muted — no fill, no radius, drawn only from the
+tested chip/accent palette so the codec discipline and light/dark contrast both hold.
+The marker line is chrome (unselectable, never anchored); the body stays anchorable
+markdown so a comment pins to one specific callout. A **decision matrix** is a plain
+GFM table; the chosen row (first cell `✓`) gets a 2px accent rule on the marker cell
+and a faint accent wash — the winner inked, the alternatives left as ordinary rows.
+**Inline pills** are small mono tags hued by scope (new green, breaking/deletes red,
+risky amber). They render the keyword without its brackets, so — like inline emphasis —
+a comment quote that spans a pill may not survive a cross-revision re-anchor; it orphans
+gracefully rather than misattaching.
 
 ### Index (the phone bookmark)
 

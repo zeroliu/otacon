@@ -40,6 +40,8 @@ export interface Phase {
   strayH4s: number[];
   /** Fences outside Details — the phase's read path. */
   fenceCount: number;
+  /** Markdown-native visuals (callouts, matrices) outside Details — capped. */
+  visualCount: number;
 }
 
 export interface Section {
@@ -49,6 +51,8 @@ export interface Section {
   endLine: number;
   budgetedLineCount: number;
   fenceCount: number;
+  /** Markdown-native visuals (callouts, matrices) in the section read path. */
+  visualCount: number;
   listItems: ListItem[];
   phases?: Phase[];
 }
@@ -74,6 +78,22 @@ const PHASE_RE = /^### Phase (\d+) [—-] (.+?)\s*$/;
 const HEADING_RE = /^(#{2,4})\s+(.+?)\s*$/;
 const FENCE_RE = /^\s*(`{3,}|~{3,})/;
 const LIST_ITEM_RE = /^[-*+]\s+/;
+// A blockquote line, and the callout marker that must be its first line — the
+// same closed type set the renderer styles (src/ui/plan/callout.tsx). A known
+// callout's lines are budget-exempt and count as one visual; a plain
+// blockquote (or an unknown `[!type]`) stays ordinary budgeted prose.
+const QUOTE_RE = /^\s*>/;
+const CALLOUT_RE = /^\s*>\s*\[!(?:risk|note|decision|assumption)\]\s*$/i;
+
+// A GFM table: a header row (has a pipe) immediately followed by a delimiter
+// row (pipes plus only `-:` and spaces, with at least one `-`). The renderer
+// styles such tables as decision matrices; the parser exempts their lines from
+// the line budget and counts the table as one visual, like a callout.
+const TABLE_ROW_RE = /\|/;
+function isTableDelimiter(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.includes("-") && trimmed.includes("|") && /^[|\s:-]+$/.test(trimmed);
+}
 const FRONTMATTER_KEY_RE = /^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/;
 
 export function slugify(title: string): string {
@@ -122,6 +142,12 @@ export function parsePlan(content: string): ParsedPlan {
   let item: ListItem | null = null;
   let fence: string | null = null;
   let fenceOpenLine = 0;
+  // Open blockquote run: a callout (budget-exempt, counts as one visual) or a
+  // plain quote (ordinary budgeted prose). Reset by any structural boundary.
+  let quote: { callout: boolean } | null = null;
+  // Open GFM table run (a decision matrix): budget-exempt, counts as one
+  // visual. Reset by any structural boundary.
+  let inTable = false;
   let inDetails = false;
   let openDetails: DetailsBlock | null = null;
   let detailsLastContent = 0;
@@ -166,6 +192,8 @@ export function parsePlan(content: string): ParsedPlan {
     if (fenceMatch) {
       fence = fenceMatch[1]!;
       fenceOpenLine = lineNo;
+      quote = null;
+      inTable = false;
       closeItem();
       if (inDetails) detailsLastContent = lineNo;
       else if (phase) phase.fenceCount++;
@@ -175,6 +203,8 @@ export function parsePlan(content: string): ParsedPlan {
 
     const heading = HEADING_RE.exec(line);
     if (heading) {
+      quote = null; // a heading ends any open blockquote run
+      inTable = false;
       const level = heading[1]!.length;
       const title = heading[2]!;
       if (level === 2) {
@@ -186,6 +216,7 @@ export function parsePlan(content: string): ParsedPlan {
           endLine: lines.length,
           budgetedLineCount: 0,
           fenceCount: 0,
+          visualCount: 0,
           listItems: [],
         };
         sections.push(section);
@@ -205,6 +236,7 @@ export function parsePlan(content: string): ParsedPlan {
           detailsCount: 0,
           strayH4s: [],
           fenceCount: 0,
+          visualCount: 0,
         };
         (section.phases ??= []).push(phase);
         continue;
@@ -228,6 +260,43 @@ export function parsePlan(content: string): ParsedPlan {
 
     if (inDetails) {
       if (!blank) detailsLastContent = lineNo;
+      continue;
+    }
+
+    // Blockquote runs (outside Details). A known callout is exempt from the
+    // line budget and counts as one visual; a plain blockquote stays budgeted
+    // prose, exactly as before this primitive existed.
+    if (quote) {
+      if (QUOTE_RE.test(line)) {
+        if (!quote.callout && !phase && section) section.budgetedLineCount++;
+        continue;
+      }
+      quote = null; // a non-quote line ends the run; fall through to handle it
+    }
+    if (QUOTE_RE.test(line)) {
+      const callout = CALLOUT_RE.test(line);
+      quote = { callout };
+      closeItem();
+      if (callout) {
+        if (phase) phase.visualCount++;
+        else if (section) section.visualCount++;
+      } else if (!phase && section) {
+        section.budgetedLineCount++;
+      }
+      continue;
+    }
+
+    // GFM table runs (outside Details): budget-exempt, one visual each. A table
+    // starts where a pipe-bearing line is followed by a delimiter row.
+    if (inTable) {
+      if (TABLE_ROW_RE.test(line)) continue;
+      inTable = false; // a non-row line ends the table; fall through
+    }
+    if (TABLE_ROW_RE.test(line) && isTableDelimiter(lines[idx + 1] ?? "")) {
+      inTable = true;
+      closeItem();
+      if (phase) phase.visualCount++;
+      else if (section) section.visualCount++;
       continue;
     }
 

@@ -37,6 +37,25 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   cannot happen. This is what makes the version handshake meaningful.
 - **Revisit when:** Never, realistically.
 
+## Plan visuals: markdown-native, semantic-ink, budget-capped
+
+- **Decision:** Review-oriented plan visuals (v1: typed callouts, decision matrices, and
+  inline scope pills) are authored as plain markdown the renderer styles — a `> [!type]`
+  blockquote, a `✓`-led GFM table, bracket tokens — not fenced DSLs. Type/winner is
+  encoded with semantic ink (a 2px accent rule + glyph/hue drawn from the tested
+  chip/accent palette), no heavy fills, no radius. The block visuals are exempt from line
+  budgets but capped per read-path section (default 2, tunable), parallel to the one-fence
+  rule; inline pills are always free.
+- **Why:** Markdown-native keeps every element comment-anchorable (a comment pins to one
+  risk), diff-able, and degrading to readable text if rendering fails — a fenced DSL
+  would anchor only at section level and sit outside the budget/diff machinery. Semantic
+  ink lets a risk pop out of prose without becoming a Notion block, staying inside the
+  §10 hairline discipline. Budget-exempt-but-capped preserves the "no wall of text"
+  invariant: a 2-line risk can _be_ a callout, but a section can't fill with widgets.
+- **Revisit when:** A visual genuinely needs structure plain markdown can't express (the
+  blast-radius file tree was cut from v1 for exactly this reason), or the cap default of
+  2 proves wrong in real use.
+
 ## Plan parser: hand-rolled and line-based, no markdown/yaml libraries
 
 - **Decision:** The linter parses plans with a single-pass, line-oriented parser; no

@@ -4,10 +4,11 @@
 // content (DESIGN.md §10).
 
 import DOMPurify from "dompurify";
-import { marked } from "marked";
 import { memo, useMemo } from "react";
-
-marked.use({ gfm: true });
+// marked, configured with the plan's markdown-native visuals (callouts,
+// decision matrices). The whole transform pipeline lives in marked-setup so it
+// stays DOM-free and testable; here we only parse + sanitize.
+import { marked } from "./marked-setup";
 
 // The {__html} wrapper identity is what matters here: react-dom re-assigns
 // innerHTML whenever the wrapper object is new, which rebuilds the text nodes

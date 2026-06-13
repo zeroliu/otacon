@@ -270,6 +270,13 @@ export function checkL2(plan: ParsedPlan, budgets: Budgets): LintIssue[] {
         budgets.maxFencesPerReadSection,
         { line: section.startLine, section: id },
       );
+      over(
+        "E_VISUAL_CAP",
+        `Section "## ${section.title}" has too many visuals`,
+        section.visualCount,
+        budgets.maxVisualsPerReadSection,
+        { line: section.startLine, section: id },
+      );
     }
   }
 
@@ -294,6 +301,13 @@ export function checkL2(plan: ParsedPlan, budgets: Budgets): LintIssue[] {
       `Phase ${phase.n} has too many fenced blocks outside Details`,
       phase.fenceCount,
       budgets.maxFencesPerReadSection,
+      { line: phase.startLine, section: phaseSlug(phase) },
+    );
+    over(
+      "E_VISUAL_CAP",
+      `Phase ${phase.n} has too many visuals outside Details`,
+      phase.visualCount,
+      budgets.maxVisualsPerReadSection,
       { line: phase.startLine, section: phaseSlug(phase) },
     );
   }

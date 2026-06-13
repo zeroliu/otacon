@@ -87,8 +87,33 @@ these H2 sections in order: \`## Summary\` (≤5 lines) · \`## Decisions\` (ent
 lines, \`Files:\` list, \`Verification:\` ≤3 lines, optional collapsible
 \`#### Details\` block) · \`## Risks\` (≤5 items, ≤2 lines each) ·
 \`## Open Questions\`. Mermaid / code / \`before\`+\`after\` fences are budget-exempt,
-max one per read-path section. Details may elaborate on the read path, never
+max one per read-path section; the markdown-native review visuals below share a
+separate per-section cap. Details may elaborate on the read path, never
 introduce new scope.
+
+## Visuals — prefer them over prose where they carry the information
+
+Three markdown-native primitives the review UI styles. They degrade to readable
+markdown if rendering fails, and a comment can anchor to one specific risk, row,
+or callout.
+
+- **Callouts** — a blockquote whose first line is a type marker
+  (\`[!risk]\`, \`[!note]\`, \`[!decision]\`, \`[!assumption]\`). Risks and
+  assumptions SHOULD be callouts, not bullets buried in prose:
+  > [!risk]
+  > The JWT cutover locks out sessions issued before it.
+- **Decision matrix** — a GFM table comparing options, the chosen row led by a
+  \`✓\`. A Decisions section weighing 2+ options SHOULD use a matrix:
+  | Pick | Option | Tradeoff                        |
+  | ---- | ------ | ------------------------------- |
+  | ✓    | RS256  | rotate keys without redeploy    |
+  |      | HS256  | shared secret on every verifier |
+- **Scope pills** — inline tags \`[new]\` \`[breaking]\` \`[risky]\` \`[deletes]\`
+  for flagging scope mid-sentence ("adds a [new] issuer; [breaking] cookie removal").
+
+Callouts and matrices are budget-exempt but capped (default 2 per read-path
+section); pills are free. Reach for a visual when it carries the point better
+than a sentence — never as decoration.
 
 ## Rules
 

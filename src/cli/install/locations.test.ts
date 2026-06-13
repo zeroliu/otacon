@@ -86,6 +86,11 @@ describe("wrapper assets", () => {
         "Never end your turn",
         "caffeinate -i",
         "600000 ms",
+        // Visuals guidance (DESIGN.md §4): the three primitives + soft SHOULDs.
+        "## Visuals",
+        "[!risk]",
+        "SHOULD use a matrix",
+        "[new]",
       ]) {
         expect(text).toContain(needle);
       }
