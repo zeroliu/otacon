@@ -26,7 +26,8 @@
     "e2e:grill": "bash test/e2e-grill.sh",
     "e2e:install": "bash test/e2e-install.sh",
     "e2e:ui": "bun run build && playwright test",
-    "smoke": "bash test/smoke.sh"
+    "smoke": "bash test/smoke.sh",
+    "accept": "bash test/acceptance.sh"
   },
   "dependencies": {
     "@hono/node-server": "^1",
