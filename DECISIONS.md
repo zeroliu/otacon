@@ -1025,20 +1025,28 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Decision:** Tailscale is discovered via `OTACON_TAILSCALE` (authoritative when
   set), else PATH, else the macOS app bundle's embedded CLI. `otacon expose`
   automates exactly one thing — `tailscale serve --bg http://127.0.0.1:<port>` after
-  verifying `BackendState === "Running"` — and prints the MagicDNS-derived URL;
-  install, login (`tailscale up`), and tailnet HTTPS/MagicDNS enablement are
-  errors/pointers, never automated. doctor treats every tailscale state as a warning,
-  and wrapper absence likewise; only node < 20 and a daemon that cannot own its port
-  fail the run (exit 1).
+  verifying `BackendState === "Running"` — then **verifies the result** by GETting
+  `<url>api/health` and reporting `verified`; install, login (`tailscale up`), and
+  tailnet HTTPS/MagicDNS enablement are errors/pointers, never automated. doctor
+  treats every tailscale state as a warning, and wrapper absence likewise; only node
+  < 20 and a daemon that cannot own its port fail the run (exit 1).
 - **Why:** Login and HTTPS enablement are interactive and account-scoped (browser
   auth, admin console) — automating them means scraping flows that change under us,
-  for a step done once per machine. The env override extends the established
-  OTACON_HOME/OTACON_PORT escape-hatch pattern and is what makes the expose e2e
-  hermetic (a stub binary, never a real tailnet). Doctor's warn-vs-fail split follows
-  use: phone access and non-Claude agents are optional features, but a broken daemon
-  or runtime breaks everything.
-- **Revisit when:** `tailscale serve` syntax changes (the e2e stub pins today's), or
-  expose needs serve-status introspection to detect an already-configured tailnet.
+  for a step done once per machine. But `serve --bg` exits 0 once its config is
+  written, so it is a false success signal: with the tailnet's HTTPS Certificates
+  disabled the URL resets every TLS handshake, and a bare `ok:true` sent users
+  chasing the wrong layer (the daemon's Origin guard, the App Store sandbox) when the
+  real fix was one admin toggle. An actual GET is the only honest check — DNS that
+  never resolves is fatal (the hermetic e2e stub, a foreign tailnet), a TLS reset is
+  retried to ride out cold-cert provisioning. `cap/https` in `status --json` is *not*
+  a usable signal — it is absent even when HTTPS is enabled and serving. The env
+  override extends the OTACON_HOME/OTACON_PORT escape-hatch pattern and keeps the
+  e2e hermetic (a stub binary + an unresolvable name, never a real tailnet). Doctor's
+  warn-vs-fail split follows use: phone access and non-Claude agents are optional
+  features, but a broken daemon or runtime breaks everything.
+- **Revisit when:** `tailscale serve` syntax changes (the e2e stub pins today's),
+  expose needs serve-status introspection to detect an already-configured tailnet, or
+  Tailscale exposes a reliable "HTTPS enabled" signal that could replace the live GET.
 
 ## open prints, never launches; implicit failures degrade to the index URL
 

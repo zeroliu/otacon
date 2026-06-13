@@ -46,9 +46,18 @@ Reviews work from a phone over Tailscale (DESIGN.md §11) — plans never leave 
 devices, and the tailnet is the auth:
 
 1. Install Tailscale on the Mac and the phone; log in (`tailscale up`).
-2. `otacon expose` — configures `tailscale serve` for the daemon port and prints the
-   HTTPS tailnet URL. Bookmark it on the phone.
-3. Keep the Mac awake while a plan is in review: `caffeinate -i`.
+2. Enable **HTTPS Certificates** for the tailnet: Tailscale admin console → DNS →
+   Enable HTTPS (MagicDNS must be on). This is the one step otacon cannot do for you.
+3. `otacon expose` — configures `tailscale serve` for the daemon port, verifies the
+   tailnet URL actually serves, and prints the HTTPS URL with `verified: true`.
+   Bookmark it on the phone.
+4. Keep the Mac awake while a plan is in review: `caffeinate -i`.
 
-If `tailscale serve` complains about certificates, enable MagicDNS + HTTPS for the
-tailnet in the Tailscale admin console — the one step otacon cannot do for you.
+If you skip step 2, `tailscale serve` still succeeds but the URL resets every TLS
+handshake — so `otacon expose` reports `verified: false` and links the admin DNS page
+instead of handing you a dead URL. (Just enabled HTTPS? The cert can take a minute to
+provision; re-run `expose`.)
+
+On the Mac App Store Tailscale, putting `tailscale` on your `PATH` needs a manual
+launcher — a wrapper script that runs the app-bundle binary (a bare symlink crashes).
+otacon finds the app-bundle binary on its own either way.

@@ -228,10 +228,16 @@ case "$1" in
 esac
 SH
 chmod +x "$TMP/bin/tailscale"
-OTACON_TAILSCALE="$TMP/bin/tailscale" otacon expose > "$TMP/expose-ok.json" 2> /dev/null
+# The stub's tailnet name never resolves, so verification fails fast (DNS) →
+# ok:true with verified:false and a pointer at enabling HTTPS certs. The
+# OTACON_EXPOSE_VERIFY_* knobs keep this hermetic and instant.
+OTACON_TAILSCALE="$TMP/bin/tailscale" OTACON_EXPOSE_VERIFY_ATTEMPTS=1 OTACON_EXPOSE_VERIFY_DELAY_MS=0 \
+  otacon expose > "$TMP/expose-ok.json" 2> "$TMP/expose-ok.err"
 [ "$(json_field ok "$TMP/expose-ok.json")" = "true" ] || fail "stubbed expose did not report ok"
 [ "$(json_field url "$TMP/expose-ok.json")" = "https://zeros-mac.tail1234.ts.net/" ] || fail "expose printed the wrong tailnet URL"
 [ "$(json_field target "$TMP/expose-ok.json")" = "http://127.0.0.1:$PORT" ] || fail "expose serves the wrong target"
-ok "expose fails gracefully without tailscale and prints the tailnet URL with one"
+[ "$(json_field verified "$TMP/expose-ok.json")" = "false" ] || fail "unreachable stub tailnet URL should report verified:false"
+grep -q 'admin/dns' "$TMP/expose-ok.err" || fail "unverified expose should point at enabling HTTPS certs"
+ok "expose fails gracefully without tailscale; with one it serves, verifies, and flags an unreachable URL"
 
 echo "# e2e-install: all $PASS checks passed"
