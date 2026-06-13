@@ -15,6 +15,7 @@ TMP="$(mktemp -d)"
 export OTACON_HOME="$TMP/home"
 REPO="$TMP/repo"
 mkdir -p "$OTACON_HOME" "$REPO"
+printf '{"notifications":{"desktop":false}}' > "$OTACON_HOME/config.json" # hermetic: no real desktop banners
 
 BASE="" # set once the port is picked; the trap may fire before that (set -u)
 DAEMON_PID=""

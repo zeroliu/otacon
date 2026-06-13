@@ -24,9 +24,15 @@ export interface ActivityConfig {
   noteMaxChars: number;
 }
 
+/** Attention notifications (DESIGN.md §6). Desktop = a native macOS banner. */
+export interface Notifications {
+  desktop: boolean;
+}
+
 export interface OtaconConfig {
   budgets: Budgets;
   activity: ActivityConfig;
+  notifications: Notifications;
 }
 
 export const DEFAULT_CONFIG: OtaconConfig = {
@@ -44,6 +50,7 @@ export const DEFAULT_CONFIG: OtaconConfig = {
     cap: 20,
     noteMaxChars: 200,
   },
+  notifications: { desktop: true },
 };
 
 function readJsonFile(path: string): unknown {
@@ -80,9 +87,27 @@ function mergeSection<T extends object>(
   return merged;
 }
 
+/** Overlay one config file's notifications; a non-boolean is ignored with a notice. */
+function mergeNotifications(base: Notifications, raw: unknown, source: string): Notifications {
+  if (typeof raw !== "object" || raw === null) return base;
+  const notifications = (raw as Record<string, unknown>).notifications;
+  if (typeof notifications !== "object" || notifications === null) return base;
+  const merged = { ...base };
+  for (const key of Object.keys(base) as (keyof Notifications)[]) {
+    const value = (notifications as Record<string, unknown>)[key];
+    if (typeof value === "boolean") {
+      merged[key] = value;
+    } else if (value !== undefined) {
+      process.stderr.write(`otacon: ignoring invalid notifications.${key} in ${source}\n`);
+    }
+  }
+  return merged;
+}
+
 /**
  * defaults ← $OTACON_HOME/config.json ← <repo>/otacon.config.json.
- * Loaded fresh on every use so tuning takes effect immediately.
+ * Loaded fresh on every use so tuning takes effect immediately. Each file is
+ * overlaid section by section (budgets, activity, notifications).
  */
 export function loadConfig(repoRoot?: string): OtaconConfig {
   const overlay = (source: string, into: OtaconConfig): OtaconConfig => {
@@ -90,6 +115,7 @@ export function loadConfig(repoRoot?: string): OtaconConfig {
     return {
       budgets: mergeSection(into.budgets, raw, "budgets", source),
       activity: mergeSection(into.activity, raw, "activity", source),
+      notifications: mergeNotifications(into.notifications, raw, source),
     };
   };
   let config = overlay(globalConfigPath(), DEFAULT_CONFIG);

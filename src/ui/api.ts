@@ -222,6 +222,62 @@ export function useSession(id: string): SessionDetail {
   return { session, threads, transcript, activity, missing, cleaned, connected };
 }
 
+const PRESENCE_HEARTBEAT_MS = 20_000;
+
+/**
+ * Report this session's review visibility to the daemon (DESIGN.md §6), so a
+ * desktop banner is suppressed only while the user is actually looking. POSTs
+ * {visible:true} when visible and on a ~20s heartbeat, {visible:false} on
+ * visibilitychange→hidden, and a sendBeacon false on unload (the daemon's ~45s
+ * TTL covers a crash that skips the unload ping). A hidden/backgrounded tab
+ * keeps its SSE stream open but stops being "watched", so banners fire again.
+ */
+export function usePresence(id: string): void {
+  useEffect(() => {
+    const url = `/api/sessions/${id}/presence`;
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    const send = (visible: boolean): void => {
+      void fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ visible }),
+        keepalive: true,
+      }).catch(() => undefined);
+    };
+    const stopHeartbeat = (): void => {
+      if (heartbeat !== undefined) {
+        clearInterval(heartbeat);
+        heartbeat = undefined;
+      }
+    };
+    const sync = (): void => {
+      if (document.visibilityState === "visible") {
+        send(true);
+        if (heartbeat === undefined) heartbeat = setInterval(() => send(true), PRESENCE_HEARTBEAT_MS);
+      } else {
+        stopHeartbeat();
+        send(false);
+      }
+    };
+    // sendBeacon survives page teardown where a keepalive fetch can still race.
+    const onUnload = (): void => {
+      navigator.sendBeacon?.(
+        url,
+        new Blob([JSON.stringify({ visible: false })], { type: "application/json" }),
+      );
+    };
+    sync();
+    document.addEventListener("visibilitychange", sync);
+    window.addEventListener("pagehide", onUnload);
+    return () => {
+      document.removeEventListener("visibilitychange", sync);
+      window.removeEventListener("pagehide", onUnload);
+      stopHeartbeat();
+      send(false); // leaving this screen un-suppresses immediately
+    };
+  }, [id]);
+}
+
 /** A drawer item not yet flushed to the daemon (DESIGN.md §9 batching). */
 export interface CommentDraft {
   anchor: Anchor | null;

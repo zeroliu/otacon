@@ -15,7 +15,15 @@ import type { MouseEvent, ReactNode, RefObject } from "react";
 import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { accentStyle } from "./accent";
 import type { ActivityNote, Anchor, CommentDraft, LiveSession, Thread, TranscriptEntry } from "./api";
-import { postComments, postQuestion, postReviewed, useDiff, useRevision, useSession } from "./api";
+import {
+  postComments,
+  postQuestion,
+  postReviewed,
+  useDiff,
+  usePresence,
+  useRevision,
+  useSession,
+} from "./api";
 import { AgentDot, LinkState, StatusChip } from "./chip";
 import { relativeTime, repoName } from "./format";
 import { ActivityLog } from "./review/activity";
@@ -588,6 +596,9 @@ export function SessionScreen({ id }: { id: string }) {
   // One ticking clock for the presence dot + activity/relative timestamps, so
   // they stay honest while the screen idles between SSE frames.
   const now = useNow(30_000);
+  // Report visibility so the daemon suppresses desktop banners only while this
+  // review is actually on screen (DESIGN.md §6).
+  usePresence(id);
 
   const revision = session?.revision;
   useEffect(() => {

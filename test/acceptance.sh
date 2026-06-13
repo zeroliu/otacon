@@ -30,6 +30,7 @@ export OTACON_TAILSCALE="/nonexistent-tailscale" # never touch a real tailnet
 export NO_PROXY="127.0.0.1,localhost${NO_PROXY:+,$NO_PROXY}"
 REPO="$TMP/project" # the "user's project" git repo
 mkdir -p "$HOME" "$OTACON_HOME" "$REPO"
+printf '{"notifications":{"desktop":false}}' > "$OTACON_HOME/config.json" # hermetic: no real desktop banners
 
 BASE="" # set once the port is picked; the trap may fire before that (set -u)
 DAEMON_PID=""
