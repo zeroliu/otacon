@@ -122,15 +122,18 @@ else
 fi
 
 # ---- grill (ask before drafting, mirroring the real loop) -------------------
-"$OTACON" ask --question "RS256 or HS256?" --options "RS256|HS256" --recommend RS256 >/dev/null
-"$OTACON" ask --question "Anything that should stay out of scope?" >/dev/null
+# Every verb addresses $SID explicitly. This scratch repo's path accumulates
+# draft sessions across reruns — they never reach `approved`, so nothing reaps
+# them — and path-based resolution would then refuse with E_AMBIGUOUS_SESSION.
+"$OTACON" ask --session "$SID" --question "RS256 or HS256?" --options "RS256|HS256" --recommend RS256 >/dev/null
+"$OTACON" ask --session "$SID" --question "Anything that should stay out of scope?" >/dev/null
 # Answer q1 over curl (the phone's path); leave q2 pending so a live grill card shows.
 curl -s -X POST "$BASE/api/sessions/$SID/answers" -H 'content-type: application/json' \
   -d '{"question":"q1","choice":"RS256","text":"simpler key-rotation story"}' >/dev/null
 echo "# grill: q1 answered, q2 left pending"
 
 # ---- submit r1 --------------------------------------------------------------
-"$OTACON" submit >/dev/null
+"$OTACON" submit --session "$SID" >/dev/null
 echo "# revision 1 submitted"
 
 if [ "$FLAVOR" = visuals ]; then
@@ -161,7 +164,7 @@ else
   }
 }
 JSON
-  "$OTACON" submit --resolutions "$REPO/res.json" >/dev/null
+  "$OTACON" submit --session "$SID" --resolutions "$REPO/res.json" >/dev/null
   echo "# revision 2 submitted: diff vs r1, t1 resolved+anchored, t2 orphaned"
 fi
 
@@ -171,13 +174,13 @@ echo "  session : $SID"
 echo "  daemon  : $BASE   (this checkout's isolated daemon)"
 echo "  REVIEW  : $URL"
 echo "=================================================================="
-echo "  open it:  $OTACON open $SID    (or paste the URL)"
+echo "  open it:  $OTACON open --session $SID    (or paste the URL)"
 echo "  phone  :  $OTACON expose       (Tailscale HTTPS)"
 echo "  reset  :  $OTACON restart  |  archive: $OTACON clean"
 echo
 
 # Open it — manual e2e wants eyes on the page (no-op if the browser can't open).
-"$OTACON" open "$SID" >/dev/null 2>&1 || true
+"$OTACON" open --session "$SID" >/dev/null 2>&1 || true
 
 # ---- flavor-specific live drivers -------------------------------------------
 case "$FLAVOR" in
@@ -188,10 +191,10 @@ case "$FLAVOR" in
       printf 'fire what? [q]uestion / [r]evision / [Q]uit: '
       read -r key || break
       case "$key" in
-        q|"") "$OTACON" ask --question "Follow-up at $(date +%H:%M:%S) — proceed?" --options "yes|no" >/dev/null \
+        q|"") "$OTACON" ask --session "$SID" --question "Follow-up at $(date +%H:%M:%S) — proceed?" --options "yes|no" >/dev/null \
                 && echo "  -> grill question posted (watch for a banner)";;
         r)    printf '\n<!-- nudge %s -->\n' "$(date +%s)" >> ".otacon/$SID/plan.md"
-              "$OTACON" submit --resolutions "$REPO/res.json" >/dev/null 2>&1 \
+              "$OTACON" submit --session "$SID" --resolutions "$REPO/res.json" >/dev/null 2>&1 \
                 && echo "  -> revision submitted (watch for a banner)" \
                 || echo "  -> submit refused (likely needs fresh resolutions); try a question instead";;
         Q)    break;;
@@ -200,12 +203,12 @@ case "$FLAVOR" in
     ;;
   activity)
     echo "activity: streaming progress notes — watch the feed + presence dot update live."
-    if ! "$OTACON" progress "warming up" >/dev/null 2>&1; then
+    if ! "$OTACON" progress --session "$SID" "warming up" >/dev/null 2>&1; then
       echo "  (the 'progress' verb isn't built in this checkout yet — skipping the stream)"
     else
       for note in "reading the auth module" "mapping the session store" \
                   "drafting the plan" "revising for the comment batch" "ready for your review"; do
-        "$OTACON" progress "$note" >/dev/null 2>&1 && echo "  -> $note"
+        "$OTACON" progress --session "$SID" "$note" >/dev/null 2>&1 && echo "  -> $note"
         sleep 4
       done
       echo "  done — the dot should drift to 'offline' once the live threshold passes."
