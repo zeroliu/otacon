@@ -246,7 +246,7 @@ the model is suspended — no inference, no token spend.
 
 | Command                                                                     | Effect                                                                        |
 | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `otacon start --title <t> [--quick]`                                        | Mint session, register it, print review URL. Writes `.otacon/current-session` |
+| `otacon start --title <t> [--quick]`                                        | Mint session, register it, print review URL                                   |
 | `otacon submit [plan.md] [--resolutions res.json]`                          | Lint → reject with errors, or store revision N, notify UI                     |
 | `otacon wait [--timeout 540] [--session <id>]`                              | Long-poll this session's queue; print next event as JSON                      |
 | `otacon ask --question "…" [--options "A\|B\|C"] [--recommend A] [--multi]` | Post agent question card to UI (or a batch of independent questions via `--batch <file\|->`); answer arrives via `wait` |
@@ -370,7 +370,7 @@ a failed submit, which returns 422 carrying the linter's `errors`/`warnings` arr
 Every state-mutating session verb (submit, comments, questions and their answers,
 ask, answers, approve) refuses an approved session with 409 `E_SESSION_OVER` — the
 status machine's terminal state is enforced on the daemon, not just by the CLI's
-pointer rules.
+session-resolution rules.
 `/` and `/s/:id` serve the SPA shell (static assets under `/assets/`); an unknown
 session id renders as a client-side not-found state. Each SSE stream opens with a
 `snapshot` frame (the per-session stream's snapshot carries the thread list and the
@@ -427,16 +427,16 @@ Multiple concurrent planning sessions (different repos, worktrees, or features) 
 one daemon.
 
 **Identity & routing.** `otacon start` mints a session ID and registers it in
-`~/.otacon/registry.json` (ID → repo path, branch, title, status). Binding is
-file-based because env vars don't persist across an agent's Bash calls:
+`~/.otacon/registry.json` (ID → repo path, branch, title, status). The registry is
+the single source of truth — there is no local session pointer:
 
-- `start` writes `.otacon/current-session` in the cwd; all commands default to it.
-  Different worktrees = different cwds = parallel planning with zero flags.
-- `--session <id>` overrides everywhere. If a directory has two active sessions, the
-  CLI **refuses** the implicit default and errors with the list — never guesses. The
-  same never-guess rule covers the pointer itself: one naming a session the registry
-  does not know, or an approved (ended) one, is refused — only explicit `--session`
-  reaches an ended session.
+- Commands default to the repo's single active session: the CLI reads the registry
+  and picks the one non-approved session whose repo is the cwd's git root. Different
+  worktrees = different roots = parallel planning with zero flags.
+- `--session <id>` overrides everywhere, and is the only way to reach an approved
+  (ended) session. If a repo has two or more active sessions, the CLI **refuses** the
+  implicit default and errors with the candidate list — never guesses. Zero active
+  sessions for the repo refuses too (`E_NO_SESSION`).
 
 **Event isolation.** One event queue per session. `otacon wait` long-polls only its own
 session's queue; a comment on plan A wakes only plan A's agent. N parked waits = N open
@@ -654,7 +654,7 @@ Operational requirement: the Mac stays awake while a plan is in review
 
 | Location                                 | Contents                                                                                                       | Git                                        |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `<repo>/.otacon/`                        | Working state: `current-session`, `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), threads (`threads.json`: comment + question threads with answers, resolutions, and anchor states inline), the grill transcript (`transcript.json`), queues | **gitignored**                             |
+| `<repo>/.otacon/`                        | Working state under `<id>/`: `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), threads (`threads.json`: comment + question threads with answers, resolutions, and anchor states inline), the grill transcript (`transcript.json`), queues | **gitignored**                             |
 | `<repo>/docs/plans/YYYY-MM-DD-<slug>.md` | Final approved plan (`status: approved` frontmatter + grill transcript)                                        | **committed** (by the agent, post-approve) |
 | `~/.otacon/registry.json`                | Session registry: ID → repo, branch, title, status                                                             | n/a (global)                               |
 
@@ -663,10 +663,9 @@ machine can find it. Review exhaust stays out of git. `otacon clean` archives en
 sessions' working state: for every **approved** session in the current repo (`--all`:
 everywhere), the daemon drops the registry entry (`DELETE /api/sessions/:id`, refused
 409 for active sessions), then the CLI moves `.otacon/<id>/` to
-`.otacon/archive/<id>/` in the session's repo (name collisions get a numeric suffix)
-and removes a `current-session` pointer naming it. Committed plans under `docs/plans/`
-are never touched; events still queued on an ended session are archived with the
-directory rather than blocking the clean.
+`.otacon/archive/<id>/` in the session's repo (name collisions get a numeric suffix).
+Committed plans under `docs/plans/` are never touched; events still queued on an ended
+session are archived with the directory rather than blocking the clean.
 
 **The approved artifact** is the final revision's markdown with the frontmatter
 `status` rewritten to `approved` and `revision` corrected to the daemon's count (the

@@ -1,13 +1,11 @@
 // Registry-first session resolution (DESIGN.md §7): explicit --session always
-// wins; otherwise the .otacon/current-session pointer at the repo root;
-// otherwise the repo's single active session in the daemon registry. Two or
-// more active sessions without a pointer — or a pointer naming a session the
-// registry does not know — is a refusal carrying the candidates, never a guess
-// (DECISIONS.md "Session resolution precedence").
+// wins; otherwise the repo's single active session in the daemon registry — the
+// registry is the single source of truth, there is no local pointer. Zero active
+// sessions for the repo, or two or more, is a refusal carrying the candidates,
+// never a guess (DECISIONS.md "Session resolution precedence").
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
-import { currentSessionPath } from "../shared/paths.js";
+import { realpathSync } from "node:fs";
 import type { RegistrySession } from "../shared/types.js";
 import { api } from "./client.js";
 import { fail } from "./output.js";
@@ -47,15 +45,6 @@ export function currentBranch(cwd: string): string {
   return git(cwd, ["branch", "--show-current"]) ?? "";
 }
 
-/** The .otacon/current-session pointer at a repo root, if readable. */
-export function readPointer(repoRoot: string): string | undefined {
-  try {
-    return readFileSync(currentSessionPath(repoRoot), "utf8").trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /** The daemon registry — callers ensureDaemon() first. */
 export async function listSessions(): Promise<RegistrySession[]> {
   const response = await api("GET", "/api/sessions");
@@ -77,30 +66,12 @@ export function resolveSession(
     return session;
   }
 
+  // No local pointer: the repo's single active (non-approved) session is the
+  // implicit default. An approved session is over (DESIGN.md §6) so it never
+  // counts — reaching it needs an explicit --session. Two or more active
+  // sessions refuse with the candidate list rather than guess: cross-posting
+  // feedback to the wrong plan is unrecoverable confusion.
   const root = findRepoRoot(cwd) ?? realpathOr(cwd);
-  const pointer = readPointer(root);
-  if (pointer !== undefined) {
-    const session = sessions.find((s) => s.id === pointer);
-    if (!session) {
-      // A stale pointer never falls through to the registry scan: silently
-      // picking "the other session" could cross-post feedback.
-      fail(
-        "E_STALE_POINTER",
-        `${currentSessionPath(root)} points at ${pointer}, which is not in the daemon registry; run otacon start or pass --session <id>`,
-      );
-    }
-    if (!isActive(session)) {
-      // An approved session is over (DESIGN.md §6); implicitly submitting to
-      // it would resurrect a finished plan. Explicit --session stays the
-      // escape hatch (e.g. draining a queued approved event after a crash).
-      fail(
-        "E_SESSION_OVER",
-        `${currentSessionPath(root)} points at ${pointer}, which is ${session.status} — that session is over; run otacon start for the next plan or pass --session <id> explicitly`,
-      );
-    }
-    return session;
-  }
-
   const here = sessions.filter((s) => isActive(s) && realpathOr(s.repo) === root);
   if (here.length === 1) return here[0] as RegistrySession;
   if (here.length === 0) {
@@ -111,7 +82,7 @@ export function resolveSession(
   }
   fail(
     "E_AMBIGUOUS_SESSION",
-    `${here.length} active sessions for ${root} and no .otacon/current-session pointer; pass --session <id>`,
+    `${here.length} active sessions for ${root}; pass --session <id>`,
     { sessions: here.map((s) => ({ id: s.id, title: s.title, status: s.status })) },
   );
 }

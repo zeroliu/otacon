@@ -93,11 +93,12 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 ## `.otacon/` lives at the git repo root
 
 - **Decision:** `otacon start` resolves `git rev-parse --show-toplevel` and puts
-  `.otacon/` (and `current-session`) there; in non-git directories it warns and uses
-  the cwd, skipping the `.gitignore` append.
-- **Why:** Subdirectory invocations must find the same session; separate worktrees have
-  distinct roots, which preserves worktree-parallel planning for free. The non-git
-  fallback keeps temp-dir testing trivial.
+  `.otacon/` there (the daemon writes session state under `.otacon/<id>/`); in non-git
+  directories it warns and uses the cwd, skipping the `.gitignore` append.
+- **Why:** Subdirectory invocations must resolve to the same repo root the registry
+  records, so the cwd's single active session is found from anywhere under it; separate
+  worktrees have distinct roots, which preserves worktree-parallel planning for free.
+  The non-git fallback keeps temp-dir testing trivial.
 - **Revisit when:** Monorepo sub-project sessions become a real use case.
 
 ## Frontmatter authority: the daemon owns `revision` and `status`
@@ -299,25 +300,28 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** A consumer needs finer-grained codes than the JSON `error.code`
   already provides.
 
-## Session resolution precedence: explicit, then pointer, then lone active session
+## Session resolution precedence: explicit, then the repo's lone active session
 
-- **Decision:** `--session` always wins (even over a pointer). Otherwise the
-  `.otacon/current-session` pointer at the repo root decides; a pointer naming a
-  session the registry does not know is a hard refusal (`E_STALE_POINTER`), never a
-  fall-through to the registry scan, and one naming an approved session refuses too
-  (`E_SESSION_OVER`) — implicitly submitting would resurrect a finished plan, so an
-  ended session is reachable only via explicit `--session`. Only with no pointer at
-  all may the repo's single *active* (non-approved) registry session be assumed; two
-  or more refuse with the candidate list attached (`E_AMBIGUOUS_SESSION`).
-- **Why:** The never-guess rule (DESIGN.md §7) exists because cross-posting feedback
-  to the wrong plan is unrecoverable confusion. A stale pointer silently resolving to
-  "the other session in this repo" is exactly that failure, so it refuses even when a
-  scan would find one candidate. Approved sessions are excluded because they are
-  over by definition (§6) — a finished plan should never block starting work on the
-  next one. The refusal carries the machine-readable list so the agent's very next
-  call can pass `--session`.
-- **Revisit when:** `otacon clean` starts managing pointers, or archived-but-active
-  states appear.
+- **Decision:** `--session` always wins. Otherwise the CLI resolves against the daemon
+  registry alone: the repo's single *active* (non-approved) session is assumed; zero
+  refuses (`E_NO_SESSION`), two or more refuse with the candidate list attached
+  (`E_AMBIGUOUS_SESSION`). There is no local `.otacon/current-session` pointer — an
+  approved (ended) session is reachable only via explicit `--session`.
+- **Why:** The never-guess rule (DESIGN.md §7) exists because cross-posting feedback to
+  the wrong plan is unrecoverable confusion. The earlier repo-root pointer (last
+  `otacon start` wins) silently sent a session's flagless commands to whichever session
+  another agent `start`ed most recently in the *same* working tree — exactly that
+  failure, and one the pointer's own staleness guards could not catch because the
+  target was a valid active session. Dropping the pointer makes the registry the single
+  source of truth: with one active session the common case stays flag-free, and any
+  ambiguity refuses with the machine-readable list so the agent's very next call can
+  pass `--session`. Approved sessions never count toward the lone-active default —
+  a finished plan (§6) should never block starting the next one, and implicitly
+  resubmitting to it would resurrect a closed plan. Separate worktrees keep parallel
+  planning flag-free because each has its own git root.
+- **Revisit when:** A single working tree needs multiple concurrent sessions resolved
+  without flags (would require a per-terminal binding that env vars can't provide
+  across an agent's Bash calls), or archived-but-active states appear.
 
 ## `wait` parks in ≤240-second slices under one fixed deadline
 
@@ -970,23 +974,29 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 ## Stop hook: plain sh, block-decision JSON, fail-open, stop_hook_active ignored
 
 - **Decision:** The hook is POSIX sh: cwd parsed from the stdin JSON with sed ($PWD
-  fallback), repo root via `git rev-parse`, session from `.otacon/current-session`,
-  status probed with `curl --max-time 2`; an open session emits
-  `{"decision":"block","reason":…}` on exit 0, everything else exits 0 silently.
-  Approval is detected by a `"status":"approved"` substring check. Any failure —
-  missing pointer, daemon down, curl absent — allows the stop. `stop_hook_active` is
-  deliberately not consulted.
+  fallback), repo root via `git rev-parse` canonicalized with `pwd -P`, then the open
+  session is found by fetching `GET /api/sessions` and selecting (in sh) the first
+  non-approved entry whose `repo` equals that root — the compact registry array is
+  split one object per line on `},{`, filtered with `grep`, the id read with `sed`. An
+  open session emits `{"decision":"block","reason":…}` on exit 0, everything else exits
+  0 silently. Any failure — daemon down, curl absent, no match — allows the stop.
+  `stop_hook_active` is deliberately not consulted.
 - **Why:** Exit-0-plus-JSON is Claude Code's documented decision channel and routes
   the reason to the model cleanly (exit 2 ignores stdout and dumps stderr). Fail-open
   is non-negotiable: a guard that can trap an agent in an unstoppable session when
   the daemon dies is worse than no guard. Ignoring `stop_hook_active` is the point of
   §13 — the block should hold exactly as long as the session is open; it terminates
   deterministically because approve flips the status the very check reads, and the
-  human can always interrupt. The substring check is naive but sound in practice: the
-  summary JSON is compact, and a session title containing the literal
-  `"status":"approved"` is not a real threat model for a personal tool.
-- **Revisit when:** Hook input grows fields sed can't safely extract (then: a node
-  one-liner — node is guaranteed by the package's own engines), or false blocks show
+  human can always interrupt. Reading the registry by repo (instead of the old
+  `.otacon/current-session` pointer) keeps the hook in step with the CLI's single
+  source of truth — `pwd -P` canonicalizes the root so it matches the realpath the CLI
+  stores, and a symlink that defeats the match merely fails open. The substring/split
+  parsing is naive but sound in practice: the registry JSON is compact and flat, so a
+  session title containing the literal `},{` or `"status":"approved"` is not a real
+  threat model for a personal tool.
+- **Revisit when:** Hook input or the registry JSON grows shapes sed can't safely
+  extract — a title containing `},{` mis-splits, or nested objects appear (then: a node
+  one-liner — node is guaranteed by the package's own engines) — or false blocks show
   up in real use.
 
 ## clean: daemon deregisters, CLI archives; undrained events leave with the dir
@@ -994,9 +1004,8 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Decision:** `DELETE /api/sessions/:id` accepts only approved sessions (active →
   409 `E_SESSION_ACTIVE`), removes the registry entry, and evicts the session's queue
   instance without draining it; the CLI then moves `.otacon/<id>/` to
-  `.otacon/archive/<id>/` and deletes a `current-session` pointer naming the session.
-  The response reports still-pending events; clean surfaces them as a notice and
-  proceeds. The evicted queue instance is `close()`d: a delivered-but-unacked event's
+  `.otacon/archive/<id>/`. The response reports still-pending events; clean surfaces
+  them as a notice and proceeds. The evicted queue instance is `close()`d: a delivered-but-unacked event's
   post-response ack callback firing after the CLI's dir move would otherwise recreate
   `.otacon/<id>/events.json` next to the archive (writeFileAtomic mkdirs).
 - **Why:** The registry is daemon-owned in-memory state — a CLI editing

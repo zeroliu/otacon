@@ -1,6 +1,6 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RegistrySession } from "../shared/types.js";
@@ -33,11 +33,6 @@ function session(id: string, repo: string, status: RegistrySession["status"] = "
     createdAt: now,
     updatedAt: now,
   };
-}
-
-function writePointer(repoRoot: string, id: string): void {
-  mkdirSync(join(repoRoot, ".otacon"), { recursive: true });
-  writeFileSync(join(repoRoot, ".otacon", "current-session"), `${id}\n`);
 }
 
 function caught(fn: () => unknown): CliError {
@@ -73,10 +68,9 @@ describe("findRepoRoot / currentBranch", () => {
 });
 
 describe("resolveSession: explicit --session", () => {
-  test("explicit id wins over a pointer to a different session", () => {
+  test("explicit id wins over the repo's lone active session", () => {
     gitInit(dir);
     const sessions = [session("otc_aaaaaa", dir), session("otc_bbbbbb", "/elsewhere")];
-    writePointer(dir, "otc_aaaaaa");
     expect(resolveSession(sessions, "otc_bbbbbb", dir).id).toBe("otc_bbbbbb");
   });
 
@@ -92,46 +86,22 @@ describe("resolveSession: explicit --session", () => {
   });
 });
 
-describe("resolveSession: current-session pointer", () => {
-  test("pointer at the repo root resolves from a subdirectory", () => {
-    gitInit(dir);
-    const sub = join(dir, "src", "deep");
-    mkdirSync(sub, { recursive: true });
-    writePointer(dir, "otc_aaaaaa");
-    const sessions = [session("otc_aaaaaa", dir), session("otc_bbbbbb", dir)];
-    expect(resolveSession(sessions, undefined, sub).id).toBe("otc_aaaaaa");
-  });
-
-  test("pointer works in a non-git directory (cwd is the root)", () => {
-    writePointer(dir, "otc_aaaaaa");
-    expect(resolveSession([session("otc_aaaaaa", dir)], undefined, dir).id).toBe("otc_aaaaaa");
-  });
-
-  test("a stale pointer refuses instead of falling through to the registry", () => {
-    gitInit(dir);
-    writePointer(dir, "otc_gonexx");
-    const error = caught(() => resolveSession([session("otc_aaaaaa", dir)], undefined, dir));
-    expect(error.code).toBe("E_STALE_POINTER");
-    expect(error.message).toContain("otc_gonexx");
-  });
-
-  test("a pointer at an approved session refuses — the session is over", () => {
-    gitInit(dir);
-    writePointer(dir, "otc_aaaaaa");
-    const sessions = [session("otc_aaaaaa", dir, "approved"), session("otc_bbbbbb", dir)];
-    const error = caught(() => resolveSession(sessions, undefined, dir));
-    expect(error.code).toBe("E_SESSION_OVER");
-    expect(error.exitCode).toBe(1);
-    expect(error.message).toContain("otc_aaaaaa");
-    expect(error.message).toContain("approved");
-  });
-});
-
-describe("resolveSession: registry scan without a pointer", () => {
+describe("resolveSession: registry scan", () => {
   test("the repo's single active session is assumed", () => {
     gitInit(dir);
     const sessions = [session("otc_aaaaaa", dir), session("otc_bbbbbb", "/elsewhere")];
     expect(resolveSession(sessions, undefined, dir).id).toBe("otc_aaaaaa");
+  });
+
+  test("resolves the repo's active session from a nested subdirectory", () => {
+    gitInit(dir);
+    const sub = join(dir, "src", "deep");
+    mkdirSync(sub, { recursive: true });
+    expect(resolveSession([session("otc_aaaaaa", dir)], undefined, sub).id).toBe("otc_aaaaaa");
+  });
+
+  test("resolves in a non-git directory (cwd is the root)", () => {
+    expect(resolveSession([session("otc_aaaaaa", dir)], undefined, dir).id).toBe("otc_aaaaaa");
   });
 
   test("approved sessions do not count toward ambiguity", () => {

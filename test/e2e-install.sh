@@ -143,7 +143,6 @@ otacon clean > "$TMP/clean.json" 2> /dev/null
 [ -d "$REPO/.otacon/archive/$SID" ] || fail "session dir was not archived"
 [ -f "$REPO/.otacon/archive/$SID/session.json" ] || fail "archived dir lost its state files"
 [ ! -d "$REPO/.otacon/$SID" ] || fail "live session dir still exists after clean"
-[ ! -f "$REPO/.otacon/current-session" ] || fail "clean left the stale current-session pointer"
 [ -f "$REPO/$ART_PATH" ] || fail "clean must never touch docs/plans artifacts"
 curl -s "$BASE/api/sessions" | grep -q "$SID" && fail "registry still lists the cleaned session"
 otacon clean > "$TMP/clean2.json" 2> /dev/null
@@ -165,14 +164,14 @@ curl -s -X POST "$BASE/api/sessions/$SID2/approve" -H 'content-type: application
 printf '{"cwd":"%s"}' "$REPO2" | sh "$HOOK" > "$TMP/hook-approved.out"
 [ ! -s "$TMP/hook-approved.out" ] || fail "hook should allow a stop once the session is approved"
 printf '{"cwd":"%s"}' "$REPO3" | sh "$HOOK" > "$TMP/hook-absent.out"
-[ ! -s "$TMP/hook-absent.out" ] || fail "hook should allow a stop with no session pointer"
+[ ! -s "$TMP/hook-absent.out" ] || fail "hook should allow a stop with no session for the repo"
 cd "$REPO3"
 git init -q -b main .
 otacon start --title "hook daemon down" > /dev/null 2>&1
 DEAD_PORT="$(free_port)"
 printf '{"cwd":"%s"}' "$REPO3" | OTACON_PORT="$DEAD_PORT" sh "$HOOK" > "$TMP/hook-down.out"
 [ ! -s "$TMP/hook-down.out" ] || fail "hook must fail open when the daemon is down"
-ok "Stop hook blocks an open session; allows approved, pointer-less, and daemon-down stops"
+ok "Stop hook blocks an open session; allows approved, no-session, and daemon-down stops"
 
 # --- 9. doctor: green on a healthy setup ----------------------------------------
 otacon doctor > "$TMP/doctor-ok.json" 2> /dev/null || fail "doctor exited nonzero on a healthy setup"

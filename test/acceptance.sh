@@ -113,13 +113,12 @@ SID="$(json_field session "$TMP/start.json")"
 [[ "$SID" == otc_* ]] || fail "start printed no otc_ session id"
 DAEMON_PID="$(curl -sf "$BASE/api/health" | node -pe "JSON.parse(require('fs').readFileSync(0,'utf8')).pid")"
 [ -d "$REPO/.otacon/$SID" ] || fail ".otacon/<session> dir not created"
-[ "$(cat .otacon/current-session)" = "$SID" ] || fail "current-session pointer not written"
 grep -qx '\.otacon/' .gitignore || fail ".otacon/ was not appended to .gitignore"
 grep -qx 'node_modules/' .gitignore || fail "existing .gitignore content was clobbered"
 grep -q 'appended .otacon/' "$TMP/start.err" || fail "no .gitignore notice on stderr"
 grep -q "$SID" "$OTACON_HOME/registry.json" || fail "session missing from the registry"
 json_field url "$TMP/start.json" | grep -q "/s/$SID" || fail "start printed no review URL"
-ok "start: .otacon created, pointer written, .gitignore appended, registered, review URL printed"
+ok "start: .otacon created, .gitignore appended, registered, review URL printed"
 
 # --- 4. grill: ask a chip question; a parked wait is fed the phone's answer ----
 otacon ask --question "RS256 or HS256 for token signing?" \
@@ -339,9 +338,18 @@ set +e
 otacon submit > "$TMP/oversubmit.json" 2> /dev/null
 CODE=$?
 set -e
-[ "$CODE" = "1" ] || fail "submit on the ended session exited $CODE, expected 1"
-[ "$(json_field error.code "$TMP/oversubmit.json")" = "E_SESSION_OVER" ] || fail "expected E_SESSION_OVER"
-ok "post-approve: status shows approved; a further submit is refused (session over)"
+[ "$CODE" = "1" ] || fail "implicit submit after approve exited $CODE, expected 1"
+# No pointer: the approved session is not an active candidate, so an implicit
+# submit finds nothing to resolve. The daemon's terminal-state guard
+# (E_SESSION_OVER) is reached only with an explicit --session.
+[ "$(json_field error.code "$TMP/oversubmit.json")" = "E_NO_SESSION" ] || fail "expected E_NO_SESSION"
+set +e
+otacon submit --session "$SID" > "$TMP/oversubmit2.json" 2> /dev/null
+CODE=$?
+set -e
+[ "$CODE" = "1" ] || fail "explicit submit on the ended session exited $CODE, expected 1"
+[ "$(json_field error.code "$TMP/oversubmit2.json")" = "E_SESSION_OVER" ] || fail "expected E_SESSION_OVER"
+ok "post-approve: implicit submit finds no active session; explicit --session is refused (session over)"
 
 # --- 13. clean archives the working state and prunes the registry -------------
 otacon clean > "$TMP/clean.json" 2> /dev/null
@@ -349,7 +357,6 @@ otacon clean > "$TMP/clean.json" 2> /dev/null
 [ -d "$REPO/.otacon/archive/$SID" ] || fail "session dir was not archived"
 [ -f "$REPO/.otacon/archive/$SID/session.json" ] || fail "archived dir lost its state files"
 [ ! -d "$REPO/.otacon/$SID" ] || fail "live session dir still exists after clean"
-[ ! -f "$REPO/.otacon/current-session" ] || fail "clean left the stale current-session pointer"
 [ -f "$REPO/$ART_PATH" ] || fail "clean must never touch docs/plans artifacts"
 curl -s "$BASE/api/sessions" | grep -q "$SID" && fail "registry still lists the cleaned session"
 ok "clean: archived .otacon/$SID → .otacon/archive/, pruned the registry, kept docs/plans"

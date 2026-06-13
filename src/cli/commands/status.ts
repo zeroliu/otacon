@@ -4,8 +4,7 @@
 //
 // Routing is registry-first (DESIGN.md §7): the daemon's registry says where
 // every session's repo lives, so the default view is "sessions whose repo
-// contains my cwd" — no local state needed beyond the optional
-// .otacon/current-session pointer, which is only reported, never guessed from.
+// contains my cwd" — no local state needed, the registry is the source of truth.
 
 import { sep } from "node:path";
 import { parseArgs } from "node:util";
@@ -13,7 +12,7 @@ import { otaconPort } from "../../shared/paths.js";
 import type { RegistrySession } from "../../shared/types.js";
 import { api, ensureDaemon } from "../client.js";
 import { printJson } from "../output.js";
-import { readPointer, realpathOr } from "../session.js";
+import { realpathOr } from "../session.js";
 
 function repoContains(repo: string, cwd: string): boolean {
   const root = realpathOr(repo);
@@ -35,12 +34,11 @@ export async function statusCommand(argv: string[]): Promise<number> {
   const details = await Promise.all(
     relevant.map((s) => api("GET", `/api/sessions/${s.id}`)),
   );
-  const sessions = relevant.flatMap((session, i) => {
-    const detail = details[i];
+  const sessions = details.flatMap((detail) => {
     // A session can vanish between index and detail (e.g. otacon clean);
     // skip it rather than spreading the 404 error body into the report.
     if (detail === undefined || detail.status !== 200) return [];
-    return [{ ...detail.body, current: readPointer(session.repo) === session.id }];
+    return [detail.body];
   });
   printJson({
     ok: true,

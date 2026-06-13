@@ -57,14 +57,13 @@ otacon status > "$TMP/status2.json"
   || fail "second status respawned instead of reusing the daemon"
 ok "status auto-spawned otacond (pid $DAEMON_PID), reported empty state, exited 0"
 
-# --- 2. start in a git repo: pointer, .gitignore append, registry ------------
+# --- 2. start in a git repo: .gitignore append, registry ---------------------
 cd "$REPO"
 git init -q -b main .
 printf 'node_modules/\n' > .gitignore
 otacon start --title "e2e plan" > "$TMP/start.json" 2> "$TMP/start.err"
 SID="$(json_field session "$TMP/start.json")"
 [[ "$SID" == otc_* ]] || fail "start printed no otc_ session id"
-[ "$(cat .otacon/current-session)" = "$SID" ] || fail "current-session pointer not written"
 grep -qx '\.otacon/' .gitignore || fail ".otacon/ was not appended to .gitignore"
 grep -qx 'node_modules/' .gitignore || fail "existing .gitignore content was clobbered"
 grep -q 'appended .otacon/' "$TMP/start.err" || fail "no .gitignore notice on stderr"
@@ -72,8 +71,7 @@ grep -q "$SID" "$OTACON_HOME/registry.json" || fail "session missing from the re
 json_field url "$TMP/start.json" | grep -q "/s/$SID" || fail "start printed no review URL"
 otacon status > "$TMP/status3.json"
 [ "$(json_field 'sessions[0].id' "$TMP/status3.json")" = "$SID" ] || fail "status does not list the session"
-[ "$(json_field 'sessions[0].current' "$TMP/status3.json")" = "true" ] || fail "status does not mark it current"
-ok "start minted $SID, wrote the pointer, appended .gitignore, registered it"
+ok "start minted $SID, appended .gitignore, registered it"
 
 # --- 3. failing submit, then passing submit ----------------------------------
 mkdir -p ".otacon/$SID"
@@ -155,10 +153,9 @@ WAIT_PID=""
 [ "$(json_field batch "$TMP/wait2.json")" = "b2" ] || fail "expected batch b2 after restart"
 ok "kill -9 mid-wait: CLI respawned otacond (pid $DAEMON_PID), re-parked, delivered b2"
 
-# --- 6. two sessions, no pointer: refuse with the list — never guess ----------
+# --- 6. two active sessions: refuse with the list — never guess ---------------
 otacon start --title "second plan" > "$TMP/start2.json" 2> /dev/null
 SID2="$(json_field session "$TMP/start2.json")"
-rm "$REPO/.otacon/current-session"
 set +e
 otacon submit > "$TMP/ambiguous.json" 2> /dev/null
 CODE=$?
@@ -168,7 +165,7 @@ set -e
 [ "$(json_field 'error.sessions.length' "$TMP/ambiguous.json")" = "2" ] || fail "refusal did not list both sessions"
 grep -q "$SID" "$TMP/ambiguous.json" || fail "refusal list missing $SID"
 grep -q "$SID2" "$TMP/ambiguous.json" || fail "refusal list missing $SID2"
-ok "two active sessions without a pointer: refused with the candidate list"
+ok "two active sessions in the repo: refused with the candidate list"
 
 # --- 7. version mismatch: stale otacond restarted in place --------------------
 # Replace the real daemon with a fake stale otacond (health says 0.0.1, exits

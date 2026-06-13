@@ -1,12 +1,11 @@
 // otacon start --title <t> [--quick] — mint and register a session (DESIGN.md
-// §6, §16): POST /api/sessions, write .otacon/current-session at the repo
-// root, append .otacon/ to the repo's .gitignore if missing (with a notice),
-// print the session id and review URL.
+// §6, §16): POST /api/sessions, append .otacon/ to the repo's .gitignore if
+// missing (with a notice), print the session id and review URL. No local
+// session pointer — the daemon registry is the single source of truth (§7).
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { currentSessionPath, otaconDir } from "../../shared/paths.js";
 import type { RegistrySession } from "../../shared/types.js";
 import { api, baseUrl, ensureDaemon } from "../client.js";
 import { fail, notice, printJson, usageError } from "../output.js";
@@ -41,15 +40,6 @@ export async function startCommand(argv: string[]): Promise<number> {
   }
   const session = created.body as unknown as RegistrySession;
 
-  mkdirSync(otaconDir(repo), { recursive: true });
-  const pointerPath = currentSessionPath(repo);
-  if (existsSync(pointerPath)) {
-    const previous = readFileSync(pointerPath, "utf8").trim();
-    if (previous !== "" && previous !== session.id) {
-      notice(`current-session pointer now ${session.id} (was ${previous})`);
-    }
-  }
-  writeFileSync(pointerPath, `${session.id}\n`);
   if (gitRoot !== undefined) ensureGitignore(gitRoot);
 
   printJson({

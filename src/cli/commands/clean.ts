@@ -2,17 +2,16 @@
 // §6, §12): for every approved session in this repo (--all: everywhere), the
 // daemon deregisters it (DELETE /api/sessions/:id — refused for active
 // sessions), then the CLI moves .otacon/<id>/ to .otacon/archive/<id>/ in the
-// session's repo and clears a current-session pointer naming it. Committed
-// artifacts under docs/plans/ are never touched (DECISIONS.md "clean: daemon
-// deregisters, CLI archives").
+// session's repo. Committed artifacts under docs/plans/ are never touched
+// (DECISIONS.md "clean: daemon deregisters, CLI archives").
 
-import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { currentSessionPath, otaconDir, sessionDir } from "../../shared/paths.js";
+import { otaconDir, sessionDir } from "../../shared/paths.js";
 import { api, ensureDaemon } from "../client.js";
 import { notice, printJson } from "../output.js";
-import { findRepoRoot, listSessions, readPointer, realpathOr } from "../session.js";
+import { findRepoRoot, listSessions, realpathOr } from "../session.js";
 
 /** Move .otacon/<id>/ into .otacon/archive/ (suffix on collision); null = no dir. */
 function archiveSessionDir(repo: string, id: string): string | null {
@@ -52,9 +51,6 @@ export async function cleanCommand(argv: string[]): Promise<number> {
       notice(`${session.id}: ${pending} undelivered event(s) archived with it`);
     }
     const archivedTo = archiveSessionDir(session.repo, session.id);
-    if (readPointer(session.repo) === session.id) {
-      rmSync(currentSessionPath(session.repo), { force: true });
-    }
     cleaned.push({ session: session.id, title: session.title, repo: session.repo, archivedTo });
   }
   if (cleaned.length === 0) {

@@ -111,26 +111,28 @@ ${CODEX_END}`;
 /**
  * The Claude Code Stop hook (DESIGN.md §13): blocks ending the turn while an
  * open otacon session exists in the cwd's repo. Plain sh, fast, fail-open —
- * any failure (no pointer, daemon down, curl missing) allows the stop.
+ * any failure (daemon down, curl missing, no match) allows the stop. With no
+ * local pointer, the open session is found by scanning the daemon registry for
+ * a non-approved session whose repo equals the cwd's git root (DESIGN.md §7).
  */
 export const STOP_HOOK_SCRIPT = `#!/bin/sh
 # otacon Stop hook — ${MANAGED_MARKER}; reinstall overwrites this file.
 # Blocks Claude Code from ending its turn while the cwd's repo has an open
 # otacon plan session (DESIGN.md §13). Fail-open by design: when anything here
-# fails (no pointer, daemon unreachable, curl missing), the stop is allowed.
+# fails (daemon unreachable, curl missing, no match), the stop is allowed.
 input=$(cat 2>/dev/null) || input=""
 cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p')
 [ -n "$cwd" ] || cwd=$PWD
 root=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null) || root=$cwd
-pointer="$root/.otacon/current-session"
-[ -f "$pointer" ] || exit 0
-sid=$(head -n 1 "$pointer" 2>/dev/null | tr -d '[:space:]')
-[ -n "$sid" ] || exit 0
+root=$(cd "$root" 2>/dev/null && pwd -P) || exit 0
 port=\${OTACON_PORT:-4747}
-body=$(curl -fsS --max-time 2 "http://127.0.0.1:$port/api/sessions/$sid" 2>/dev/null) || exit 0
-case $body in
-  *'"status":"approved"'*) exit 0 ;;
-esac
+list=$(curl -fsS --max-time 2 "http://127.0.0.1:$port/api/sessions" 2>/dev/null) || exit 0
+# Split the compact registry array one session-object per line, keep this repo's
+# open (non-approved) sessions, take the first id. The repo match is exact: the
+# pattern includes the closing quote of the JSON value.
+sid=$(printf '%s' "$list" | sed 's/},{/}\\
+{/g' | grep -F "\\"repo\\":\\"$root\\"" | grep -v '"status":"approved"' | sed -n '1s/.*"id":"\\([^"]*\\)".*/\\1/p')
+[ -n "$sid" ] || exit 0
 printf '{"decision":"block","reason":"otacon plan session %s is still open — run otacon wait --timeout 540 (Bash timeout 600000 ms) and keep handling events until the plan is approved; run otacon status to re-orient."}\\n' "$sid"
 exit 0
 `;

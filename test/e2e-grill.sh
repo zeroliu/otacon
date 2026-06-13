@@ -154,7 +154,10 @@ otacon submit > "$TMP/oversubmit.json" 2> /dev/null
 CODE=$?
 set -e
 [ "$CODE" = "1" ] || fail "submit on the ended session exited $CODE, expected 1"
-[ "$(json_field error.code "$TMP/oversubmit.json")" = "E_SESSION_OVER" ] || fail "expected E_SESSION_OVER from the pointer"
+# No pointer: the approved session is not an active candidate, so an implicit
+# submit resolves nothing. The terminal-state guard is asserted below, via the
+# daemon directly and via an explicit --session ask.
+[ "$(json_field error.code "$TMP/oversubmit.json")" = "E_NO_SESSION" ] || fail "expected E_NO_SESSION"
 HTTP=$(curl -s -o "$TMP/oversubmit2.json" -w '%{http_code}' \
   -X POST "$BASE/api/sessions/$SID/submit" -H 'content-type: text/markdown' \
   --data-binary "@.otacon/$SID/plan.md")
@@ -166,7 +169,7 @@ CODE=$?
 set -e
 [ "$CODE" = "1" ] || fail "ask on the ended session exited $CODE, expected 1"
 [ "$(json_field error.code "$TMP/overask.json")" = "E_SESSION_OVER" ] || fail "ask did not refuse with E_SESSION_OVER"
-ok "the approved session is over: CLI and daemon refuse submit/ask with E_SESSION_OVER"
+ok "the approved session is over: implicit submit finds no active session; daemon and explicit --session ask refuse with E_SESSION_OVER"
 
 # --- 8. a --quick session downgrades L3 to warnings ----------------------------
 otacon start --quick --title "quick grill" > "$TMP/quick.json" 2> /dev/null

@@ -34,10 +34,6 @@ export function otaconDir(repoRoot: string): string {
   return join(repoRoot, ".otacon");
 }
 
-export function currentSessionPath(repoRoot: string): string {
-  return join(otaconDir(repoRoot), "current-session");
-}
-
 export function sessionDir(repoRoot: string, id: string): string {
   return join(otaconDir(repoRoot), id);
 }
