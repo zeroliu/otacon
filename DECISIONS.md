@@ -975,7 +975,9 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   instance without draining it; the CLI then moves `.otacon/<id>/` to
   `.otacon/archive/<id>/` and deletes a `current-session` pointer naming the session.
   The response reports still-pending events; clean surfaces them as a notice and
-  proceeds.
+  proceeds. The evicted queue instance is `close()`d: a delivered-but-unacked event's
+  post-response ack callback firing after the CLI's dir move would otherwise recreate
+  `.otacon/<id>/events.json` next to the archive (writeFileAtomic mkdirs).
 - **Why:** The registry is daemon-owned in-memory state — a CLI editing
   `registry.json` directly would be overwritten by the next flush, so deregistration
   must be a daemon verb; the dir move stays in the CLI because the files live in the

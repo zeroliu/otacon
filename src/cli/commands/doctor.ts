@@ -11,11 +11,10 @@ import { ensureDaemon } from "../client.js";
 import { CODEX_BEGIN, MANAGED_MARKER } from "../install/assets.js";
 import {
   claudeHookScriptPath,
-  claudeSettingsPath,
   claudeSkillPath,
   codexAgentsPath,
   opencodeSkillPath,
-  stopHookRegistered,
+  settingsRegisterStopHook,
 } from "../install/locations.js";
 import { findTailscale, tailscaleStatus } from "../install/tailscale.js";
 import { CliError, printJson } from "../output.js";
@@ -39,15 +38,8 @@ function wrapperCheck(name: string, path: string, marker: string): Check {
 
 function stopHookCheck(): Check {
   const name = "stop-hook";
-  try {
-    const raw = JSON.parse(readFileSync(claudeSettingsPath(), "utf8")) as {
-      hooks?: { Stop?: unknown };
-    };
-    if (stopHookRegistered(raw?.hooks?.Stop, claudeHookScriptPath())) {
-      return { name, status: "ok", detail: claudeHookScriptPath() };
-    }
-  } catch {
-    // missing/unparseable settings: not registered
+  if (settingsRegisterStopHook()) {
+    return { name, status: "ok", detail: claudeHookScriptPath() };
   }
   return {
     name,

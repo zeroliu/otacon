@@ -311,9 +311,15 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
         409,
       );
     }
-    const pendingEvents = queueFor(session.id).size;
-    queues.delete(session.id);
+    const queue = queueFor(session.id);
+    const pendingEvents = queue.size;
+    // Deregister first — it can throw (registry flush), and an early queue
+    // eviction would orphan in-flight ack tracking for a session that is in
+    // fact still registered. Then close the evicted instance so a late
+    // in-flight ack cannot recreate .otacon/<id>/ after the CLI archives it.
     store.deleteSession(session.id);
+    queue.close();
+    queues.delete(session.id);
     return c.json({ ok: true, session: session.id, repo: session.repo, pendingEvents });
   });
 

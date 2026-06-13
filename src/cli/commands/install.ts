@@ -17,7 +17,7 @@ import {
   codexAgentsPath,
   mergeStopHook,
   opencodeSkillPath,
-  stopHookRegistered,
+  settingsRegisterStopHook,
   upsertMarkedBlock,
 } from "../install/locations.js";
 import { fail, notice, printJson, usageError } from "../output.js";
@@ -96,13 +96,7 @@ function applyStopHook(): HooksReport {
 /** Without --hooks: report the current state and offer the flag (DESIGN.md §16). */
 function offerStopHook(): HooksReport {
   const path = claudeSettingsPath();
-  let registered = false;
-  try {
-    const raw = JSON.parse(readFileSync(path, "utf8")) as { hooks?: { Stop?: unknown } };
-    registered = stopHookRegistered(raw?.hooks?.Stop, claudeHookScriptPath());
-  } catch {
-    // missing or unparseable settings: not registered
-  }
+  const registered = settingsRegisterStopHook();
   if (!registered) {
     notice(
       "Stop hook not registered — run `otacon install --agent claude --hooks` to add it to " +

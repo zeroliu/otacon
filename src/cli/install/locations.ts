@@ -1,8 +1,9 @@
 // Where each agent reads its wrapper from (DESIGN.md §16; DECISIONS.md
-// "Wrapper destinations per agent"), plus the pure merge helpers install and
-// doctor share. homedir() honors $HOME, which is what keeps the install e2e
-// hermetic under a temp HOME.
+// "Wrapper destinations per agent"), plus the merge/registration helpers
+// install and doctor share. homedir() honors $HOME, which is what keeps the
+// install e2e hermetic under a temp HOME.
 
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -55,6 +56,22 @@ export function upsertMarkedBlock(
   if (existing.trim() === "") return `${block}\n`;
   const separator = existing.endsWith("\n") ? "\n" : "\n\n";
   return `${existing}${separator}${block}\n`;
+}
+
+/**
+ * Whether ~/.claude/settings.json currently registers the otacon Stop hook
+ * (install's offer path and doctor's check). Missing or unparseable settings
+ * read as "not registered" — only --hooks treats unparseable as an error.
+ */
+export function settingsRegisterStopHook(): boolean {
+  try {
+    const raw = JSON.parse(readFileSync(claudeSettingsPath(), "utf8")) as {
+      hooks?: { Stop?: unknown };
+    };
+    return stopHookRegistered(raw?.hooks?.Stop, claudeHookScriptPath());
+  } catch {
+    return false;
+  }
 }
 
 /** True when some Stop matcher entry already runs `command`. */

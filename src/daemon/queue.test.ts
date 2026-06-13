@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EventPayload, QueuedEvent } from "../shared/types.js";
@@ -220,6 +220,28 @@ describe("SessionQueue at-least-once delivery", () => {
     q.park((e) => got.push(e));
     q.requeue(event);
     expect(got.map((e) => e.seq)).toEqual([1]);
+  });
+});
+
+describe("SessionQueue close (DELETE eviction)", () => {
+  test("flush after close never touches disk — a late ack cannot recreate the archived file", () => {
+    const q = new SessionQueue(file);
+    q.enqueue(payload(1), 1);
+    const taken = q.take() as QueuedEvent;
+    q.close();
+    rmSync(file); // otacon clean archived the session dir
+    q.flush(taken); // the post-response ack callback fires late
+    expect(existsSync(file)).toBe(false);
+  });
+
+  test("requeue after close is a no-op on disk", () => {
+    const q = new SessionQueue(file);
+    q.enqueue(payload(1), 1);
+    const taken = q.take() as QueuedEvent;
+    q.close();
+    rmSync(file);
+    q.requeue(taken); // client aborted after wake, post-eviction
+    expect(existsSync(file)).toBe(false);
   });
 });
 

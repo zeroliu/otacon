@@ -28,6 +28,7 @@ export class SessionQueue {
   /** Dequeued (taken or delivered to a waiter) but not yet acked via flush(event). */
   private inFlight: QueuedEvent[] = [];
   private waiters: { waiter: Waiter }[] = [];
+  private closed = false;
 
   constructor(private readonly filePath: string) {
     if (!existsSync(filePath)) return;
@@ -93,8 +94,20 @@ export class SessionQueue {
     };
   }
 
+  /**
+   * Detach from disk forever (DELETE /api/sessions/:id evicted this instance):
+   * flush and requeue become no-ops. A delivered-but-unacked event's
+   * post-response ack callback can fire after `otacon clean` archives the
+   * session dir — writing then would recreate .otacon/<id>/ next to the
+   * archive (writeFileAtomic mkdirs). The events file leaves with the dir.
+   */
+  close(): void {
+    this.closed = true;
+  }
+
   /** Return an undeliverable event (e.g. wait aborted after wake) to the head, durably. */
   requeue(event: QueuedEvent): void {
+    if (this.closed) return;
     this.dropInFlight(event);
     this.events.unshift(event);
     this.flush();
@@ -107,6 +120,7 @@ export class SessionQueue {
    * response just went out for to ack it — only an ack removes it from disk.
    */
   flush(acked?: QueuedEvent): void {
+    if (this.closed) return;
     if (acked) this.dropInFlight(acked);
     const file: EventsFile = { version: 1, events: [...this.inFlight, ...this.events] };
     writeFileAtomic(this.filePath, stringify(file));
