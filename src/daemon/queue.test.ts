@@ -245,6 +245,43 @@ describe("SessionQueue close (DELETE eviction)", () => {
   });
 });
 
+describe("SessionQueue closeWith (pending delete)", () => {
+  const terminal: EventPayload = { event: "deleted", session: "otc_abc123" };
+
+  test("wakes every parked waiter with the same terminal event and empties the waiter list", () => {
+    const q = new SessionQueue(file);
+    const got: EventPayload[] = [];
+    q.park((e) => got.push(e.payload));
+    q.park((e) => got.push(e.payload));
+    q.closeWith(terminal);
+    expect(got).toEqual([terminal, terminal]);
+    expect(q.waiterCount).toBe(0);
+  });
+
+  test("persists nothing for the synthetic event — closed before it is handed out", () => {
+    const q = new SessionQueue(file); // file does not exist yet
+    q.park(() => {});
+    q.closeWith(terminal);
+    expect(existsSync(file)).toBe(false);
+  });
+
+  test("flush after closeWith never touches disk — a late ack cannot recreate the removed dir", () => {
+    const q = new SessionQueue(file);
+    q.enqueue(payload(1), 1);
+    const taken = q.take() as QueuedEvent;
+    q.closeWith(terminal); // the pending delete woke the parked agent
+    rmSync(file); // the working dir was hard-removed
+    q.flush(taken); // the woken poll's post-response ack fires late
+    expect(existsSync(file)).toBe(false);
+  });
+
+  test("no parked waiter: closeWith just closes (the agent finds out on its next call)", () => {
+    const q = new SessionQueue(file);
+    expect(() => q.closeWith(terminal)).not.toThrow();
+    expect(q.waiterCount).toBe(0);
+  });
+});
+
 describe("SessionQueue persistence", () => {
   test("events round-trip FIFO across instances", () => {
     const q1 = new SessionQueue(file);

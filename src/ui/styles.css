@@ -3303,6 +3303,86 @@ code {
   border-color: var(--chip-await-ink);
 }
 
+/* Delete confirm sheet (delete-pending-session): the approve sheet re-inked in
+   the caution amber — the palette carries no red, so the copy carries the
+   permanence. One stage, no force. */
+.delete-sheet {
+  border-top-color: var(--chip-await-ink);
+}
+
+.delete-sheet .approve-head {
+  color: var(--chip-await-ink);
+}
+
+.btn-delete {
+  border: 1px solid transparent;
+  background: var(--chip-await-ink);
+  color: var(--surface);
+}
+
+.btn-delete:not(:disabled):hover {
+  filter: brightness(1.08);
+}
+
+/* The trailing ✕ on a pending index card — muted until hover/focus. */
+.card-delete {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--ink-soft);
+  font: 12px/1 var(--mono);
+  cursor: pointer;
+  opacity: 0.5;
+  transition: opacity 0.12s ease, color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+@media (hover: hover) {
+  .card-delete:hover {
+    opacity: 1;
+    color: var(--chip-await-ink);
+    border-color: color-mix(in srgb, var(--chip-await-ink) 45%, transparent);
+    background: var(--chip-await-bg);
+  }
+}
+
+.card-delete:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The session header's delete control (pending sessions only). */
+.session-delete {
+  flex: none;
+  padding: 6px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: none;
+  color: var(--ink-soft);
+  font: 600 10.5px/1 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+.session-delete:hover {
+  color: var(--chip-await-ink);
+  border-color: color-mix(in srgb, var(--chip-await-ink) 55%, var(--line-strong));
+  background: var(--chip-await-bg);
+}
+
+.session-delete:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* The quiet after: approved, read-only, artifact named when known. */
 .approved-note {
   display: flex;

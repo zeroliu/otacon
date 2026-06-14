@@ -36,6 +36,7 @@ import {
 } from "./review/anchor";
 import type { CapturedSelection, LitThread } from "./review/anchor";
 import { ApproveDialog, ApprovedNote } from "./review/approve";
+import { DeleteDialog } from "./review/delete";
 import type { ReviewView } from "./review/banner";
 import { ReviewControls, RevisionBanner } from "./review/banner";
 import { DiffView } from "./review/diff";
@@ -138,6 +139,7 @@ function ReviewLoop({
   const [ivTarget, setIvTarget] = useState<InterviewTarget | null>(null);
   const ivNonce = useRef(0);
   const [approveOpen, setApproveOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   // The artifact path from this tab's approve response; after a reload the
   // notice falls back to the destination folder (the path is not persisted
   // on the session summary — DECISIONS.md).
@@ -483,6 +485,7 @@ function ReviewLoop({
         onView={setView}
         hasPlan={hasPlan}
         onApprove={over ? undefined : () => setApproveOpen(true)}
+        onDelete={() => setDeleteOpen(true)}
       />
       <div className="review-layout">
         <div className="review-main">
@@ -597,6 +600,16 @@ function ReviewLoop({
           }}
         />
       )}
+      {deleteOpen && (
+        <DeleteDialog
+          sessionId={session.id}
+          approved={over}
+          onClose={() => setDeleteOpen(false)}
+          // The session is gone — leave for the index rather than waiting for
+          // the `removed` frame to flip this screen to its closed state.
+          onDeleted={() => navigate("/")}
+        />
+      )}
       {hasPlan && !over && (
         <>
           {selection !== null && composer === null && (
@@ -687,9 +700,11 @@ export function SessionScreen({ id }: { id: string }) {
     }
   }, [session]);
 
-  // A `removed` frame landed while this screen was open: otacon clean
-  // archived the session (DESIGN.md §12). A terminal state, not an error —
-  // the stream is closed and the switcher still offers everything live.
+  // A `removed` frame landed while this screen was open (DESIGN.md §12): the
+  // session left the registry — `otacon clean` archived an approved one, or it
+  // was deleted from review while pending. The frame carries no reason, so the
+  // copy covers both. A terminal state, not an error — the stream is closed and
+  // the switcher still offers everything live.
   if (cleaned) {
     return (
       <div className="page">
@@ -698,9 +713,9 @@ export function SessionScreen({ id }: { id: string }) {
           <SessionSwitcher current={id} />
         </div>
         <main className="empty">
-          <p className="empty-title">session cleaned</p>
+          <p className="empty-title">session closed</p>
           <p className="empty-body">
-            This session ended and <code>otacon clean</code> archived its working state. The
+            This session left the codec — approved and cleaned, or deleted from review. Any
             approved plan stays committed under <code>docs/plans/</code>.
           </p>
         </main>

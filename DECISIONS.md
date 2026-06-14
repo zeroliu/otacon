@@ -1018,26 +1018,61 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   one-liner — node is guaranteed by the package's own engines) — or false blocks show
   up in real use.
 
-## clean: daemon deregisters, CLI archives; undrained events leave with the dir
+## clean: daemon deregisters AND archives; undrained events leave with the dir
 
-- **Decision:** `DELETE /api/sessions/:id` accepts only approved sessions (active →
-  409 `E_SESSION_ACTIVE`), removes the registry entry, and evicts the session's queue
-  instance without draining it; the CLI then moves `.otacon/<id>/` to
-  `.otacon/archive/<id>/`. The response reports still-pending events; clean surfaces
-  them as a notice and proceeds. The evicted queue instance is `close()`d: a delivered-but-unacked event's
-  post-response ack callback firing after the CLI's dir move would otherwise recreate
-  `.otacon/<id>/events.json` next to the archive (writeFileAtomic mkdirs).
-- **Why:** The registry is daemon-owned in-memory state — a CLI editing
-  `registry.json` directly would be overwritten by the next flush, so deregistration
-  must be a daemon verb; the dir move stays in the CLI because the files live in the
-  user's repo and the daemon stops knowing the session the moment the entry is gone
-  (`require()` throws — nothing can race the move). Dropping undrained events is the
-  conscious resolution of the M2-era eviction caveat (DECISIONS "One SessionQueue
-  instance per session"): on an approved session the only loseable events are
-  `approved` copies, and the artifact they announce is already committed on disk —
-  blocking clean on them would make the common "approve, then tidy up" flow refuse.
-- **Revisit when:** clean wants to cover non-approved states (abandoned drafts), which
-  would need a real force/drain story.
+- **Decision:** `DELETE /api/sessions/:id` is **status-branched**; its **approved**
+  branch is `otacon clean`'s path: it removes the registry entry, evicts the session's
+  queue instance without draining it, and the **daemon** moves `.otacon/<id>/` to
+  `.otacon/archive/<id>/` (`Store.archiveSessionDir`), returning the destination as
+  `archivedTo`. The CLI just relays that field; it no longer moves the dir itself. The
+  response also reports still-pending events; clean surfaces them as a notice and
+  proceeds. The queue instance is `close()`d before the move: a delivered-but-unacked
+  event's post-response ack firing after it would otherwise recreate
+  `.otacon/<id>/events.json` next to the archive (writeFileAtomic mkdirs). `clean` only
+  ever sends approved ids, and `approved` is terminal, so it never takes the pending
+  branch (next entry).
+- **Why:** The registry is daemon-owned in-memory state — a CLI editing `registry.json`
+  directly would be overwritten by the next flush, so deregistration must be a daemon
+  verb. Archiving moved **into the daemon** (it was the CLI's job through M5) so the
+  browser UI can delete an approved session too (the browser can't move files on the
+  daemon's host); one archiving implementation now serves both clean and the UI. The
+  daemon already owns `.otacon/<id>/`, and it captures `session.repo` before deregistering
+  (the registry copy survives `deleteSession`), so nothing races the move. Dropping
+  undrained events is the conscious resolution of the M2-era eviction caveat (DECISIONS
+  "One SessionQueue instance per session"): on an approved session the only loseable
+  events are `approved` copies, and the artifact they announce is already committed on
+  disk — blocking clean on them would make the common "approve, then tidy up" flow refuse.
+- **Revisit when:** clean itself should bulk-sweep pending sessions (today the UI deletes
+  those one at a time — next entry), which would need a real force/drain story.
+
+## delete a session from the UI: any status; approved archives, pending hard-removes
+
+- **Decision:** Every session is deletable from the review UI (index card + session
+  header) via `DELETE /api/sessions/:id`, status-branched on whether it has committed
+  value. **Approved** → the clean path above (deregister + `archiveSessionDir`,
+  recoverable). **Pending** → wake any parked agent with a terminal `{event:"deleted"}`
+  (new `EventPayload` member; `SessionQueue.closeWith` sets the queue closed, then hands
+  the synthetic event to every parked waiter), deregister, and **hard-remove**
+  `.otacon/<id>/` (`Store.removeSessionDir`, `rm -rf`) — permanently. Ordering on the
+  pending branch: wake before deregister (so the woken long-poll resolves against a
+  still-registered session), and `closeWith` marks the queue closed before the dir is
+  removed (so a late ack cannot recreate it). Both branches publish the existing terminal
+  `removed` SSE frame — no new browser frame. No new CLI verb; the wrapper's review loop
+  learns to stop on `deleted`. The confirm sheet (one stage, mirroring Approve) is the
+  only guard, and its copy follows status: "archived (recoverable)" vs "permanent".
+- **Why:** Sessions of any status pile up in the index, and clearing them shouldn't
+  require the CLI. Disposition follows committed value: an **approved** session's plan +
+  transcript are committed under `docs/plans/`, so its working state is worth keeping —
+  archived, exactly as `clean` already does. A **pending** session has no committed
+  artifact and its working state is pure review exhaust, so archiving every discarded
+  draft would just grow `.otacon/archive/` with junk — hard-remove instead. Waking a
+  parked agent beats letting it 404 on its next `wait`: it stops *immediately and cleanly*
+  with an honest terminal event. Reusing the route + `removed` frame keeps the surface
+  minimal — the UI and CLI already handle `removed`, so only the daemon branch, one event
+  member, the archive helper, and the wrapper text are new.
+- **Revisit when:** users want an undo for the hard-delete (then: a soft-delete/trash with
+  a TTL, not `rm -rf`), or deletion needs to reach an agent that is mid-call rather than
+  parked (then: a per-session kill flag the next call checks, beyond the wake).
 
 ## doctor/expose: OTACON_TAILSCALE override, PATH + app-bundle lookup, serve-only automation
 

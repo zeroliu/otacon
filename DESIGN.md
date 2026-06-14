@@ -307,6 +307,7 @@ replies are refused 400 before linting.
 {"event":"question","session":"otc_a1b2c3","id":"q12","anchor":{"section":"decisions"},"body":"…","replyTo":"q7"}
 {"event":"answer","session":"otc_a1b2c3","question":"q7","choice":"A","text":"…"}
 {"event":"approved","session":"otc_a1b2c3","path":"docs/plans/2026-06-12-auth-refactor.md"}
+{"event":"deleted","session":"otc_a1b2c3"}
 {"event":"timeout"}
 ```
 
@@ -318,7 +319,10 @@ non-empty `text` with no `choice`/`choices` (native-AskUserQuestion "Other" pari
 the user is never trapped by the offered chips. A `question` event carries `replyTo`
 when it is a **follow-up** on an earlier question (§9) — the agent skims that thread's
 prior turns for context and answers the new `q<n>` the usual way. `approved.path` is
-repo-relative — the agent commits that file.
+repo-relative — the agent commits that file. `approved` and `deleted` are both
+**terminal**: the agent stops on either — `deleted` means the reviewer discarded a
+pending session in the UI (§12), so there is no artifact and nothing to commit; a parked
+`wait` is woken with it immediately rather than left to 404 on its next call.
 
 ### HTTP API (daemon, 127.0.0.1 only)
 
@@ -328,9 +332,13 @@ POST /api/shutdown                          clean daemon exit
 GET  /api/sessions                          index (registry)
 POST /api/sessions                          mint + register a session (otacon start)
 GET  /api/sessions/:id                      session detail (+ revision, pending events)
-DELETE /api/sessions/:id                    deregister an ended session (otacon clean);
-                                            non-approved sessions → 409 E_SESSION_ACTIVE;
-                                            publishes a terminal `removed` SSE frame
+DELETE /api/sessions/:id                    deregister a session, status-branched:
+                                            approved → deregister + archive its dir to
+                                            .otacon/archive/ (otacon clean + UI); pending
+                                            → wake the parked agent with a terminal
+                                            `deleted` event, then hard-remove its dir
+                                            (UI, §12). Both publish a terminal `removed`
+                                            SSE frame; response carries `archivedTo`
 GET  /api/sessions/:id/events?wait=540      agent long-poll
 POST /api/sessions/:id/submit               lint; reject 422 with issues, or store revision N
 POST /api/sessions/:id/comments             flush a comment batch
@@ -675,6 +683,14 @@ total; the approved section carries its own count. Approved plans stay readable:
 an approved card opens its read-only plan, and that is the only entry point now the
 switcher (§7) no longer lists them.
 
+Every session carries a small delete control on its card — and one in the review
+screen header — to remove it from the index without dropping to the CLI. It opens a
+confirm sheet (mirroring Approve), and the disposition (and the sheet's copy) follow
+status (§12): an **approved** session is archived (recoverable — its plan stays
+committed under `docs/plans/`), a **pending** one is permanently removed. The card
+control stops its click from following the card link; deleting from the review screen
+returns to the index.
+
 ### Review screen — desktop (Google-Docs margin model)
 
 ```
@@ -833,11 +849,23 @@ Operational requirement: the Mac stays awake while a plan is in review
 The committed plan is the contract `snake` consumes — any fresh session, worktree, or
 machine can find it. Review exhaust stays out of git. `otacon clean` archives ended
 sessions' working state: for every **approved** session in the current repo (`--all`:
-everywhere), the daemon drops the registry entry (`DELETE /api/sessions/:id`, refused
-409 for active sessions), then the CLI moves `.otacon/<id>/` to
-`.otacon/archive/<id>/` in the session's repo (name collisions get a numeric suffix).
-Committed plans under `docs/plans/` are never touched; events still queued on an ended
-session are archived with the directory rather than blocking the clean.
+everywhere), it calls `DELETE /api/sessions/:id`; the daemon drops the registry entry
+and **archives** `.otacon/<id>/` to `.otacon/archive/<id>/` in the session's repo (name
+collisions get a numeric suffix), reporting the destination as `archivedTo`. Committed
+plans under `docs/plans/` are never touched; events still queued on an ended session are
+archived with the directory rather than blocking the clean.
+
+**Deleting any session** from the review UI (§10) reuses that same route, and the
+disposition follows whether a committed plan exists. An **approved** session takes the
+clean path above: its dir is archived (recoverable) because its plan + transcript are
+already committed. A **pending** session has no committed artifact, so the daemon wakes
+any parked agent with a terminal `deleted` event (§6) — so its `wait` loop stops cleanly
+— drops the registry entry, and **hard-removes** `.otacon/<id>/` permanently. The wake
+fires before deregistration so the woken long-poll still resolves against a live session;
+the queue is marked closed first so a late post-response ack cannot recreate the
+directory after it is removed/archived. Both paths publish the same terminal `removed`
+SSE frame; an agent that was not parked at delete time discovers it via the next call's
+404.
 
 **The approved artifact** is the final revision's markdown with the frontmatter
 `status` rewritten to `approved` and `revision` corrected to the daemon's count (the

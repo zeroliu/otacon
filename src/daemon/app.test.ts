@@ -5,7 +5,7 @@ import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hono } from "hono";
-import { eventsPath, otaconPort, revisionPath } from "../shared/paths.js";
+import { eventsPath, otaconPort, revisionPath, sessionDir } from "../shared/paths.js";
 import type { RegistrySession } from "../shared/types.js";
 import { VERSION } from "../shared/version.js";
 import type { NodeBindings } from "./app.js";
@@ -1619,16 +1619,7 @@ describe("DELETE /api/sessions/:id (otacon clean, M5)", () => {
     expect(res.status).toBe(404);
   });
 
-  test("refuses an active session with E_SESSION_ACTIVE", async () => {
-    const session = mintSession();
-    const res = await app.request(`/api/sessions/${session.id}`, { method: "DELETE" });
-    expect(res.status).toBe(409);
-    const body = (await res.json()) as { error: { code: string } };
-    expect(body.error.code).toBe("E_SESSION_ACTIVE");
-    expect(store.getSession(session.id)).toBeDefined();
-  });
-
-  test("deregisters an approved session and reports its pending events", async () => {
+  test("deregisters an approved session, archives its dir, and reports pending events", async () => {
     const session = mintSession();
     await app.request(`/api/sessions/${session.id}/submit`, {
       method: "POST",
@@ -1639,7 +1630,12 @@ describe("DELETE /api/sessions/:id (otacon clean, M5)", () => {
 
     const res = await app.request(`/api/sessions/${session.id}`, { method: "DELETE" });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { ok: boolean; repo: string; pendingEvents: number };
+    const body = (await res.json()) as {
+      ok: boolean;
+      repo: string;
+      pendingEvents: number;
+      archivedTo: string | null;
+    };
     expect(body.ok).toBe(true);
     expect(body.repo).toBe(repo);
     expect(body.pendingEvents).toBe(1); // the undrained `approved` event
@@ -1647,9 +1643,13 @@ describe("DELETE /api/sessions/:id (otacon clean, M5)", () => {
     expect(store.getSession(session.id)).toBeUndefined();
     const detail = await app.request(`/api/sessions/${session.id}`);
     expect(detail.status).toBe(404);
-    // The .otacon/<id>/ dir is untouched — archiving is the CLI's job.
-    expect(existsSync(revisionPath(repo, session.id, 1))).toBe(true);
-    expect(existsSync(eventsPath(repo, session.id))).toBe(true);
+    // The daemon archives the working dir (recoverable) — the live dir is gone,
+    // its state files now live under .otacon/archive/<id>/.
+    expect(body.archivedTo).toBe(join(repo, ".otacon", "archive", session.id));
+    expect(existsSync(sessionDir(repo, session.id))).toBe(false);
+    expect(existsSync(revisionPath(repo, session.id, 1))).toBe(false);
+    expect(existsSync(join(repo, ".otacon", "archive", session.id, "r1.md"))).toBe(true);
+    expect(existsSync(join(repo, ".otacon", "archive", session.id, "events.json"))).toBe(true);
   });
 
   test("deletion publishes a `removed` frame on the index and per-session streams", async () => {
@@ -1687,6 +1687,57 @@ describe("DELETE /api/sessions/:id (otacon clean, M5)", () => {
     const frame = await index.next();
     expect(frame.event).toBe("session");
     expect((frame.data as { session: { id: string } }).session.id).toBe(survivor.id);
+    await index.cancel();
+  });
+});
+
+describe("DELETE a pending session (delete-pending-session)", () => {
+  test("deregisters a pending session and hard-removes its working dir (no archive)", async () => {
+    const session = mintSession();
+    await app.request(`/api/sessions/${session.id}/submit`, {
+      method: "POST",
+      body: validPlanFor(session.id),
+    });
+    expect(existsSync(sessionDir(repo, session.id))).toBe(true);
+
+    const res = await app.request(`/api/sessions/${session.id}`, { method: "DELETE" });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; repo: string };
+    expect(body.ok).toBe(true);
+    expect(body.repo).toBe(repo);
+
+    expect(store.getSession(session.id)).toBeUndefined();
+    const detail = await app.request(`/api/sessions/${session.id}`);
+    expect(detail.status).toBe(404);
+    // Permanent delete, not clean's archive: the dir is gone and nothing was
+    // moved into .otacon/archive/.
+    expect(existsSync(sessionDir(repo, session.id))).toBe(false);
+    expect(existsSync(join(repo, ".otacon", "archive"))).toBe(false);
+  });
+
+  test("wakes a parked agent with a terminal {event:\"deleted\"} the moment it is deleted", async () => {
+    const session = mintSession();
+    const parked = app.request(`/api/sessions/${session.id}/events?wait=5`);
+    await sleep(20); // let the handler reach park()
+
+    const res = await app.request(`/api/sessions/${session.id}`, { method: "DELETE" });
+    expect(res.status).toBe(200);
+
+    const payload = (await (await parked).json()) as { event: string; session: string };
+    expect(payload.event).toBe("deleted");
+    expect(payload.session).toBe(session.id);
+    expect(store.getSession(session.id)).toBeUndefined();
+    expect(existsSync(sessionDir(repo, session.id))).toBe(false);
+  });
+
+  test("publishes a terminal `removed` frame on the index stream", async () => {
+    const session = mintSession();
+    const index = sseReader(await app.request("/api/stream"));
+    expect((await index.next()).event).toBe("snapshot");
+
+    const res = await app.request(`/api/sessions/${session.id}`, { method: "DELETE" });
+    expect(res.status).toBe(200);
+    expect(await index.next()).toEqual({ event: "removed", data: { session: session.id } });
     await index.cancel();
   });
 });

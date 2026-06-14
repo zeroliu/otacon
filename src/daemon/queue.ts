@@ -105,6 +105,23 @@ export class SessionQueue {
     this.closed = true;
   }
 
+  /**
+   * Detach from disk AND wake every parked waiter with one terminal event
+   * (DELETE of a *pending* session, DESIGN.md §12): set `closed` first so
+   * flush/requeue/dispatch all become no-ops — the synthetic event is never
+   * persisted or requeued, and a late post-response ack can't recreate the
+   * `.otacon/<id>/` dir the caller is about to hard-remove — then hand each
+   * parked waiter the same payload so its long-poll resolves cleanly instead of
+   * 404ing on the next call. No waiter parked = nobody to wake (an agent that
+   * is not parked discovers the delete via its next call's 404). The synthetic
+   * seq is -1: it never touches disk or the eventSeq counter.
+   */
+  closeWith(payload: EventPayload): void {
+    this.close(); // share the detach-from-disk semantics — closed first, see above
+    const event: QueuedEvent = { seq: -1, queuedAt: new Date().toISOString(), payload };
+    for (const { waiter } of this.waiters.splice(0)) waiter(event);
+  }
+
   /** Return an undeliverable event (e.g. wait aborted after wake) to the head, durably. */
   requeue(event: QueuedEvent): void {
     if (this.closed) return;

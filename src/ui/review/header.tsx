@@ -71,6 +71,7 @@ export function ReviewHeader({
   onView,
   hasPlan,
   onApprove,
+  onDelete,
 }: {
   session: LiveSession;
   connected: boolean;
@@ -85,6 +86,8 @@ export function ReviewHeader({
    * (ended) session. Click-only: no keyboard shortcut exists, on purpose.
    */
   onApprove?: () => void;
+  /** Opens the delete confirm sheet; every session is deletable (DESIGN.md §10). */
+  onDelete?: () => void;
 }) {
   const compact = useCompactOnScroll();
   return (
@@ -126,6 +129,11 @@ export function ReviewHeader({
           />
           <span className="card-time">{relativeTime(session.updatedAt, now)}</span>
           <LinkState connected={connected} />
+          {onDelete && (
+            <button type="button" className="session-delete" title="delete session" onClick={onDelete}>
+              ✕ delete
+            </button>
+          )}
         </div>
       </div>
     </header>

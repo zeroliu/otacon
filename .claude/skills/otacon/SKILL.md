@@ -75,6 +75,8 @@ machine-readable error you can fix (read the JSON); exit 2 = you invoked it wron
    - `approved` → `git add` + commit the plan file at the printed `path`, print a
      one-line summary, and STOP. Planning only — implementation is another
      session's job.
+   - `deleted` → the user deleted this session in the review UI. It is over:
+     STOP. There is no approved plan and nothing to commit.
 6. **Never end your turn while the session is open.** Nothing to do = park in
    `./bin/otacon wait` again. Confused, crashed, or compacted? `./bin/otacon status` returns
    the open session, revision, and pending events — resume the loop from it.
