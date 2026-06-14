@@ -16,7 +16,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && vite build src/ui && chmod +x dist/cli/main.js dist/daemon/main.js",
-    "typecheck": "tsc --noEmit && tsc -p src/ui",
+    "typecheck": "tsc --noEmit && tsc -p src/ui && tsc -p src/ui/tsconfig.test.json",
     "test": "bun test",
     "dev:daemon": "bun run src/daemon/main.ts",
     "dev:ui": "vite src/ui",
@@ -42,6 +42,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
     "dompurify": "^3.4.10",
+    "happy-dom": "^20.10.3",
     "highlight.js": "^11.11.1",
     "marked": "^18.0.5",
     "mermaid": "^11.15.0",

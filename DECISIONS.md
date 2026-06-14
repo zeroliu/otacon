@@ -1469,3 +1469,57 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** The header needs content that genuinely cannot fit a single morphing
   element, or scroll-driven compaction proves janky on a real low-end device (a
   scroll-timeline / `content-visibility` approach would be the next lever).
+
+## Persistent thread marks paint from a ReviewLoop effect, never a PlanView re-render
+
+- **Decision:** Open threads (unanswered questions, unresolved comments) and unsent
+  drawer drafts keep their anchored text lit via a `useLayoutEffect` that registers two
+  named CSS Custom Highlights over `planRef` (`paintThreads` in `anchor.ts`) — `otacon-q`
+  (underlined) for questions, `otacon-comment` for comments + drafts. The effect is gated
+  on a stable anchor signature (ids + the quote-locating fields) so a drawer body
+  keystroke never repaints, and re-fired by a `PlanView` `onRendered` tick after each
+  lazy/revision commit. The click-flash keeps the higher `Highlight.priority`, so it
+  still pops above the steady marks.
+- **Why:** Re-rendering the memo'd `PlanView` to paint would rewrite the dossier DOM (see
+  the next entry) — collapsing an in-progress selection and re-running mermaid. The
+  Custom Highlight API paints without touching React-owned nodes (the same reason the
+  flash uses it, and why wrapping quotes in `<mark>` was rejected). Open-only scope means
+  answering or resolving a thread clears its mark on the next paint with no extra wiring
+  (it just leaves the lit set); drafts reuse the comment ink, giving three readable
+  states without a third treatment. Orphaned and whole-plan anchors have no re-locatable
+  quote, so they are never lit. The `onRendered` tick closes the window where a new
+  revision's DOM mounts before the paint runs; the signature gate keeps painting off the
+  per-keystroke path.
+- **Revisit when:** Answered/resolved threads should leave a faint "was-discussed" tick
+  instead of clearing (open question from the plan's q1), or a new thread kind needs its
+  own ink and the two-name scheme no longer suffices.
+
+## Tap a lit span focuses its thread; a drag still selects to comment
+
+- **Decision:** In `onPlanClick`, a **collapsed** selection (a tap) whose point hits a
+  lit range — `threadAtPoint`, which re-locates ranges at click time and hit-tests the
+  caret — sets a `focusThread` target the rail scrolls to and pulses. A **non-collapsed**
+  selection (a drag) is left to the select-to-comment toolbar, untouched.
+- **Why:** The Custom Highlight API never intercepts pointer events, so the click falls
+  through to the underlying text — the tap/drag split is the only signal distinguishing
+  "focus this thread" from "select to comment", and resolving it this way avoids a
+  gesture clash. Ranges are re-located per click (never cached as live `Range`s) so the
+  hit-test stays correct across revision re-renders. Hit-testing uses the standard
+  `caretPositionFromPoint` with a WebKit `caretRangeFromPoint` fallback (the only one
+  Safari ships).
+- **Revisit when:** Touch devices want a distinct long-press gesture, or lit spans should
+  carry a hover/focus affordance of their own rather than relying on the rail card pulse.
+
+## UI tests that need the DOM typecheck under a dedicated DOM + bun config
+
+- **Decision:** `src/ui/tsconfig.test.json` (the UI tsconfig plus bun's types) typechecks
+  every UI `*.test.ts`; the root node config no longer includes them, and `bun run
+  typecheck` runs it as a third pass.
+- **Why:** `anchor.ts` re-locates quotes over real `Range`/`TreeWalker`/`querySelector`,
+  so its unit test pulls the module into the typecheck and needs the **DOM** lib — which
+  the node-only root config lacks. The UI config has the DOM lib but carries no `bun:test`
+  types, so neither alone fits a DOM + bun test file; the dedicated config is their union.
+  `bun test` only transpiles, so this gap was invisible until a UI test imported a
+  DOM-dependent module — every prior UI unit test covered pure string logic.
+- **Revisit when:** UI tests need jsdom/happy-dom globals registered process-wide (a bun
+  preload), or the runner grows its own type story that subsumes this config.

@@ -8,23 +8,44 @@
 // top of the rail, badge-counted, never silently dropped.
 
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
-import { memo, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { Anchor, Thread } from "../api";
-import { anchorLabel } from "./anchor";
+import { anchorLabel, motionSafeScroll } from "./anchor";
 
 type CommentThread = Extract<Thread, { kind: "comment" }>;
 type Jump = (anchor: Anchor) => void;
+/** A tap on a lit plan span targets its rail thread; the nonce re-fires taps. */
+type FocusTarget = { id: string; nonce: number };
+const FOCUS_MS = 1600;
 
 // memo'd: the parent review loop re-renders per selection tick and drawer
 // keystroke, while `threads` only gets a new identity on an SSE frame.
 export const ThreadsRail = memo(function ThreadsRail({
   threads,
   onJump,
+  focus,
 }: {
   threads: Thread[];
   onJump: Jump;
+  /** Tap-a-lit-span → focus its rail thread (DESIGN.md §10); null = no target. */
+  focus?: FocusTarget | null;
 }) {
+  const railRef = useRef<HTMLElement>(null);
   const [trayOpen, setTrayOpen] = useState(false);
+  // Scroll the tapped thread's card into view and pulse it. Re-fires on every
+  // tap (focus is a fresh object per nonce), even repeats on the same thread.
+  useEffect(() => {
+    const rail = railRef.current;
+    if (!focus || !rail) return;
+    const card = rail.querySelector<HTMLElement>(`[data-thread="${CSS.escape(focus.id)}"]`);
+    if (!card) return;
+    motionSafeScroll(card, "center");
+    card.classList.remove("thread-focus");
+    void card.offsetWidth; // restart the emphasis animation on a repeat tap
+    card.classList.add("thread-focus");
+    const timer = setTimeout(() => card.classList.remove("thread-focus"), FOCUS_MS);
+    return () => clearTimeout(timer);
+  }, [focus]);
   const { live, orphaned } = useMemo(() => {
     const live: Thread[] = [];
     const orphaned: Thread[] = [];
@@ -35,7 +56,7 @@ export const ThreadsRail = memo(function ThreadsRail({
   }, [threads]);
 
   return (
-    <aside className="rail" aria-label="threads">
+    <aside ref={railRef} className="rail" aria-label="threads">
       <div className="rail-top">
         <span>⊙ threads</span>
         <span className="rail-count">{threads.length}</span>
@@ -96,6 +117,7 @@ function ThreadCard({ thread, onJump }: { thread: Thread; onJump: Jump }) {
     });
   return (
     <article
+      data-thread={thread.id}
       className={`thread thread-${thread.kind}${jump ? " thread-anchored" : ""}`}
       onClick={jump}
       onKeyDown={onKeyDown}

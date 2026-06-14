@@ -1,0 +1,9 @@
+{
+  "//": "UI unit tests run under bun (bun:test) but exercise UI modules that need the DOM lib — anchor.ts re-locates quotes over real Ranges. The root config is node-only (no DOM) and the UI config carries no bun types, so neither alone fits a DOM + bun:test file. This = the UI config (DOM lib, bundler resolution) plus bun's types.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["bun", "vite/client"]
+  },
+  "include": ["**/*.test.ts", "**/*.test.tsx"],
+  "exclude": []
+}
