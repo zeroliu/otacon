@@ -1893,6 +1893,23 @@ code {
   background-color: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
+/* Persistent thread marks (DESIGN.md §10): open threads + unsent drafts keep
+ * their anchored text lit *beneath* the click flash (which keeps top priority).
+ * Low-opacity washes plus a shape cue — questions underlined, comments not —
+ * read apart from each other, from the amber gutter markers, and from the
+ * accent flash, and stay distinguishable without relying on color. Static, so
+ * reduced-motion is unaffected. */
+::highlight(otacon-comment) {
+  background-color: color-mix(in srgb, var(--accent) 13%, transparent);
+}
+
+::highlight(otacon-q) {
+  background-color: color-mix(in srgb, var(--chip-revise-ink) 14%, transparent);
+  text-decoration-line: underline;
+  text-decoration-color: color-mix(in srgb, var(--chip-revise-ink) 70%, transparent);
+  text-decoration-thickness: 2px;
+}
+
 .anchor-hit {
   animation: anchor-hit 1.6s ease-out both;
   border-radius: 8px;
@@ -1906,6 +1923,26 @@ code {
   100% {
     background: transparent;
     box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+/* Reverse interaction (DESIGN.md §10): a tap on a lit span pulses a ring around
+ * its rail card. Ring only — never touches the card's own background. */
+.thread-focus {
+  animation: thread-focus 1.6s ease-out both;
+  border-radius: 8px;
+}
+
+@keyframes thread-focus {
+  0% {
+    box-shadow:
+      0 0 0 2px var(--accent),
+      0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+  100% {
+    box-shadow:
+      0 0 0 2px transparent,
+      0 0 0 6px transparent;
   }
 }
 

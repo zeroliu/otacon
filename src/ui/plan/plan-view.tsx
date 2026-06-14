@@ -6,7 +6,7 @@
 // loads this chunk so the index bundle stays light.
 
 import type { CSSProperties } from "react";
-import { memo, useMemo } from "react";
+import { memo, useLayoutEffect, useMemo } from "react";
 import type { LintIssue } from "../../shared/types";
 import { CITATION_RE } from "../../shared/types";
 import { CodeFence, MermaidFigure, PairFences } from "./code";
@@ -193,17 +193,27 @@ export default memo(function PlanView({
   markdown,
   warnings,
   changedIds = "",
+  onRendered,
 }: {
   markdown: string;
   warnings: LintIssue[];
   /** Space-joined slug ids changed vs the diff baseline (gutter markers, §10). */
   changedIds?: string;
+  /** Fired after each commit so the persistent thread marks can repaint once
+   *  the (memo'd) dossier's DOM lands — a new revision swaps the whole subtree.
+   *  Must be a stable identity (a parent useCallback) or it defeats the memo. */
+  onRendered?: () => void;
 }) {
   const doc = useMemo(() => parsePlan(markdown), [markdown]);
   const changed = useMemo(
     () => new Set(changedIds.split(" ").filter(Boolean)),
     [changedIds],
   );
+  // Runs after every PlanView commit (mount + each revision/diff prop change) —
+  // the memo means that is exactly when planRef's DOM is (re)written.
+  useLayoutEffect(() => {
+    onRendered?.();
+  });
   return (
     <article className="plan">
       {doc.preamble.length > 0 && (

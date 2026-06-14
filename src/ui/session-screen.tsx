@@ -11,8 +11,8 @@
 // deliberately (§10). Approved sessions render read-only behind the quiet
 // approved notice. The renderer stays a lazy chunk.
 
-import type { MouseEvent, ReactNode } from "react";
-import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { MouseEvent, ReactNode, RefObject } from "react";
+import { Component, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { accentStyle } from "./accent";
 import type { ActivityNote, Anchor, CommentDraft, LiveSession, Thread, TranscriptEntry } from "./api";
 import {
@@ -25,8 +25,15 @@ import {
   useSession,
 } from "./api";
 import { ActivityLog } from "./review/activity";
-import { captureSelection, flashAnchor, motionSafeScroll } from "./review/anchor";
-import type { CapturedSelection } from "./review/anchor";
+import {
+  captureSelection,
+  clearThreadHighlights,
+  flashAnchor,
+  motionSafeScroll,
+  paintThreads,
+  threadAtPoint,
+} from "./review/anchor";
+import type { CapturedSelection, LitThread } from "./review/anchor";
 import { ApproveDialog, ApprovedNote } from "./review/approve";
 import type { ReviewView } from "./review/banner";
 import { ReviewControls, RevisionBanner } from "./review/banner";
@@ -134,6 +141,17 @@ function ReviewLoop({
   // notice falls back to the destination folder (the path is not persisted
   // on the session summary — DECISIONS.md).
   const [approvedPath, setApprovedPath] = useState<string | null>(null);
+  // Persistent thread marks (DESIGN.md §10): open threads + unsent drafts keep
+  // their anchored plan text lit. `renderTick` re-fires the paint once the
+  // lazy/memo'd PlanView commits (mount + every revision swap); `focusThread`
+  // drives the reverse gesture — a tap on a lit span targets its rail thread.
+  const [renderTick, setRenderTick] = useState(0);
+  const onRendered = useCallback(() => setRenderTick((tick) => tick + 1), []);
+  const [focusThread, setFocusThread] = useState<{ id: string; nonce: number } | null>(null);
+  const focusNonce = useRef(0);
+  // The painted lit set, mirrored for the click hit-test so onPlanClick stays
+  // off the per-keystroke `litEntries` identity (updated in the paint effect).
+  const litRef = useRef<LitThread[]>([]);
   const hasPlan = session.revision > 0;
   // Approved = the session is over (DESIGN.md §12): the whole screen goes
   // read-only — no selection anchoring, no composer, no drawer, no cards.
@@ -191,6 +209,59 @@ function ReviewLoop({
     },
     [jumpIds],
   );
+
+  // The lit set: open questions (one ink) and open comments + unsent drawer
+  // drafts (another), each with a re-locatable quote. Answered/resolved threads
+  // drop out (so their mark clears on the next paint); orphaned and whole-plan
+  // (null/quote-less) anchors are never lit — no text to paint (DESIGN.md §10).
+  const litEntries = useMemo<LitThread[]>(() => {
+    const lit: LitThread[] = [];
+    for (const thread of threads) {
+      if (thread.anchorState === "orphaned" || !thread.anchor?.exact) continue;
+      if (thread.kind === "question") {
+        if (thread.answer === undefined) {
+          lit.push({ id: thread.id, anchor: thread.anchor, kind: "question" });
+        }
+      } else if (thread.resolution === undefined) {
+        lit.push({ id: thread.id, anchor: thread.anchor, kind: "comment" });
+      }
+    }
+    for (const item of pending) {
+      if (item.anchor?.exact) {
+        lit.push({ id: `draft:${item.key}`, anchor: item.anchor, kind: "comment" });
+      }
+    }
+    return lit;
+  }, [threads, pending]);
+  // A stable signature over the painted set (ids + the fields that locate each
+  // quote), so a drawer body keystroke — new `pending` identity, same anchors —
+  // yields the same value and the paint effect below never re-fires for it.
+  // Control-char delimiters (NUL within a row, newline between rows) so a
+  // free-text quote/prefix can't collide into a false-equal signature and
+  // drop a needed repaint — plan text carries neither.
+  const litSig = litEntries
+    .map((e) => [e.id, e.kind, e.anchor.section, e.anchor.exact, e.anchor.prefix].join("\u0000"))
+    .join("\n");
+
+  // Paint by registering Ranges, never by re-rendering PlanView (DECISIONS.md:
+  // a re-render rewrites the DOM and kills selections). Gated on
+  // litSig/view/renderTick — anchor-set changes, the diff toggle, and the
+  // lazy/revision DOM swaps — so it skips per-keystroke churn. litEntries is
+  // read fresh; litSig is the real trigger.
+  useLayoutEffect(() => {
+    litRef.current = litEntries;
+    const plan = planRef.current;
+    if (!plan) return;
+    if (view === "clean") paintThreads(plan, litEntries);
+    else clearThreadHighlights();
+  }, [litSig, view, renderTick]);
+
+  // On unmount (leaving the review, or switching sessions — this loop is keyed
+  // by session id), clear the persistent marks: the CSS highlight registry is
+  // global, so otherwise a session's ranges would linger on the next screen.
+  // The arrow returns clearThreadHighlights *as the cleanup* — it runs on
+  // teardown, not on mount.
+  useEffect(() => clearThreadHighlights, []);
 
   // No re-review prompt on an approved session: the review is over.
   const fresh =
@@ -348,14 +419,27 @@ function ReviewLoop({
         return;
       }
       const cite = target?.closest?.("a.q-cite");
-      if (!cite) return;
-      event.preventDefault();
-      const id = (cite as HTMLElement).dataset.q;
-      if (id === undefined || !transcript.some((entry) => entry.id === id)) return;
-      setInterviewOpen(true);
-      setIvTarget({ id, nonce: (ivNonce.current += 1) });
+      if (cite) {
+        event.preventDefault();
+        const id = (cite as HTMLElement).dataset.q;
+        if (id !== undefined && transcript.some((entry) => entry.id === id)) {
+          setInterviewOpen(true);
+          setIvTarget({ id, nonce: (ivNonce.current += 1) });
+        }
+        return;
+      }
+      // A tap (collapsed selection) inside a lit span focuses its rail thread; a
+      // drag is select-to-comment, so a real selection is never hijacked. Clean
+      // view only — diff lines aren't anchored, an ended session paints nothing.
+      if (over || view !== "clean") return;
+      const sel = document.getSelection();
+      if (sel && !sel.isCollapsed) return;
+      const plan = planRef.current;
+      if (!plan) return;
+      const hit = threadAtPoint(plan, litRef.current, event.clientX, event.clientY);
+      if (hit !== null) setFocusThread({ id: hit, nonce: (focusNonce.current += 1) });
     },
-    [transcript, over],
+    [transcript, over, view],
   );
 
   // The ⋯ menu's verbs ride the existing composer with a section-only anchor
@@ -456,6 +540,7 @@ function ReviewLoop({
                         markdown={payload.markdown}
                         warnings={payload.warnings}
                         changedIds={changedIds}
+                        onRendered={onRendered}
                       />
                     </Suspense>
                   </RendererBoundary>
@@ -482,7 +567,7 @@ function ReviewLoop({
             </main>
           )}
         </div>
-        {hasPlan && <ThreadsRail threads={threads} onJump={jump} />}
+        {hasPlan && <ThreadsRail threads={threads} onJump={jump} focus={focusThread} />}
       </div>
       {approveOpen && !over && (
         <ApproveDialog

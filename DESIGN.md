@@ -206,6 +206,13 @@ rewrites the stored quote to the new revision's text. A unique match re-anchors
 dropped, and automatically recovered if a later revision restores the text. Whole-plan
 (non-anchored) comments are also supported and never orphan.
 
+Open threads keep their anchored text **persistently lit** in the clean view — the
+steady counterpart to the click-flash, so which passages are under discussion is
+visible at a glance. Open questions, open comments, and unsent drawer drafts paint
+via the CSS Custom Highlight API (never by re-rendering the plan); a mark clears when
+its thread is answered or resolved, or when its quote orphans. Whole-plan and orphaned
+anchors are never lit — there is no re-locatable quote to paint.
+
 ---
 
 ## 5. Linter
@@ -696,6 +703,12 @@ switcher (§7) no longer lists them.
   section) and expand to the agent's reply. Orphaned threads leave the list for the
   rail's badge-counted **orphan tray**: each entry keeps its dead quote (section slug
   struck through) and expands to the full original anchor text.
+- Persistent thread marks (clean view): open threads and unsent drafts keep their
+  anchored text lit — questions one ink (underlined), comments + drafts another — so
+  the two read apart and stay legible without color; the click-flash still pops above
+  them. Reverse interaction: a **tap** (collapsed selection) on a lit span scrolls its
+  rail thread into view and pulses it, while a **drag** still starts select-to-comment,
+  so the gestures never clash.
 - New revision → banner: _changelog / diff / dismiss_. Shown while the latest
   revision is newer than last-reviewed — derived state, so it survives reloads and
   shows on every device — and only from r2 on: the first read of a plan is a first
