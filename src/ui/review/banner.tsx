@@ -1,13 +1,13 @@
 // The re-review chrome (DESIGN.md §9, §10): the new-revision banner — an
 // incoming-transmission card carrying the agent's changelog with the
-// _changelog / diff / dismiss_ verbs — and the controls strip under the
-// session head: the [clean|diff] segmented toggle, the diff baseline picker
-// ("vs r2 ▾"), the changed-section tally with its j/k hint, and the changelog
-// recall button. Banner visibility is *derived server state*: it shows while
-// lastReviewedRevision < revision, and Dismiss simply POSTs /reviewed — the
-// session SSE frame that answers it moves the baseline and unmounts the
-// banner, clears the gutter markers, and re-aims the default diff, all
-// without local bookkeeping.
+// _changelog / diff / dismiss_ verbs — the [clean|diff] segmented toggle (now
+// riding the sticky header, exported as ViewToggle), and the contextual
+// controls strip: the diff baseline picker ("vs r2 ▾"), the changed-section
+// tally with its j/k hint, and the changelog recall button. Banner visibility
+// is *derived server state*: it shows while lastReviewedRevision < revision,
+// and Dismiss simply POSTs /reviewed — the session SSE frame that answers it
+// moves the baseline and unmounts the banner, clears the gutter markers, and
+// re-aims the default diff, all without local bookkeeping.
 
 import { useState } from "react";
 
@@ -82,9 +82,42 @@ export function RevisionBanner({
 
 export type ReviewView = "clean" | "diff";
 
-export function ReviewControls({
+/**
+ * The clean⇄diff segmented toggle (DESIGN.md §10). Lives in the sticky header
+ * (ReviewHeader) so the view switch rides along as the plan scrolls; the rest
+ * of the re-review controls stay in the contextual in-flow strip below.
+ */
+export function ViewToggle({
   view,
   onView,
+}: {
+  view: ReviewView;
+  onView: (view: ReviewView) => void;
+}) {
+  return (
+    <div className="seg" role="group" aria-label="plan view">
+      <button
+        type="button"
+        className={view === "clean" ? "seg-btn seg-on" : "seg-btn"}
+        aria-pressed={view === "clean"}
+        onClick={() => onView("clean")}
+      >
+        clean
+      </button>
+      <button
+        type="button"
+        className={view === "diff" ? "seg-btn seg-on" : "seg-btn"}
+        aria-pressed={view === "diff"}
+        onClick={() => onView("diff")}
+      >
+        diff
+      </button>
+    </div>
+  );
+}
+
+export function ReviewControls({
+  view,
   revision,
   lastReviewed,
   baseline,
@@ -93,10 +126,9 @@ export function ReviewControls({
   showChangelog,
   changelogOpen,
   onToggleChangelog,
-  onApprove,
 }: {
+  /** The view gates the baseline picker (it only makes sense in diff). */
   view: ReviewView;
-  onView: (view: ReviewView) => void;
   revision: number;
   lastReviewed: number;
   /** The effective diff baseline (a pick, or last-reviewed by default). */
@@ -106,12 +138,10 @@ export function ReviewControls({
   showChangelog: boolean;
   changelogOpen: boolean;
   onToggleChangelog: () => void;
-  /**
-   * Opens the approve confirm sheet (DESIGN.md §10) — undefined on an
-   * approved session. Click-only: no keyboard shortcut exists, on purpose.
-   */
-  onApprove?: () => void;
 }) {
+  // Nothing contextual to show (clean view, no changes, no changelog recall) →
+  // no empty strip: the toggle and Approve moved up to the header.
+  if (view !== "diff" && changedCount === 0 && !showChangelog) return null;
   // Prior revisions, newest first, down to the always-reachable empty plan;
   // last-reviewed keeps its seat even when it equals the current revision.
   const top = lastReviewed === revision ? revision : revision - 1;
@@ -119,24 +149,6 @@ export function ReviewControls({
   for (let n = top; n >= 0; n--) options.push(n);
   return (
     <div className="review-controls">
-      <div className="seg" role="group" aria-label="plan view">
-        <button
-          type="button"
-          className={view === "clean" ? "seg-btn seg-on" : "seg-btn"}
-          aria-pressed={view === "clean"}
-          onClick={() => onView("clean")}
-        >
-          clean
-        </button>
-        <button
-          type="button"
-          className={view === "diff" ? "seg-btn seg-on" : "seg-btn"}
-          aria-pressed={view === "diff"}
-          onClick={() => onView("diff")}
-        >
-          diff
-        </button>
-      </div>
       {view === "diff" && (
         <label className="baseline">
           vs
@@ -175,11 +187,6 @@ export function ReviewControls({
           onClick={onToggleChangelog}
         >
           changelog
-        </button>
-      )}
-      {onApprove && (
-        <button type="button" className="ctrl-approve" onClick={onApprove}>
-          <span aria-hidden="true">✓</span> approve
         </button>
       )}
     </div>

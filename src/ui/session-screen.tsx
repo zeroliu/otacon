@@ -11,7 +11,7 @@
 // deliberately (§10). Approved sessions render read-only behind the quiet
 // approved notice. The renderer stays a lazy chunk.
 
-import type { MouseEvent, ReactNode, RefObject } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { accentStyle } from "./accent";
 import type { ActivityNote, Anchor, CommentDraft, LiveSession, Thread, TranscriptEntry } from "./api";
@@ -24,8 +24,6 @@ import {
   useRevision,
   useSession,
 } from "./api";
-import { AgentDot, LinkState, StatusChip } from "./chip";
-import { relativeTime, repoName } from "./format";
 import { ActivityLog } from "./review/activity";
 import { captureSelection, flashAnchor, motionSafeScroll } from "./review/anchor";
 import type { CapturedSelection } from "./review/anchor";
@@ -38,6 +36,7 @@ import { CommentDrawer } from "./review/drawer";
 import type { ComposerState } from "./review/feedback";
 import { Composer, SelectionToolbar, useSelection } from "./review/feedback";
 import { GrillQueue } from "./review/grill";
+import { BackLink, ReviewHeader } from "./review/header";
 import type { InterviewTarget } from "./review/interview";
 import { InterviewPanel } from "./review/interview";
 import { ThreadsRail } from "./review/rail";
@@ -50,19 +49,6 @@ import { SessionSwitcher } from "./switcher";
 import { useNow } from "./tick";
 
 const PlanView = lazy(() => import("./plan/plan-view"));
-
-function BackLink() {
-  const onClick = (event: MouseEvent) => {
-    if (event.button !== 0 || event.metaKey || event.ctrlKey) return;
-    event.preventDefault();
-    navigate("/");
-  };
-  return (
-    <a className="backlink" href="/" onClick={onClick}>
-      ← sessions
-    </a>
-  );
-}
 
 /**
  * Catches a failed plan-view chunk load (offline, or a stale tab whose chunk
@@ -89,44 +75,6 @@ class RendererBoundary extends Component<{ children: ReactNode }, { failed: bool
       </main>
     );
   }
-}
-
-function SessionHead({
-  session,
-  connected,
-  now,
-}: {
-  session: LiveSession;
-  connected: boolean;
-  now: number;
-}) {
-  return (
-    <header className="session-head">
-      <div className="session-head-top">
-        <h1 className="session-title">{session.title}</h1>
-        <span className="session-rev">r{session.revision}</span>
-      </div>
-      <p className="session-where" title={session.repo}>
-        {repoName(session.repo)}
-        {session.branch !== "" && <span> · {session.branch}</span>}
-      </p>
-      <div className="session-meta">
-        <StatusChip
-          status={session.status}
-          openQuestions={session.openQuestions}
-          latestActivity={session.latestActivity}
-        />
-        <AgentDot
-          status={session.status}
-          parked={session.parked}
-          lastContactAt={session.lastContactAt}
-          now={now}
-        />
-        <span className="card-time">{relativeTime(session.updatedAt, now)}</span>
-        <LinkState connected={connected} />
-      </div>
-    </header>
-  );
 }
 
 const COMPOSER_WIDTH = 380;
@@ -435,14 +383,21 @@ function ReviewLoop({
 
   return (
     <>
+      <ReviewHeader
+        session={session}
+        connected={connected}
+        now={now}
+        view={view}
+        onView={setView}
+        hasPlan={hasPlan}
+        onApprove={over ? undefined : () => setApproveOpen(true)}
+      />
       <div className="review-layout">
         <div className="review-main">
-          <SessionHead session={session} connected={connected} now={now} />
           {over && <ApprovedNote path={approvedPath} />}
           {hasPlan && (
             <ReviewControls
               view={view}
-              onView={setView}
               revision={session.revision}
               lastReviewed={session.lastReviewedRevision}
               baseline={from}
@@ -451,7 +406,6 @@ function ReviewLoop({
               showChangelog={!fresh && currentChangelog != null}
               changelogOpen={changelogOpen}
               onToggleChangelog={() => setChangelogOpen((value) => !value)}
-              onApprove={over ? undefined : () => setApproveOpen(true)}
             />
           )}
           {fresh && (
@@ -678,10 +632,10 @@ export function SessionScreen({ id }: { id: string }) {
 
   return (
     <div className="page page-review" style={accentStyle(session.id)}>
-      <div className="topbar">
-        <BackLink />
-        <SessionSwitcher current={session.id} />
-      </div>
+      {/* ReviewHeader (rendered inside ReviewLoop) is the sticky masthead —
+          back + switcher + identity + controls — so there is no separate
+          topbar here. The cleaned/missing/loading shells below keep their own
+          minimal topbar: no plan exists there, nothing to pin. */}
       <ReviewLoop
         key={session.id}
         session={session}

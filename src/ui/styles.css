@@ -540,30 +540,80 @@ code {
   color: var(--ink);
 }
 
-/* The session's identity surface: flat panel, accent carried by a top rule
- * (the §10 hairline-telemetry treatment) instead of a fat left blade. */
-.session-head {
-  padding: 15px 16px 16px;
+/* The sticky session masthead (DESIGN.md §7, §10): one always-present header
+ * pinned to the top of the scroll. It carries the identity surface treatment —
+ * accent on the top edge (the hairline-telemetry rule), a surface-tinted
+ * backdrop so the plan scrolls cleanly beneath it, and a bottom hairline. Sits
+ * below the composer/sheets (z40/41) and the drawer (z30). Compacts on scroll:
+ * the detail rows collapse, the title shrinks, padding tightens, a faint lift
+ * appears — one element, so there is never a second copy to gate. */
+.review-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  margin-bottom: 10px;
+  padding: 14px 16px 15px;
   background: color-mix(in srgb, var(--accent) 5%, var(--surface));
   border: 1px solid var(--line);
   border-top: 2px solid var(--accent);
+  border-bottom: 1px solid var(--line-strong);
   animation: card-in 0.4s cubic-bezier(0.22, 0.7, 0.3, 1) both;
+  transition: padding 0.18s ease, box-shadow 0.18s ease;
 }
 
-.session-head-top {
+.review-header.compact {
+  padding-top: 9px;
+  padding-bottom: 9px;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 7%);
+}
+
+/* The always-present bar: back + identity + controls + switcher on one line. */
+.rh-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.rh-bar .backlink {
+  flex: none;
+  margin-bottom: 0;
+}
+
+.rh-ident {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 auto; /* takes the middle; the title ellipsizes before controls wrap */
+}
+
+.rh-actions {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.review-header .switcher {
+  flex: none;
 }
 
 .session-title {
   margin: 0;
+  min-width: 0;
   font-size: 20px;
   font-weight: 700;
   letter-spacing: -0.015em;
   line-height: 1.25;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  transition: font-size 0.18s ease;
+}
+
+.review-header.compact .session-title {
+  font-size: 15px;
 }
 
 .session-rev {
@@ -572,8 +622,25 @@ code {
   color: var(--accent);
 }
 
+/* The detail rows (repo/branch + status meta) — shown expanded, collapsed to
+ * nothing when compact. The transition is height/opacity only, no per-frame
+ * layout of the children, so it stays cheap on every scroll frame. */
+.rh-detail {
+  overflow: hidden;
+  max-height: 120px;
+  margin-top: 10px;
+  opacity: 1;
+  transition: max-height 0.2s ease, opacity 0.18s ease, margin-top 0.2s ease;
+}
+
+.review-header.compact .rh-detail {
+  max-height: 0;
+  margin-top: 0;
+  opacity: 0;
+}
+
 .session-where {
-  margin: 8px 0 14px;
+  margin: 0 0 8px;
   font: 12px/1.4 var(--mono);
   color: var(--ink-soft);
   white-space: nowrap;
@@ -625,6 +692,16 @@ code {
 
 .review {
   margin-top: 8px;
+}
+
+/* Scroll-jump targets must clear the sticky header (DESIGN.md §10): the ❓-queue
+ * jump (block:start), and — defensively — the section/phase anchors that j/k,
+ * thread clicks, and decision deep-links land on, so none come to rest hidden
+ * under the pinned bar. */
+.plan-section,
+.phase,
+.grill-queue {
+  scroll-margin-top: 64px;
 }
 
 .plan-section {
@@ -1210,8 +1287,9 @@ code {
 
   .rail {
     position: sticky;
-    top: 18px;
-    max-height: calc(100vh - 36px);
+    /* Clears the compact sticky header (≈46px) so the rail never underlaps it. */
+    top: 60px;
+    max-height: calc(100vh - 78px);
     overflow-y: auto;
   }
 }
@@ -3371,9 +3449,29 @@ code {
 }
 
 @media (max-width: 639px) {
-  /* One control surface: the header strip's approve folds into the bar. */
-  .review-controls .ctrl-approve {
+  /* The sticky header goes lean on phone (DESIGN.md §10): title + switcher chips
+   * + the clean⇄diff toggle. The revision and Approve fold away — Approve to the
+   * fixed bottom bar, so it is never shown in two places; the toggle stays, so
+   * diff review is still reachable on a phone. */
+  .review-header .session-rev,
+  .review-header .ctrl-approve,
+  .rh-detail {
     display: none;
+  }
+
+  .review-header .session-title {
+    font-size: 16px;
+  }
+
+  /* The chip strip takes its own line under the title so it scrolls full-width. */
+  .review-header .switcher {
+    flex-basis: 100%;
+  }
+
+  /* The ❓-queue jump (bottom bar, phone-only) scrolls block:start; clear the
+   * lean header — title + chips wrap to two lines — so it lands fully visible. */
+  .grill-queue {
+    scroll-margin-top: 96px;
   }
 
   .page-review {
