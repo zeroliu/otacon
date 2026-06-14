@@ -741,6 +741,21 @@ phone runs the Tailscale app. The tailnet IS the auth — zero auth code in v1. 
 itself stays loopback-bound; remote access is pure infra, so a Cloudflare Tunnel (or
 the rejected hosted relay) remains a drop-in swap later without touching app code.
 
+**HTTPS requirement & verification.** The tailnet URL is served over HTTPS, which
+requires the tailnet to have HTTPS Certificates enabled (admin console → DNS → Enable
+HTTPS). `tailscale serve --bg` writes its config and exits 0 even when certs are off —
+the endpoint then resets every TLS handshake, so the phone just sees a dead URL. `otacon
+expose` therefore does not trust that exit code: after configuring serve it GETs
+`<url>api/health`, reports `verified: true|false`, and on failure points at the admin
+DNS page (a foreign/unresolvable name fails fast; a TLS reset is retried briefly to ride
+out cold-cert provisioning). Verification timing is `OTACON_EXPOSE_VERIFY_*`-overridable
+so the e2e stays hermetic.
+
+On the Mac App Store (sandboxed) Tailscale, `tailscale serve` proxies a port fine, but
+the `tailscale` CLI must be launched from inside its `.app` bundle — a bare
+`/usr/local/bin/tailscale` symlink crashes, so the launcher is a wrapper script that
+`exec`s the bundle binary. otacon's discovery falls back to the bundle path regardless.
+
 Operational requirement: the Mac stays awake while a plan is in review
 (`caffeinate -i` guidance in the skill/docs).
 
@@ -857,7 +872,8 @@ otacon doctor                # verify: node ≥ 20, daemon boots + port free-or-
                              # (hard failures exit 1; optional pieces are warnings)
 otacon expose                # optional, phone access: checks the tailscale CLI exists
                              # and is logged in, runs `tailscale serve` against the
-                             # daemon port, prints the tailnet URL to bookmark
+                             # daemon port, verifies the tailnet URL actually serves
+                             # (needs HTTPS certs enabled), prints the URL to bookmark
 ```
 
 `otacon install` writes the thin protocol wrapper — one protocol card teaching the
