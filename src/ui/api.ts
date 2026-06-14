@@ -308,6 +308,15 @@ export function postQuestion(id: string, anchor: Anchor | null, body: string): P
   return post202(`/api/sessions/${id}/questions`, { anchor, body });
 }
 
+/**
+ * Post a follow-up question on an existing conversation (DESIGN.md §9): a new
+ * linked question that inherits the root's anchor. `rootId` is the conversation
+ * root the rail groups on; the new turn folds in over the `thread` SSE frame.
+ */
+export function postFollowup(id: string, rootId: string, body: string): Promise<boolean> {
+  return post202(`/api/sessions/${id}/questions`, { replyTo: rootId, body });
+}
+
 /** The user's side of a grill question (DESIGN.md §8): chip choice(s) and/or text. */
 export interface AnswerDraft {
   question: string;

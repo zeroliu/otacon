@@ -95,7 +95,7 @@ test("the /s/:id shell renders the session header in its accent color", async ({
   // edge (the hairline-telemetry treatment; §10). getComputedStyle is reached
   // through the element so no DOM globals leak into the tsconfig.
   const edge = await page
-    .locator(".session-head")
+    .locator(".review-header")
     .evaluate((el) => el.ownerDocument.defaultView!.getComputedStyle(el).borderTopColor);
   expect(edge).toMatch(/^(rgb|color|lab|okl)/);
   expect(edge).not.toBe("rgba(0, 0, 0, 0)");

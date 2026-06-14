@@ -264,4 +264,13 @@ describe("thread validation of M3 fields", () => {
       expect(readThreads(path)).toEqual([]);
     }
   });
+
+  test("a follow-up question's replyTo round-trips; a non-string replyTo quarantines", () => {
+    const followup: Thread = { ...(question("q2") as Extract<Thread, { kind: "question" }>), replyTo: "q1" };
+    writeFileSync(path, JSON.stringify({ version: 1, threads: [question("q1"), followup] }));
+    expect(readThreads(path)).toEqual([question("q1"), followup]);
+
+    writeFileSync(path, JSON.stringify({ version: 1, threads: [{ ...question("q2"), replyTo: 7 }] }));
+    expect(readThreads(path)).toEqual([]);
+  });
 });

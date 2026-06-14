@@ -287,7 +287,7 @@ test("desktop regression: header strip intact, phone bar controls absent, ⋯ op
   await ask(request, session.id, "Desktop still routes questions to the queue?");
 
   // The header instrument strip holds approve; the switcher is a dropdown.
-  await expect(page.locator(".review-controls .ctrl-approve")).toBeVisible();
+  await expect(page.locator(".review-header .ctrl-approve")).toBeVisible();
   await expect(page.locator(".switch-select select")).toBeVisible();
   await expect(page.locator(".switch-chips")).toBeHidden();
 
