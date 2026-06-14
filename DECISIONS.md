@@ -1369,3 +1369,27 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   a `web-push` dep vs. full hand-rolled RFC-8291 gets re-decided against the then-current
   effort/dependency tradeoff (the alternatives from the interview's q2 are recorded
   there).
+
+## Follow-up questions: linked `replyTo` threads, not a `messages[]` rewrite
+
+- **Decision:** A follow-up on a question thread is a brand-new `q<n>` thread carrying
+  `replyTo` (the root question's id), not a turn appended to a `messages[]` array on the
+  existing thread. The new thread inherits the **root's** anchor (a client anchor on a
+  follow-up is ignored), and "follow up on a follow-up" resolves to the same root, so a
+  chain shares one key. The UI groups root + follow-ups into one conversation card with a
+  pure `groupThreads` helper. Scope is question threads only, one direction (you ask, the
+  agent answers); comment threads stay one-shot resolutions.
+- **Why:** Linking reuses everything already built — the event queue and `question`
+  wake-up, overwrite-idempotent `otacon answer <q>` (each turn is its own id, so a
+  duplicate POST is still a shrug), the SSE `thread` upsert, the shared q-id space, and
+  the existing re-anchoring pass (a chain that shares the root's anchor relocates and
+  orphans identically, so the group travels as a unit). A `messages[]` rewrite would
+  reshape the `Thread` union, migrate `body`/`answer` into the array, break the
+  answer-by-id idempotency, and touch every thread reader (linter L5, approve's
+  unresolved count, the rail, orphan re-anchoring) — far more surface for a P3 feature.
+  Keeping it to question threads and one direction matches how the surface is actually
+  used (you interrogate the plan; the agent's turn is the plan revision itself), and
+  leaves comment-thread back-and-forth out of a change that doesn't need it.
+- **Revisit when:** Conversations need agent-initiated turns inside a thread, comment
+  threads need follow-ups too, or per-turn metadata (edits, reactions) makes a first-
+  class `messages[]` model worth the migration.

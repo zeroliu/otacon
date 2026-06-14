@@ -41,6 +41,7 @@ function isThread(raw: unknown): raw is Thread {
     );
   }
   if (thread.kind === "question") {
+    if (thread.replyTo !== undefined && typeof thread.replyTo !== "string") return false;
     const { answer } = thread;
     if (answer === undefined) return true;
     return (

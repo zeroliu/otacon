@@ -431,6 +431,76 @@ describe("threads", () => {
     });
     await reader.cancel();
   });
+
+  test("a follow-up links to the root, inherits its anchor, and the event carries replyTo", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/questions`, {
+      anchor: { section: "phase-1", exact: "RS256" },
+      body: "why RS256?",
+    });
+    // Drain the root's question event so the next /events returns the follow-up.
+    await app.request(`/api/sessions/${session.id}/events`);
+
+    const res = await postJson(`/api/sessions/${session.id}/questions`, {
+      replyTo: "q1",
+      anchor: { section: "decisions", exact: "ignored" }, // ignored on a follow-up
+      body: "and key rotation?",
+    });
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ ok: true, id: "q2", seq: 2 });
+
+    const threads = (await (await app.request(`/api/sessions/${session.id}/threads`)).json()) as {
+      threads: { id: string; replyTo?: string; anchor: unknown }[];
+    };
+    const followup = threads.threads.find((t) => t.id === "q2");
+    expect(followup?.replyTo).toBe("q1");
+    // Inherited the root's anchor; the client-sent anchor was ignored.
+    expect(followup?.anchor).toEqual({ section: "phase-1", exact: "RS256" });
+
+    const event = await app.request(`/api/sessions/${session.id}/events`);
+    expect(await event.json()).toEqual({
+      event: "question",
+      session: session.id,
+      id: "q2",
+      anchor: { section: "phase-1", exact: "RS256" },
+      body: "and key rotation?",
+      replyTo: "q1",
+    });
+  });
+
+  test("a follow-up on a follow-up collapses to the same root", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/questions`, { anchor: null, body: "root" });
+    await postJson(`/api/sessions/${session.id}/questions`, { replyTo: "q1", body: "f1" });
+    const res = await postJson(`/api/sessions/${session.id}/questions`, { replyTo: "q2", body: "f2" });
+    expect(res.status).toBe(202);
+    const threads = (await (await app.request(`/api/sessions/${session.id}/threads`)).json()) as {
+      threads: { id: string; replyTo?: string }[];
+    };
+    // q3 follows q2, but its replyTo points at the root q1 (one key per chain).
+    expect(threads.threads.find((t) => t.id === "q3")?.replyTo).toBe("q1");
+  });
+
+  test("replyTo to an unknown or non-question id is a 404 E_UNKNOWN_QUESTION, no id burned", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ body: "c" }] }); // t1
+    await postJson(`/api/sessions/${session.id}/questions`, { body: "q" }); // q1
+
+    const unknown = await postJson(`/api/sessions/${session.id}/questions`, { replyTo: "q9", body: "x" });
+    expect(unknown.status).toBe(404);
+    expect(((await unknown.json()) as { error: { code: string } }).error.code).toBe(
+      "E_UNKNOWN_QUESTION",
+    );
+    // A comment thread is not a question — a follow-up can't link to it.
+    const comment = await postJson(`/api/sessions/${session.id}/questions`, { replyTo: "t1", body: "x" });
+    expect(comment.status).toBe(404);
+    const nonString = await postJson(`/api/sessions/${session.id}/questions`, { replyTo: 7, body: "x" });
+    expect(nonString.status).toBe(400);
+
+    // A real root still mints the next id — no q was burned by the rejects.
+    const ok = await postJson(`/api/sessions/${session.id}/questions`, { replyTo: "q1", body: "real" });
+    expect(((await ok.json()) as { id: string }).id).toBe("q2");
+  });
 });
 
 describe("events long-poll", () => {

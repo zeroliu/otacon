@@ -67,7 +67,9 @@ machine-readable error you can fix (read the JSON); exit 2 = you invoked it wron
      `{"changelog":"what changed","threads":{"t1":"how you resolved it"}}` with
      one reply per comment thread; `./bin/otacon submit --resolutions resolutions.json`
      (loop on lint errors); park again.
-   - `question` → `./bin/otacon answer <q-id> --body "..."` (or `--file`); park again.
+   - `question` → `./bin/otacon answer <q-id> --body "..."` (or `--file`); park again. A
+     `question` may carry `replyTo` (a follow-up on an earlier question) — skim that
+     thread's prior turns for context, but still answer the new `q<n>`.
    - `answer` → use it and continue; park again whenever you are waiting.
    - `timeout` → park again immediately. A timeout is NEVER completion.
    - `approved` → `git add` + commit the plan file at the printed `path`, print a
