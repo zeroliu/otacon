@@ -1887,6 +1887,100 @@ code {
   }
 }
 
+/* ── conversation card: a question + its follow-up turns (DESIGN.md §9) ── */
+.thread-meta-jump {
+  cursor: pointer;
+}
+
+.thread-meta-jump:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Each follow-up turn sits under a hairline so the back-and-forth reads. */
+.thread-followup-turn {
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line);
+}
+
+.thread-followup-q {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.thread-followup-label {
+  margin-right: 6px;
+  font: 600 9.5px/1 var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+/* The collapsed "follow up" affordance: a quiet full-width button. */
+.thread-followup-open {
+  margin-top: 9px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px dashed var(--line-strong);
+  background: none;
+  font: 600 10px/1 var(--mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: border-color 0.12s ease, color 0.12s ease;
+}
+
+@media (hover: hover) {
+  .thread-followup-open:hover {
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--line-strong));
+    color: var(--ink);
+  }
+}
+
+.thread-followup-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.thread-followup {
+  margin-top: 9px;
+}
+
+.thread-followup-input {
+  width: 100%;
+  min-height: 56px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font: 13px/1.5 var(--sans);
+  resize: vertical;
+}
+
+.thread-followup-input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.thread-followup-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.thread-followup-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
 /* ── jump-and-flash: the anchored text lights up ── */
 
 ::highlight(otacon-flash) {

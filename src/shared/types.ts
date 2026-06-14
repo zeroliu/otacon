@@ -101,6 +101,8 @@ export type EventPayload =
       id: string;
       anchor: Anchor | null;
       body: string;
+      /** Root question id this follows up on (DESIGN.md §9); absent on a root question. */
+      replyTo?: string;
     }
   | {
       event: "answer";
@@ -116,9 +118,11 @@ export type EventPayload =
  * One review thread, persisted in .otacon/<id>/threads.json (DESIGN.md §9).
  * Comment threads come from comment batches (one per item) and gain a
  * `resolution` from the agent's resolutions on resubmit (lint L5); question
- * threads gain an `answer` when the agent runs `otacon answer`. `anchorState`
- * "orphaned" means re-anchoring lost the quote in the current revision
- * (DESIGN.md §4 orphaned tray); absent = anchored.
+ * threads gain an `answer` when the agent runs `otacon answer`. A follow-up
+ * question is its own thread linked to the root by `replyTo` (DESIGN.md §9):
+ * it inherits the root's anchor, so a whole conversation groups, jumps, and
+ * orphans as one unit. `anchorState` "orphaned" means re-anchoring lost the
+ * quote in the current revision (DESIGN.md §4 orphaned tray); absent = anchored.
  */
 export type Thread =
   | {
@@ -138,6 +142,8 @@ export type Thread =
       anchorState?: "orphaned";
       body: string;
       createdAt: string;
+      /** Root question id this follows up on; absent on a root question. */
+      replyTo?: string;
       answer?: { body: string; answeredAt: string };
     };
 

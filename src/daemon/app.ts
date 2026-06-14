@@ -681,9 +681,54 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     const body = (await readJsonBody(c)) ?? {};
     if (sessionEnded(session.id)) return sessionOver(c, session.id);
     bumpContact(session.id);
-    const anchor = parseAnchor(body.anchor);
-    if (typeof body.body !== "string" || body.body.trim() === "" || anchor === undefined) {
-      return badRequest(c, "question needs a non-empty body and a valid anchor (or null)");
+    if (typeof body.body !== "string" || body.body.trim() === "") {
+      return badRequest(c, "question needs a non-empty body");
+    }
+    // A follow-up (DESIGN.md §9) names the question it continues with `replyTo`
+    // and inherits that conversation's anchor — so a client anchor is ignored on
+    // a follow-up; a root question parses its own anchor (or null = whole-plan).
+    let anchor: Anchor | null;
+    let replyTo: string | undefined;
+    let inheritOrphan = false;
+    const replyToRaw = body.replyTo;
+    if (replyToRaw === undefined) {
+      const parsed = parseAnchor(body.anchor);
+      if (parsed === undefined) {
+        return badRequest(c, "question needs a valid anchor (or null)");
+      }
+      anchor = parsed;
+    } else {
+      if (typeof replyToRaw !== "string" || replyToRaw === "") {
+        return badRequest(c, "replyTo must name a question thread id (q<n>)");
+      }
+      const existing = readThreads(store.threadsPath(session.id));
+      const parent = existing.find(
+        (t): t is Extract<Thread, { kind: "question" }> =>
+          t.id === replyToRaw && t.kind === "question",
+      );
+      if (!parent) {
+        return c.json(
+          {
+            error: {
+              code: "E_UNKNOWN_QUESTION",
+              message: `session ${session.id} has no question ${replyToRaw}`,
+            },
+          },
+          404,
+        );
+      }
+      // Resolve the root so a whole chain shares one key — "follow up on a
+      // follow-up" collapses to the same root, whose anchor (and orphan state)
+      // the new turn inherits and travels with.
+      const rootId = parent.replyTo ?? parent.id;
+      const root = existing.find(
+        (t): t is Extract<Thread, { kind: "question" }> =>
+          t.id === rootId && t.kind === "question",
+      );
+      const source = root ?? parent;
+      replyTo = rootId;
+      anchor = source.anchor;
+      inheritOrphan = source.anchorState === "orphaned";
     }
     const counters = store.bumpCounters(session.id, { question: 1, eventSeq: 1 });
     const id = `q${counters.question}`;
@@ -691,8 +736,10 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       id,
       kind: "question",
       anchor,
+      ...(inheritOrphan ? { anchorState: "orphaned" as const } : {}),
       body: body.body,
       createdAt: new Date().toISOString(),
+      ...(replyTo !== undefined ? { replyTo } : {}),
     };
     appendThreads(store.threadsPath(session.id), [thread]);
     // Questions leave the plan — and the status — untouched (DESIGN.md §9).
@@ -702,6 +749,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       id,
       anchor,
       body: body.body,
+      ...(replyTo !== undefined ? { replyTo } : {}),
     };
     queue.enqueue(payload, counters.eventSeq);
     publishQueue(session.id, queue.size);
