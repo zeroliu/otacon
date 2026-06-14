@@ -45,6 +45,7 @@ import type { SectionMenuState } from "./review/section-menu";
 import { SectionMenu } from "./review/section-menu";
 import { navigate } from "./router";
 import { markSeen } from "./seen";
+import { isApproved } from "./session-filter";
 import { SessionSwitcher } from "./switcher";
 import { useNow } from "./tick";
 
@@ -604,6 +605,33 @@ export function SessionScreen({ id }: { id: string }) {
   useEffect(() => {
     if (session && revision !== undefined) markSeen(session.id, revision);
   }, [session, revision]);
+
+  // When the session you're viewing flips to approved, its switcher chip is gone
+  // (§7) so send yourself home, where the approved section holds it (DESIGN.md
+  // §12, D3). Fire only on the live non-approved → approved crossing: opening a
+  // session that is ALREADY approved (you tapped an approved card on home) must
+  // stay, or approved plans become unopenable. `sawActive` records that we
+  // observed a non-approved status first, so the ref's initial false can't be
+  // mistaken for one. A `session` SSE frame flipping it remotely still redirects
+  // (accepted, q5).
+  //
+  // The crossing is per-session: this screen is NOT remounted when `id` changes
+  // (app.tsx routes without a key), so reset the ref on every `id` switch —
+  // otherwise the "saw active" set while reading one session would leak across a
+  // navigation and bounce the next already-approved session you open straight
+  // back home (the very unopenable case the guard exists to prevent).
+  const sawActive = useRef(false);
+  useEffect(() => {
+    sawActive.current = false;
+  }, [id]);
+  useEffect(() => {
+    if (!session) return;
+    if (isApproved(session.status)) {
+      if (sawActive.current) navigate("/");
+    } else {
+      sawActive.current = true;
+    }
+  }, [session]);
 
   // A `removed` frame landed while this screen was open: otacon clean
   // archived the session (DESIGN.md §12). A terminal state, not an error —

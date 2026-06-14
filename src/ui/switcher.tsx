@@ -12,6 +12,7 @@ import { useSessions } from "./api";
 import { AgentDot, questionsPending } from "./chip";
 import { navigate } from "./router";
 import { unreadCount } from "./seen";
+import { isApproved, partitionByApproval } from "./session-filter";
 import { useNow } from "./tick";
 
 const GLYPHS: Record<SessionStatus, { glyph: string; word: string }> = {
@@ -33,22 +34,36 @@ function stateOf(session: LiveSession): { glyph: string; word: string } {
 export function SessionSwitcher({ current }: { current: string }) {
   const { sessions: byActivity } = useSessions();
   const now = useNow(30_000);
+  // Approved sessions drop from the switcher entirely (DESIGN.md §7) — both
+  // faces, one list — so a finished plan stops cluttering the strip you switch
+  // through, including the one you are on (D1). The split is shared with home so
+  // the two surfaces can never disagree about what is hidden.
+  const { active } = partitionByApproval(byActivity);
+  // `current` is absent from the visible list when it was cleaned (gone from the
+  // registry) OR is itself approved (opened from home — its chip is now hidden).
+  // Either way the controlled select has no matching option and would render
+  // blank (selectedIndex -1), so `gone` makes it fall back to a labeled
+  // placeholder. Both facts come from the one `currentSession` lookup: it's
+  // absent from `active` exactly when it's missing from the registry or approved.
+  const currentSession = byActivity.find((s) => s.id === current);
+  const gone = !currentSession || isApproved(currentSession.status);
+  // Render nothing only when the registry is genuinely empty. An all-approved
+  // registry still has a current to anchor: the placeholder must show (DESIGN.md
+  // §7), so the switcher doesn't vanish out from under the one approved session
+  // you opened from home. Keying on `byActivity` (not `active`) keeps the
+  // placeholder reachable instead of short-circuiting before it.
   if (byActivity.length === 0) return null;
   // The chip you are on leads the strip (§7's sketch): the "you are here"
   // anchor never scrolls out of reach; the rest keep their activity order.
   // Unread is computed once here for both faces (select + chips); the entry
   // you are on never wears a badge — you are reading it.
   const entries = [
-    ...byActivity.filter((s) => s.id === current),
-    ...byActivity.filter((s) => s.id !== current),
+    ...active.filter((s) => s.id === current),
+    ...active.filter((s) => s.id !== current),
   ].map((session) => ({
     session,
     unread: session.id === current ? 0 : unreadCount(session.id, session.revision),
   }));
-  // On the cleaned screen `current` was just removed from the registry, so no
-  // option matches it — without a placeholder the controlled select would
-  // render blank (selectedIndex -1).
-  const gone = !byActivity.some((s) => s.id === current);
 
   const onSelect = (id: string) => {
     if (id !== current) navigate(`/s/${id}`);
@@ -67,7 +82,9 @@ export function SessionSwitcher({ current }: { current: string }) {
           >
             {gone && (
               <option value="" disabled>
-                cleaned session
+                {currentSession
+                  ? `${currentSession.title} · ${stateOf(currentSession).word}`
+                  : "cleaned session"}
               </option>
             )}
             {entries.map(({ session, unread }) => (

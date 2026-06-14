@@ -1369,3 +1369,75 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   a `web-push` dep vs. full hand-rolled RFC-8291 gets re-decided against the then-current
   effort/dependency tradeoff (the alternatives from the interview's q2 are recorded
   there).
+
+## The switcher hides approved sessions on both faces, with no current-session anchor
+
+- **Decision:** The session switcher (DESIGN.md §7) lists only active sessions —
+  approved ones are filtered from both faces (phone chips and desktop dropdown),
+  including the session you are currently viewing (there is no "you are here" anchor
+  exception for an approved current). Active-vs-approved comes from one shared,
+  React-free `partitionByApproval` (`src/ui/session-filter.ts`) that also feeds the home
+  list. When the current session is absent from the visible list — cleaned, or itself
+  approved (opened from home) — the controlled `<select>` shows a labeled placeholder
+  (title + state) and the chip strip omits it, rather than rendering blank.
+- **Why:** Approved sessions are over; leaving them in the switcher clutters the strip
+  you switch through on a phone with plans you'll never touch again. An interview first
+  chose to keep the current session's chip as an anchor (q1), but that was reversed (t3):
+  a lone approved anchor is dead weight, and once the current session can be absent for a
+  *cleaned* reason anyway, "current isn't in the visible list" is one condition the
+  placeholder already had to handle — folding approved into it adds no new state. One
+  shared split (not two independent filters) is what guarantees the switcher and the home
+  list can never disagree about which sessions are hidden.
+- **Revisit when:** Switching back to an approved plan from the switcher (not just home)
+  becomes a common need, or the placeholder's "title + state" proves to carry too little
+  context.
+
+## Approving the viewed session redirects home — on the live transition only
+
+- **Decision:** When the session open on the review screen transitions to approved, the
+  screen navigates to home (`navigate("/")`). The redirect fires **only** on the live
+  non-approved → approved crossing, tracked with a `sawActive` ref that records we
+  observed a non-approved status first; opening a session that is already approved
+  (tapping an approved card on home) never redirects. Because the review screen is **not**
+  remounted when the routed `id` changes (the router swaps the prop, it does not key the
+  component), the `sawActive` ref is reset to `false` on every `id` switch — so the
+  per-session crossing can't leak across a navigation. A `session` SSE frame that flips
+  the status remotely (approved on another device) still redirects — accepted, not
+  special-cased.
+- **Why:** Once approved, the session's switcher chip is gone (above), so leaving you on
+  a screen whose switcher can't navigate back to it is a dead end; home is where the
+  approved section now holds it. The transition-only guard is load-bearing: if the
+  redirect fired whenever status is approved, the home approved section could open
+  nothing — every tap would bounce straight back, making approved plans unopenable. The
+  ref-records-active approach is needed because a bare boolean's initial `false` is
+  indistinguishable from an observed non-approved state, which would wrongly redirect a
+  session that is already approved. The per-`id` reset is the other half of that guard:
+  without it the "saw active" set while reading one session would persist into the next
+  (no remount clears it), bouncing the next already-approved session you open straight
+  home — the exact unopenable case the guard exists to prevent. Honoring the remote flip
+  too keeps the rule simple and matches "approved is approved, wherever it happened" (q5).
+- **Revisit when:** Users want to keep reading a plan they just approved in place (an
+  in-screen "approved" confirmation state instead of a redirect), or a remote approval
+  yanking you off an unrelated read becomes a real annoyance.
+
+## Approved sessions group into a collapsed home section; the top count is active-only
+
+- **Decision:** On the index (DESIGN.md §10) active sessions stay in the main `.cards`
+  list; approved ones render in a dedicated `approved` section below it, collapsed by
+  default, its heading carrying the count (`approved 3`), expanding on tap. It reuses the
+  activity panel's disclosure idiom (button + `aria-expanded` + caret + `useState`) and
+  the same `SessionCard` rows. The list's top `sessions N` count reflects the active list,
+  not the registry total; the approved section carries its own count.
+- **Why:** Approved plans should stay reachable from home (they're the committed
+  artifact's review record) but not crowd the list of what still needs you — a
+  collapsible section declutters while keeping them one tap away (chosen over an
+  always-visible group, which still fills the list, and over expanded-by-default, which
+  pays the toggle cost without the declutter win — q3/q4). Reusing the activity
+  disclosure and the existing card keeps the surface consistent and the change small. The
+  active-only top count makes the masthead number mean "your queue", matching the new
+  main-list scope; the per-section count keeps the approved total visible without
+  reintroducing the clutter.
+- **Revisit when:** The approved section grows long enough to want its own search/paging,
+  or users read the top `sessions N` as the registry total often enough that the
+  active-only meaning surprises them (a one-line flip back, flagged as an open question
+  in the plan).
