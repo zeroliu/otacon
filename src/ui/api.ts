@@ -82,7 +82,7 @@ export function useSessions(): { sessions: LiveSession[]; connected: boolean } {
     on<{ session: string; pending: number }>(source, "queue", (data) => {
       setById((prev) => patch(prev, data.session, { pendingEvents: data.pending }));
     });
-    // Terminal: the session left the registry (otacon clean) — drop its card.
+    // Terminal: the session left the registry (clean or a UI delete) — drop its card.
     on<{ session: string }>(source, "removed", (data) => {
       setById((prev) => {
         if (!prev.has(data.session)) return prev;
@@ -110,7 +110,7 @@ export interface SessionDetail {
   /** The live-activity feed, oldest first; live over `activity` frames (DESIGN.md §6). */
   activity: ActivityNote[];
   missing: boolean;
-  /** True once a `removed` frame lands: otacon clean archived this session. */
+  /** True once a `removed` frame lands: the session was cleaned/archived or deleted. */
   cleaned: boolean;
   connected: boolean;
 }
@@ -197,9 +197,9 @@ export function useSession(id: string): SessionDetail {
           on<{ session: string; note: ActivityNote }>(source, "activity", ({ note }) =>
             setActivity((prev) => [...prev, note].slice(-ACTIVITY_VIEW_CAP)),
           );
-          // Terminal: otacon clean archived this session. Close the stream —
-          // a reconnect would 404-loop against the deregistered id — and let
-          // the screen render its cleaned state.
+          // Terminal: this session left the registry (clean/archive or a delete).
+          // Close the stream — a reconnect would 404-loop against the deregistered
+          // id — and let the screen render its closed state.
           on<{ session: string }>(source, "removed", () => {
             setCleaned(true);
             source?.close();

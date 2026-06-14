@@ -1546,7 +1546,7 @@ describe("DELETE /api/sessions/:id (otacon clean, M5)", () => {
     expect(res.status).toBe(404);
   });
 
-  test("deregisters an approved session and reports its pending events", async () => {
+  test("deregisters an approved session, archives its dir, and reports pending events", async () => {
     const session = mintSession();
     await app.request(`/api/sessions/${session.id}/submit`, {
       method: "POST",
@@ -1557,7 +1557,12 @@ describe("DELETE /api/sessions/:id (otacon clean, M5)", () => {
 
     const res = await app.request(`/api/sessions/${session.id}`, { method: "DELETE" });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { ok: boolean; repo: string; pendingEvents: number };
+    const body = (await res.json()) as {
+      ok: boolean;
+      repo: string;
+      pendingEvents: number;
+      archivedTo: string | null;
+    };
     expect(body.ok).toBe(true);
     expect(body.repo).toBe(repo);
     expect(body.pendingEvents).toBe(1); // the undrained `approved` event
@@ -1565,9 +1570,13 @@ describe("DELETE /api/sessions/:id (otacon clean, M5)", () => {
     expect(store.getSession(session.id)).toBeUndefined();
     const detail = await app.request(`/api/sessions/${session.id}`);
     expect(detail.status).toBe(404);
-    // The .otacon/<id>/ dir is untouched — archiving is the CLI's job.
-    expect(existsSync(revisionPath(repo, session.id, 1))).toBe(true);
-    expect(existsSync(eventsPath(repo, session.id))).toBe(true);
+    // The daemon archives the working dir (recoverable) — the live dir is gone,
+    // its state files now live under .otacon/archive/<id>/.
+    expect(body.archivedTo).toBe(join(repo, ".otacon", "archive", session.id));
+    expect(existsSync(sessionDir(repo, session.id))).toBe(false);
+    expect(existsSync(revisionPath(repo, session.id, 1))).toBe(false);
+    expect(existsSync(join(repo, ".otacon", "archive", session.id, "r1.md"))).toBe(true);
+    expect(existsSync(join(repo, ".otacon", "archive", session.id, "events.json"))).toBe(true);
   });
 
   test("deletion publishes a `removed` frame on the index and per-session streams", async () => {

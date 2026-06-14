@@ -58,9 +58,9 @@ function SessionCard({
   const unread = unreadCount(session.id, session.revision) > 0;
   const href = `/s/${session.id}`;
   const style = { ...accentStyle(session.id), "--i": index } as CSSProperties;
-  // Pending (non-approved) sessions can be deleted from the list to clear
-  // abandoned drafts (DESIGN.md §10); approved ones are `otacon clean`'s job.
-  const pending = session.status !== "approved";
+  // Any session can be deleted from the list (DESIGN.md §10): approved ones are
+  // archived (recoverable, like `otacon clean`), pending ones hard-deleted.
+  const approved = session.status === "approved";
   const [deleting, setDeleting] = useState(false);
   const onClick = (event: MouseEvent) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey) return;
@@ -97,27 +97,26 @@ function SessionCard({
             now={now}
           />
           <span className="card-time">{relativeTime(session.updatedAt, now)}</span>
-          {pending && (
-            <button
-              type="button"
-              className="card-delete"
-              aria-label={`delete session ${session.title}`}
-              title="delete session"
-              // The card is a link: stop the click from navigating into it.
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                setDeleting(true);
-              }}
-            >
-              ✕
-            </button>
-          )}
+          <button
+            type="button"
+            className="card-delete"
+            aria-label={`delete session ${session.title}`}
+            title="delete session"
+            // The card is a link: stop the click from navigating into it.
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setDeleting(true);
+            }}
+          >
+            ✕
+          </button>
         </div>
       </a>
       {deleting && (
         <DeleteDialog
           sessionId={session.id}
+          approved={approved}
           onClose={() => setDeleting(false)}
           // The `removed` SSE frame drops the card; closing state is housekeeping.
           onDeleted={() => setDeleting(false)}

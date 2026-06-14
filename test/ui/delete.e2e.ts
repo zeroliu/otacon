@@ -60,11 +60,11 @@ test("a pending delete can be cancelled, leaving the session untouched", async (
   await expect(card).toBeVisible();
 });
 
-test("an approved session offers no delete control on either surface", async ({
+test("an approved session is deletable too, and its sheet says it is archived", async ({
   page,
   request,
 }) => {
-  const session = await createSession(request, uniqueTitle("approved-nodel"));
+  const session = await createSession(request, uniqueTitle("approved-del"));
   await submitPlan(request, session.id);
   const approved = await request.post(`/api/sessions/${session.id}/approve`, {
     data: { force: true },
@@ -74,9 +74,12 @@ test("an approved session offers no delete control on either surface", async ({
   await page.goto("/");
   const card = cardFor(page, session);
   await expect(card.locator(".chip")).toHaveText("approved");
-  await expect(card.locator(".card-delete")).toHaveCount(0);
 
-  await page.goto(`/s/${session.id}`);
-  await expect(page.locator(".session-title")).toHaveText(session.title);
-  await expect(page.locator(".session-delete")).toHaveCount(0);
+  // Approved sessions also carry the ✕, but the sheet promises archive (not purge).
+  await card.locator(".card-delete").click();
+  const sheet = page.locator(".delete-sheet");
+  await expect(sheet).toBeVisible();
+  await expect(sheet).toContainText("recoverable");
+  await sheet.locator(".btn-delete").click();
+  await expect(card).toHaveCount(0);
 });

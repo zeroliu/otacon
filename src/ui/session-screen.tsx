@@ -100,7 +100,7 @@ function SessionHead({
   session: LiveSession;
   connected: boolean;
   now: number;
-  /** Present only on a pending session: opens the delete confirm sheet. */
+  /** Opens the delete confirm sheet; every session is deletable (DESIGN.md §10). */
   onDelete?: () => void;
 }) {
   return (
@@ -455,7 +455,7 @@ function ReviewLoop({
             session={session}
             connected={connected}
             now={now}
-            onDelete={over ? undefined : () => setDeleteOpen(true)}
+            onDelete={() => setDeleteOpen(true)}
           />
           {over && <ApprovedNote path={approvedPath} />}
           {hasPlan && (
@@ -562,9 +562,10 @@ function ReviewLoop({
           }}
         />
       )}
-      {deleteOpen && !over && (
+      {deleteOpen && (
         <DeleteDialog
           sessionId={session.id}
+          approved={over}
           onClose={() => setDeleteOpen(false)}
           // The session is gone — leave for the index rather than waiting for
           // the `removed` frame to flip this screen to its closed state.

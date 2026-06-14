@@ -258,13 +258,32 @@ export class Store {
 
   /**
    * Hard-remove a session's working dir `.otacon/<id>/` (the UI deleting a
-   * *pending* session, DESIGN.md §12): permanent, no archive — the asymmetric
-   * counterpart to `otacon clean`, which *archives* an approved session's dir.
-   * `repo` is passed explicitly because the caller deregisters first, so
-   * require() would already throw. Idempotent: a missing dir is fine (force).
+   * *pending* session, DESIGN.md §12): permanent, no archive — for a session
+   * with no committed artifact. `repo` is passed explicitly because the caller
+   * deregisters first, so require() would already throw. Idempotent: a missing
+   * dir is fine (force).
    */
   removeSessionDir(repo: string, id: string): void {
     rmSync(paths.sessionDir(repo, id), { recursive: true, force: true });
+  }
+
+  /**
+   * Archive a session's working dir `.otacon/<id>/` → `.otacon/archive/<id>/`
+   * in its repo (numeric suffix on name collision); returns the destination, or
+   * null when there was no dir. The recoverable counterpart to removeSessionDir,
+   * for a session whose plan is committed (approved): `otacon clean` and the
+   * UI's delete of an approved session both archive through here. `repo` is
+   * passed explicitly because the caller deregisters first (require() throws).
+   */
+  archiveSessionDir(repo: string, id: string): string | null {
+    const source = paths.sessionDir(repo, id);
+    if (!existsSync(source)) return null;
+    const base = join(paths.otaconDir(repo), "archive");
+    mkdirSync(base, { recursive: true });
+    let dest = join(base, id);
+    for (let n = 2; existsSync(dest); n++) dest = join(base, `${id}-${n}`);
+    renameSync(source, dest);
+    return dest;
   }
 
   readState(id: string): SessionStateFile {
