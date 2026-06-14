@@ -213,6 +213,55 @@ describe("parsePlan structure handling", () => {
   });
 });
 
+describe("gwt block capture", () => {
+  test("a gwt fence under Verification is captured, budget-exempt", () => {
+    const plan = parsePlan(
+      planWith(
+        "## Phases\n\n### Phase 1 — x\n\nGoal: g\nFiles:\n- a.ts\nVerification: passes\n```gwt\nGiven a\nWhen b\nThen c\n```\n",
+      ),
+    );
+    const phase = plan.sections[0]!.phases![0]!;
+    expect(phase.fenceCount).toBe(0); // gwt does not spend the one-fence allowance
+    expect(phase.gwtBlocks).toHaveLength(1);
+    expect(phase.gwtBlocks[0]!.field).toBe("verification");
+    // Scenarios are tokenized once at parse time (parse.ts), so rules.ts and any
+    // UI consumer read the same array instead of re-parsing the fence body.
+    expect(phase.gwtBlocks[0]!.scenarios).toHaveLength(1);
+    expect(phase.gwtBlocks[0]!.scenarios[0]!.valid).toBe(true);
+  });
+
+  test("a gwt fence under another field records that field (placement check fodder)", () => {
+    const plan = parsePlan(
+      planWith(
+        "## Phases\n\n### Phase 1 — x\n\nGoal: g\nFiles:\n- a.ts\n```gwt\nGiven a\nWhen b\nThen c\n```\nVerification: t\n",
+      ),
+    );
+    expect(plan.sections[0]!.phases![0]!.gwtBlocks[0]!.field).toBe("files");
+  });
+
+  test("a gwt fence inside Details is detail content, not a captured block", () => {
+    const plan = parsePlan(
+      planWith(
+        "## Phases\n\n### Phase 1 — x\n\nGoal: g\nFiles:\n- a.ts\nVerification: t\n\n#### Details\n\n```gwt\nGiven a\nWhen b\nThen c\n```\n",
+      ),
+    );
+    const phase = plan.sections[0]!.phases![0]!;
+    expect(phase.gwtBlocks).toEqual([]);
+    expect(phase.details!.lineCount).toBeGreaterThan(0);
+  });
+
+  test("a normal fence still counts toward the phase fence cap", () => {
+    const plan = parsePlan(
+      planWith(
+        "## Phases\n\n### Phase 1 — x\n\nGoal: g\nFiles:\n- a.ts\nVerification: t\n```ts\nconst x = 1;\n```\n",
+      ),
+    );
+    const phase = plan.sections[0]!.phases![0]!;
+    expect(phase.fenceCount).toBe(1);
+    expect(phase.gwtBlocks).toEqual([]);
+  });
+});
+
 describe("callout detection", () => {
   test("a known callout is budget-exempt and counts as one visual", () => {
     const plan = parsePlan(
@@ -261,6 +310,35 @@ describe("callout detection", () => {
     const phase = plan.sections[0]!.phases![0]!;
     expect(phase.visualCount).toBe(0);
     expect(phase.details!.lineCount).toBeGreaterThan(0);
+  });
+});
+
+describe("lead diagram + opt-out detection", () => {
+  test("the valid fixture's Summary mermaid is counted as a diagram", () => {
+    const summary = parsePlan(validPlan).sections[0]!;
+    expect(summary.diagramCount).toBe(1);
+    expect(summary.fenceCount).toBe(1); // still spends the one-fence allowance
+    expect(summary.leadDiagramOptOut).toBeFalse();
+  });
+
+  test("a non-mermaid fence is not a diagram", () => {
+    const summary = parsePlan(planWith("## Summary\n\n```ts\nconst x = 1;\n```\n")).sections[0]!;
+    expect(summary.diagramCount).toBe(0);
+    expect(summary.fenceCount).toBe(1);
+  });
+
+  test("the no-lead-diagram marker sets the flag and is budget-exempt", () => {
+    const summary = parsePlan(
+      planWith("## Summary\n\nShip it.\n<!-- no-lead-diagram: docs only -->\n"),
+    ).sections[0]!;
+    expect(summary.leadDiagramOptOut).toBeTrue();
+    expect(summary.budgetedLineCount).toBe(1); // only "Ship it." counts
+    expect(summary.diagramCount).toBe(0);
+  });
+
+  test("a bare marker with no reason still opts out", () => {
+    const summary = parsePlan(planWith("## Summary\n\n<!-- no-lead-diagram -->\n")).sections[0]!;
+    expect(summary.leadDiagramOptOut).toBeTrue();
   });
 });
 

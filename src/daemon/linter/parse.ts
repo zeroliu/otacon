@@ -1,3 +1,4 @@
+import { type GwtScenario, parseGwt } from "../../shared/gwt.js";
 import type { LintIssue } from "../../shared/types.js";
 
 // Single-pass, line-based plan parser (DECISIONS.md "Plan parser"). Purely
@@ -27,6 +28,22 @@ export interface DetailsBlock {
   lineCount: number;
 }
 
+/**
+ * A ```gwt behavioral-assertion fence (DESIGN.md §4). Captured structurally —
+ * `scenarios` is tokenized once here by the shared grammar (src/shared/gwt.ts)
+ * so the linter (shape/budget verdicts) and a UI that ever reuses this never
+ * re-parse; `field` is the active phase field when the fence opened, so the
+ * linter can require gwt under Verification. A gwt fence in a non-phase section
+ * (Summary, Contract, …) is captured too — with `field` null — so the linter
+ * can reject it as misplaced rather than silently treat it as a budgeted fence
+ * while the UI renders it as a scenario checklist.
+ */
+export interface GwtBlock {
+  startLine: number;
+  field: PhaseFieldName | null;
+  scenarios: GwtScenario[];
+}
+
 export interface Phase {
   n: number;
   name: string;
@@ -42,6 +59,8 @@ export interface Phase {
   fenceCount: number;
   /** Markdown-native visuals (callouts, matrices) outside Details — capped. */
   visualCount: number;
+  /** Behavioral-assertion blocks in the read path; budget-exempt, validated separately. */
+  gwtBlocks: GwtBlock[];
 }
 
 export interface Section {
@@ -53,6 +72,16 @@ export interface Section {
   fenceCount: number;
   /** Markdown-native visuals (callouts, matrices) in the section read path. */
   visualCount: number;
+  /** Mermaid fences in the section read path — the lead-diagram check (L7). */
+  diagramCount: number;
+  /** A `<!-- no-lead-diagram -->` escape-hatch marker was seen in this section. */
+  leadDiagramOptOut: boolean;
+  /**
+   * Stray gwt fences in this section's read path (outside any phase). gwt belongs
+   * in a phase's Verification, so any block here is misplaced — captured (not
+   * silently budgeted) so the linter rejects it, matching what the UI renders.
+   */
+  gwtBlocks: GwtBlock[];
   listItems: ListItem[];
   phases?: Phase[];
 }
@@ -76,7 +105,9 @@ const FIELD_RE =
   /^(?:\*\*)?(Goal|Files|Verification|Out of scope)(?:\*\*)?:(?:\*\*)?\s*(.*)$/;
 const PHASE_RE = /^### Phase (\d+) [—-] (.+?)\s*$/;
 const HEADING_RE = /^(#{2,4})\s+(.+?)\s*$/;
-const FENCE_RE = /^\s*(`{3,}|~{3,})/;
+// Capture the info string too — a `gwt` fence is a behavioral-assertion block,
+// not a budgeted/visual fence (DESIGN.md §4). Group 1 stays the delimiter.
+const FENCE_RE = /^\s*(`{3,}|~{3,})\s*(.*)$/;
 const LIST_ITEM_RE = /^[-*+]\s+/;
 // A blockquote line, and the callout marker that must be its first line — the
 // same closed type set the renderer styles (src/ui/plan/callout.tsx). A known
@@ -84,6 +115,10 @@ const LIST_ITEM_RE = /^[-*+]\s+/;
 // blockquote (or an unknown `[!type]`) stays ordinary budgeted prose.
 const QUOTE_RE = /^\s*>/;
 const CALLOUT_RE = /^\s*>\s*\[!(?:risk|note|decision|assumption)\]\s*$/i;
+// The lead-diagram escape hatch (DESIGN.md §4): an HTML-comment directive that
+// suppresses the L7 nudge when a chart isn't meaningful. Like a callout marker
+// it is chrome, not prose, so a section's read path exempts it from the budget.
+const LEAD_OPT_OUT_RE = /^\s*<!--\s*no-lead-diagram\b.*?-->\s*$/i;
 
 // A GFM table: a header row (has a pipe) immediately followed by a delimiter
 // row (pipes plus only `-:` and spaces, with at least one `-`). The renderer
@@ -139,9 +174,19 @@ export function parsePlan(content: string): ParsedPlan {
   let section: Section | null = null;
   let phase: Phase | null = null;
   let field: PhaseField | null = null;
+  /** Name of the active phase field — gwt placement keys off it. */
+  let fieldName: PhaseFieldName | null = null;
   let item: ListItem | null = null;
   let fence: string | null = null;
   let fenceOpenLine = 0;
+  // When the open fence is a ```gwt block, collect its body here instead of
+  // counting it as a read-path fence; finalized onto its container at the close.
+  // `gwtTarget` is the array (a phase's or a stray section's) the finished block
+  // lands in — fixed at open time so it survives even if structure closes mid-fence.
+  let gwtBody: string[] | null = null;
+  let gwtStartLine = 0;
+  let gwtField: PhaseFieldName | null = null;
+  let gwtTarget: GwtBlock[] | null = null;
   // Open blockquote run: a callout (budget-exempt, counts as one visual) or a
   // plain quote (ordinary budgeted prose). Reset by any structural boundary.
   let quote: { callout: boolean } | null = null;
@@ -157,6 +202,7 @@ export function parsePlan(content: string): ParsedPlan {
   };
   const closeField = (): void => {
     field = null;
+    fieldName = null;
     closeItem();
   };
   const closeDetails = (): void => {
@@ -184,7 +230,20 @@ export function parsePlan(content: string): ParsedPlan {
 
     if (fence) {
       if (inDetails && !blank) detailsLastContent = lineNo;
-      if (line.trimStart().startsWith(fence)) fence = null;
+      if (line.trimStart().startsWith(fence)) {
+        fence = null;
+        if (gwtBody !== null && gwtTarget) {
+          gwtTarget.push({
+            startLine: gwtStartLine,
+            field: gwtField,
+            scenarios: parseGwt(gwtBody.join("\n")).scenarios,
+          });
+        }
+        gwtBody = null;
+        gwtTarget = null;
+      } else if (gwtBody !== null) {
+        gwtBody.push(line);
+      }
       continue;
     }
 
@@ -192,12 +251,30 @@ export function parsePlan(content: string): ParsedPlan {
     if (fenceMatch) {
       fence = fenceMatch[1]!;
       fenceOpenLine = lineNo;
+      const lang = (fenceMatch[2] ?? "").trim().toLowerCase().split(/\s+/)[0];
+      const isGwt = lang === "gwt";
       quote = null;
       inTable = false;
       closeItem();
       if (inDetails) detailsLastContent = lineNo;
-      else if (phase) phase.fenceCount++;
-      else if (section) section.fenceCount++;
+      else if (isGwt && (phase || section)) {
+        // A gwt block is the read path's behavioral-assertion checklist, exempt
+        // from the one-fence cap; its body is buffered and validated separately.
+        // It belongs in a phase's Verification, but we also capture a stray block
+        // in a non-phase section (field null) so the linter rejects it as
+        // misplaced — otherwise it would slip through as a budgeted fence while
+        // the UI still renders it as scenario cards (producer/consumer drift).
+        gwtBody = [];
+        gwtStartLine = lineNo;
+        gwtField = phase ? fieldName : null;
+        gwtTarget = phase ? phase.gwtBlocks : section!.gwtBlocks;
+      } else if (phase) phase.fenceCount++;
+      else if (section) {
+        section.fenceCount++;
+        // A mermaid fence in a section read path is a candidate lead diagram
+        // (L7 reads Summary's count); it still spends the one-fence allowance.
+        if (lang === "mermaid") section.diagramCount++;
+      }
       continue;
     }
 
@@ -217,6 +294,9 @@ export function parsePlan(content: string): ParsedPlan {
           budgetedLineCount: 0,
           fenceCount: 0,
           visualCount: 0,
+          diagramCount: 0,
+          leadDiagramOptOut: false,
+          gwtBlocks: [],
           listItems: [],
         };
         sections.push(section);
@@ -237,6 +317,7 @@ export function parsePlan(content: string): ParsedPlan {
           strayH4s: [],
           fenceCount: 0,
           visualCount: 0,
+          gwtBlocks: [],
         };
         (section.phases ??= []).push(phase);
         continue;
@@ -300,12 +381,22 @@ export function parsePlan(content: string): ParsedPlan {
       continue;
     }
 
+    // The lead-diagram escape hatch (DESIGN.md §4): in a section's read path it
+    // records the opt-out and, being chrome, is exempt from the line budget —
+    // so declining a diagram never costs a Summary content line.
+    if (section && !phase && LEAD_OPT_OUT_RE.test(line)) {
+      section.leadDiagramOptOut = true;
+      closeItem();
+      continue;
+    }
+
     if (phase) {
       const fm = FIELD_RE.exec(line);
       if (fm) {
         closeField();
+        fieldName = FIELD_LABELS[fm[1]!]!;
         field = { startLine: lineNo, budgetedLineCount: 1, listItemCount: 0 };
-        phase.fields[FIELD_LABELS[fm[1]!]!] = field;
+        phase.fields[fieldName] = field;
         continue;
       }
     }

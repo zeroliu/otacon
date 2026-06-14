@@ -742,6 +742,35 @@ code {
   background: linear-gradient(90deg, var(--line-strong), transparent);
 }
 
+/* The optional review-altitude sections (Contract, Impact) carry the intent/
+ * risk layer the reviewer reads first (DESIGN.md §4, §10). They render through
+ * the same SectionBlock as any H2; an accent-inked rail and section glyph mark
+ * them apart from phase detail without a card, fill, or radius. */
+.plan-altitude .section-title::before {
+  content: "▲ ";
+}
+
+.plan-altitude .rail-line {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent) 55%, var(--line-strong)),
+    transparent
+  );
+}
+
+/* Lead diagram (DESIGN.md §4, §10): the Summary's mermaid chart is the plan's
+ * first screen — strongly recommended up top so the reviewer reads shape before
+ * prose. It rides the §10 hairline vocabulary — a 2px accent top rule and an
+ * accent-inked caption lift it as the headline figure, no card or fill. Absent
+ * on plans that opted out, where the selector simply matches nothing. */
+.plan-lead .diagram {
+  border-top: 2px solid var(--accent);
+}
+
+.plan-lead .diagram .fence-head {
+  color: var(--accent);
+}
+
 /* The slug each section answers to — M2c anchors comments here. Quietly
  * present on hover/focus so the contract is discoverable but never noisy. */
 .anchor-slug {
@@ -877,6 +906,66 @@ code {
 .pill-deletes {
   color: var(--diff-del);
   background: color-mix(in srgb, var(--diff-del) 15%, transparent);
+}
+
+/* ── behavioral assertions: gwt scenario cards (DESIGN.md §4, §9, §10) ──
+ * A ```gwt fence renders as Given/When/Then cards — the Test-Driven Review
+ * approve checklist. Flat panels, a 2px top rule, mono clause labels; no fill
+ * or radius, matching the callout/codec language. The clause text stays the
+ * plan's own words so a comment can still anchor to a scenario line. */
+.gwt {
+  margin: 0 0 0.85em;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.gwt-card {
+  display: flex;
+  gap: 10px;
+  padding: 9px 0 2px;
+  border-top: 2px solid var(--line-strong);
+}
+
+.gwt-n {
+  flex: none;
+  font: 600 10.5px/1.7 var(--mono);
+  color: var(--ink-soft);
+}
+
+.gwt-clauses {
+  flex: 1;
+  min-width: 0;
+}
+
+.gwt-step {
+  margin: 0 0 0.25em;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.gwt-step:last-child {
+  margin-bottom: 0;
+}
+
+.gwt-kw {
+  display: inline-block;
+  min-width: 3.4em;
+  font: 600 10.5px var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.gwt-given .gwt-kw {
+  color: var(--ink-soft);
+}
+
+.gwt-when .gwt-kw {
+  color: var(--accent);
+}
+
+.gwt-then .gwt-kw {
+  color: var(--chip-approved-ink);
 }
 
 .md h1,

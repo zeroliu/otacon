@@ -1582,3 +1582,98 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   DOM-dependent module — every prior UI unit test covered pure string logic.
 - **Revisit when:** UI tests need jsdom/happy-dom globals registered process-wide (a bun
   preload), or the runner grows its own type story that subsumes this config.
+
+## Optional H2 sections are linted-when-present, not a second required tier
+
+- **Decision:** The linter's section list (`ORDERED_SECTIONS` in
+  `src/daemon/linter/rules.ts`) grows an `optional` flag and stops being a flat required
+  list. Optional sections (`## Contract` after Summary, `## Impact` after Decisions) sit at
+  fixed positions in the canonical order; they are linted for budget/visual caps **when
+  present** but never trigger `E_SECTION_MISSING`. The order check filters the canonical
+  order to the sections actually present (`knownIds.filter(seen.has)`), so dropping an
+  optional never trips `E_SECTION_ORDER`. Each carries its own line budget
+  (`budgets.contractLines` 12, `budgets.impactLines` 10) and shares the existing
+  per-read-path-section fence (1) and visual (2) caps — so an Impact section's dependency
+  mermaid rides the one-fence allowance. The
+  rejected alternatives were new *required* sections (ceremony on trivial plans) and
+  block-types-inside-existing-sections (couples interface surface to Decisions/Phases).
+- **Why:** The redesign's thesis is **review altitude** — lead with the contract and blast
+  radius so the human reviews intent and risk, not steps. A trivial plan should not pay for
+  a Contract section it doesn't need, and a complex one should be able to add one without a
+  schema fork; optional-when-warranted is the only shape that serves both (q3). Threading
+  `optional` through the existing order machinery (rather than a parallel code path) keeps
+  the one ordering algorithm authoritative and means every existing plan still lints
+  identically — the regression surface the broad lint tests guard. Placing Contract right
+  after Summary matches the read order (what it *is* before why/how) and the §1 brainstorm
+  flow (lead → contract → … → phases).
+- **Revisit when:** A third optional section makes the fixed-position list unwieldy and a
+  general "optional section registry" (id → budget → position) earns its keep, or optional
+  sections want their own tier label in the normative/informative contract (§4) rather than
+  inheriting read-path-normative. Impact sits after Decisions (the blast radius reads after
+  the tradeoffs that chose it, just before the phases that act on it); its 10-line budget is
+  tighter than Contract's 12 because a dependency list is terser than an interface surface.
+
+## Behavioral assertions are a shared-tokenizer ```gwt fence under Verification
+
+- **Decision:** Given/When/Then scenarios live in a ` ```gwt ` fence inside a phase's
+  Verification, not as prose, a GFM table, or a new section (q7). The grammar lives in one
+  shared module, `src/shared/gwt.ts` (`parseGwt`), imported by both the daemon linter
+  (`rules.ts`, shape + scenario-count budget) and the UI scenario cards
+  (`src/ui/plan/scenario-card.tsx`). The daemon line parser tokenizes the fence body **once**
+  (calling `parseGwt` at parse time) and stores the resulting scenarios plus the active field
+  as a `GwtBlock` (budget-exempt — it does **not** spend the phase's one-fence allowance), so
+  the linter's three verdicts read one shared parse instead of re-tokenizing per check. A gwt
+  fence inside a phase lands on that phase; a stray one in a non-phase section's read path
+  (e.g. Summary) is captured on the *section* with a null field rather than silently counted
+  as an ordinary budgeted fence — because the UI dispatcher renders **any** `gwt` fence as
+  scenario cards regardless of location, so the linter must judge it everywhere or producer
+  and consumer drift. The linter then errors on placement outside Verification
+  (`E_GWT_PLACEMENT` — for a stray-section block too), an empty block (`E_GWT_EMPTY`), a
+  scenario missing/disordering Given-When-Then (`E_GWT_MALFORMED`), and too many scenarios
+  (`E_BUDGET_GWT`, default 6). The UI renders cards in `plan-view`'s block dispatcher (the
+  fence reaches it as a `FenceBlock`, never `marked`), degrading to a plain fence if parsing
+  yields no scenarios.
+- **Why:** Scenario cards that *are* the approve checklist (Test-Driven Review) need a
+  structured, machine-checkable shape — prose can't be linted, a table fights long clauses,
+  a whole new section is ceremony for something that belongs to one phase's verification.
+  A fence keeps the plan plain renderable markdown and inherits the existing budget-exempt
+  treatment. The grammar is **new** (unlike the line grammar, whose daemon/UI duplication is
+  deliberate per "Review screen renders via a ported line grammar"), so a single shared
+  tokenizer is the simpler, drift-proof choice — the agent's required shape and the
+  reviewer's rendered cards come from the same code. Exempting gwt from the one-fence cap is
+  load-bearing: it is the verification surface, so making it compete with a phase diagram
+  for the single fence slot would force a false choice. Keeping the keyword in the rendered
+  clause text (inking only the label) preserves comment-anchoring onto a scenario line.
+- **Revisit when:** Scenarios need richer structure (tables of examples, tags, data tables)
+  that the line grammar can't carry, or reviewers want to *check off* individual scenarios
+  on approve (state the linter/daemon would then have to persist), or gwt earns a place
+  outside Verification (e.g. a Contract-level acceptance block).
+
+## Lead diagram is a strongly-recommended nudge, not a required section
+
+- **Decision:** A lead diagram is a ` ```mermaid ` fence in the existing `## Summary`
+  section — not a new required section and not a forced one-line TL;DR (q6, D6). The
+  daemon line parser counts mermaid fences per section (`Section.diagramCount`) and
+  records an HTML-comment opt-out (`Section.leadDiagramOptOut`); a new advisory rule
+  `checkL7` (`src/daemon/linter/rules.ts`) emits exactly one **warning**
+  (`W_LEAD_DIAGRAM_MISSING`, rule L7) when Summary has no diagram and no opt-out — never
+  an error, so it can never block a submit. The escape hatch is the directive
+  `<!-- no-lead-diagram: <why> -->` in Summary, recognized by the parser and exempt from
+  the line budget like a callout marker. The UI marks the Summary section `plan-lead` and
+  inks its diagram as the first-screen figure (a 2px accent top rule); no reorder is
+  needed, since Summary already leads the column and the diagram already follows the
+  headline.
+- **Why:** The redesign's first-screen goal (§1, §10) is "see the shape before the prose,"
+  but a *mandated* diagram turns decorative — an auto-mermaid that restates the summary
+  adds reading load (a named risk). Strongly-recommended-with-an-escape-hatch is the only
+  shape that pushes the diagram rate toward ~90% without forcing a useless chart onto a
+  trivial change. A warning (not an error) is what keeps the linter's "presence, never
+  usefulness" honesty: the linter cannot judge whether a diagram helps, so it must not
+  block on one. Reusing Summary rather than a `## Diagram` section keeps the schema spine
+  unchanged and the diagram budget-free under the one-fence rule. Making the opt-out
+  budget-exempt means declining a diagram never silently costs a Summary content line, so
+  the agent is never nudged toward a worse headline just to dodge the nudge.
+- **Revisit when:** Real plans show the nudge mis-firing (e.g. a Contract- or preamble-level
+  diagram should satisfy it too), the ~90% target proves wrong, or a forced TL;DR /
+  collapse-all altitude control earns its keep after all (both were considered and dropped
+  — D6, D12).

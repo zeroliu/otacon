@@ -13,6 +13,7 @@ import { CodeFence, MermaidFigure, PairFences } from "./code";
 import { Markdown } from "./markdown";
 import type { Block, PlanDetails, PlanPhase, PlanSection } from "./parse";
 import { parsePlan } from "./parse";
+import { ScenarioCards } from "./scenario-card";
 
 /**
  * The section/phase ⋯ menu affordance (DESIGN.md §10): always available, and
@@ -35,6 +36,7 @@ function Blocks({ blocks }: { blocks: Block[] }) {
         if (block.kind === "markdown") return <Markdown key={i} source={block.text} />;
         if (block.kind === "pair") return <PairFences key={i} pair={block} />;
         if (block.lang === "mermaid") return <MermaidFigure key={i} code={block.code} />;
+        if (block.lang === "gwt") return <ScenarioCards key={i} fence={block} />;
         return <CodeFence key={i} fence={block} />;
       })}
     </>
@@ -149,6 +151,12 @@ function decisionBlocks(blocks: Block[]): Block[] {
   );
 }
 
+// The optional review-altitude sections (DESIGN.md §4): Contract (the interface
+// the reviewer signs off) and Impact (blast radius). They render through the
+// same SectionBlock as any H2, but carry an `altitude` class so the codec ink
+// marks them as the intent/risk layer above the phase detail.
+const ALTITUDE_SECTIONS = new Set(["contract", "impact"]);
+
 function SectionBlock({
   section,
   index,
@@ -162,10 +170,21 @@ function SectionBlock({
 }) {
   const blocks =
     section.id === "decisions" ? decisionBlocks(section.blocks) : section.blocks;
+  // Summary leads the document; `plan-lead` lets CSS lift its recommended lead
+  // diagram (a mermaid fence, DESIGN.md §4) as the headline figure — an accent
+  // top rule and inked caption (.plan-lead .diagram), no card or fill.
+  const className = [
+    "plan-section",
+    ALTITUDE_SECTIONS.has(section.id) ? "plan-altitude" : "",
+    section.id === "summary" ? "plan-lead" : "",
+    changed.has(section.id) ? "unit-changed" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   return (
     <section
       id={section.id}
-      className={changed.has(section.id) ? "plan-section unit-changed" : "plan-section"}
+      className={className}
       style={{ "--si": index } as CSSProperties}
     >
       <header className="section-rail">

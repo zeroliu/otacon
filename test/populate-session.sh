@@ -15,8 +15,9 @@
 # flavor (default: full):
 #   full     r1 + grill Q&A + comment threads + r2 → a diff, a resolved+anchored
 #            thread, and an orphaned thread. The all-purpose realistic surface.
-#   visuals  r1 is a plan built from callouts + a decision matrix + inline pills,
-#            with a comment anchored INTO a callout. For expressive-plan-visuals.
+#   visuals  r1 is a plan built from callouts + a decision matrix + inline pills +
+#            a Given/When/Then scenario card block, with a comment anchored INTO a
+#            callout. For expressive-plan-visuals.
 #   notify   full base, then an interactive loop: fire a grill question / a new
 #            revision on demand so you can test focus/blur banner suppression.
 #   activity full base, then streams `otacon progress` notes live so you can watch
@@ -56,9 +57,12 @@ mkdir -p ".otacon/$SID"
 
 # ---- r1 ---------------------------------------------------------------------
 if [ "$FLAVOR" = visuals ]; then
-  # Built inline so it is self-contained and exercises all three primitives.
-  # At most one budget-exempt visual (callout/matrix) per section keeps it under
-  # any reasonable per-section visual cap; inline pills are always free.
+  # Built inline so it is self-contained and exercises every render primitive:
+  # semantic callouts, a decision matrix, inline pills, and a Given/When/Then
+  # scenario-card block under a phase's Verification. At most one budget-exempt
+  # visual (callout/matrix) per section keeps it under any reasonable per-section
+  # visual cap; inline pills are always free, and a ```gwt block is fence- and
+  # visual-exempt (validated separately by the linter, DESIGN.md §4).
   cat > ".otacon/$SID/plan.md" <<EOF
 ---
 title: visuals-demo
@@ -93,6 +97,17 @@ Goal: Render \`> [!risk|note|decision|assumption]\` blockquotes as semantic-ink 
 Files:
 - src/ui/plan/callout.tsx
 Verification: A 4-type sample renders; an over-cap section fails lint.
+
+\`\`\`gwt
+Given a phase whose Verification holds a gwt fence
+When the reviewer opens the plan
+Then each scenario renders as its own numbered card
+And the Given/When/Then keywords read as inked labels
+
+Given a scenario missing its Then clause
+When the daemon lints the submit
+Then it reports E_GWT_MALFORMED and blocks the revision
+\`\`\`
 
 > [!risk]
 > A selection spanning a pill token may break comment anchoring — verify it.
