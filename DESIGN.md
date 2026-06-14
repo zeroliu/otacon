@@ -509,15 +509,21 @@ the single source of truth — there is no local session pointer:
 session's queue; a comment on plan A wakes only plan A's agent. N parked waits = N open
 HTTP requests, no contention.
 
-**UI switching.** Index page is home (all sessions, status, unread badges). The review
-screen header has a persistent session switcher — dropdown on desktop, horizontally
-scrollable chips on phone: `auth-refactor ●2 │ search-index ✋awaiting │ miyo ⏳revising`.
-The current session's chip leads the strip (the "you are here" anchor never scrolls
-out of reach) and never wears an unread badge — you are reading it; `●N` counts the
-revisions this device hasn't opened (unread state is device-local, §10). The switcher
-rides the index SSE stream, so chips appear, re-badge, and vanish live.
-Each session gets a stable **accent color** used on the header, comment composer, and
-agent-question cards, so rapid phone switching can't post feedback to the wrong plan.
+**UI switching.** Index page is home (status, unread badges); approved sessions group
+into a collapsed section there (§10). The review screen header has a persistent session
+switcher — dropdown on desktop, horizontally scrollable chips on phone:
+`auth-refactor ●2 │ search-index ✋awaiting │ miyo ⏳revising`. **The switcher lists only
+active sessions** — approved ones are hidden from both faces (chips and dropdown),
+including the one you are viewing: a finished plan shouldn't clutter the strip you switch
+through. The current session's chip leads the strip (the "you are here" anchor never
+scrolls out of reach) and never wears an unread badge — you are reading it; `●N` counts
+the revisions this device hasn't opened (unread state is device-local, §10). When the
+current session is absent from the strip — cleaned, or approved and opened from home —
+the dropdown shows a labeled placeholder (its title + state) instead of rendering blank,
+and the chip strip simply omits it. The switcher rides the index SSE stream, so chips
+appear, re-badge, and vanish live. Each session gets a stable **accent color** used on
+the header, comment composer, and agent-question cards, so rapid phone switching can't
+post feedback to the wrong plan.
 
 ---
 
@@ -634,6 +640,15 @@ chip — a subtle "is the agent still on the line?" mark, distinct from the
 browser↔daemon link dot (labelled `agent` vs `link`); the status chip stays the
 primary "your turn" signal. The dot is live while the agent is parked in
 `otacon wait` or its last contact is recent, and is hidden on approved sessions.
+
+**Approved sessions group separately.** The main list holds only active sessions
+(drafting / in review / revising); approved ones move into a dedicated `approved`
+section below it, collapsed by default with the count in its heading (`approved 3`),
+one tap to expand (the same disclosure idiom as the activity panel). The list's top
+`sessions N` count tracks the active list — what still needs you — not the registry
+total; the approved section carries its own count. Approved plans stay readable: tapping
+an approved card opens its read-only plan, and that is the only entry point now the
+switcher (§7) no longer lists them.
 
 ### Review screen — desktop (Google-Docs margin model)
 
@@ -791,7 +806,10 @@ The artifact is post-lint output: the closed plan schema (§4-5) governs submits
 this file. Approve ends the session **logically** — `status: approved` excludes it
 from implicit CLI resolution and every mutating verb refuses — while `.otacon/<id>/`
 stays on disk (the parked `wait` still drains the `approved` event from it) until
-`otacon clean` archives it.
+`otacon clean` archives it. In the UI, the moment the session you're viewing flips to
+approved, the review screen navigates home (its switcher chip is gone, §7); this fires
+only on the live non-approved → approved transition, so opening an already-approved
+session from home does **not** redirect and the committed plan stays readable.
 
 Session status machine: `draft → in_review ⇄ revising → approved`.
 

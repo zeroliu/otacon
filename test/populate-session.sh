@@ -168,6 +168,22 @@ JSON
   echo "# revision 2 submitted: diff vs r1, t1 resolved+anchored, t2 orphaned"
 fi
 
+# ---- a second, APPROVED session ---------------------------------------------
+# So the hide-approved work is demoable: it is gone from the switcher (§7) and
+# grouped under home's collapsed `approved` section (§10). The redirect (§12) is
+# a manual approve of the MAIN (active) session in the UI. Force-approve here is
+# what the UI does after its unresolved-thread warning; the artifact lands in the
+# scratch repo's docs/plans/ (never committed — the agent commits in the real flow).
+APPROVED_SID="$("$OTACON" start --title "demo: $FLAVOR (approved)" 2>/dev/null | jf .session)"
+if [[ "$APPROVED_SID" == otc_* ]]; then
+  mkdir -p ".otacon/$APPROVED_SID"
+  sed "s/otc_test01/$APPROVED_SID/" "$FIXTURES/valid-plan.md" > ".otacon/$APPROVED_SID/plan.md"
+  "$OTACON" submit --session "$APPROVED_SID" >/dev/null
+  curl -s -X POST "$BASE/api/sessions/$APPROVED_SID/approve" \
+    -H 'content-type: application/json' -d '{"force":true}' >/dev/null
+  echo "# second session $APPROVED_SID approved: hidden from the switcher, grouped on home"
+fi
+
 echo
 echo "=================================================================="
 echo "  session : $SID"

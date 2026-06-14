@@ -2,6 +2,7 @@
 // status chip, unread badge, last activity, session accent. Live over SSE.
 
 import type { CSSProperties, MouseEvent } from "react";
+import { useState } from "react";
 import { accentStyle } from "./accent";
 import type { LiveSession } from "./api";
 import { useSessions } from "./api";
@@ -9,6 +10,7 @@ import { AgentDot, LinkState, StatusChip } from "./chip";
 import { relativeTime, repoName } from "./format";
 import { navigate } from "./router";
 import { unreadCount } from "./seen";
+import { partitionByApproval } from "./session-filter";
 import { useNow } from "./tick";
 
 export function IndexScreen() {
@@ -16,6 +18,11 @@ export function IndexScreen() {
   // One ticking clock for the whole list: keeps "3m ago" and every card's
   // agent-presence dot honest while the page idles between SSE frames.
   const now = useNow(30_000);
+  // Approved sessions leave the main list for a collapsed section below
+  // (DESIGN.md §10) so finished plans stop crowding what still needs you; the
+  // switcher hides them outright (§7). One shared split keeps the two surfaces
+  // in agreement.
+  const { active, approved } = partitionByApproval(sessions);
   return (
     <div className="page">
       <header className="masthead">
@@ -27,20 +34,64 @@ export function IndexScreen() {
       </header>
       <div className="list-head" aria-hidden="true">
         <span>
-          sessions <span className="list-count">{sessions.length}</span>
+          {/* The count tracks what still needs you — the active list — not the
+              registry total; the approved section carries its own count (D5). */}
+          sessions <span className="list-count">{active.length}</span>
         </span>
         <span className="freq">140.85</span>
       </div>
       {sessions.length === 0 ? (
         <EmptyState connected={connected} />
       ) : (
-        <main className="cards">
+        <>
+          {/* Only the active queue lives in the main list; when every session is
+              approved this is empty, so skip the grid element entirely rather
+              than render a zero-row `.cards` above the approved section. */}
+          {active.length > 0 && (
+            <main className="cards">
+              {active.map((session, index) => (
+                <SessionCard key={session.id} session={session} index={index} now={now} />
+              ))}
+            </main>
+          )}
+          {approved.length > 0 && <ApprovedSection sessions={approved} now={now} />}
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Approved sessions, collapsed by default behind an `approved (n)` heading (D4):
+ * declutters the main list while keeping finished plans one tap away. Reuses the
+ * activity panel's disclosure idiom (button + aria-expanded + caret + useState)
+ * and the same `SessionCard` rows, so an approved plan opens read-only from here
+ * (and is the only place it opens — the switcher no longer lists it).
+ */
+function ApprovedSection({ sessions, now }: { sessions: LiveSession[]; now: number }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <section className="approved-group" aria-label="approved sessions">
+      <button
+        type="button"
+        className="approved-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className="approved-group-word">approved</span>
+        <span className="approved-count">{sessions.length}</span>
+        <span className="approved-caret" aria-hidden="true">
+          {open ? "▾" : "▸"}
+        </span>
+      </button>
+      {open && (
+        <div className="cards approved-cards">
           {sessions.map((session, index) => (
             <SessionCard key={session.id} session={session} index={index} now={now} />
           ))}
-        </main>
+        </div>
       )}
-    </div>
+    </section>
   );
 }
 
