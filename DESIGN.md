@@ -126,17 +126,51 @@ created: 2026-06-12
 
 ### Sections (fixed order, H2)
 
-| Section                    | Tier                           | Budget                  |
-| -------------------------- | ------------------------------ | ----------------------- |
-| `## Summary`               | read path (normative)          | ≤5 lines                |
-| `## Decisions`             | read path (normative)          | each entry ≤3 lines     |
-| `## Phases` (H3 per phase) | read path (normative) + detail | see below               |
-| `## Risks`                 | read path (normative)          | ≤5 items, ≤2 lines each |
-| `## Open Questions`        | read path                      | may be empty            |
+| Section                    | Tier                           | Budget                  | Presence |
+| -------------------------- | ------------------------------ | ----------------------- | -------- |
+| `## Summary`               | read path (normative)          | ≤5 lines                | required |
+| `## Contract`              | read path (normative)          | ≤12 lines               | optional |
+| `## Decisions`             | read path (normative)          | each entry ≤3 lines     | required |
+| `## Impact`                | read path (normative)          | ≤10 lines               | optional |
+| `## Phases` (H3 per phase) | read path (normative) + detail | see below               | required |
+| `## Risks`                 | read path (normative)          | ≤5 items, ≤2 lines each | required |
+| `## Open Questions`        | read path                      | may be empty            | required |
+
+**Optional review-altitude sections.** Beyond the required spine, the schema
+admits optional H2 sections slotted at fixed positions in the order above —
+linted when present, never mandatory — so a trivial plan stays minimal and a
+complex one scales up (the **review altitude** goal: lead with intent and risk,
+not implementation steps). `## Contract` is the first: the interface / data-schema
+surface — inputs, outputs, types, errors — the reviewer signs off **instead of
+reading implementation**. `## Impact` is the second: the change's **blast radius** —
+the upstream modules it leans on and the downstream modules it can break —
+rendered as a compact dependency list (an optional dependency mermaid is allowed
+under the one-fence rule). The order check tolerates absent optionals (it compares
+the sections found against the canonical order filtered to those present), so
+omitting one never trips the ordering rule.
 
 Each `### Phase <n> — <name>` requires: **Goal** (≤3 lines), **Files** (list),
-**Verification** (≤3 lines), optional **Out of scope**. Each phase may have one
-`#### Details` block — collapsible in the UI, unbudgeted (soft cap: warn over 80 lines).
+**Verification** (≤3 lines), optional **Out of scope**. The Verification field
+may also carry a ` ```gwt ` **behavioral-assertion block** (below). Each phase may
+have one `#### Details` block — collapsible in the UI, unbudgeted (soft cap: warn
+over 80 lines).
+
+### Lead diagram (first screen)
+
+A **lead diagram** — a ` ```mermaid ` state / sequence / flow chart placed directly
+under the `## Summary` headline — is **strongly recommended, not required** (~90% of
+plans, q6): the reviewer should grasp the change's shape before reading any prose. It is
+budget-exempt and rides Summary's one-fence allowance, so the ≤5-line headline is
+unaffected, and the review screen pins the Summary and its lead diagram as the first
+screen (§10). The headline stays the existing ≤5-line Summary — there is no forced
+one-line TL;DR, and phases stay expanded.
+
+The linter checks **presence, never usefulness** (a diagram that merely restates the
+summary adds reading load): a Summary with no diagram earns a non-blocking nudge (lint
+L7, §5), never an error. When a chart genuinely wouldn't help — a pure docs or config
+change — an explicit `<!-- no-lead-diagram: <why> -->` marker in Summary suppresses the
+nudge (the marker is chrome, exempt from the line budget). The escape hatch is explicit
+so "no diagram" is always a deliberate choice, never an oversight.
 
 ### The normative / informative contract
 
@@ -187,11 +221,21 @@ to readable text if rendering ever fails:
 - **Inline scope pills** — a closed set of bracket tokens (`[new]`, `[breaking]`,
   `[risky]`, `[deletes]`) renders as small mono tags inline in prose (§10). Markdown
   links and the `[assumed]` decision tag are left untouched.
+- **Behavioral assertions** — a ` ```gwt ` fence inside a phase's **Verification**
+  holds one or more `Given … / When … / Then …` scenarios (blank line between
+  scenarios; `And`/`But` continue a clause). The renderer styles them as scenario
+  cards that double as the human's approve checklist — **Test-Driven Review**
+  (§9, §10). The grammar is a single shared tokenizer used by both the linter and
+  the UI, so what the agent must write and what the reviewer sees never drift. The
+  block is exempt from the one-fence rule (it is the verification surface, not a
+  diagram), capped at a scenario count (default 6), and must sit under Verification;
+  a malformed or misplaced block fails the lint.
 
 The two block visuals are exempt from line budgets but counted against a
 per-read-path-section **visual cap** (default 2, tunable — the same shape as the
 one-fence rule, and uncapped inside Details), so a 2-line risk can _be_ a callout without
 a section becoming a wall of widgets. **Inline pills are always free** (never counted).
+The `gwt` block is exempt from the fence cap and tracked by its own scenario budget.
 
 ### Anchoring (for comments)
 
@@ -222,12 +266,13 @@ errors on stdout; the agent fixes and resubmits. Invalid revisions never reach t
 
 | Rule | Check                                                                                                                                            | Severity                               |
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
-| L1   | Schema completeness: required sections present, in order; phases have Goal/Files/Verification                                                    | error                                  |
+| L1   | Schema completeness: required sections present, in canonical order (absent optionals tolerated); phases have Goal/Files/Verification; `gwt` blocks well-formed and under Verification | error                                  |
 | L2   | Read-path budgets (Summary ≤5 lines, Goal ≤3, etc.)                                                                                              | error                                  |
 | L3   | Decision traceability: every `D<n>` cites a `q<n>` (`← q7` or `← q7, q9`; `<-` accepted) or `[assumed]`; cited ids must exist in the grill transcript | error (warning in `--quick` sessions)  |
 | L4   | Detail containment heuristics: file paths in Details must appear in that phase's Files; new dependency names in Details must appear in Decisions | warning                                |
 | L5   | Revision accompaniment: a submit must include a resolution reply for every open comment thread, and every revision ≥ 2 must carry a changelog    | error                                  |
 | L6   | Detail soft caps (>80 lines/section)                                                                                                             | warning, surfaced as a badge in the UI |
+| L7   | First-screen recommendation: a lead diagram (`mermaid`) near the top is strongly recommended (~90% of plans); a `<!-- no-lead-diagram -->` marker in Summary opts out | warning (nudge, never blocks) |
 
 Budget numbers are config, expected to be tuned during the first week of real use.
 Known residual risk: vacuous summaries pass L2 (no deterministic fix without an LLM,
@@ -705,6 +750,10 @@ switcher (§7) no longer lists them.
   second copy to keep in sync. The diff baseline picker, the changed-section tally
   (`j`/`k`), and the changelog recall live below it in a contextual in-flow strip, not
   in the header.
+- Lead diagram: the Summary's ` ```mermaid ` chart (§4) is the **first screen** —
+  the Summary section and its diagram lead the reading column, the diagram lifted by a
+  2px accent top rule so the change's shape reads before its prose. Absent on plans that
+  opted out of a lead diagram.
 - Select text → floating toolbar: **Comment** (→ drawer) | **Ask** (fires immediately;
   thread shows "answering…" until the reply lands). The toolbar only appears where the
   anchor can survive: selections touching renderer chrome (mermaid SVG labels, fence

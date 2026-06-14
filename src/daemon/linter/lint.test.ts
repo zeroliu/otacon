@@ -14,7 +14,10 @@ status: draft
 created: 2026-06-13
 ---
 `;
-const SUMMARY = "## Summary\n\nShip it.\n";
+// The default Summary carries a lead diagram — the recommended shape (L7), so
+// unrelated "passes clean" cases don't trip the lead-diagram nudge. Tests that
+// exercise the nudge override `summary` with a diagram-less one.
+const SUMMARY = "## Summary\n\nShip it.\n\n```mermaid\nflowchart LR\n  a --> b\n```\n";
 const DECISIONS = "## Decisions\n\n- D1: choice ← q1\n";
 const PHASES =
   "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n- a.ts\nVerification: tests\n";
@@ -178,6 +181,80 @@ describe("L1 schema completeness", () => {
   });
 });
 
+describe("optional Contract section", () => {
+  const CONTRACT = "## Contract\n\n- input: `Plan` markdown\n- output: `LintResult`\n";
+
+  test("present, in order, within budget passes clean", () => {
+    const content = [FM, SUMMARY, CONTRACT, DECISIONS, PHASES, RISKS, OPEN].join("\n");
+    const result = run(content);
+    expect(codes(result)).toEqual([]);
+    expect(result.ok).toBeTrue();
+  });
+
+  test("absent is fine — the default doc carries no Contract", () => {
+    expect(run(doc()).ok).toBeTrue();
+  });
+
+  test("out of order (after Decisions) is E_SECTION_ORDER", () => {
+    const content = [FM, SUMMARY, DECISIONS, CONTRACT, PHASES, RISKS, OPEN].join("\n");
+    expect(codes(run(content))).toContain("E_SECTION_ORDER");
+  });
+
+  test("over budget reports E_BUDGET_CONTRACT", () => {
+    const contract = `## Contract\n\n${"- field\n".repeat(13)}`;
+    const content = [FM, SUMMARY, contract, DECISIONS, PHASES, RISKS, OPEN].join("\n");
+    const over = run(content).errors.find((e) => e.code === "E_BUDGET_CONTRACT");
+    expect(over).toMatchObject({ budget: 12, actual: 13, section: "contract" });
+  });
+
+  test("the one-fence rule applies to Contract too", () => {
+    const contract = "## Contract\n\nShape:\n\n```\na\n```\n\n```\nb\n```\n";
+    const content = [FM, SUMMARY, contract, DECISIONS, PHASES, RISKS, OPEN].join("\n");
+    expect(run(content).errors.find((e) => e.code === "E_FENCE_CAP")).toMatchObject({
+      section: "contract",
+    });
+  });
+
+  test("a still-unknown section stays E_UNKNOWN_SECTION and lists Contract as allowed", () => {
+    const result = run(doc({ open: `${OPEN}\n## Notes\n\nstuff\n` }));
+    const unknown = result.errors.find((e) => e.code === "E_UNKNOWN_SECTION");
+    expect(unknown?.message).toContain("Contract");
+  });
+});
+
+describe("optional Impact section", () => {
+  const IMPACT = "## Impact\n\n- upstream: `src/auth/keys.ts`\n- downstream: every API route\n";
+
+  test("present, in order (after Decisions), within budget passes clean", () => {
+    const content = [FM, SUMMARY, DECISIONS, IMPACT, PHASES, RISKS, OPEN].join("\n");
+    expect(codes(run(content))).toEqual([]);
+  });
+
+  test("Contract + Impact together stay in order", () => {
+    const contract = "## Contract\n\n- in: x\n";
+    const content = [FM, SUMMARY, contract, DECISIONS, IMPACT, PHASES, RISKS, OPEN].join("\n");
+    expect(codes(run(content))).toEqual([]);
+  });
+
+  test("out of order (before Decisions) is E_SECTION_ORDER", () => {
+    const content = [FM, SUMMARY, IMPACT, DECISIONS, PHASES, RISKS, OPEN].join("\n");
+    expect(codes(run(content))).toContain("E_SECTION_ORDER");
+  });
+
+  test("over budget reports E_BUDGET_IMPACT", () => {
+    const impact = `## Impact\n\n${"- dep\n".repeat(11)}`;
+    const content = [FM, SUMMARY, DECISIONS, impact, PHASES, RISKS, OPEN].join("\n");
+    const over = run(content).errors.find((e) => e.code === "E_BUDGET_IMPACT");
+    expect(over).toMatchObject({ budget: 10, actual: 11, section: "impact" });
+  });
+
+  test("a dependency mermaid rides the one-fence allowance", () => {
+    const impact = "## Impact\n\n- chain:\n\n```mermaid\nflowchart LR\n  a --> b\n```\n";
+    const content = [FM, SUMMARY, DECISIONS, impact, PHASES, RISKS, OPEN].join("\n");
+    expect(run(content).ok).toBeTrue();
+  });
+});
+
 describe("L2 budgets", () => {
   test("summary over budget reports budget and actual", () => {
     const summary = `## Summary\n\n${"line\n".repeat(6)}`;
@@ -284,6 +361,64 @@ describe("L2 budgets", () => {
   });
 });
 
+describe("gwt behavioral assertions", () => {
+  const phaseWithGwt = (gwt: string): string =>
+    `## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n- a.ts\nVerification: tests\n${gwt}\n`;
+  const block = (body: string): string => `\`\`\`gwt\n${body}\n\`\`\``;
+
+  test("a well-formed gwt block under Verification passes clean", () => {
+    const phases = phaseWithGwt(block("Given a fresh session\nWhen the agent submits\nThen review opens"));
+    expect(codes(run(doc({ phases })))).toEqual([]);
+  });
+
+  test("a gwt block outside Verification is E_GWT_PLACEMENT", () => {
+    const phases =
+      `## Phases\n\n### Phase 1 — Build\n\nGoal: g\n${block("Given a\nWhen b\nThen c")}\nFiles:\n- a.ts\nVerification: t\n`;
+    expect(codes(run(doc({ phases })))).toContain("E_GWT_PLACEMENT");
+  });
+
+  test("an empty gwt block is E_GWT_EMPTY", () => {
+    expect(codes(run(doc({ phases: phaseWithGwt(block("")) })))).toContain("E_GWT_EMPTY");
+  });
+
+  test("a scenario missing Then is E_GWT_MALFORMED, not empty", () => {
+    const result = run(doc({ phases: phaseWithGwt(block("Given a\nWhen b")) }));
+    expect(codes(result)).toContain("E_GWT_MALFORMED");
+    expect(codes(result)).not.toContain("E_GWT_EMPTY");
+  });
+
+  test("too many scenarios is E_BUDGET_GWT", () => {
+    const many = Array.from({ length: 7 }, (_, i) => `Given g${i}\nWhen w${i}\nThen t${i}`).join("\n\n");
+    const over = run(doc({ phases: phaseWithGwt(block(many)) })).errors.find(
+      (e) => e.code === "E_BUDGET_GWT",
+    );
+    expect(over).toMatchObject({ budget: 6, actual: 7, section: "phase-1" });
+  });
+
+  test("the gwt scenario budget is config-driven", () => {
+    const many = Array.from({ length: 7 }, (_, i) => `Given g${i}\nWhen w${i}\nThen t${i}`).join("\n\n");
+    const config: OtaconConfig = {
+      ...DEFAULT_CONFIG,
+      budgets: { ...DEFAULT_CONFIG.budgets, gwtMaxScenarios: 7 },
+    };
+    expect(run(doc({ phases: phaseWithGwt(block(many)) }), { session: SESSION }, config).ok).toBeTrue();
+  });
+
+  test("a gwt block in a non-phase section is E_GWT_PLACEMENT, not a silent fence", () => {
+    // The UI renders any ```gwt fence as scenario cards regardless of section, so
+    // a block in Summary must be rejected here rather than slip through budgeted.
+    const summary = `## Summary\n\nShip it.\n${block("Given a\nWhen b\nThen c")}\n`;
+    const result = run(doc({ summary }));
+    const placement = result.errors.find((e) => e.code === "E_GWT_PLACEMENT");
+    expect(placement).toMatchObject({ rule: "L1", section: "summary" });
+  });
+
+  test("a malformed gwt block in a non-phase section still reports its shape", () => {
+    const summary = `## Summary\n\nShip it.\n${block("Given a\nWhen b")}\n`;
+    expect(codes(run(doc({ summary })))).toContain("E_GWT_MALFORMED");
+  });
+});
+
 describe("L6 details soft cap", () => {
   function phasesWithDetails(lines: number): string {
     return `## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n- a.ts\nVerification: t\n\n#### Details\n${"x\n".repeat(lines)}`;
@@ -299,6 +434,36 @@ describe("L6 details soft cap", () => {
   test("80 raw lines is clean", () => {
     const result = run(doc({ phases: phasesWithDetails(80) }));
     expect(codes(result)).toEqual([]);
+  });
+});
+
+describe("lead diagram nudge (L7)", () => {
+  const noDiagram = "## Summary\n\nShip it.\n";
+  const withDiagram = "## Summary\n\nShip it.\n\n```mermaid\nflowchart LR\n  a --> b\n```\n";
+  const optedOut = "## Summary\n\nShip it.\n\n<!-- no-lead-diagram: pure docs change -->\n";
+
+  test("a Summary with a lead diagram is clean", () => {
+    expect(codes(run(doc({ summary: withDiagram })))).toEqual([]);
+  });
+
+  test("no diagram nudges — a warning, never a blocking error", () => {
+    const result = run(doc({ summary: noDiagram }));
+    expect(result.ok).toBeTrue();
+    expect(result.errors).toEqual([]);
+    const nudge = result.warnings.find((w) => w.code === "W_LEAD_DIAGRAM_MISSING");
+    expect(nudge).toMatchObject({ rule: "L7", severity: "warning", section: "summary" });
+  });
+
+  test("the no-lead-diagram escape hatch suppresses the nudge", () => {
+    expect(codes(run(doc({ summary: optedOut })))).toEqual([]);
+  });
+
+  test("the opt-out marker is chrome — it does not spend a Summary line", () => {
+    // Five content lines plus the marker: 6 budgeted lines if the marker counted
+    // (it must not), so this stays within the ≤5 Summary budget.
+    const summary = `## Summary\n\n${"line\n".repeat(5)}<!-- no-lead-diagram: n/a -->\n`;
+    const result = run(doc({ summary }));
+    expect(result.errors.find((e) => e.code === "E_BUDGET_SUMMARY")).toBeUndefined();
   });
 });
 
@@ -429,7 +594,7 @@ describe("L3 decision traceability", () => {
   test("an entry with neither citation nor [assumed] is an error", () => {
     const result = l3("## Decisions\n\n- D1: silently decided\n");
     expect(result.errors.map((e) => e.code)).toEqual(["E_DECISION_UNTRACED"]);
-    expect(result.errors[0]).toMatchObject({ rule: "L3", section: "decisions", line: 15 });
+    expect(result.errors[0]).toMatchObject({ rule: "L3", section: "decisions", line: 20 });
   });
 
   test("a citation on a continuation line still counts", () => {

@@ -231,7 +231,7 @@ export interface SessionStateFile {
 export type LintSeverity = "error" | "warning";
 
 export interface LintIssue {
-  rule: "L1" | "L2" | "L3" | "L5" | "L6";
+  rule: "L1" | "L2" | "L3" | "L5" | "L6" | "L7";
   code: string;
   severity: LintSeverity;
   message: string;

@@ -8,6 +8,7 @@ import {
   checkL3,
   checkL5,
   checkL6,
+  checkL7,
   type FrontmatterExpectations,
   type GrillContext,
   type ResolutionContext,
@@ -37,6 +38,7 @@ export function lint(
     ...(options.grill ? checkL3(plan, options.grill) : []),
     ...(options.resolutions ? checkL5(options.resolutions) : []),
     ...checkL6(plan, config.budgets),
+    ...checkL7(plan),
     ...checkFrontmatterAuthority(plan, options),
   ];
   const errors = issues.filter((i) => i.severity === "error");

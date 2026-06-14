@@ -1,7 +1,7 @@
 import type { Budgets } from "../../shared/config.js";
 import type { LintIssue, LintSeverity } from "../../shared/types.js";
 import { CITATION_RE, SESSION_STATUSES } from "../../shared/types.js";
-import type { ParsedPlan, Phase } from "./parse.js";
+import type { GwtBlock, ParsedPlan, Phase } from "./parse.js";
 
 // Rule semantics follow DESIGN.md §4-5; resolved edge cases follow
 // DECISIONS.md ("Schema is closed", "Frontmatter authority", "Plan grammar").
@@ -14,13 +14,25 @@ const REQUIRED_FRONTMATTER_KEYS = [
   "created",
 ] as const;
 
-const REQUIRED_SECTIONS: readonly { id: string; title: string }[] = [
+/**
+ * The H2 sections in canonical order. Optional sections (Contract, Impact) are
+ * linted when present but never required (DESIGN.md §4, q3): a trivial plan
+ * stays minimal, a complex one scales up. The order check tolerates absent
+ * optionals — it compares the sections found against this order filtered to the
+ * ones actually present, so dropping an optional never trips E_SECTION_ORDER.
+ */
+const ORDERED_SECTIONS: readonly { id: string; title: string; optional?: boolean }[] = [
   { id: "summary", title: "Summary" },
+  { id: "contract", title: "Contract", optional: true },
   { id: "decisions", title: "Decisions" },
+  { id: "impact", title: "Impact", optional: true },
   { id: "phases", title: "Phases" },
   { id: "risks", title: "Risks" },
   { id: "open-questions", title: "Open Questions" },
 ];
+
+/** All sections the schema accepts, for the unknown-section message. */
+const KNOWN_SECTION_TITLES = ORDERED_SECTIONS.map((s) => s.title).join(", ");
 
 const REQUIRED_PHASE_FIELDS = [
   { name: "goal", label: "Goal" },
@@ -40,6 +52,39 @@ function issue(
 
 function phaseSlug(phase: Phase): string {
   return phase.headingValid ? `phase-${phase.n}` : "phases";
+}
+
+/**
+ * The shape verdicts shared by every gwt block, wherever it sits: empty (no
+ * scenario) and malformed (a scenario that doesn't read Given… When… Then…).
+ * `where` prefixes the message ("Phase 2", "Section ## Summary"); `slug` anchors
+ * the issue. Scenarios are pre-tokenized at parse time, so this never re-parses.
+ */
+function checkGwtShape(issues: LintIssue[], gwt: GwtBlock, where: string, slug: string): void {
+  if (gwt.scenarios.length === 0) {
+    issues.push(
+      issue(
+        "L1",
+        "E_GWT_EMPTY",
+        "error",
+        `${where} has an empty \`gwt\` block — add at least one Given/When/Then scenario`,
+        { line: gwt.startLine, section: slug },
+      ),
+    );
+  }
+  gwt.scenarios.forEach((scenario, i) => {
+    if (!scenario.valid) {
+      issues.push(
+        issue(
+          "L1",
+          "E_GWT_MALFORMED",
+          "error",
+          `${where} \`gwt\` scenario ${i + 1} must read Given… When… Then… (in order)`,
+          { line: gwt.startLine, section: slug },
+        ),
+      );
+    }
+  });
 }
 
 export function checkL1(plan: ParsedPlan, session?: string): LintIssue[] {
@@ -74,17 +119,17 @@ export function checkL1(plan: ParsedPlan, session?: string): LintIssue[] {
     }
   }
 
-  const requiredIds = REQUIRED_SECTIONS.map((s) => s.id);
+  const knownIds = ORDERED_SECTIONS.map((s) => s.id);
   const seen = new Set<string>();
   const firstOccurrences: string[] = [];
   for (const section of plan.sections) {
-    if (!requiredIds.includes(section.id)) {
+    if (!knownIds.includes(section.id)) {
       issues.push(
         issue(
           "L1",
           "E_UNKNOWN_SECTION",
           "error",
-          `Unknown section "## ${section.title}" — the schema allows only Summary, Decisions, Phases, Risks, Open Questions`,
+          `Unknown section "## ${section.title}" — the schema allows only ${KNOWN_SECTION_TITLES}`,
           { line: section.startLine, section: section.id },
         ),
       );
@@ -102,15 +147,34 @@ export function checkL1(plan: ParsedPlan, session?: string): LintIssue[] {
       seen.add(section.id);
       firstOccurrences.push(section.id);
     }
+    // A gwt fence in a section's read path (outside any phase) is misplaced —
+    // behavioral assertions live under a phase's Verification. Reject it here so
+    // it can't slip through as an ordinary budgeted fence while the UI still
+    // renders it as a scenario checklist (DESIGN.md §4).
+    for (const gwt of section.gwtBlocks) {
+      issues.push(
+        issue(
+          "L1",
+          "E_GWT_PLACEMENT",
+          "error",
+          `Section "## ${section.title}" has a \`gwt\` block — behavioral assertions belong under a phase's "Verification"`,
+          { line: gwt.startLine, section: section.id },
+        ),
+      );
+      checkGwtShape(issues, gwt, `Section "## ${section.title}"`, section.id);
+    }
   }
-  for (const { id, title } of REQUIRED_SECTIONS) {
-    if (!seen.has(id)) {
+  for (const { id, title, optional } of ORDERED_SECTIONS) {
+    if (!optional && !seen.has(id)) {
       issues.push(
         issue("L1", "E_SECTION_MISSING", "error", `Required section "## ${title}" is missing`),
       );
     }
   }
-  const expectedOrder = requiredIds.filter((id) => seen.has(id));
+  // Filtering the canonical order to present sections is what makes the order
+  // check tolerant of absent optionals (DESIGN.md §4): a plan without Contract
+  // simply never contributes a "contract" slot to compare against.
+  const expectedOrder = knownIds.filter((id) => seen.has(id));
   if (firstOccurrences.join(",") !== expectedOrder.join(",")) {
     issues.push(
       issue(
@@ -191,6 +255,21 @@ export function checkL1(plan: ParsedPlan, session?: string): LintIssue[] {
           ),
         );
       }
+      for (const gwt of phase.gwtBlocks) {
+        // gwt belongs under Verification; any other phase field is misplaced.
+        if (gwt.field !== "verification") {
+          issues.push(
+            issue(
+              "L1",
+              "E_GWT_PLACEMENT",
+              "error",
+              `Phase ${phase.n} has a \`gwt\` block outside Verification — behavioral assertions belong under "Verification"`,
+              { line: gwt.startLine, section: phaseSlug(phase) },
+            ),
+          );
+        }
+        checkGwtShape(issues, gwt, `Phase ${phase.n}`, phaseSlug(phase));
+      }
     }
     const misnumbered = validNumbers.find(({ n }, i) => n !== i + 1);
     if (misnumbered) {
@@ -239,6 +318,22 @@ export function checkL2(plan: ParsedPlan, budgets: Budgets): LintIssue[] {
     });
   }
 
+  const contract = byId.get("contract");
+  if (contract) {
+    over("E_BUDGET_CONTRACT", "Contract is over budget", contract.budgetedLineCount, budgets.contractLines, {
+      line: contract.startLine,
+      section: "contract",
+    });
+  }
+
+  const impact = byId.get("impact");
+  if (impact) {
+    over("E_BUDGET_IMPACT", "Impact is over budget", impact.budgetedLineCount, budgets.impactLines, {
+      line: impact.startLine,
+      section: "impact",
+    });
+  }
+
   for (const item of byId.get("decisions")?.listItems ?? []) {
     over("E_BUDGET_DECISION", "Decision entry is over budget", item.lineCount, budgets.decisionEntryLines, {
       line: item.startLine,
@@ -260,7 +355,7 @@ export function checkL2(plan: ParsedPlan, budgets: Budgets): LintIssue[] {
     }
   }
 
-  for (const id of ["summary", "decisions", "risks", "open-questions"]) {
+  for (const id of ["summary", "contract", "decisions", "impact", "risks", "open-questions"]) {
     const section = byId.get(id);
     if (section) {
       over(
@@ -310,6 +405,15 @@ export function checkL2(plan: ParsedPlan, budgets: Budgets): LintIssue[] {
       budgets.maxVisualsPerReadSection,
       { line: phase.startLine, section: phaseSlug(phase) },
     );
+    for (const gwt of phase.gwtBlocks) {
+      over(
+        "E_BUDGET_GWT",
+        `Phase ${phase.n} \`gwt\` block has too many scenarios`,
+        gwt.scenarios.length,
+        budgets.gwtMaxScenarios,
+        { line: gwt.startLine, section: phaseSlug(phase) },
+      );
+    }
   }
 
   return issues;
@@ -336,6 +440,29 @@ export function checkL6(plan: ParsedPlan, budgets: Budgets): LintIssue[] {
     }
   }
   return issues;
+}
+
+/**
+ * L7 (DESIGN.md §4, §5, q6): a lead diagram near the top is *strongly
+ * recommended, not required* — ~90% of plans — so the reviewer sees the
+ * change's shape before its prose. A Summary with no ` ```mermaid ` diagram and
+ * no `<!-- no-lead-diagram -->` escape-hatch marker earns one **warning**, never
+ * an error: the linter checks presence, never usefulness (a diagram that merely
+ * restates the summary would add reading load), so it must not block a submit.
+ * A missing Summary is L1's business, not L7's — no double-report.
+ */
+export function checkL7(plan: ParsedPlan): LintIssue[] {
+  const summary = plan.sections.find((s) => s.id === "summary");
+  if (!summary || summary.diagramCount > 0 || summary.leadDiagramOptOut) return [];
+  return [
+    issue(
+      "L7",
+      "W_LEAD_DIAGRAM_MISSING",
+      "warning",
+      "Summary has no lead diagram — a state/sequence/flow ```mermaid block up top is strongly recommended (≈90% of plans). Add one, or mark `<!-- no-lead-diagram: <why> -->` in Summary if a chart wouldn't help.",
+      { line: summary.startLine, section: "summary" },
+    ),
+  ];
 }
 
 /**

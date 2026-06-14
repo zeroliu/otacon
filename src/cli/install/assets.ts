@@ -82,16 +82,34 @@ machine-readable error you can fix (read the JSON); exit 2 = you invoked it wron
 
 ## Plan schema (linted on submit)
 
-Frontmatter (\`title\`, \`session\`, \`revision\`, \`status\`, \`created\`), then exactly
-these H2 sections in order: \`## Summary\` (≤5 lines) · \`## Decisions\` (entries
-≤3 lines, \`- D<n>: ... ← q<n>\` citing the grill answer that produced it, or
-\`[assumed]\`) · \`## Phases\` (\`### Phase <n> — <name>\`, each with \`Goal:\` ≤3
-lines, \`Files:\` list, \`Verification:\` ≤3 lines, optional collapsible
-\`#### Details\` block) · \`## Risks\` (≤5 items, ≤2 lines each) ·
+Frontmatter (\`title\`, \`session\`, \`revision\`, \`status\`, \`created\`), then these
+H2 sections in order — the five required ones plus optional review-altitude
+sections slotted in place (include them when the change warrants; skip them on
+trivial plans): \`## Summary\` (≤5 lines, lead with a diagram — see below) ·
+*(optional)* \`## Contract\` (≤12 lines —
+the interface surface the reviewer signs off instead of reading code: inputs,
+outputs, types, errors; one signature fence is fine under the 1-fence rule) ·
+\`## Decisions\` (entries ≤3 lines, \`- D<n>: ... ← q<n>\` citing the grill answer
+that produced it, or \`[assumed]\`) · *(optional)* \`## Impact\` (≤10 lines — blast
+radius: the upstream modules this plan leans on and the downstream modules it can
+break; a dependency mermaid is fine under the 1-fence rule) · \`## Phases\`
+(\`### Phase <n> — <name>\`, each with \`Goal:\` ≤3 lines, \`Files:\` list,
+\`Verification:\` ≤3 lines plus an optional \`\`\`gwt scenario block — see below,
+optional collapsible \`#### Details\` block) ·
+\`## Risks\` (≤5 items, ≤2 lines each) ·
 \`## Open Questions\`. Mermaid / code / \`before\`+\`after\` fences are budget-exempt,
 max one per read-path section; the markdown-native review visuals below share a
 separate per-section cap. Details may elaborate on the read path, never
 introduce new scope.
+
+**Lead with a diagram.** Put a \`\`\`mermaid state / sequence / flow diagram right
+under the \`## Summary\` headline — strongly recommended on ~90% of plans, so the
+reviewer grasps the change's shape before reading prose. It is budget-exempt and uses
+Summary's one fence, so the ≤5-line headline stays intact; the review screen pins
+Summary and its lead diagram as the first screen. Keep the headline as the ≤5-line
+Summary — no forced one-liner. When a chart genuinely wouldn't help (a pure docs or
+config change), opt out explicitly with \`<!-- no-lead-diagram: <why> -->\` inside
+Summary; otherwise a missing lead diagram is a non-blocking lint nudge, never a reject.
 
 ## Visuals — prefer them over prose where they carry the information
 
@@ -112,6 +130,18 @@ or callout.
   |      | HS256  | shared secret on every verifier |
 - **Scope pills** — inline tags \`[new]\` \`[breaking]\` \`[risky]\` \`[deletes]\`
   for flagging scope mid-sentence ("adds a [new] issuer; [breaking] cookie removal").
+- **Behavioral assertions** — a \`\`\`gwt fence inside a phase's \`Verification\`
+  holding one or more Given/When/Then scenarios (blank line between scenarios;
+  \`And\`/\`But\` continue a clause). They render as scenario cards that double as
+  the human's approve checklist (Test-Driven Review), so write the observable
+  behavior the reviewer signs off, not the test code:
+  \`\`\`gwt
+  Given a plan with no Contract section
+  When the agent submits it
+  Then the lint passes and review opens
+  \`\`\`
+  Budget-exempt like a visual (does not spend the phase's one-fence allowance),
+  capped at 6 scenarios per block; must sit under \`Verification\`.
 
 Callouts and matrices are budget-exempt but capped (default 2 per read-path
 section); pills are free. Reach for a visual when it carries the point better

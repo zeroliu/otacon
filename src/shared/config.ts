@@ -3,9 +3,15 @@ import { globalConfigPath, repoConfigPath } from "./paths.js";
 
 export interface Budgets {
   summaryLines: number;
+  /** Read-path line budget for the optional `## Contract` section (DESIGN.md §4). */
+  contractLines: number;
+  /** Read-path line budget for the optional `## Impact` (blast-radius) section (DESIGN.md §4). */
+  impactLines: number;
   decisionEntryLines: number;
   phaseGoalLines: number;
   phaseVerificationLines: number;
+  /** Max Given/When/Then scenarios in one phase's ```gwt block (DESIGN.md §4). */
+  gwtMaxScenarios: number;
   risksMaxItems: number;
   riskEntryLines: number;
   maxFencesPerReadSection: number;
@@ -40,9 +46,12 @@ export interface OtaconConfig {
 export const DEFAULT_CONFIG: OtaconConfig = {
   budgets: {
     summaryLines: 5,
+    contractLines: 12,
+    impactLines: 10,
     decisionEntryLines: 3,
     phaseGoalLines: 3,
     phaseVerificationLines: 3,
+    gwtMaxScenarios: 6,
     risksMaxItems: 5,
     riskEntryLines: 2,
     maxFencesPerReadSection: 1,
