@@ -26,15 +26,15 @@ test("a progress note drives the draft chip, the activity log, and the live dot"
 
   // The activity-driven draft chip reads the latest note (DESIGN.md §10, D3),
   // not a fixed "agent drafting".
-  await expect(page.locator(".session-head .chip")).toHaveText("reading the auth module");
+  await expect(page.locator(".review-header .chip")).toHaveText("reading the auth module");
   // The pre-plan placeholder leads with the activity log, open.
   await expect(page.locator(".review-wait .activity .act-text")).toContainText(
     "reading the auth module",
   );
   // Posting progress bumped last-contact, so the agent dot reads live; it is
   // distinct from the link dot (labelled "agent").
-  await expect(page.locator(".session-head .agent-dot")).toHaveClass(/is-live/);
-  await expect(page.locator(".session-head .agent-dot")).toContainText("agent");
+  await expect(page.locator(".review-header .agent-dot")).toHaveClass(/is-live/);
+  await expect(page.locator(".review-header .agent-dot")).toContainText("agent");
 });
 
 test("a progress note posted while watching appears live (SSE), no reload", async ({
@@ -44,12 +44,12 @@ test("a progress note posted while watching appears live (SSE), no reload", asyn
   const session = await createSession(request, uniqueTitle("activity-live"));
   await page.goto(`/s/${session.id}`);
   // No note yet: the draft chip falls back to "agent working".
-  await expect(page.locator(".session-head .chip")).toHaveText("agent working");
+  await expect(page.locator(".review-header .chip")).toHaveText("agent working");
   await expect(page.locator(".review-wait")).toBeVisible();
   await plantMarker(page);
 
   await postProgress(request, session.id, "drafting the plan");
-  await expect(page.locator(".session-head .chip")).toHaveText("drafting the plan");
+  await expect(page.locator(".review-header .chip")).toHaveText("drafting the plan");
   await expect(page.locator(".review-wait .activity .act-text")).toContainText(
     "drafting the plan",
   );
@@ -75,5 +75,5 @@ test("the activity log keeps multiple notes; the chip shows the newest", async (
   await page.goto(`/s/${session.id}`);
 
   await expect(page.locator(".review-wait .activity .act-entry")).toHaveCount(2);
-  await expect(page.locator(".session-head .chip")).toHaveText("second note");
+  await expect(page.locator(".review-header .chip")).toHaveText("second note");
 });

@@ -12,7 +12,7 @@
 // approved notice. The renderer stays a lazy chunk.
 
 import type { MouseEvent, ReactNode, RefObject } from "react";
-import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Component, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { accentStyle } from "./accent";
 import type { ActivityNote, Anchor, CommentDraft, LiveSession, Thread, TranscriptEntry } from "./api";
 import {
@@ -25,11 +25,16 @@ import {
   useRevision,
   useSession,
 } from "./api";
-import { AgentDot, LinkState, StatusChip } from "./chip";
-import { relativeTime, repoName } from "./format";
 import { ActivityLog } from "./review/activity";
-import { captureSelection, flashAnchor, motionSafeScroll } from "./review/anchor";
-import type { CapturedSelection } from "./review/anchor";
+import {
+  captureSelection,
+  clearThreadHighlights,
+  flashAnchor,
+  motionSafeScroll,
+  paintThreads,
+  threadAtPoint,
+} from "./review/anchor";
+import type { CapturedSelection, LitThread } from "./review/anchor";
 import { ApproveDialog, ApprovedNote } from "./review/approve";
 import type { ReviewView } from "./review/banner";
 import { ReviewControls, RevisionBanner } from "./review/banner";
@@ -39,6 +44,7 @@ import { CommentDrawer } from "./review/drawer";
 import type { ComposerState } from "./review/feedback";
 import { Composer, SelectionToolbar, useSelection } from "./review/feedback";
 import { GrillQueue } from "./review/grill";
+import { BackLink, ReviewHeader } from "./review/header";
 import type { InterviewTarget } from "./review/interview";
 import { InterviewPanel } from "./review/interview";
 import { ThreadsRail } from "./review/rail";
@@ -46,23 +52,11 @@ import type { SectionMenuState } from "./review/section-menu";
 import { SectionMenu } from "./review/section-menu";
 import { navigate } from "./router";
 import { markSeen } from "./seen";
+import { isApproved } from "./session-filter";
 import { SessionSwitcher } from "./switcher";
 import { useNow } from "./tick";
 
 const PlanView = lazy(() => import("./plan/plan-view"));
-
-function BackLink() {
-  const onClick = (event: MouseEvent) => {
-    if (event.button !== 0 || event.metaKey || event.ctrlKey) return;
-    event.preventDefault();
-    navigate("/");
-  };
-  return (
-    <a className="backlink" href="/" onClick={onClick}>
-      ← sessions
-    </a>
-  );
-}
 
 /**
  * Catches a failed plan-view chunk load (offline, or a stale tab whose chunk
@@ -89,44 +83,6 @@ class RendererBoundary extends Component<{ children: ReactNode }, { failed: bool
       </main>
     );
   }
-}
-
-function SessionHead({
-  session,
-  connected,
-  now,
-}: {
-  session: LiveSession;
-  connected: boolean;
-  now: number;
-}) {
-  return (
-    <header className="session-head">
-      <div className="session-head-top">
-        <h1 className="session-title">{session.title}</h1>
-        <span className="session-rev">r{session.revision}</span>
-      </div>
-      <p className="session-where" title={session.repo}>
-        {repoName(session.repo)}
-        {session.branch !== "" && <span> · {session.branch}</span>}
-      </p>
-      <div className="session-meta">
-        <StatusChip
-          status={session.status}
-          openQuestions={session.openQuestions}
-          latestActivity={session.latestActivity}
-        />
-        <AgentDot
-          status={session.status}
-          parked={session.parked}
-          lastContactAt={session.lastContactAt}
-          now={now}
-        />
-        <span className="card-time">{relativeTime(session.updatedAt, now)}</span>
-        <LinkState connected={connected} />
-      </div>
-    </header>
-  );
 }
 
 const COMPOSER_WIDTH = 380;
@@ -186,6 +142,17 @@ function ReviewLoop({
   // notice falls back to the destination folder (the path is not persisted
   // on the session summary — DECISIONS.md).
   const [approvedPath, setApprovedPath] = useState<string | null>(null);
+  // Persistent thread marks (DESIGN.md §10): open threads + unsent drafts keep
+  // their anchored plan text lit. `renderTick` re-fires the paint once the
+  // lazy/memo'd PlanView commits (mount + every revision swap); `focusThread`
+  // drives the reverse gesture — a tap on a lit span targets its rail thread.
+  const [renderTick, setRenderTick] = useState(0);
+  const onRendered = useCallback(() => setRenderTick((tick) => tick + 1), []);
+  const [focusThread, setFocusThread] = useState<{ id: string; nonce: number } | null>(null);
+  const focusNonce = useRef(0);
+  // The painted lit set, mirrored for the click hit-test so onPlanClick stays
+  // off the per-keystroke `litEntries` identity (updated in the paint effect).
+  const litRef = useRef<LitThread[]>([]);
   const hasPlan = session.revision > 0;
   // Approved = the session is over (DESIGN.md §12): the whole screen goes
   // read-only — no selection anchoring, no composer, no drawer, no cards.
@@ -243,6 +210,59 @@ function ReviewLoop({
     },
     [jumpIds],
   );
+
+  // The lit set: open questions (one ink) and open comments + unsent drawer
+  // drafts (another), each with a re-locatable quote. Answered/resolved threads
+  // drop out (so their mark clears on the next paint); orphaned and whole-plan
+  // (null/quote-less) anchors are never lit — no text to paint (DESIGN.md §10).
+  const litEntries = useMemo<LitThread[]>(() => {
+    const lit: LitThread[] = [];
+    for (const thread of threads) {
+      if (thread.anchorState === "orphaned" || !thread.anchor?.exact) continue;
+      if (thread.kind === "question") {
+        if (thread.answer === undefined) {
+          lit.push({ id: thread.id, anchor: thread.anchor, kind: "question" });
+        }
+      } else if (thread.resolution === undefined) {
+        lit.push({ id: thread.id, anchor: thread.anchor, kind: "comment" });
+      }
+    }
+    for (const item of pending) {
+      if (item.anchor?.exact) {
+        lit.push({ id: `draft:${item.key}`, anchor: item.anchor, kind: "comment" });
+      }
+    }
+    return lit;
+  }, [threads, pending]);
+  // A stable signature over the painted set (ids + the fields that locate each
+  // quote), so a drawer body keystroke — new `pending` identity, same anchors —
+  // yields the same value and the paint effect below never re-fires for it.
+  // Control-char delimiters (NUL within a row, newline between rows) so a
+  // free-text quote/prefix can't collide into a false-equal signature and
+  // drop a needed repaint — plan text carries neither.
+  const litSig = litEntries
+    .map((e) => [e.id, e.kind, e.anchor.section, e.anchor.exact, e.anchor.prefix].join("\u0000"))
+    .join("\n");
+
+  // Paint by registering Ranges, never by re-rendering PlanView (DECISIONS.md:
+  // a re-render rewrites the DOM and kills selections). Gated on
+  // litSig/view/renderTick — anchor-set changes, the diff toggle, and the
+  // lazy/revision DOM swaps — so it skips per-keystroke churn. litEntries is
+  // read fresh; litSig is the real trigger.
+  useLayoutEffect(() => {
+    litRef.current = litEntries;
+    const plan = planRef.current;
+    if (!plan) return;
+    if (view === "clean") paintThreads(plan, litEntries);
+    else clearThreadHighlights();
+  }, [litSig, view, renderTick]);
+
+  // On unmount (leaving the review, or switching sessions — this loop is keyed
+  // by session id), clear the persistent marks: the CSS highlight registry is
+  // global, so otherwise a session's ranges would linger on the next screen.
+  // The arrow returns clearThreadHighlights *as the cleanup* — it runs on
+  // teardown, not on mount.
+  useEffect(() => clearThreadHighlights, []);
 
   // No re-review prompt on an approved session: the review is over.
   const fresh =
@@ -407,14 +427,27 @@ function ReviewLoop({
         return;
       }
       const cite = target?.closest?.("a.q-cite");
-      if (!cite) return;
-      event.preventDefault();
-      const id = (cite as HTMLElement).dataset.q;
-      if (id === undefined || !transcript.some((entry) => entry.id === id)) return;
-      setInterviewOpen(true);
-      setIvTarget({ id, nonce: (ivNonce.current += 1) });
+      if (cite) {
+        event.preventDefault();
+        const id = (cite as HTMLElement).dataset.q;
+        if (id !== undefined && transcript.some((entry) => entry.id === id)) {
+          setInterviewOpen(true);
+          setIvTarget({ id, nonce: (ivNonce.current += 1) });
+        }
+        return;
+      }
+      // A tap (collapsed selection) inside a lit span focuses its rail thread; a
+      // drag is select-to-comment, so a real selection is never hijacked. Clean
+      // view only — diff lines aren't anchored, an ended session paints nothing.
+      if (over || view !== "clean") return;
+      const sel = document.getSelection();
+      if (sel && !sel.isCollapsed) return;
+      const plan = planRef.current;
+      if (!plan) return;
+      const hit = threadAtPoint(plan, litRef.current, event.clientX, event.clientY);
+      if (hit !== null) setFocusThread({ id: hit, nonce: (focusNonce.current += 1) });
     },
-    [transcript, over],
+    [transcript, over, view],
   );
 
   // The ⋯ menu's verbs ride the existing composer with a section-only anchor
@@ -442,14 +475,21 @@ function ReviewLoop({
 
   return (
     <>
+      <ReviewHeader
+        session={session}
+        connected={connected}
+        now={now}
+        view={view}
+        onView={setView}
+        hasPlan={hasPlan}
+        onApprove={over ? undefined : () => setApproveOpen(true)}
+      />
       <div className="review-layout">
         <div className="review-main">
-          <SessionHead session={session} connected={connected} now={now} />
           {over && <ApprovedNote path={approvedPath} />}
           {hasPlan && (
             <ReviewControls
               view={view}
-              onView={setView}
               revision={session.revision}
               lastReviewed={session.lastReviewedRevision}
               baseline={from}
@@ -458,7 +498,6 @@ function ReviewLoop({
               showChangelog={!fresh && currentChangelog != null}
               changelogOpen={changelogOpen}
               onToggleChangelog={() => setChangelogOpen((value) => !value)}
-              onApprove={over ? undefined : () => setApproveOpen(true)}
             />
           )}
           {fresh && (
@@ -509,6 +548,7 @@ function ReviewLoop({
                         markdown={payload.markdown}
                         warnings={payload.warnings}
                         changedIds={changedIds}
+                        onRendered={onRendered}
                       />
                     </Suspense>
                   </RendererBoundary>
@@ -536,7 +576,12 @@ function ReviewLoop({
           )}
         </div>
         {hasPlan && (
-          <ThreadsRail threads={threads} onJump={jump} onFollowup={over ? undefined : followup} />
+          <ThreadsRail
+            threads={threads}
+            onJump={jump}
+            focus={focusThread}
+            onFollowup={over ? undefined : followup}
+          />
         )}
       </div>
       {approveOpen && !over && (
@@ -615,6 +660,33 @@ export function SessionScreen({ id }: { id: string }) {
     if (session && revision !== undefined) markSeen(session.id, revision);
   }, [session, revision]);
 
+  // When the session you're viewing flips to approved, its switcher chip is gone
+  // (§7) so send yourself home, where the approved section holds it (DESIGN.md
+  // §12, D3). Fire only on the live non-approved → approved crossing: opening a
+  // session that is ALREADY approved (you tapped an approved card on home) must
+  // stay, or approved plans become unopenable. `sawActive` records that we
+  // observed a non-approved status first, so the ref's initial false can't be
+  // mistaken for one. A `session` SSE frame flipping it remotely still redirects
+  // (accepted, q5).
+  //
+  // The crossing is per-session: this screen is NOT remounted when `id` changes
+  // (app.tsx routes without a key), so reset the ref on every `id` switch —
+  // otherwise the "saw active" set while reading one session would leak across a
+  // navigation and bounce the next already-approved session you open straight
+  // back home (the very unopenable case the guard exists to prevent).
+  const sawActive = useRef(false);
+  useEffect(() => {
+    sawActive.current = false;
+  }, [id]);
+  useEffect(() => {
+    if (!session) return;
+    if (isApproved(session.status)) {
+      if (sawActive.current) navigate("/");
+    } else {
+      sawActive.current = true;
+    }
+  }, [session]);
+
   // A `removed` frame landed while this screen was open: otacon clean
   // archived the session (DESIGN.md §12). A terminal state, not an error —
   // the stream is closed and the switcher still offers everything live.
@@ -660,10 +732,10 @@ export function SessionScreen({ id }: { id: string }) {
 
   return (
     <div className="page page-review" style={accentStyle(session.id)}>
-      <div className="topbar">
-        <BackLink />
-        <SessionSwitcher current={session.id} />
-      </div>
+      {/* ReviewHeader (rendered inside ReviewLoop) is the sticky masthead —
+          back + switcher + identity + controls — so there is no separate
+          topbar here. The cleaned/missing/loading shells below keep their own
+          minimal topbar: no plan exists there, nothing to pin. */}
       <ReviewLoop
         key={session.id}
         session={session}

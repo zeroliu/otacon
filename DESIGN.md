@@ -206,6 +206,13 @@ rewrites the stored quote to the new revision's text. A unique match re-anchors
 dropped, and automatically recovered if a later revision restores the text. Whole-plan
 (non-anchored) comments are also supported and never orphan.
 
+Open threads keep their anchored text **persistently lit** in the clean view — the
+steady counterpart to the click-flash, so which passages are under discussion is
+visible at a glance. Open questions, open comments, and unsent drawer drafts paint
+via the CSS Custom Highlight API (never by re-rendering the plan); a mark clears when
+its thread is answered or resolved, or when its quote orphans. Whole-plan and orphaned
+anchors are never lit — there is no re-locatable quote to paint.
+
 ---
 
 ## 5. Linter
@@ -516,15 +523,24 @@ the single source of truth — there is no local session pointer:
 session's queue; a comment on plan A wakes only plan A's agent. N parked waits = N open
 HTTP requests, no contention.
 
-**UI switching.** Index page is home (all sessions, status, unread badges). The review
-screen header has a persistent session switcher — dropdown on desktop, horizontally
-scrollable chips on phone: `auth-refactor ●2 │ search-index ✋awaiting │ miyo ⏳revising`.
-The current session's chip leads the strip (the "you are here" anchor never scrolls
-out of reach) and never wears an unread badge — you are reading it; `●N` counts the
-revisions this device hasn't opened (unread state is device-local, §10). The switcher
-rides the index SSE stream, so chips appear, re-badge, and vanish live.
-Each session gets a stable **accent color** used on the header, comment composer, and
-agent-question cards, so rapid phone switching can't post feedback to the wrong plan.
+**UI switching.** Index page is home (status, unread badges); approved sessions group
+into a collapsed section there (§10). The review screen has one **sticky header** pinned
+to the top of the scroll: expanded it shows the full masthead (title, revision,
+repo/branch, status) plus the persistent session switcher, the clean⇄diff toggle, and
+Approve; scrolling down it compacts to a tight one-line bar and re-expands at the top
+(§10). The switcher is a dropdown on desktop and horizontally scrollable chips on phone:
+`auth-refactor ●2 │ search-index ✋awaiting │ miyo ⏳revising`. **The switcher lists only
+active sessions** — approved ones are hidden from both faces (chips and dropdown),
+including the one you are viewing: a finished plan shouldn't clutter the strip you switch
+through. The current session's chip leads the strip (the "you are here" anchor never
+scrolls out of reach) and never wears an unread badge — you are reading it; `●N` counts
+the revisions this device hasn't opened (unread state is device-local, §10). When the
+current session is absent from the strip — cleaned, or approved and opened from home —
+the dropdown shows a labeled placeholder (its title + state) instead of rendering blank,
+and the chip strip simply omits it. The switcher rides the index SSE stream, so chips
+appear, re-badge, and vanish live. Each session gets a stable **accent color** used on
+the header, comment composer, and agent-question cards, so rapid phone switching can't
+post feedback to the wrong plan.
 
 ---
 
@@ -650,11 +666,20 @@ browser↔daemon link dot (labelled `agent` vs `link`); the status chip stays th
 primary "your turn" signal. The dot is live while the agent is parked in
 `otacon wait` or its last contact is recent, and is hidden on approved sessions.
 
+**Approved sessions group separately.** The main list holds only active sessions
+(drafting / in review / revising); approved ones move into a dedicated `approved`
+section below it, collapsed by default with the count in its heading (`approved 3`),
+one tap to expand (the same disclosure idiom as the activity panel). The list's top
+`sessions N` count tracks the active list — what still needs you — not the registry
+total; the approved section carries its own count. Approved plans stay readable: tapping
+an approved card opens its read-only plan, and that is the only entry point now the
+switcher (§7) no longer lists them.
+
 ### Review screen — desktop (Google-Docs margin model)
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│ auth-refactor  r4 · in review   [Clean|Diff]  [Changelog] ✓Approve│
+│ auth-refactor  r4 · in review   [Clean|Diff]  [session ▾] ✓Approve│
 ├────┬────────────────────────────────────────┬────────────────────┤
 │    │ # Summary                              │ ⊙ THREADS          │
 │    │ Replace session auth with JWT…         │ ┌────────────────┐ │
@@ -670,8 +695,16 @@ primary "your turn" signal. The dot is live while the agent is parked in
 │               💬 3 comments pending · [Review] [Send all]         │
 └──────────────────────────────────────────────────────────────────┘
     ▌ = gutter marker: changed since last-reviewed revision
+    top strip = the sticky header; it compacts to one line as the plan scrolls
 ```
 
+- Sticky header: one always-present masthead pinned to the top — title, revision,
+  repo/branch, status, the agent-presence dot, plus the session switcher, the
+  clean⇄diff toggle, and Approve. It **compacts** to a tight one-line bar as the plan
+  scrolls down and re-expands at the top; because it is a single element there is no
+  second copy to keep in sync. The diff baseline picker, the changed-section tally
+  (`j`/`k`), and the changelog recall live below it in a contextual in-flow strip, not
+  in the header.
 - Select text → floating toolbar: **Comment** (→ drawer) | **Ask** (fires immediately;
   thread shows "answering…" until the reply lands). The toolbar only appears where the
   anchor can survive: selections touching renderer chrome (mermaid SVG labels, fence
@@ -688,11 +721,17 @@ primary "your turn" signal. The dot is live while the agent is parked in
   agent's reply. Orphaned threads leave the list for the rail's badge-counted **orphan
   tray**: an orphaned conversation travels as a unit, each entry keeping its dead quote
   (section slug struck through) and expanding to the full original anchor text.
+- Persistent thread marks (clean view): open threads and unsent drafts keep their
+  anchored text lit — questions one ink (underlined), comments + drafts another — so
+  the two read apart and stay legible without color; the click-flash still pops above
+  them. Reverse interaction: a **tap** (collapsed selection) on a lit span scrolls its
+  rail thread into view and pulses it, while a **drag** still starts select-to-comment,
+  so the gestures never clash.
 - New revision → banner: _changelog / diff / dismiss_. Shown while the latest
   revision is newer than last-reviewed — derived state, so it survives reloads and
   shows on every device — and only from r2 on: the first read of a plan is a first
-  review, not a re-review. Dismiss marks the revision reviewed; a header
-  **Changelog** control re-opens the current revision's changelog afterwards.
+  review, not a re-review. Dismiss marks the revision reviewed; a **Changelog**
+  control in the contextual strip re-opens the current revision's changelog afterwards.
 - Diff mode renders the server's hunks inside the same reading column; a baseline
   picker ("vs r2 ▾") selects any prior revision and the clean view's gutter markers
   follow the same baseline. Unchanged sections collapse to status-tagged rails —
@@ -716,7 +755,7 @@ primary "your turn" signal. The dot is live while the agent is parked in
 
 ```
 ┌──────────────────────┐
-│ auth-refactor   r4 ▌ │  ← header in session accent color
+│ auth-refactor  ●srch │  ← sticky header: title + chips + [clean|diff] (accent)
 │ ──────────────────── │
 │ # Summary            │
 │ Replace session auth │
@@ -735,6 +774,10 @@ primary "your turn" signal. The dot is live while the agent is parked in
   no exact quote; it survives revisions as long as the section does). The menu is
   always available — a popover on desktop, a bottom sheet in thumb range on phone —
   and long-press text selection still works for precision.
+- The sticky header stays lean on phone: title + switcher chips + the clean⇄diff
+  toggle. The revision and Approve are not in the phone header — Approve and the
+  question tally live in the bottom bar instead, never shown in two places; the
+  toggle stays so diff review is still reachable on a phone.
 - Threads open as bottom sheets. Sticky bar = whole control surface: pending
   questions ❓ (tap → the question queue), drawer + Send, Approve (confirm sheet:
   "Finalize r4 → docs/plans/2026-06-12-auth-refactor.md and end the session"). The
@@ -809,7 +852,10 @@ The artifact is post-lint output: the closed plan schema (§4-5) governs submits
 this file. Approve ends the session **logically** — `status: approved` excludes it
 from implicit CLI resolution and every mutating verb refuses — while `.otacon/<id>/`
 stays on disk (the parked `wait` still drains the `approved` event from it) until
-`otacon clean` archives it.
+`otacon clean` archives it. In the UI, the moment the session you're viewing flips to
+approved, the review screen navigates home (its switcher chip is gone, §7); this fires
+only on the live non-approved → approved transition, so opening an already-approved
+session from home does **not** redirect and the committed plan stays readable.
 
 Session status machine: `draft → in_review ⇄ revising → approved`.
 
