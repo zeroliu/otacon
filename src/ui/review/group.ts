@@ -26,7 +26,9 @@ function isFollowup(thread: Thread): thread is QuestionThread & { replyTo: strin
 /**
  * Group threads into rail units, preserving the input's (oldest-first) order of
  * roots. Follow-ups fold under their root's `followups`, ordered by createdAt; a
- * follow-up whose root is missing degrades to its own unit rather than vanishing.
+ * follow-up whose root is missing — or, only via a corrupt threads.json, points
+ * at a comment — degrades to its own unit rather than vanishing (DESIGN.md §4:
+ * kept, never silently dropped). Only question roots are valid attach targets.
  */
 export function groupThreads(threads: Thread[]): ThreadGroup[] {
   const groups: ThreadGroup[] = [];
@@ -35,13 +37,13 @@ export function groupThreads(threads: Thread[]): ThreadGroup[] {
     if (isFollowup(thread)) continue;
     const group: ThreadGroup = { root: thread, followups: [] };
     groups.push(group);
-    byRoot.set(thread.id, group);
+    if (thread.kind === "question") byRoot.set(thread.id, group); // comments can't be replied to
   }
   for (const thread of threads) {
     if (!isFollowup(thread)) continue;
     const group = byRoot.get(thread.replyTo);
     if (group) group.followups.push(thread);
-    else groups.push({ root: thread, followups: [] }); // root gone: never drop it
+    else groups.push({ root: thread, followups: [] }); // root gone/not a question: never drop
   }
   for (const group of groups) {
     group.followups.sort((a, b) => a.createdAt.localeCompare(b.createdAt));

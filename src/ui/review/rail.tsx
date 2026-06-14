@@ -51,7 +51,9 @@ export const ThreadsRail = memo(function ThreadsRail({
     <aside className="rail" aria-label="threads">
       <div className="rail-top">
         <span>⊙ threads</span>
-        <span className="rail-count">{threads.length}</span>
+        {/* Count conversations (cards), matching the orphan badge's unit — a
+            chain of turns is one card, not one tally each. */}
+        <span className="rail-count">{live.length + orphaned.length}</span>
       </div>
       {orphaned.length > 0 && (
         <button
@@ -217,7 +219,11 @@ function ConversationCard({
           <QuestionAnswer thread={followup} />
         </div>
       ))}
-      {onFollowup && <FollowupBox rootId={root.id} onFollowup={onFollowup} />}
+      {/* root.replyTo is set only on a degraded "root gone" card (groupThreads);
+          don't offer a reply box there — it would link to a missing root. */}
+      {onFollowup && root.replyTo === undefined && (
+        <FollowupBox rootId={root.id} onFollowup={onFollowup} />
+      )}
     </article>
   );
 }

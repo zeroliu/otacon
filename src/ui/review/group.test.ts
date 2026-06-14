@@ -74,4 +74,12 @@ describe("groupThreads", () => {
     const groups = groupThreads([question("q2", { replyTo: "q1" })]);
     expect(groups.map((g) => g.root.id)).toEqual(["q2"]);
   });
+
+  test("a follow-up pointing at a comment id degrades to its own group, not folded away", () => {
+    // Only reachable via a corrupt threads.json (the daemon 404s this on write),
+    // but a comment must never absorb — and hide — a question turn.
+    const groups = groupThreads([comment("t1"), question("q1", { replyTo: "t1" })]);
+    expect(groups.map((g) => g.root.id)).toEqual(["t1", "q1"]);
+    expect(groups.find((g) => g.root.id === "t1")?.followups).toEqual([]);
+  });
 });
