@@ -17,6 +17,7 @@ import { accentStyle } from "./accent";
 import type { ActivityNote, Anchor, CommentDraft, LiveSession, Thread, TranscriptEntry } from "./api";
 import {
   postComments,
+  postFollowup,
   postQuestion,
   postReviewed,
   useDiff,
@@ -378,6 +379,13 @@ function ReviewLoop({
     if (planRef.current) flashAnchor(planRef.current, anchor);
   }, []);
 
+  // A follow-up question on an existing conversation (DESIGN.md §9): inherits
+  // the root's anchor server-side, so the rail only passes the root id + body.
+  const followup = useCallback(
+    (rootId: string, body: string): Promise<boolean> => postFollowup(session.id, rootId, body),
+    [session.id],
+  );
+
   // Decision deep-links (DESIGN.md §8) and the section ⋯ menus (§10) are both
   // delegated here, so PlanView takes no callback props and its memo survives.
   // `← q7` citations render as `a.q-cite[data-q]`; the menu buttons as
@@ -527,7 +535,9 @@ function ReviewLoop({
             </main>
           )}
         </div>
-        {hasPlan && <ThreadsRail threads={threads} onJump={jump} />}
+        {hasPlan && (
+          <ThreadsRail threads={threads} onJump={jump} onFollowup={over ? undefined : followup} />
+        )}
       </div>
       {approveOpen && !over && (
         <ApproveDialog
