@@ -1441,3 +1441,31 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   or users read the top `sessions N` as the registry total often enough that the
   active-only meaning surprises them (a one-line flip back, flagged as an open question
   in the plan).
+
+## Sticky session header: one element that compacts, not a separate reveal bar
+
+- **Decision:** The review screen's masthead is a single sticky header (`ReviewHeader`,
+  `position: sticky; top: 0`) that subsumes the old `.topbar` (back + switcher) and the
+  scroll-away `SessionHead` hero. It always renders the full content — title, revision,
+  repo/branch, status, switcher, clean⇄diff toggle, Approve — and **compacts** to a
+  one-line bar past a small scroll threshold (`nextCompact`, rAF-throttled in
+  `useCompactOnScroll`), re-expanding at the top. The rejected alternative was a hero
+  plus a separate condensed bar that fades in once the hero scrolls past. On phone the
+  header is lean (title + switcher chips + the clean⇄diff toggle); the revision and
+  Approve are CSS-hidden below 640px, with Approve living solely in the fixed bottom
+  bar. (The plan's q3 settled the phone header as "chips only"; we keep the toggle
+  because hiding it removed the only phone path into diff view — a regression an
+  existing 375px e2e test caught — and the toggle, unlike Approve, carries no
+  shown-in-two-places hazard.)
+- **Why:** Two elements (hero + reveal bar) means an IntersectionObserver to gate the
+  reveal and **two copies of the title/Approve** that can disagree or briefly both show
+  — the exact double-render the §10 "Approve never shown twice" rule forbids. One
+  element is always complete and consistent by construction: a dropped or coalesced
+  scroll frame merely leaves it in its last state (it fails to *expanded*, fully usable),
+  never to a half-rendered or duplicated bar. rAF-throttling matches the selection
+  reposition so the compact transition never janks per scroll frame. Hiding Approve in
+  the phone header (rather than duplicating it) preserves the never-twice rule while the
+  bottom bar stays the one-thumb control surface.
+- **Revisit when:** The header needs content that genuinely cannot fit a single morphing
+  element, or scroll-driven compaction proves janky on a real low-end device (a
+  scroll-timeline / `content-visibility` approach would be the next lever).
