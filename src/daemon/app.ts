@@ -698,7 +698,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       }
       anchor = parsed;
     } else {
-      if (typeof replyToRaw !== "string") {
+      if (typeof replyToRaw !== "string" || replyToRaw === "") {
         return badRequest(c, "replyTo must name a question thread id (q<n>)");
       }
       const existing = readThreads(store.threadsPath(session.id));

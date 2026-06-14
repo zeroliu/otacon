@@ -496,6 +496,9 @@ describe("threads", () => {
     expect(comment.status).toBe(404);
     const nonString = await postJson(`/api/sessions/${session.id}/questions`, { replyTo: 7, body: "x" });
     expect(nonString.status).toBe(400);
+    // An empty id is a malformed request (400), not a missing question (404).
+    const empty = await postJson(`/api/sessions/${session.id}/questions`, { replyTo: "", body: "x" });
+    expect(empty.status).toBe(400);
 
     // A real root still mints the next id — no q was burned by the rejects.
     const ok = await postJson(`/api/sessions/${session.id}/questions`, { replyTo: "q1", body: "real" });

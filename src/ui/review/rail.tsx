@@ -233,21 +233,29 @@ function FollowupBox({ rootId, onFollowup }: { rootId: string; onFollowup: Follo
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  // Supersedes an in-flight send: a cancel/Escape (or a newer send) bumps this,
+  // so a late resolve can't strand busy/failed on a closed box (a stale "send
+  // failed" would then greet the next open).
+  const sendSeq = useRef(0);
   useEffect(() => {
     if (open) inputRef.current?.focus();
   }, [open]);
 
   const ready = body.trim() !== "" && !busy;
   const close = () => {
+    sendSeq.current += 1;
     setOpen(false);
     setBody("");
+    setBusy(false);
     setFailed(false);
   };
   const send = () => {
     if (!ready) return;
+    const seq = (sendSeq.current += 1);
     setBusy(true);
     setFailed(false);
     void onFollowup(rootId, body).then((ok) => {
+      if (seq !== sendSeq.current) return; // superseded by a close or newer send
       setBusy(false);
       if (ok) close();
       else setFailed(true);
