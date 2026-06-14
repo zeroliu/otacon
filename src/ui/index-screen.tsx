@@ -2,11 +2,13 @@
 // status chip, unread badge, last activity, session accent. Live over SSE.
 
 import type { CSSProperties, MouseEvent } from "react";
+import { useState } from "react";
 import { accentStyle } from "./accent";
 import type { LiveSession } from "./api";
 import { useSessions } from "./api";
 import { AgentDot, LinkState, StatusChip } from "./chip";
 import { relativeTime, repoName } from "./format";
+import { DeleteDialog } from "./review/delete";
 import { navigate } from "./router";
 import { unreadCount } from "./seen";
 import { useNow } from "./tick";
@@ -56,42 +58,72 @@ function SessionCard({
   const unread = unreadCount(session.id, session.revision) > 0;
   const href = `/s/${session.id}`;
   const style = { ...accentStyle(session.id), "--i": index } as CSSProperties;
+  // Pending (non-approved) sessions can be deleted from the list to clear
+  // abandoned drafts (DESIGN.md §10); approved ones are `otacon clean`'s job.
+  const pending = session.status !== "approved";
+  const [deleting, setDeleting] = useState(false);
   const onClick = (event: MouseEvent) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey) return;
     event.preventDefault();
     navigate(href);
   };
   return (
-    <a className="card" href={href} style={style} onClick={onClick}>
-      {session.changedAt !== undefined && (
-        <span key={session.changedAt} className="card-flash" aria-hidden="true" />
+    <>
+      <a className="card" href={href} style={style} onClick={onClick}>
+        {session.changedAt !== undefined && (
+          <span key={session.changedAt} className="card-flash" aria-hidden="true" />
+        )}
+        <div className="card-top">
+          <h2 className="card-title">{session.title}</h2>
+          {unread && <span className="badge">r{session.revision} unread</span>}
+        </div>
+        <p className="card-where" title={session.repo}>
+          {repoName(session.repo)}
+          {session.branch !== "" && <span className="card-branch"> · {session.branch}</span>}
+        </p>
+        <div className="card-meta">
+          <span className="card-sig" aria-hidden="true">
+            ▍
+          </span>
+          <StatusChip
+            status={session.status}
+            openQuestions={session.openQuestions}
+            latestActivity={session.latestActivity}
+          />
+          <AgentDot
+            status={session.status}
+            parked={session.parked}
+            lastContactAt={session.lastContactAt}
+            now={now}
+          />
+          <span className="card-time">{relativeTime(session.updatedAt, now)}</span>
+          {pending && (
+            <button
+              type="button"
+              className="card-delete"
+              aria-label={`delete session ${session.title}`}
+              title="delete session"
+              // The card is a link: stop the click from navigating into it.
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setDeleting(true);
+              }}
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      </a>
+      {deleting && (
+        <DeleteDialog
+          sessionId={session.id}
+          onClose={() => setDeleting(false)}
+          // The `removed` SSE frame drops the card; closing state is housekeeping.
+          onDeleted={() => setDeleting(false)}
+        />
       )}
-      <div className="card-top">
-        <h2 className="card-title">{session.title}</h2>
-        {unread && <span className="badge">r{session.revision} unread</span>}
-      </div>
-      <p className="card-where" title={session.repo}>
-        {repoName(session.repo)}
-        {session.branch !== "" && <span className="card-branch"> · {session.branch}</span>}
-      </p>
-      <div className="card-meta">
-        <span className="card-sig" aria-hidden="true">
-          ▍
-        </span>
-        <StatusChip
-          status={session.status}
-          openQuestions={session.openQuestions}
-          latestActivity={session.latestActivity}
-        />
-        <AgentDot
-          status={session.status}
-          parked={session.parked}
-          lastContactAt={session.lastContactAt}
-          now={now}
-        />
-        <span className="card-time">{relativeTime(session.updatedAt, now)}</span>
-      </div>
-    </a>
+    </>
   );
 }
 

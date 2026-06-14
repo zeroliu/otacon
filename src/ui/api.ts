@@ -358,6 +358,31 @@ export async function postApprove(id: string, force: boolean): Promise<ApproveRe
 }
 
 /**
+ * The delete outcome (DESIGN.md §6, §12): success is the 200; a failure carries
+ * the daemon's own error code/message so the sheet can tell a real server fault
+ * (a registry-flush throw → 500) apart from an unreachable daemon, instead of
+ * blaming the network for either.
+ */
+export type DeleteResult = { ok: true } | { ok: false; code: string; message?: string };
+
+/**
+ * Permanently delete a pending (non-approved) session (DESIGN.md §6, §12): the
+ * daemon hard-removes its working state and publishes the `removed` frame both
+ * session hooks already handle, so callers need no local teardown — the card
+ * drops / the screen closes off that frame. Resolves ok only on the 200.
+ */
+export async function postDelete(id: string): Promise<DeleteResult> {
+  try {
+    const res = await fetch(`/api/sessions/${id}`, { method: "DELETE" });
+    if (res.ok) return { ok: true };
+    const body = (await res.json().catch(() => ({}))) as { error?: { code?: string; message?: string } };
+    return { ok: false, code: body.error?.code ?? "E_INTERNAL", message: body.error?.message };
+  } catch {
+    return { ok: false, code: "E_UNREACHABLE" };
+  }
+}
+
+/**
  * Mark a revision reviewed (DESIGN.md §9 layer 3) — the banner's dismiss and
  * the explicit "mark reviewed" both land here. The daemon answers with a
  * session SSE frame carrying the moved baseline, so callers need no local

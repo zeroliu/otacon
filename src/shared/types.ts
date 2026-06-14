@@ -110,7 +110,12 @@ export type EventPayload =
       choices?: string[];
       text?: string;
     }
-  | { event: "approved"; session: string; path: string };
+  | { event: "approved"; session: string; path: string }
+  // Terminal: the reviewer deleted a pending (non-approved) session from the UI
+  // (DESIGN.md §6, §12). The daemon wakes the parked agent with this so its
+  // `wait` loop stops cleanly instead of 404ing on a later call; nothing is
+  // committed, there is no artifact path.
+  | { event: "deleted"; session: string };
 
 /**
  * One review thread, persisted in .otacon/<id>/threads.json (DESIGN.md §9).

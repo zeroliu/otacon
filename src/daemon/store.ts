@@ -8,7 +8,7 @@
 // than one recoverable file.
 
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import * as paths from "../shared/paths.js";
 import type { LintIssue, RegistryFile, RegistrySession, SessionStateFile } from "../shared/types.js";
@@ -254,6 +254,17 @@ export class Store {
     delete this.registry.sessions[id];
     this.flushRegistry();
     return { ...session };
+  }
+
+  /**
+   * Hard-remove a session's working dir `.otacon/<id>/` (the UI deleting a
+   * *pending* session, DESIGN.md §12): permanent, no archive — the asymmetric
+   * counterpart to `otacon clean`, which *archives* an approved session's dir.
+   * `repo` is passed explicitly because the caller deregisters first, so
+   * require() would already throw. Idempotent: a missing dir is fine (force).
+   */
+  removeSessionDir(repo: string, id: string): void {
+    rmSync(paths.sessionDir(repo, id), { recursive: true, force: true });
   }
 
   readState(id: string): SessionStateFile {

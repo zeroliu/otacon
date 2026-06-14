@@ -1020,13 +1020,15 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 ## clean: daemon deregisters, CLI archives; undrained events leave with the dir
 
-- **Decision:** `DELETE /api/sessions/:id` accepts only approved sessions (active →
-  409 `E_SESSION_ACTIVE`), removes the registry entry, and evicts the session's queue
-  instance without draining it; the CLI then moves `.otacon/<id>/` to
+- **Decision:** `DELETE /api/sessions/:id` is **status-branched**; its **approved**
+  branch is `otacon clean`'s path: it removes the registry entry and evicts the
+  session's queue instance without draining it; the CLI then moves `.otacon/<id>/` to
   `.otacon/archive/<id>/`. The response reports still-pending events; clean surfaces
   them as a notice and proceeds. The evicted queue instance is `close()`d: a delivered-but-unacked event's
   post-response ack callback firing after the CLI's dir move would otherwise recreate
-  `.otacon/<id>/events.json` next to the archive (writeFileAtomic mkdirs).
+  `.otacon/<id>/events.json` next to the archive (writeFileAtomic mkdirs). (The
+  non-approved branch — a UI delete — is the next entry.) `clean` only ever sends
+  approved ids, and `approved` is terminal, so it never takes the pending branch.
 - **Why:** The registry is daemon-owned in-memory state — a CLI editing
   `registry.json` directly would be overwritten by the next flush, so deregistration
   must be a daemon verb; the dir move stays in the CLI because the files live in the
@@ -1036,8 +1038,35 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   instance per session"): on an approved session the only loseable events are
   `approved` copies, and the artifact they announce is already committed on disk —
   blocking clean on them would make the common "approve, then tidy up" flow refuse.
-- **Revisit when:** clean wants to cover non-approved states (abandoned drafts), which
-  would need a real force/drain story.
+- **Revisit when:** clean itself should bulk-sweep pending sessions (today only the UI
+  deletes them, one at a time — next entry), which would need a real force/drain story.
+
+## delete a pending session: UI-only, hard-remove (no archive), wake the parked agent
+
+- **Decision:** A non-approved session can be deleted from the review UI (index card +
+  session header), reusing `DELETE /api/sessions/:id` on a non-approved branch. That
+  branch wakes any parked agent with a terminal `{event:"deleted"}` (new `EventPayload`
+  member; `SessionQueue.closeWith` sets the queue closed, then hands the synthetic event
+  to every parked waiter), drops the registry entry, and **hard-removes** `.otacon/<id>/`
+  (`Store.removeSessionDir`, `rm -rf`) — permanently, no archive. Ordering: wake before
+  deregister (so the woken long-poll resolves against a still-registered session), and
+  `closeWith` marks the queue closed before the dir is removed (so a late post-response
+  ack cannot recreate it). Both branches publish the existing terminal `removed` SSE
+  frame — no new browser frame. No new CLI verb; the wrapper's review loop learns to stop
+  on `deleted`. The confirm sheet (one stage, mirroring Approve) is the only guard.
+- **Why:** Abandoned drafts clutter the index and there was no way to clear them without
+  the CLI; the UI is where a human notices and discards one. Hard-remove, not archive,
+  because a pending session has **no committed artifact** to orphan and the working state
+  is pure review exhaust — archiving every discarded draft would just grow `.otacon/archive/`
+  with junk (the inverse of `clean`, where the artifact is already committed and the state
+  is worth keeping). Waking the agent beats letting it 404 on its next `wait`: a parked
+  agent stops *immediately and cleanly* with an honest terminal event instead of surfacing
+  an error minutes later. Reusing the route + `removed` frame keeps the surface minimal —
+  the UI and CLI already handle `removed`, so only the daemon branch, one event member, and
+  the wrapper text are new.
+- **Revisit when:** users want an undo (then: a soft-delete/trash with a TTL, not `rm -rf`),
+  or deletion needs to reach an agent that is mid-call rather than parked (then: a
+  per-session kill flag the next call checks, beyond the wake).
 
 ## doctor/expose: OTACON_TAILSCALE override, PATH + app-bundle lookup, serve-only automation
 

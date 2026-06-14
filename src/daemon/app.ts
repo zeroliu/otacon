@@ -367,36 +367,37 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     return c.json(summarize(session));
   });
 
-  // otacon clean's deregistration (DESIGN.md §6, §12): only an approved
-  // (ended) session may leave the registry — the CLI archives its .otacon/
-  // dir afterwards. The queue instance is evicted with it; still-queued
-  // events on an ended session (an undrained `approved` copy) leave with the
-  // dir by design (DECISIONS.md "clean: daemon deregisters, CLI archives").
+  // DELETE removes a session from the registry, status-branched (DESIGN.md §6,
+  // §12): an **approved** session leaves via `otacon clean` — the CLI archives
+  // its `.otacon/<id>/` dir afterwards. A **pending** (non-approved) session is
+  // deleted from the review UI — the daemon hard-removes its dir (permanent, no
+  // archive) and wakes any parked agent with a terminal `deleted` event so its
+  // `wait` loop stops cleanly. Both publish the same terminal `removed` frame.
   app.delete("/api/sessions/:id", (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
-    if (session.status !== "approved") {
-      return c.json(
-        {
-          error: {
-            code: "E_SESSION_ACTIVE",
-            message: `session ${session.id} is ${session.status} — only approved (ended) sessions can be cleaned`,
-          },
-        },
-        409,
-      );
-    }
     const queue = queueFor(session.id);
     const pendingEvents = queue.size;
-    // Deregister first — it can throw (registry flush), and an early queue
-    // eviction would orphan in-flight ack tracking for a session that is in
-    // fact still registered. Then close the evicted instance so a late
-    // in-flight ack cannot recreate .otacon/<id>/ after the CLI archives it.
-    store.deleteSession(session.id);
-    queue.close();
-    queues.delete(session.id);
+    if (session.status === "approved") {
+      // Deregister first — it can throw (registry flush), and an early queue
+      // eviction would orphan in-flight ack tracking for a session that is in
+      // fact still registered. Then close the evicted instance so a late
+      // in-flight ack cannot recreate .otacon/<id>/ after the CLI archives it.
+      store.deleteSession(session.id);
+      queue.close();
+      queues.delete(session.id);
+    } else {
+      // Wake any parked agent BEFORE deregistering so its respondEvent still
+      // resolves against a registered session; closeWith sets the queue closed
+      // first, so the hard-remove below can't be recreated by a late ack. Then
+      // deregister and permanently drop the working dir (no archive — D2).
+      queue.closeWith({ event: "deleted", session: session.id });
+      queues.delete(session.id);
+      store.deleteSession(session.id);
+      store.removeSessionDir(session.repo, session.id);
+    }
     // Terminal frame: the index and switcher drop the session live, and an
-    // open review tab flips to its cleaned state instead of error-limbo.
+    // open review tab flips to its closed state instead of error-limbo.
     notifier.publish({ type: "removed", session: session.id, data: { session: session.id } });
     return c.json({ ok: true, session: session.id, repo: session.repo, pendingEvents });
   });

@@ -42,4 +42,13 @@ describe("single-source wrappers (D7)", () => {
       expect(text).toContain('progress "<what you\'re doing>"');
     }
   });
+
+  test("every wrapper teaches the terminal `deleted` event (delete-pending-session)", () => {
+    for (const text of [skillMd(), codexBlock(), dogfoodSkillMd()]) {
+      // The review loop must stop, not re-park or error, when the user deletes
+      // a pending session in the UI (DESIGN.md §6).
+      expect(text).toContain("`deleted`");
+      expect(text).toContain("deleted this session in the review UI");
+    }
+  });
 });

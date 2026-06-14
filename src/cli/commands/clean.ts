@@ -1,9 +1,10 @@
 // otacon clean [--all] — archive working state for ended sessions (DESIGN.md
 // §6, §12): for every approved session in this repo (--all: everywhere), the
-// daemon deregisters it (DELETE /api/sessions/:id — refused for active
-// sessions), then the CLI moves .otacon/<id>/ to .otacon/archive/<id>/ in the
-// session's repo. Committed artifacts under docs/plans/ are never touched
-// (DECISIONS.md "clean: daemon deregisters, CLI archives").
+// daemon deregisters it (DELETE /api/sessions/:id, the approved branch — the
+// review UI drives the same route to hard-delete a *pending* session instead),
+// then the CLI moves .otacon/<id>/ to .otacon/archive/<id>/ in the session's
+// repo. Committed artifacts under docs/plans/ are never touched (DECISIONS.md
+// "clean: daemon deregisters, CLI archives").
 
 import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
@@ -33,8 +34,10 @@ export async function cleanCommand(argv: string[]): Promise<number> {
   await ensureDaemon();
   const cwd = realpathOr(process.cwd());
   const root = findRepoRoot(cwd) ?? cwd;
-  // Only approved (ended) sessions qualify — the daemon re-checks and refuses
-  // anything active, so a racing status change cannot sweep a live session.
+  // Only approved (ended) sessions qualify. `approved` is terminal in the
+  // status machine, so a session listed here stays approved: clean's DELETE
+  // always takes the daemon's archive branch, never the UI's pending
+  // hard-delete one — a racing status change cannot sweep a live session.
   const targets = (await listSessions()).filter(
     (s) => s.status === "approved" && (values.all || realpathOr(s.repo) === root),
   );
