@@ -1,5 +1,9 @@
 <img width="9034" height="1857" alt="github-otacon" src="https://github.com/user-attachments/assets/18796111-63d7-4df6-a2ba-b95f132eabd3" />
 
+[![npm version](https://img.shields.io/npm/v/otacon.svg)](https://www.npmjs.com/package/otacon)
+[![node](https://img.shields.io/node/v/otacon.svg)](https://www.npmjs.com/package/otacon)
+[![license](https://img.shields.io/npm/l/otacon.svg)](LICENSE)
+
 Plan review surface for coding agents (Claude Code, Codex, OpenCode). Replaces native
 plan modes with one CLI protocol: schema'd concise plans, anchored comments and
 questions from any device (phone included, over Tailscale), revision diffs against
