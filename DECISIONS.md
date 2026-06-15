@@ -1754,3 +1754,19 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** The commit-granularity / squash question is decided, builds want to
   target a non-default base branch, or worktree-under-`.otacon` collides with the build's
   own tooling.
+
+## A successful build archives its plan via a PR commit; the agent owns the move
+
+- **Decision:** On a successful Approve & Implement build, the implementing agent
+  `git mv`s the committed plan `docs/plans/YYYY-MM-DD-<slug>.md` into `docs/plans/archive/`
+  as a commit on the impl branch — so the move lands in the implementation PR. An aborted
+  build (`implement-done --failed`) and a plain Approve (no `implement`) both leave the plan
+  in `docs/plans/`. `otacon clean` is unchanged: it still never rewrites `docs/plans/`.
+- **Why:** `docs/plans/` reads as a live backlog of not-yet-implemented plans, with shipped
+  ones filed under `archive/` (matching the layout that was previously curated by hand).
+  Doing the move as a PR commit makes archival **atomic with the merge** — if the PR never
+  lands, the plan stays active on the default branch with no drift and no cleanup pass; and
+  it keeps the daemon out of it (clean only ever touches gitignored working state, so the
+  agent, which already holds the git worktree, is the natural owner of a committed-file move).
+- **Revisit when:** A flat `archive/` grows unwieldy (consider per-month subdirs), or plain
+  Approve should archive too (right now an un-built approved plan stays in `docs/plans/`).

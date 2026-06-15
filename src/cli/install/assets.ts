@@ -7,11 +7,11 @@
 // overwrites them wholesale (DECISIONS.md "Wrappers are managed files").
 
 /** Present in every wrapper this tool owns; doctor greps for it. */
-export const MANAGED_MARKER = "managed by `otacon install`";
+export const MANAGED_MARKER = 'managed by `otacon install`';
 
 export const CODEX_BEGIN =
-  "<!-- BEGIN OTACON — managed by `otacon install`; content inside these markers is overwritten on reinstall -->";
-export const CODEX_END = "<!-- END OTACON -->";
+  '<!-- BEGIN OTACON — managed by `otacon install`; content inside these markers is overwritten on reinstall -->';
+export const CODEX_END = '<!-- END OTACON -->';
 
 /**
  * The protocol card — §6 full loop (start-first) + §8 grill discipline + §13
@@ -23,7 +23,7 @@ export const CODEX_END = "<!-- END OTACON -->";
  */
 function protocolCard(cmd: string): string {
   return `Run plan reviews through the otacon CLI instead of your native plan mode. The
-user reviews in a browser — often a phone over Tailscale. Every \`${cmd}\`
+user reviews in a browser. Every \`${cmd}\`
 command prints exactly one JSON line on stdout. Exit 0 = proceed; exit 1 = a
 machine-readable error you can fix (read the JSON); exit 2 = you invoked it wrong.
 
@@ -39,9 +39,11 @@ machine-readable error you can fix (read the JSON); exit 2 = you invoked it wron
    a non-blocking one-liner that feeds the live activity log and the draft chip; no
    answer comes back, so never park on it. Read enough to propose answers, not
    collect questions.
-3. **Grill** (mandatory unless --quick): walk the design tree ONE question at a
-   time, dependencies first. Explore the code before asking — never ask what the
-   code can answer.
+3. **Grill** (mandatory unless --quick): Interview me relentlessly about every
+   aspect of this plan until we reach a shared understanding. Walk down each branch
+   of the design tree, resolving dependencies between decisions one-by-one. For
+   each question, provide your recommended answer. Explore the code before asking.
+   Never ask what the code can answer.
    - \`${cmd} ask --question "..." --options "A|B|C" --recommend A\` — always lead
      with your recommended answer. \`--multi\` for multi-select; omit \`--options\`
      for free text. The user can always answer with free-form custom text instead
@@ -88,7 +90,7 @@ machine-readable error you can fix (read the JSON); exit 2 = you invoked it wron
 
 You are the **orchestrator**: you only coordinate and narrate
 (\`${cmd} progress\` at each checkpoint) — every phase's real work runs in a fresh
-native subagent (Task tool, subscription-covered) so your own context stays lean.
+native subagent (Task tool) so your own context stays lean.
 
 1. **Setup.** Commit the plan file at the event \`path\` (exactly as plain Approve),
    then \`git worktree add .otacon/worktrees/<slug> -b otacon/impl-<slug>\` off that
@@ -104,14 +106,17 @@ native subagent (Task tool, subscription-covered) so your own context stays lean
      review still flags, or a subagent is stuck) → on the FIRST blocker,
      \`${cmd} ask\` with options \`retry|skip|abort|guidance\`, park in \`${cmd} wait\`,
      and act on the answer. No auto-retry.
-3. **Finish.** \`gh pr create\` against the default branch (PR body = the plan
-   summary + the per-phase log; fall back to the local branch + path when there is
-   no remote), then \`${cmd} implement-done --pr <url>\` (or
-   \`${cmd} implement-done --failed\` on abort).
+3. **Finish.** On success, \`git mv\` the committed plan (the \`approved\` event's
+   \`path\`) into \`docs/plans/archive/\` and commit it on the impl branch, so the
+   archived plan rides along in the PR (it only takes effect on the default branch
+   when the PR merges). Then \`gh pr create\` against the default branch (PR body =
+   the plan summary + the per-phase log; fall back to the local branch + path when
+   there is no remote), then \`${cmd} implement-done --pr <url>\`. On abort, skip the
+   archive move (leave the plan in \`docs/plans/\` so it stays active) and run
+   \`${cmd} implement-done --failed\`.
 
 While \`implementing\` the Stop hook still keeps you on the line — never end the turn
-until \`implement-done\`. Remind the user to keep the Mac awake (\`caffeinate -i\`) for
-a long build.
+until \`implement-done\`.
 
 ## Plan schema (linted on submit)
 
@@ -137,16 +142,12 @@ introduce new scope.
 
 **Lead with a diagram.** Put a \`\`\`mermaid state / sequence / flow diagram right
 under the \`## Summary\` headline — strongly recommended on ~90% of plans, so the
-reviewer grasps the change's shape before reading prose. It is budget-exempt and uses
-Summary's one fence, so the ≤5-line headline stays intact; the review screen pins
-Summary and its lead diagram as the first screen. Keep the headline as the ≤5-line
-Summary — no forced one-liner. When a chart genuinely wouldn't help (a pure docs or
-config change), opt out explicitly with \`<!-- no-lead-diagram: <why> -->\` inside
-Summary; otherwise a missing lead diagram is a non-blocking lint nudge, never a reject.
+reviewer grasps the change's shape before reading prose. Keep the headline as the ≤5-line
+Summary.
 
 ## Visuals — prefer them over prose where they carry the information
 
-Three markdown-native primitives the review UI styles. They degrade to readable
+Four markdown-native primitives the review UI styles. They degrade to readable
 markdown if rendering fails, and a comment can anchor to one specific risk, row,
 or callout.
 
@@ -173,8 +174,7 @@ or callout.
   When the agent submits it
   Then the lint passes and review opens
   \`\`\`
-  Budget-exempt like a visual (does not spend the phase's one-fence allowance),
-  capped at 6 scenarios per block; must sit under \`Verification\`.
+  Capped at 6 scenarios per block; must sit under \`Verification\`.
 
 Callouts and matrices are budget-exempt but capped (default 2 per read-path
 section); pills are free. Reach for a visual when it carries the point better
@@ -182,14 +182,9 @@ than a sentence — never as decoration.
 
 ## Rules
 
-- Keep the user in the loop: \`${cmd} progress\` at every checkpoint they can't see
-  (research phase boundaries, drafting, each revision) so the activity log and the
-  draft chip show work happening — silence past a while reads as "agent gone".
 - Never use native plan mode, AskUserQuestion, or any built-in question UI while
   the session is open — every question goes through \`${cmd} ask\`.
-- Dependencies first, one question at a time; only batch independent siblings.
-  Recommended option first; the phone is the review surface.
-- Long review ahead? Remind the user to keep the Mac awake: \`caffeinate -i\`
+- Long review or build ahead? Remind the user to keep the Mac awake: \`caffeinate -i\`
   while the session runs.
 `;
 }
@@ -205,7 +200,7 @@ description: Plan a feature through an otacon review session — grill interview
 
 # Otacon plan session protocol
 
-${protocolCard("otacon")}`;
+${protocolCard('otacon')}`;
 }
 
 /** The marker-delimited block upserted into ~/.codex/AGENTS.md. */
@@ -217,7 +212,7 @@ export function codexBlock(): string {
 When the user asks you to plan a feature "with otacon" (or to run a plan
 review), follow this protocol exactly.
 
-${protocolCard("otacon")}
+${protocolCard('otacon')}
 ${CODEX_END}`;
 }
 
@@ -260,7 +255,7 @@ failure habits); the canonical wrapper text lives in \`src/cli/install/assets.ts
 
 ---
 
-${protocolCard("./bin/otacon")}`;
+${protocolCard('./bin/otacon')}`;
 }
 
 /**

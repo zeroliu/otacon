@@ -582,7 +582,10 @@ budgets config. Off macOS the banner is a silent no-op.
    a fresh implement+test subagent per phase, then a separate `/code-review --fix`
    subagent that resolves findings, committing each clean+green phase. On the **first**
    blocked phase it pauses with an `otacon ask` (retry / skip / abort / guidance) and
-   parks in `wait`. It finishes by opening a PR against the default branch and reporting
+   parks in `wait`. On success it also archives the source plan — `git mv docs/plans/<name>.md`
+   into `docs/plans/archive/` as a commit on the impl branch, so the move rides in the PR and
+   takes effect on the default branch only when it merges (an aborted build leaves the plan in
+   `docs/plans/`, active). It finishes by opening a PR against the default branch and reporting
    it with `otacon implement-done --pr <url>` (or `--failed` on abort), which flips the
    session to `implemented` / `implement_failed`. All build work runs in native
    in-session subagents (subscription-covered, §13); the daemon never spawns a model.
@@ -940,8 +943,13 @@ clean` archives ended sessions' working state: for every **terminal** session
 current repo (`--all`: everywhere), it calls `DELETE /api/sessions/:id`; the daemon drops
 the registry entry and **archives** `.otacon/<id>/` to `.otacon/archive/<id>/` in the
 session's repo (name collisions get a numeric suffix), reporting the destination as
-`archivedTo`. Committed plans under `docs/plans/` are never touched; events still queued
-on an ended session are archived with the directory rather than blocking the clean.
+`archivedTo`. Committed plans under `docs/plans/` are never touched by clean; events still
+queued on an ended session are archived with the directory rather than blocking the clean.
+The source plan is archived by the *implementing agent*, not clean: a successful Approve &
+Implement build `git mv`s `docs/plans/YYYY-MM-DD-<slug>.md` into `docs/plans/archive/` as a
+commit on the impl branch, so the move merges with the implementation PR (an aborted build
+leaves the plan in place) — distinct from clean, which only ever archives gitignored working
+state and keeps `docs/plans/` a live backlog of not-yet-implemented plans.
 Clean should also prune a finished or aborted build's impl artifacts — the
 `.otacon/worktrees/<slug>/` worktree (via `git worktree remove`) and its
 `otacon/impl-<slug>` branch — which a per-phase-commit build otherwise litters on disk.
