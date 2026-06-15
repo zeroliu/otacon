@@ -2803,6 +2803,7 @@ code {
   line-height: 1.5;
   letter-spacing: -0.005em;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .grill-chips {
@@ -2983,6 +2984,7 @@ code {
   font-size: 14px;
   line-height: 1.5;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .settled-choice {
@@ -3199,6 +3201,7 @@ code {
   font-size: 14px;
   line-height: 1.55;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .iv-options {
