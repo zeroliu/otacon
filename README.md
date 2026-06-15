@@ -1,6 +1,6 @@
 # otacon
 
-> Snake is in the field; Otacon is on the line helping him think it through.
+<img width="9034" height="1857" alt="github-otacon" src="https://github.com/user-attachments/assets/18796111-63d7-4df6-a2ba-b95f132eabd3" />
 
 Plan review surface for coding agents (Claude Code, Codex, OpenCode). Replaces native
 plan modes with one CLI protocol: schema'd concise plans, anchored comments and
