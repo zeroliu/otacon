@@ -8,6 +8,7 @@ import { askCommand } from "./commands/ask.js";
 import { cleanCommand } from "./commands/clean.js";
 import { doctorCommand } from "./commands/doctor.js";
 import { exposeCommand } from "./commands/expose.js";
+import { implementDoneCommand } from "./commands/implement-done.js";
 import { installCommand } from "./commands/install.js";
 import { openCommand } from "./commands/open.js";
 import { progressCommand } from "./commands/progress.js";
@@ -18,7 +19,7 @@ import { waitCommand } from "./commands/wait.js";
 import { CliError, printJson } from "./output.js";
 
 const USAGE =
-  "usage: otacon <start|submit|wait|ask|answer|progress|status|open|clean|install|doctor|expose> [options]";
+  "usage: otacon <start|submit|wait|ask|answer|progress|implement-done|status|open|clean|install|doctor|expose> [options]";
 
 async function dispatch(command: string | undefined, argv: string[]): Promise<number> {
   switch (command) {
@@ -34,6 +35,8 @@ async function dispatch(command: string | undefined, argv: string[]): Promise<nu
       return answerCommand(argv);
     case "progress":
       return progressCommand(argv);
+    case "implement-done":
+      return implementDoneCommand(argv);
     case "status":
       return statusCommand(argv);
     case "open":

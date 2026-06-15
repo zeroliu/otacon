@@ -102,6 +102,10 @@ describe("wrapper assets", () => {
     expect(STOP_HOOK_SCRIPT.startsWith("#!/bin/sh\n")).toBe(true);
     expect(STOP_HOOK_SCRIPT).toContain('"decision":"block"');
     expect(STOP_HOOK_SCRIPT).toContain("exit 0");
-    expect(STOP_HOOK_SCRIPT).toContain('"status":"approved"');
+    // It drops ALL terminal statuses so a finished build no longer traps the
+    // agent, while an in-flight `implementing` session still blocks the stop.
+    expect(STOP_HOOK_SCRIPT).toContain(
+      `grep -vE '"status":"(approved|implemented|implement_failed)"'`,
+    );
   });
 });

@@ -12,7 +12,7 @@ import { useSessions } from "./api";
 import { AgentDot, questionsPending } from "./chip";
 import { navigate } from "./router";
 import { unreadCount } from "./seen";
-import { isApproved, partitionByApproval } from "./session-filter";
+import { isOver, partitionByApproval } from "./session-filter";
 import { useNow } from "./tick";
 
 const GLYPHS: Record<SessionStatus, { glyph: string; word: string }> = {
@@ -20,6 +20,11 @@ const GLYPHS: Record<SessionStatus, { glyph: string; word: string }> = {
   in_review: { glyph: "✋", word: "awaiting" },
   revising: { glyph: "⏳", word: "revising" },
   approved: { glyph: "✓", word: "approved" },
+  // The implement lifecycle (DESIGN.md §12): a spinner-ish gear while the agent
+  // builds, the approved check once it lands, a cross when the build aborted.
+  implementing: { glyph: "⚙", word: "implementing" },
+  implemented: { glyph: "✔", word: "implemented" },
+  implement_failed: { glyph: "✕", word: "failed" },
 };
 
 function stateOf(session: LiveSession): { glyph: string; word: string } {
@@ -34,22 +39,23 @@ function stateOf(session: LiveSession): { glyph: string; word: string } {
 export function SessionSwitcher({ current }: { current: string }) {
   const { sessions: byActivity } = useSessions();
   const now = useNow(30_000);
-  // Approved sessions drop from the switcher entirely (DESIGN.md §7) — both
-  // faces, one list — so a finished plan stops cluttering the strip you switch
-  // through, including the one you are on (D1). The split is shared with home so
-  // the two surfaces can never disagree about what is hidden.
+  // Over sessions (the terminal set) drop from the switcher entirely (DESIGN.md
+  // §7) — both faces, one list — so a finished plan stops cluttering the strip
+  // you switch through, including the one you are on (D1). `implementing` is NOT
+  // over, so a building session keeps its chip live. The split is shared with
+  // home so the two surfaces can never disagree about what is hidden.
   const { active } = partitionByApproval(byActivity);
   // `current` is absent from the visible list when it was cleaned (gone from the
-  // registry) OR is itself approved (opened from home — its chip is now hidden).
+  // registry) OR is itself over (opened from home — its chip is now hidden).
   // Either way the controlled select has no matching option and would render
   // blank (selectedIndex -1), so `gone` makes it fall back to a labeled
   // placeholder. Both facts come from the one `currentSession` lookup: it's
-  // absent from `active` exactly when it's missing from the registry or approved.
+  // absent from `active` exactly when it's missing from the registry or over.
   const currentSession = byActivity.find((s) => s.id === current);
-  const gone = !currentSession || isApproved(currentSession.status);
-  // Render nothing only when the registry is genuinely empty. An all-approved
+  const gone = !currentSession || isOver(currentSession.status);
+  // Render nothing only when the registry is genuinely empty. An all-over
   // registry still has a current to anchor: the placeholder must show (DESIGN.md
-  // §7), so the switcher doesn't vanish out from under the one approved session
+  // §7), so the switcher doesn't vanish out from under the one over session
   // you opened from home. Keying on `byActivity` (not `active`) keeps the
   // placeholder reachable instead of short-circuiting before it.
   if (byActivity.length === 0) return null;
@@ -141,7 +147,7 @@ function SwitchChip({
       onClick={onClick}
     >
       <span className="switch-name">{session.title}</span>
-      {/* Compact presence dot (no label — the chip is tight); approved hides it. */}
+      {/* Compact presence dot (no label — the chip is tight); over states hide it. */}
       <AgentDot
         status={session.status}
         parked={session.parked}

@@ -6,7 +6,7 @@
 
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
-import type { RegistrySession } from "../shared/types.js";
+import { TERMINAL_STATUSES, type RegistrySession } from "../shared/types.js";
 import { api } from "./client.js";
 import { fail } from "./output.js";
 
@@ -51,7 +51,11 @@ export async function listSessions(): Promise<RegistrySession[]> {
   return (response.body.sessions ?? []) as RegistrySession[];
 }
 
-const isActive = (s: RegistrySession): boolean => s.status !== "approved";
+// Exactly the terminal states are inactive (the single source of truth in
+// shared/types.ts): `implementing` resolves as the active session so the agent
+// can keep narrating/asking mid-build and `otacon resume` re-adopts it, while
+// `implemented`/`implement_failed` no longer count once the build is over.
+const isActive = (s: RegistrySession): boolean => !TERMINAL_STATUSES.includes(s.status);
 
 export function resolveSession(
   sessions: RegistrySession[],
@@ -66,11 +70,12 @@ export function resolveSession(
     return session;
   }
 
-  // No local pointer: the repo's single active (non-approved) session is the
-  // implicit default. An approved session is over (DESIGN.md §6) so it never
-  // counts — reaching it needs an explicit --session. Two or more active
-  // sessions refuse with the candidate list rather than guess: cross-posting
-  // feedback to the wrong plan is unrecoverable confusion.
+  // No local pointer: the repo's single active (non-terminal) session is the
+  // implicit default. A terminal session is over (DESIGN.md §6) — approved, or
+  // a finished build (implemented/implement_failed) — so it never counts;
+  // reaching it needs an explicit --session. Two or more active sessions refuse
+  // with the candidate list rather than guess: cross-posting feedback to the
+  // wrong plan is unrecoverable confusion.
   const root = findRepoRoot(cwd) ?? realpathOr(cwd);
   const here = sessions.filter((s) => isActive(s) && realpathOr(s.repo) === root);
   if (here.length === 1) return here[0] as RegistrySession;

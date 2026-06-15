@@ -53,7 +53,7 @@ import type { SectionMenuState } from "./review/section-menu";
 import { SectionMenu } from "./review/section-menu";
 import { navigate } from "./router";
 import { markSeen } from "./seen";
-import { isApproved } from "./session-filter";
+import { isOver } from "./session-filter";
 import { SessionSwitcher } from "./switcher";
 import { useNow } from "./tick";
 
@@ -156,9 +156,19 @@ function ReviewLoop({
   // off the per-keystroke `litEntries` identity (updated in the paint effect).
   const litRef = useRef<LitThread[]>([]);
   const hasPlan = session.revision > 0;
-  // Approved = the session is over (DESIGN.md §12): the whole screen goes
-  // read-only — no selection anchoring, no composer, no drawer, no cards.
-  const over = session.status === "approved";
+  // Over = the session reached a terminal state (DESIGN.md §12: approved /
+  // implemented / implement_failed): the whole screen goes read-only — no
+  // selection anchoring, no composer, no drawer, no cards. `implementing` is NOT
+  // over — the agent is building the approved plan, so the screen stays
+  // interactive (the SSE frame drives the status; an Approve & Implement leaves
+  // this view live as `implementing` rather than ending it).
+  const over = isOver(session.status);
+  // Approve is offered only while the plan still awaits a decision — not once
+  // over, and not while `implementing` (the daemon already rejects a re-approve
+  // there; the agent is mid-build). The rest of the screen stays live during
+  // `implementing` (comments, asks, the drawer) — only this terminal control is
+  // withdrawn.
+  const canApprove = !over && session.status !== "implementing";
   // Selections only anchor in the clean view: diff lines are change telemetry,
   // not plan text the agent could re-locate (same honesty rule as the
   // chrome-selector guard in anchor.ts).
@@ -484,7 +494,7 @@ function ReviewLoop({
         view={view}
         onView={setView}
         hasPlan={hasPlan}
-        onApprove={over ? undefined : () => setApproveOpen(true)}
+        onApprove={canApprove ? () => setApproveOpen(true) : undefined}
         onDelete={() => setDeleteOpen(true)}
       />
       <div className="review-layout">
@@ -587,15 +597,18 @@ function ReviewLoop({
           />
         )}
       </div>
-      {approveOpen && !over && (
+      {approveOpen && canApprove && (
         <ApproveDialog
           sessionId={session.id}
           revision={session.revision}
           onClose={() => setApproveOpen(false)}
-          onApproved={(path) => {
-            // The session SSE frame flips the status (and this screen) to
-            // approved; the path renders in the notice.
-            setApprovedPath(path);
+          onApproved={(path, implement) => {
+            // Plain approve: the session SSE frame flips the status (and this
+            // screen) to approved; the path renders in the read-only notice.
+            // Approve & Implement: the frame arrives as `implementing` (not
+            // over), so the screen stays interactive and the path notice never
+            // shows — don't pin it (it would mislead if the build later ends).
+            if (!implement) setApprovedPath(path);
             setApproveOpen(false);
           }}
         />
@@ -643,7 +656,9 @@ function ReviewLoop({
             failed={failed}
             questions={openQuestions}
             onQuestions={jumpQuestions}
-            onApprove={() => setApproveOpen(true)}
+            // Withdraw the drawer's approve control once the plan is past a
+            // decision (implementing/over) — matches the header (canApprove).
+            onApprove={canApprove ? () => setApproveOpen(true) : undefined}
             onEdit={edit}
             onDelete={remove}
             onSendOne={sendOne}
@@ -673,19 +688,21 @@ export function SessionScreen({ id }: { id: string }) {
     if (session && revision !== undefined) markSeen(session.id, revision);
   }, [session, revision]);
 
-  // When the session you're viewing flips to approved, its switcher chip is gone
-  // (§7) so send yourself home, where the approved section holds it (DESIGN.md
-  // §12, D3). Fire only on the live non-approved → approved crossing: opening a
-  // session that is ALREADY approved (you tapped an approved card on home) must
-  // stay, or approved plans become unopenable. `sawActive` records that we
-  // observed a non-approved status first, so the ref's initial false can't be
-  // mistaken for one. A `session` SSE frame flipping it remotely still redirects
-  // (accepted, q5).
+  // When the session you're viewing crosses into an over (terminal) state, its
+  // switcher chip is gone (§7) so send yourself home, where the collapsed
+  // section holds it (DESIGN.md §12, D3). Fire only on the live active → over
+  // crossing: opening a session that is ALREADY over (you tapped a card in the
+  // collapsed section on home) must stay, or finished plans become unopenable.
+  // `sawActive` records that we observed a non-terminal status first, so the
+  // ref's initial false can't be mistaken for one. A `session` SSE frame
+  // flipping it remotely still redirects (accepted, q5). `implementing` is NOT
+  // over, so an Approve & Implement keeps you on the live build screen rather
+  // than bouncing home.
   //
   // The crossing is per-session: this screen is NOT remounted when `id` changes
   // (app.tsx routes without a key), so reset the ref on every `id` switch —
   // otherwise the "saw active" set while reading one session would leak across a
-  // navigation and bounce the next already-approved session you open straight
+  // navigation and bounce the next already-over session you open straight
   // back home (the very unopenable case the guard exists to prevent).
   const sawActive = useRef(false);
   useEffect(() => {
@@ -693,7 +710,7 @@ export function SessionScreen({ id }: { id: string }) {
   }, [id]);
   useEffect(() => {
     if (!session) return;
-    if (isApproved(session.status)) {
+    if (isOver(session.status)) {
       if (sawActive.current) navigate("/");
     } else {
       sawActive.current = true;

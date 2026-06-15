@@ -5,13 +5,37 @@ import type { QuestionSpec } from "./question-spec.js";
 
 export type { QuestionSpec };
 
-export type SessionStatus = "draft" | "in_review" | "revising" | "approved";
+export type SessionStatus =
+  | "draft"
+  | "in_review"
+  | "revising"
+  | "approved"
+  | "implementing"
+  | "implemented"
+  | "implement_failed";
 
 export const SESSION_STATUSES: readonly SessionStatus[] = [
   "draft",
   "in_review",
   "revising",
   "approved",
+  "implementing",
+  "implemented",
+  "implement_failed",
+];
+
+/**
+ * The terminal states (DESIGN.md §12 status machine): a session here is *over* —
+ * every mutating verb refuses (app.ts `sessionEnded`), and the CLI's pointer
+ * rules stop resolving it implicitly. `implementing` is deliberately NOT here:
+ * it re-opens progress/ask/wait/answer while the agent builds the approved plan.
+ * The single source of truth — the app guard and the CLI resolver both derive
+ * from this, so they can never disagree about what "over" means.
+ */
+export const TERMINAL_STATUSES: readonly SessionStatus[] = [
+  "approved",
+  "implemented",
+  "implement_failed",
 ];
 
 /** One entry in ~/.otacon/registry.json. */
@@ -26,6 +50,12 @@ export interface RegistrySession {
   status: SessionStatus;
   createdAt: string;
   updatedAt: string;
+  /**
+   * The PR the agent opened for the implemented plan (`otacon implement-done
+   * --pr`); absent until a build finishes. Persists in registry.json and flows
+   * to SessionSummary so the home card can surface the link (DESIGN.md §12).
+   */
+  prUrl?: string;
 }
 
 export interface RegistryFile {
@@ -112,7 +142,10 @@ export type EventPayload =
       choices?: string[];
       text?: string;
     }
-  | { event: "approved"; session: string; path: string }
+  // `implement:true` is the Approve & Implement wake-up: the parked agent
+  // commits the plan at `path` exactly as plain Approve does, then proceeds to
+  // build it (DESIGN.md §12). Absent on a plain approve.
+  | { event: "approved"; session: string; path: string; implement?: true }
   // Terminal: the reviewer deleted a pending (non-approved) session from the UI
   // (DESIGN.md §6, §12). The daemon wakes the parked agent with this so its
   // `wait` loop stops cleanly instead of 404ing on a later call; nothing is
