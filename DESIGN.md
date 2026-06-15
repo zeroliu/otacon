@@ -1125,8 +1125,7 @@ the daemon never spawns a model.
 ### One-time machine setup
 
 ```sh
-npm install -g otacon        # one package: CLI + daemon (npm name verified free)
-                             # until published: npm i -g github:zeroliu/otacon
+npm install -g otacon        # one package: CLI + daemon (Node ≥ 20)
 otacon install --all         # write agent skill wrappers; or --agent claude|codex|opencode
                              # --hooks also registers the Claude Code Stop hook
 otacon doctor                # verify: node ≥ 20, daemon boots + port free-or-ours,
@@ -1160,6 +1159,12 @@ prepends a repo preamble. The dogfood file is **generated** from `dogfoodSkillMd
 not hand-edited, and a test (`assets.test.ts`) asserts the committed file equals that
 output — so a protocol change can never silently drift between what `otacon install`
 writes elsewhere and what this repo runs.
+
+**Single source for the version.** `package.json`'s `version` is authoritative;
+`src/shared/version.ts` (the `VERSION` the version handshake compares, §13) is
+**generated** from it by `scripts/gen-version.ts`, run automatically by the `npm
+version` lifecycle hook on every bump — never hand-edited. A test guards that the two
+stay equal, the same generated-file discipline as the protocol card.
 
 ### Per-repo setup
 

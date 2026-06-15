@@ -1830,6 +1830,89 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** A flat `archive/` grows unwieldy (consider per-month subdirs), or plain
   Approve should archive too (right now an un-built approved plan stays in `docs/plans/`).
 
+## Distribution: public npm `otacon`; GitHub is contributor build-from-source only
+
+- **Decision:** otacon ships as the unscoped public npm package `otacon`
+  (`npm install -g otacon`); `files: ["dist"]` publishes the prebuilt artifact.
+  `npm i -g github:zeroliu/otacon` is **not** a supported user path — GitHub install is
+  documented (README "Build from source") only as a contributor flow: clone, `bun
+  install`, run `./bin/otacon` from source, or `bun run build && npm link`.
+- **Why:** The published tarball is prebuilt static `dist/` bytes, so `npm install -g`
+  pulls no native or UI build deps and `npm update -g otacon` is the whole upgrade
+  story (the version handshake restarts the daemon). A GitHub install would have to
+  build on the user's machine — pulling the full vite/react/mermaid devtree through a
+  `prepare`/postinstall step we deliberately did not wire — to turn `src/` into a
+  runnable `dist/`. Reserving GitHub for contributors keeps the user path trivial and
+  dep-light. (← grill q1, q7.)
+- **Revisit when:** The npm name is squatted before first publish (fall back to scoped
+  `@zeroliu/otacon`), or a build-on-install GitHub path becomes worth wiring.
+
+## Release flow: local bump+tag+push, CI publishes on the tag
+
+- **Decision:** `bun run release [patch|minor|major]` (`scripts/release.sh`) runs
+  preflight gates (clean tree, default branch, test/typecheck/build), `npm version` to
+  bump+commit+tag, then `git push --follow-tags` — it **never** publishes. The pushed
+  `v[0-9]*` tag triggers `.github/workflows/release.yml`, which re-runs the gates and
+  `npm publish`es from a clean CI checkout. `--dry-run` rehearses without mutating.
+- **Why:** Splitting "decide to release" (local, no credentials) from "publish" (CI,
+  OIDC trusted publishing) means no npm secret lives anywhere — not on a maintainer's
+  machine, not in repo secrets — and every publish is a clean-room, reproducible build.
+  Re-running the gates in CI before the
+  publish step makes a red gate stop the publish; the tag-vs-`package.json` guard stops
+  a mismatched version; npm rejecting a duplicate version makes a re-pushed tag a no-op.
+  (← grill q2.)
+- **Revisit when:** Prerelease/`next` dist-tag publishing is needed (not wired today),
+  or the release wants a non-default base branch.
+
+## `package.json` is the single version source; `version.ts` is generated
+
+- **Decision:** `package.json`'s `version` is authoritative; `src/shared/version.ts`
+  (the `VERSION` the daemon version handshake reads) is generated from it by
+  `scripts/gen-version.ts`, run by the `npm version` lifecycle hook (which also
+  `git add`s the regenerated file). `version.test.ts` asserts the two stay equal.
+- **Why:** A hand-maintained second copy of the version is a dual-write footgun — the
+  mirror would silently drift from `package.json` and break the handshake's meaning. A
+  generated mirror makes `npm version` the entire bump (one command, both files), and
+  the equality test backstops the generator. Same generated-file discipline as the
+  dogfood SKILL.md / protocol card. (← grill q3.)
+- **Revisit when:** Another consumer needs the version in a form a flat constant can't
+  provide.
+
+## npm trusted publishing (OIDC), no stored token; provenance + SHA-pinned actions
+
+- **Decision:** The release workflow publishes with `npm publish --access public` and
+  **no npm token** — authentication is npm **trusted publishing** via the job's
+  `permissions: id-token: write` OIDC token, against a Trusted Publisher (repo + the
+  `release.yml` workflow file) configured once on npmjs.com. This needs npm CLI
+  ≥ 11.5.1 / Node ≥ 22.14, so the workflow runs on Node 22 and `npm i -g npm@latest`.
+  Provenance is attached automatically (still requires `package.json`'s `repository`
+  field); every third-party action is pinned to a commit SHA. Because a Trusted
+  Publisher can only attach to an existing package, the very first publish is a manual
+  `npm publish` from a maintainer's `npm login` session (see RELEASING.md).
+- **Why:** A long-lived `NPM_TOKEN` automation secret is the highest-value thing in the
+  repo — it can publish at any time and must be rotated and guarded. OIDC removes it
+  entirely: the credential is minted per-run, scoped to this repo+workflow, and expires
+  immediately, so there is nothing to leak or rotate. The job still wields publish
+  rights via `id-token: write`, so SHA-pinning every action stays essential — a moved
+  tag could otherwise inject code into a run that can publish. Provenance gives
+  installers a verifiable link from the tarball back to the exact repo + workflow run —
+  supply-chain integrity for a package run with `-g`.
+- **Revisit when:** npm supports configuring a Trusted Publisher for a not-yet-published
+  package (removes the manual first-publish bootstrap), npm changes its OIDC/provenance
+  contract, or a pinned action needs a SHA bump (update the SHA + its version comment).
+
+## Maintainer release steps live in RELEASING.md; README stays user-facing
+
+- **Decision:** README documents only the install/update/use surface; the release
+  runbook (npm token setup, `bun run release`, what CI does, verify, rollback) lives in
+  RELEASING.md. DESIGN.md stays product behavior; this file records the why.
+- **Why:** The README's audience is people installing and using otacon — release
+  mechanics are noise to them and a maintenance liability mixed into onboarding prose.
+  A dedicated runbook keeps the maintainer steps in one skimmable place without
+  diluting the user-facing entry point. (← grill q4.)
+- **Revisit when:** Releasing gets automated enough that the runbook shrinks to a single
+  command worth folding back into a CONTRIBUTING doc.
+
 ## Graphic OTACON wordmark + brand accent shifted to the logo's lime
 
 - **Decision:** The index masthead's mono text wordmark (`otacon`) is replaced by a graphic
