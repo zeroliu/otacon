@@ -184,6 +184,22 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** A field needs validation richer than int/bool/path (enums, ranges,
   cross-field constraints), or config grows nested structures the flat schema can't model.
 
+## `POST /api/config` replaces the scope file; project scope requires a repo
+
+- **Decision:** `POST /api/config` overwrites the target scope file with the sanitized
+  sparse `values` (only valid, provided keys) rather than merging into what's on disk. A
+  field the UI cleared is simply absent from `values`, so it's gone from the file and
+  reverts to inherited. `scope:"project"` with no `repo` is a 400 (writes nothing); a
+  value that fails its type rule is a 422 `{fieldErrors}` (writes nothing).
+- **Why:** Replace is the only semantics that lets the Settings UI express "reset this
+  field to inherited" — a merge could never delete a key, so a cleared field would stick
+  forever. The UI already holds the full intended scope state, so sending it whole is
+  natural and keeps the daemon stateless about prior values. Project config lives in a
+  repo-scoped file, so writing it without a repo has no well-defined target — refuse
+  rather than guess.
+- **Revisit when:** Concurrent editors of the same scope file need field-level merge, or
+  a partial-update (PATCH-style) verb proves worth the extra surface.
+
 ## Per-worktree daemon isolation in the dogfood shim
 
 - **Decision:** `bin/otacon` detects a linked git worktree (`.git` is a *file*, not a

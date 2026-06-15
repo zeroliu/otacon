@@ -391,6 +391,26 @@ left to 404 on its next call.
 ```
 GET  /api/health                            daemon identity + version (CLI handshake)
 POST /api/shutdown                          clean daemon exit
+GET  /api/config?repo=<root>                config surface for the Settings UI:
+                                            {schema: CONFIG_SCHEMA, scopes} where
+                                            scopes.user is {path, values} for
+                                            ~/.otacon/config.json (always present)
+                                            and scopes.project is {path, values,
+                                            repo} for <repo>/.otacon/config.json —
+                                            included only when ?repo= names an
+                                            absolute path. `values` are sparse +
+                                            coerced (known keys that pass their
+                                            type rule)
+POST /api/config                            {scope:"user"|"project", repo?, values}
+                                            — replaces the scope file with the
+                                            sanitized sparse values (a cleared
+                                            field is dropped → reverts to
+                                            inherited). 400 on a bad/missing scope
+                                            or project without an absolute repo; 422
+                                            {fieldErrors} on a value that fails its
+                                            type rule (writes nothing); else 200
+                                            {values}. scope=user → ~/.otacon, project
+                                            → <repo>/.otacon
 GET  /api/sessions                          index (registry)
 POST /api/sessions                          mint + register a session (otacon start)
 GET  /api/sessions/:id                      session detail (+ revision, pending events)
