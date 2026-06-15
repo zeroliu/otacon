@@ -1,14 +1,14 @@
 // The approve flow (DESIGN.md §6 step 6, §9, §10, §12): a deliberate control —
 // no keyboard shortcut exists, on purpose — opening a confirm sheet whose
 // copy is honest about what happens. Two primary actions:
-//   • finalize & end — the daemon writes rN into docs/plans/ (the exact filename
+//   • commit plan — the daemon writes rN into docs/plans/ (the exact filename
 //     is picked at approve time, so only the folder is promised), the agent
 //     commits it, and the session is over.
-//   • approve & implement — same finalize+commit, but the agent then keeps
+//   • commit & implement — same finalize+commit, but the agent then keeps
 //     building (worktree → per-phase implement+review loop → PR); the session
 //     stays live as `implementing` rather than ending.
 // Unresolved threads answer 409 with the count; the sheet flips to its amber
-// warning state and "approve anyway" retries with force — re-firing the SAME
+// warning state and "commit anyway" retries with force — re-firing the SAME
 // variant the user picked (the warn stage remembers it). A plain approve ends
 // read-only behind the quiet approved notice; an implement approve hands off to
 // the live `implementing` frame.
@@ -102,10 +102,10 @@ export function ApproveDialog({
               it. Then either end here, or keep the agent building.
             </p>
             <p className="approve-sub">
-              <strong>Finalize &amp; end</strong> stops after the commit — no revisions after
-              this, the session is over. <strong>Approve &amp; implement</strong> hands the same
-              agent the build: it opens a worktree and walks the phases (implement → review → fix
-              → commit), opening a PR when every phase is green. The session stays live as{" "}
+              <strong>Commit Plan</strong> stops after the commit — no revisions after this, the
+              session is over. <strong>Commit &amp; Implement</strong> hands the same agent the
+              build: it opens a worktree and walks the phases (implement → review → fix → commit),
+              opening a PR when every phase is green. The session stays live as{" "}
               <em>implementing</em> and asks you on the first blocker.
             </p>
           </>
@@ -123,12 +123,12 @@ export function ApproveDialog({
             </p>
           </>
         )}
+        {error !== null && (
+          <p className="approve-error composer-hint composer-failed">{error}</p>
+        )}
         <div className="approve-actions">
-          {error !== null && (
-            <span className="composer-hint composer-failed">{error}</span>
-          )}
           <button type="button" className="btn btn-ghost" onClick={onClose}>
-            cancel
+            Cancel
           </button>
           {stage.kind === "confirm" ? (
             <>
@@ -138,7 +138,7 @@ export function ApproveDialog({
                 disabled={busy}
                 onClick={() => fire(false, false)}
               >
-                {busy ? "finalizing…" : "✓ finalize & end"}
+                {busy ? "committing…" : "Commit Plan"}
               </button>
               <button
                 type="button"
@@ -146,7 +146,7 @@ export function ApproveDialog({
                 disabled={busy}
                 onClick={() => fire(false, true)}
               >
-                {busy ? "starting…" : "⚙ approve & implement"}
+                {busy ? "starting…" : "Commit & Implement"}
               </button>
             </>
           ) : (
@@ -154,17 +154,17 @@ export function ApproveDialog({
               type="button"
               className="btn btn-force"
               disabled={busy}
-              // Re-fire the SAME variant the user chose: an Approve & Implement
+              // Re-fire the SAME variant the user chose: a Commit & Implement
               // that hit unresolved threads must still implement on retry.
               onClick={() => fire(true, pendingImplement)}
             >
               {busy
                 ? pendingImplement
                   ? "starting…"
-                  : "approving…"
+                  : "committing…"
                 : pendingImplement
-                  ? "implement anyway"
-                  : "approve anyway"}
+                  ? "Commit & Implement anyway"
+                  : "Commit anyway"}
             </button>
           )}
         </div>

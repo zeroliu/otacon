@@ -3414,23 +3414,26 @@ code {
   color: var(--ink-soft);
 }
 
+/* Cancel + the two primary actions stay on ONE row (nowrap): the failure
+ * hint is lifted out to .approve-error above so it can never force a wrap. */
 .approve-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 10px;
+  flex-wrap: nowrap;
+  gap: 8px;
   margin-top: 14px;
 }
 
-.approve-actions .composer-hint {
-  margin-right: auto;
+/* The rare failure line sits on its own row above the actions. */
+.approve-error {
+  margin: 11px 0 0;
 }
 
 /* Terminal actions stay thumb-sized: the sheet is a phone surface first. */
 .approve-actions .btn {
   min-height: 44px;
-  padding: 9px 16px;
+  padding: 9px 13px;
 }
 
 .btn-approve {
@@ -3444,7 +3447,7 @@ code {
 }
 
 /* Approve & Implement (§12): the second primary action — the implementing tone
- * so it reads as a sibling of "finalize & end", visually the move that keeps the
+ * so it reads as a sibling of "Commit Plan", visually the move that keeps the
  * agent building rather than the one that stops. */
 .btn-implement {
   border: 1px solid transparent;
