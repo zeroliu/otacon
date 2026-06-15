@@ -9,7 +9,7 @@ import { useSessions } from "./api";
 import { AgentDot, LinkState, StatusChip } from "./chip";
 import { relativeTime, repoName } from "./format";
 import { DeleteDialog } from "./review/delete";
-import { navigate } from "./router";
+import { linkClick, navigate } from "./router";
 import { unreadCount } from "./seen";
 import { isOver, partitionByApproval } from "./session-filter";
 import { useNow } from "./tick";
@@ -39,7 +39,19 @@ export function IndexScreen() {
             style={{ "--wordmark": `url(${wordmarkUrl})` } as CSSProperties}
           />
         </div>
-        <LinkState connected={connected} />
+        <div className="masthead-side">
+          {/* Settings lands on User scope — no repo needed (DESIGN.md §6). */}
+          <a
+            className="settings-link"
+            href="/settings"
+            aria-label="settings"
+            title="settings"
+            onClick={linkClick("/settings")}
+          >
+            ⚙
+          </a>
+          <LinkState connected={connected} />
+        </div>
       </header>
       <div className="list-head" aria-hidden="true">
         <span>

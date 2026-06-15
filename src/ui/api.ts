@@ -4,6 +4,7 @@
 // (DECISIONS.md "UI live updates: in-process Notifier, snapshot-first SSE").
 
 import { useEffect, useMemo, useState } from "react";
+import type { ConfigField, ScopeValues } from "../shared/config";
 import type {
   ActivityNote,
   Anchor,
@@ -18,6 +19,8 @@ import type {
   Thread,
   TranscriptEntry,
 } from "../shared/types";
+
+export type { ConfigField, ScopeValues };
 
 export type {
   ActivityNote,
@@ -483,4 +486,71 @@ export function useDiff(id: string, from: number, to: number): DiffPayload | und
  */
 export function useRevision(id: string, n: number): RevisionPayload | undefined {
   return usePolledJson<RevisionPayload>(n < 1 ? null : `/api/sessions/${id}/revisions/${n}`);
+}
+
+/** One scope's target file path and its sparse, currently-set overrides. */
+export interface ConfigScope {
+  path: string;
+  values: ScopeValues;
+  /** The absolute repo this project scope writes under — project scope only. */
+  repo?: string;
+}
+
+/**
+ * GET /api/config payload (DESIGN.md §6 config surface): the full field schema
+ * plus each scope's target path and current values. `user` is always present;
+ * `project` only when an absolute `repo` was supplied.
+ */
+export interface ConfigPayload {
+  schema: ConfigField[];
+  scopes: { user: ConfigScope; project?: ConfigScope };
+}
+
+export interface ConfigState extends Partial<ConfigPayload> {
+  loading: boolean;
+  error: boolean;
+  reload: () => void;
+}
+
+/**
+ * Load the config schema + scopes for the Settings screen. Plain fetch on mount
+ * and whenever `repo` changes — config is a flat document, not a stream, so no
+ * EventSource (unlike the session hooks). The `repo` query param is omitted when
+ * absent, so the daemon answers with the user scope alone. `reload` re-fetches
+ * (Phase 4 calls it after a save); responses for a superseded request are
+ * dropped so a fast scope/repo switch can't land stale data.
+ */
+export function useConfig(repo?: string): ConfigState {
+  const [payload, setPayload] = useState<ConfigPayload>();
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [nonce, setNonce] = useState(0);
+  const reload = () => setNonce((n) => n + 1);
+
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    setError(false);
+    const url = repo ? `/api/config?repo=${encodeURIComponent(repo)}` : "/api/config";
+    fetch(url, { headers: { accept: "application/json" } })
+      .then((res) => {
+        if (!res.ok) throw new Error(`config fetch failed: ${res.status}`);
+        return res.json() as Promise<ConfigPayload>;
+      })
+      .then((data) => {
+        if (!live) return;
+        setPayload(data);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (!live) return;
+        setError(true);
+        setLoading(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [repo, nonce]);
+
+  return { schema: payload?.schema, scopes: payload?.scopes, loading, error, reload };
 }

@@ -4000,6 +4000,270 @@ code {
   }
 }
 
+/* ───────────────────────── settings ─────────────────────────
+ *
+ * The /settings config surface (DESIGN.md §6): a User|Project scope toggle, the
+ * Project repo picker, a prominent "writes to" path banner, and the schema
+ * fields grouped by section. Reuses the page column, the mono telemetry voice,
+ * and the accent/line tokens — no new palette. */
+
+.masthead-side {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  padding-bottom: 2px;
+}
+
+/* The gear: a quiet glyph link, inked like the link-state, accent on hover. */
+.settings-link {
+  font-size: 17px;
+  line-height: 1;
+  color: var(--ink-soft);
+  text-decoration: none;
+}
+
+.settings-link:hover,
+.settings-link:focus-visible {
+  color: var(--accent);
+}
+
+.settings-head {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.settings-head .backlink {
+  margin-bottom: 0;
+}
+
+.settings-title {
+  margin: 0;
+  font: 600 13px/1 var(--mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+/* The User | Project segmented control. */
+.scope-toggle {
+  display: inline-flex;
+  margin-top: 20px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.scope-tab {
+  appearance: none;
+  border: none;
+  padding: 8px 18px;
+  background: var(--surface);
+  color: var(--ink-soft);
+  font: 600 11px/1 var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.scope-tab + .scope-tab {
+  border-left: 1px solid var(--line-strong);
+}
+
+.scope-tab.active {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.scope-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The Project repo picker — reuses the .switch-select dropdown chrome. */
+.repo-picker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.repo-picker-label {
+  font: 600 10.5px/1 var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.repo-picker-select {
+  position: relative;
+  flex: 1;
+}
+
+.repo-picker-select::after {
+  content: "▾";
+  position: absolute;
+  right: 11px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  font-size: 9px;
+  color: var(--ink-soft);
+}
+
+.repo-picker-select select {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  padding: 9px 28px 9px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font: 12px/1.2 var(--mono);
+  cursor: pointer;
+}
+
+.repo-picker-select select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The prominent target-file banner: the reviewer's "show the path" requirement.
+ * Accent top rule + mono path so it reads as the operative fact on the screen. */
+.path-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 22px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  border: 1px solid var(--line);
+  border-top: 2px solid var(--accent);
+  border-radius: 8px;
+}
+
+.path-banner-label {
+  font: 600 10px/1 var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--accent) 75%, var(--ink-soft));
+}
+
+.path-banner-path {
+  font: 12.5px/1.4 var(--mono);
+  color: var(--ink);
+  word-break: break-all;
+}
+
+/* Inert / error states when there's nothing to render. */
+.settings-inert,
+.settings-error {
+  margin-top: 22px;
+  padding: 16px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  font: 13px/1.5 var(--sans);
+  color: var(--ink-soft);
+  text-align: center;
+}
+
+.settings-error {
+  color: var(--chip-failed-ink);
+  border-color: color-mix(in srgb, var(--chip-failed-ink) 40%, var(--line-strong));
+}
+
+.settings-section {
+  margin-top: 26px;
+}
+
+.settings-section-title {
+  margin: 0 0 4px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+  font: 600 11px/1 var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+/* One field row: text block on the left, the input on the right; stacks on
+ * narrow screens so long inputs aren't crushed (mobile-first). */
+.field-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 2px;
+  border-bottom: 1px solid var(--line);
+}
+
+.field-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.field-name {
+  font: 14px/1.3 var(--sans);
+  color: var(--ink);
+}
+
+.field-desc {
+  font: 12px/1.4 var(--sans);
+  color: var(--ink-soft);
+}
+
+.field-input {
+  flex: none;
+  width: 160px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--ink) 3%, var(--surface));
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  color: var(--ink);
+  font: 13px/1.3 var(--mono);
+}
+
+.field-input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* The bool row is itself the label so the whole row toggles the checkbox. */
+.field-row-bool {
+  cursor: pointer;
+}
+
+.field-checkbox {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+@media (max-width: 460px) {
+  .field-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .field-row-bool {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .field-input {
+    width: 100%;
+  }
+}
+
 /* ───────────────────────── motion preferences ───────────────────────── */
 
 @media (prefers-reduced-motion: reduce) {
