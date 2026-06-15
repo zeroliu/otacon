@@ -28,7 +28,11 @@
     "e2e:ui": "bun run build && playwright test",
     "smoke": "bash test/smoke.sh",
     "accept": "bash test/acceptance.sh",
-    "verify:branch": "bash test/verify-branch.sh"
+    "verify:branch": "bash test/verify-branch.sh",
+    "gen:version": "bun run scripts/gen-version.ts",
+    "version": "bun run gen:version && git add src/shared/version.ts",
+    "prepublishOnly": "npm run build",
+    "release": "bash scripts/release.sh"
   },
   "dependencies": {
     "@hono/node-server": "^1",
