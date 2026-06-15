@@ -1,4 +1,5 @@
 import type { ActivityNote, SessionStatus } from "./api";
+import { isOver } from "./session-filter";
 
 // DESIGN.md §10 status chips. "questions pending" is derived state, not a
 // stored status: it lights while unanswered agent grill questions exist
@@ -10,15 +11,24 @@ const CHIPS: Record<Exclude<SessionStatus, "draft">, { label: string; tone: stri
   in_review: { label: "awaiting your review", tone: "await" },
   revising: { label: "agent revising", tone: "revise" },
   approved: { label: "approved", tone: "approved" },
+  // The implement lifecycle (DESIGN.md §12): `implementing` is an active,
+  // in-progress state (working tone, the only one of the three with a breathing
+  // dot — see CSS); the two terminal outcomes read done (green) and failed
+  // (caution amber, the palette's error stand-in).
+  implementing: { label: "implementing", tone: "implementing" },
+  implemented: { label: "implemented", tone: "implemented" },
+  implement_failed: { label: "implement failed", tone: "implement-failed" },
 };
 
 /**
  * The §10 derivation, single-sourced for every status surface (this chip, the
  * switcher's glyphs): unanswered grill questions are the user's move, so they
- * outrank the agent-side statuses until the session is over.
+ * outrank the agent-side statuses until the session is over. `implementing`
+ * counts as live — the orchestrator can post `otacon ask` on a build blocker —
+ * so questions pending lights then too; only terminal states suppress it.
  */
 export function questionsPending(status: SessionStatus, openQuestions: number): boolean {
-  return status !== "approved" && openQuestions > 0;
+  return !isOver(status) && openQuestions > 0;
 }
 
 export function StatusChip({
@@ -80,7 +90,8 @@ export function agentLive(parked: boolean, lastContactAt: number | undefined, no
  * the status chip — the subtle "is the agent still on the line?" signal, with
  * the chips staying the primary "your turn" cue. Visually distinct from
  * LinkState (the browser↔daemon link) — labelled "agent" vs "link". Hidden on
- * approved sessions: the agent's job is done there, by design.
+ * terminal sessions: the agent's job is done there, by design. It stays visible
+ * while `implementing` — the agent is on the line building the approved plan.
  */
 export function AgentDot({
   status,
@@ -97,7 +108,7 @@ export function AgentDot({
   /** Drop the "agent" text where space is tight (the switcher chips). */
   label?: boolean;
 }) {
-  if (status === "approved") return null;
+  if (isOver(status)) return null;
   const live = agentLive(parked, lastContactAt, now);
   return (
     <span

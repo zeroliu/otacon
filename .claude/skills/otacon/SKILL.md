@@ -72,9 +72,10 @@ machine-readable error you can fix (read the JSON); exit 2 = you invoked it wron
      thread's prior turns for context, but still answer the new `q<n>`.
    - `answer` → use it and continue; park again whenever you are waiting.
    - `timeout` → park again immediately. A timeout is NEVER completion.
-   - `approved` → `git add` + commit the plan file at the printed `path`, print a
-     one-line summary, and STOP. Planning only — implementation is another
-     session's job.
+   - `approved` → `git add` + commit the plan file at the printed `path`. Plain
+     `approved` (no `implement`) → print a one-line summary and STOP. `approved`
+     **with `implement:true`** → after committing, enter the **Implement loop**
+     (below) — do NOT stop; the session is now `implementing`.
    - `deleted` → the user deleted this session in the review UI. It is over:
      STOP. There is no approved plan and nothing to commit.
 6. **Never end your turn while the session is open.** Nothing to do = park in
@@ -85,7 +86,37 @@ machine-readable error you can fix (read the JSON); exit 2 = you invoked it wron
 
 - `./bin/otacon start --title <t> [--quick]` · `./bin/otacon progress "<note>"` ·
   `./bin/otacon ask ...` · `./bin/otacon wait --timeout 540` · `./bin/otacon submit [--resolutions f]` ·
-  `./bin/otacon answer <q> --body "..."` · `./bin/otacon status` · `./bin/otacon open`
+  `./bin/otacon answer <q> --body "..."` · `./bin/otacon implement-done [--pr <url>] [--failed]` ·
+  `./bin/otacon status` · `./bin/otacon open`
+
+## Implement loop (on `approved` with `implement:true`)
+
+You are the **orchestrator**: you only coordinate and narrate
+(`./bin/otacon progress` at each checkpoint) — every phase's real work runs in a fresh
+native subagent (Task tool, subscription-covered) so your own context stays lean.
+
+1. **Setup.** Commit the plan file at the event `path` (exactly as plain Approve),
+   then `git worktree add .otacon/worktrees/<slug> -b otacon/impl-<slug>` off that
+   commit (`.otacon/` is gitignored). `./bin/otacon progress` each checkpoint throughout.
+2. **Per phase, in order** (read the phases from the committed plan):
+   - `./bin/otacon progress "phase N — implementing"`; spawn an **implement+test**
+     subagent (Task tool) scoped to that phase's Goal/Files/Verification — it
+     implements and runs the phase Verification plus the repo gates.
+   - spawn a **separate** `/code-review --fix` subagent on the phase's working
+     diff; it applies findings; re-review. (`/code-review` effort is config — start
+     moderate so false positives don't become needless pauses.)
+   - **clean + green** → commit the phase and continue. **Blocked** (tests stay red,
+     review still flags, or a subagent is stuck) → on the FIRST blocker,
+     `./bin/otacon ask` with options `retry|skip|abort|guidance`, park in `./bin/otacon wait`,
+     and act on the answer. No auto-retry.
+3. **Finish.** `gh pr create` against the default branch (PR body = the plan
+   summary + the per-phase log; fall back to the local branch + path when there is
+   no remote), then `./bin/otacon implement-done --pr <url>` (or
+   `./bin/otacon implement-done --failed` on abort).
+
+While `implementing` the Stop hook still keeps you on the line — never end the turn
+until `implement-done`. Remind the user to keep the Mac awake (`caffeinate -i`) for
+a long build.
 
 ## Plan schema (linted on submit)
 

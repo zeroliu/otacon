@@ -26,9 +26,13 @@ Native plan modes in coding agents (Claude Code, Codex, OpenCode) fail in four w
 4. **One long session implements everything.** A multi-phase plan executed by a single
    long-context session degrades — the agent gets lazy and stops following the plan.
 
-Otacon solves 1–3 with a plan review surface. Problem 4 is solved by a **future,
-separate implementer skill** (working name: `snake` — Otacon supports, Snake executes)
-that consumes Otacon's approved plan artifacts. Otacon itself never implements anything.
+Otacon solves 1–3 with a plan review surface. Problem 4 is solved by **Approve &
+Implement** (§6): the reviewer can carry an approved plan straight into implementation,
+where the *same* agent that planned it builds it through per-phase native subagents — a
+fresh implement+test subagent per phase, then a separate review subagent, pausing on the
+first blocker, opening a PR at the end. (A future, separate implementer skill — working
+name: `snake` — that consumes approved plan artifacts from a detached session remains on
+the horizon, §14.)
 
 ---
 
@@ -38,7 +42,7 @@ Every decision below was resolved deliberately; rationale follows in the relevan
 
 | #   | Decision          | Choice                                                                                                                                                                            |
 | --- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Scope             | Plan review surface only. Implementation/orchestration = future `snake` skill                                                                                                     |
+| 1   | Scope             | Plan review surface, plus **Approve & Implement**: the same agent can carry an approved plan into implementation via per-phase native subagents (§6). A detached `snake` skill stays future                          |
 | 2   | Surface           | Local web UI served by a CLI daemon; built fresh (lavish-axi as pattern reference, no fork)                                                                                       |
 | 3   | Plan format       | Schema'd markdown: frontmatter + fixed sections, stable IDs, phases first-class                                                                                                   |
 | 4   | Conciseness       | Deterministic linter at submit + 2-tier schema (budgeted read path / unbudgeted collapsible detail)                                                                               |
@@ -323,6 +327,7 @@ the model is suspended — no inference, no token spend.
 | `otacon ask --question "…" [--options "A\|B\|C"] [--recommend A] [--multi]` | Post agent question card to UI (or a batch of independent questions via `--batch <file\|->`); answer arrives via `wait` |
 | `otacon answer <question-id> (--body "…" \| --file f.md)`                   | Answer a user question; no revision                                           |
 | `otacon progress "<note>" [--session <id>]`                                 | Append a narration note to the live activity feed (UI-only; non-blocking, never parks, never an event) |
+| `otacon implement-done [--pr <url>] [--failed]`                             | End an `implementing` session: record the PR link and flip to `implemented`, or `--failed` → `implement_failed` (§12) |
 | `otacon status [--all]`                                                     | Session state + undelivered event count (crash/resume entry point)            |
 | `otacon open [--session <id>]`                                              | Print the review URL — the index URL when no session resolves; never launches a browser |
 | `otacon clean [--all]`                                                      | Archive ended sessions' working state to `.otacon/archive/` and prune the registry (§12) |
@@ -351,7 +356,7 @@ replies are refused 400 before linting.
   {"thread":"t12","anchor":{"section":"phase-2","exact":"…","prefix":"…","suffix":"…"},"body":"…"}]}
 {"event":"question","session":"otc_a1b2c3","id":"q12","anchor":{"section":"decisions"},"body":"…","replyTo":"q7"}
 {"event":"answer","session":"otc_a1b2c3","question":"q7","choice":"A","text":"…"}
-{"event":"approved","session":"otc_a1b2c3","path":"docs/plans/2026-06-12-auth-refactor.md"}
+{"event":"approved","session":"otc_a1b2c3","path":"docs/plans/2026-06-12-auth-refactor.md","implement":true}
 {"event":"deleted","session":"otc_a1b2c3"}
 {"event":"timeout"}
 ```
@@ -364,10 +369,14 @@ non-empty `text` with no `choice`/`choices` (native-AskUserQuestion "Other" pari
 the user is never trapped by the offered chips. A `question` event carries `replyTo`
 when it is a **follow-up** on an earlier question (§9) — the agent skims that thread's
 prior turns for context and answers the new `q<n>` the usual way. `approved.path` is
-repo-relative — the agent commits that file. `approved` and `deleted` are both
-**terminal**: the agent stops on either — `deleted` means the reviewer discarded a
-pending session in the UI (§12), so there is no artifact and nothing to commit; a parked
-`wait` is woken with it immediately rather than left to 404 on its next call.
+repo-relative — the agent commits that file. `approved` carries an optional `implement`
+flag: a plain `approved` (no flag) is **terminal** — commit the plan and stop; an
+`approved` with `implement:true` is **not** terminal — the agent commits the plan, then
+walks the build loop (the **Implement loop**, §6 below; the session sits in
+`implementing` until `otacon implement-done`). `deleted` is terminal: the agent stops —
+it means the reviewer discarded a pending session in the UI (§12), so there is no
+artifact and nothing to commit; a parked `wait` is woken with it immediately rather than
+left to 404 on its next call.
 
 ### HTTP API (daemon, 127.0.0.1 only)
 
@@ -378,11 +387,12 @@ GET  /api/sessions                          index (registry)
 POST /api/sessions                          mint + register a session (otacon start)
 GET  /api/sessions/:id                      session detail (+ revision, pending events)
 DELETE /api/sessions/:id                    deregister a session, status-branched:
-                                            approved → deregister + archive its dir to
-                                            .otacon/archive/ (otacon clean + UI); pending
-                                            → wake the parked agent with a terminal
-                                            `deleted` event, then hard-remove its dir
-                                            (UI, §12). Both publish a terminal `removed`
+                                            terminal (approved/implemented/
+                                            implement_failed) → deregister + archive its
+                                            dir to .otacon/archive/ (otacon clean + UI);
+                                            non-terminal → wake the parked agent with a
+                                            terminal `deleted` event, then hard-remove its
+                                            dir (UI, §12). Both publish a terminal `removed`
                                             SSE frame; response carries `archivedTo`
 GET  /api/sessions/:id/events?wait=540      agent long-poll
 POST /api/sessions/:id/submit               lint; reject 422 with issues, or store revision N
@@ -421,12 +431,22 @@ POST /api/sessions/:id/answers              user's answer to an agent question:
                                             (no chip); queues the answer event
 POST /api/sessions/:id/approve              approve: writes the final artifact, flips
                                             the session approved, queues `approved`.
+                                            With {"implement":true} it instead flips
+                                            to `implementing` (non-terminal) and sets
+                                            `implement:true` on the `approved` event —
+                                            Approve & Implement (§12).
                                             Unresolved threads (comments without a
                                             resolution + questions without an answer)
                                             → 409 E_UNRESOLVED_THREADS carrying the
                                             count, unless the body is {"force":true}
                                             (the UI warns, then forces on confirm);
                                             no revisions yet → 409 E_NO_REVISION
+POST /api/sessions/:id/implement-done       end an `implementing` build (otacon
+                                            implement-done): {pr?, failed?} → flips
+                                            `implemented` (default) or
+                                            `implement_failed` (failed:true), records
+                                            `prUrl` on the summary; a session not
+                                            `implementing` → 409 E_NOT_IMPLEMENTING
 POST /api/sessions/:id/reviewed             mark a revision reviewed ({revision},
                                             default: latest) — the diff baseline;
                                             monotonic, also set by a comment flush
@@ -467,9 +487,11 @@ line numbers are 1-based within the unit.
 `/api` errors are machine-readable JSON — `{"error":{"code":…,"message":…}}` — except
 a failed submit, which returns 422 carrying the linter's `errors`/`warnings` arrays.
 Every state-mutating session verb (submit, comments, questions and their answers,
-ask, answers, progress, approve) refuses an approved session with 409 `E_SESSION_OVER` — the
-status machine's terminal state is enforced on the daemon, not just by the CLI's
-session-resolution rules.
+ask, answers, progress, approve) refuses a **terminal** session (approved /
+implemented / implement_failed) with 409 `E_SESSION_OVER` — the status machine's
+terminal *set* is enforced on the daemon, not just by the CLI's session-resolution
+rules. An `implementing` session is **not** terminal: progress / ask / wait / answer
+stay open so the orchestrating agent can narrate and pause-and-ask while it builds.
 `/` and `/s/:id` serve the SPA shell (static assets under `/assets/`); an unknown
 session id renders as a client-side not-found state. Each SSE stream opens with a
 `snapshot` frame (the per-session stream's snapshot carries the thread list, the
@@ -551,7 +573,19 @@ budgets config. Off macOS the banner is a silent no-op.
    transcript appended, flips the session to `approved` (ending it — every further
    mutation refuses), queues the `approved` event. The agent's
    `wait` returns it; agent `git add` + commits the plan file, prints a one-line
-   summary, stops. Session over — implementation is somebody else's job (`snake`, later).
+   summary, stops. Session over.
+7. **Approve & Implement** (optional, §12). A second review action — **Approve &
+   Implement** — finalizes the plan exactly as Approve does but flips the session to
+   `implementing` (non-terminal) and sets `implement:true` on the `approved` event.
+   The same agent, on receiving it, commits the plan and then **orchestrates the
+   build**: it opens a worktree off the plan commit and walks the phases in order —
+   a fresh implement+test subagent per phase, then a separate `/code-review --fix`
+   subagent that resolves findings, committing each clean+green phase. On the **first**
+   blocked phase it pauses with an `otacon ask` (retry / skip / abort / guidance) and
+   parks in `wait`. It finishes by opening a PR against the default branch and reporting
+   it with `otacon implement-done --pr <url>` (or `--failed` on abort), which flips the
+   session to `implemented` / `implement_failed`. All build work runs in native
+   in-session subagents (subscription-covered, §13); the daemon never spawns a model.
 
 ---
 
@@ -709,7 +743,8 @@ gracefully rather than misattaching.
 Card per session: title, repo + branch, status chip, agent-presence dot,
 unread-change badge, last activity, accent color. Tap → review screen. The status
 chip is `awaiting your review` / `agent revising` / `questions pending` /
-`approved`, plus an **activity-driven draft chip**: while a session is in `draft`
+`approved` / `implementing` / `implemented` / `implement failed`, plus an
+**activity-driven draft chip**: while a session is in `draft`
 (it sits there through research + drafting, before revision 1 exists) the chip
 shows the latest `otacon progress` note (truncated), falling back to `agent
 working` until the agent narrates — so the chip never claims "drafting" while the
@@ -720,13 +755,16 @@ primary "your turn" signal. The dot is live while the agent is parked in
 `otacon wait` or its last contact is recent, and is hidden on approved sessions.
 
 **Approved sessions group separately.** The main list holds only active sessions
-(drafting / in review / revising); approved ones move into a dedicated `approved`
-section below it, collapsed by default with the count in its heading (`approved 3`),
-one tap to expand (the same disclosure idiom as the activity panel). The list's top
-`sessions N` count tracks the active list — what still needs you — not the registry
-total; the approved section carries its own count. Approved plans stay readable: tapping
-an approved card opens its read-only plan, and that is the only entry point now the
-switcher (§7) no longer lists them.
+(drafting / in review / revising / **implementing** — a live build is active work, so
+it stays on the home list, not grouped away); approved (and implemented /
+implement_failed) ones move into a dedicated `approved` section below it, collapsed by
+default with the count in its heading (`approved 3`), one tap to expand (the same
+disclosure idiom as the activity panel). The list's top `sessions N` count tracks the
+active list — what still needs you — not the registry total; the approved section
+carries its own count. Approved plans stay readable: tapping an approved card opens its
+read-only plan, and that is the only entry point now the switcher (§7) no longer lists
+them. A session that finished a build carries its **PR link** on the card (from `prUrl`,
+§12) so the opened pull request is one tap away.
 
 Every session carries a small delete control on its card — and one in the review
 screen header — to remove it from the index without dropping to the CLI. It opens a
@@ -891,24 +929,31 @@ Operational requirement: the Mac stays awake while a plan is in review
 
 | Location                                 | Contents                                                                                                       | Git                                        |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `<repo>/.otacon/`                        | Working state under `<id>/`: `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), threads (`threads.json`: comment + question threads with answers, resolutions, and anchor states inline), the grill transcript (`transcript.json`), the capped live-activity feed (`activity.json`: the newest ~N `otacon progress` notes), queues | **gitignored**                             |
+| `<repo>/.otacon/`                        | Working state under `<id>/`: `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), threads (`threads.json`: comment + question threads with answers, resolutions, and anchor states inline), the grill transcript (`transcript.json`), the capped live-activity feed (`activity.json`: the newest ~N `otacon progress` notes), queues; plus `worktrees/<slug>/` — an Approve & Implement build's git worktree on branch `otacon/impl-<slug>` | **gitignored**                             |
 | `<repo>/docs/plans/YYYY-MM-DD-<slug>.md` | Final approved plan (`status: approved` frontmatter + grill transcript)                                        | **committed** (by the agent, post-approve) |
 | `~/.otacon/registry.json`                | Session registry: ID → repo, branch, title, status                                                             | n/a (global)                               |
 
-The committed plan is the contract `snake` consumes — any fresh session, worktree, or
-machine can find it. Review exhaust stays out of git. `otacon clean` archives ended
-sessions' working state: for every **approved** session in the current repo (`--all`:
-everywhere), it calls `DELETE /api/sessions/:id`; the daemon drops the registry entry
-and **archives** `.otacon/<id>/` to `.otacon/archive/<id>/` in the session's repo (name
-collisions get a numeric suffix), reporting the destination as `archivedTo`. Committed
-plans under `docs/plans/` are never touched; events still queued on an ended session are
-archived with the directory rather than blocking the clean.
+The committed plan is the contract a downstream implementer consumes — any fresh
+session, worktree, or machine can find it. Review exhaust stays out of git. `otacon
+clean` archives ended sessions' working state: for every **terminal** session
+(approved, plus implemented / implement_failed once a build finishes) in the
+current repo (`--all`: everywhere), it calls `DELETE /api/sessions/:id`; the daemon drops
+the registry entry and **archives** `.otacon/<id>/` to `.otacon/archive/<id>/` in the
+session's repo (name collisions get a numeric suffix), reporting the destination as
+`archivedTo`. Committed plans under `docs/plans/` are never touched; events still queued
+on an ended session are archived with the directory rather than blocking the clean.
+Clean should also prune a finished or aborted build's impl artifacts — the
+`.otacon/worktrees/<slug>/` worktree (via `git worktree remove`) and its
+`otacon/impl-<slug>` branch — which a per-phase-commit build otherwise litters on disk.
 
 **Deleting any session** from the review UI (§10) reuses that same route, and the
-disposition follows whether a committed plan exists. An **approved** session takes the
-clean path above: its dir is archived (recoverable) because its plan + transcript are
-already committed. A **pending** session has no committed artifact, so the daemon wakes
-any parked agent with a terminal `deleted` event (§6) — so its `wait` loop stops cleanly
+disposition follows whether the session is terminal (its plan is committed). A
+**terminal** session (approved, or a finished build — implemented / implement_failed)
+takes the clean path above: its dir is archived (recoverable) because its plan +
+transcript are already committed. A **non-terminal** session (draft / in_review /
+revising, or a live `implementing` build) has no committed-and-ended artifact to keep,
+so the daemon wakes any parked agent with a terminal `deleted` event (§6) — so its
+`wait` loop stops cleanly
 — drops the registry entry, and **hard-removes** `.otacon/<id>/` permanently. The wake
 fires before deregistration so the woken long-poll still resolves against a live session;
 the queue is marked closed first so a late post-response ack cannot recreate the
@@ -934,7 +979,47 @@ approved, the review screen navigates home (its switcher chip is gone, §7); thi
 only on the live non-approved → approved transition, so opening an already-approved
 session from home does **not** redirect and the committed plan stays readable.
 
-Session status machine: `draft → in_review ⇄ revising → approved`.
+Session status machine:
+`draft → in_review ⇄ revising → approved` (terminal), with the **Approve & Implement**
+branch `approved → implementing → implemented | implement_failed`. The terminal *set* is
+`{approved, implemented, implement_failed}` — the open-verb guard (§6 `E_SESSION_OVER`)
+and the CLI's implicit-session resolver both gate on it, so they can never disagree about
+what "over" means. `implementing` is deliberately **not** terminal: it re-opens
+progress / ask / wait / answer for the orchestrating agent and resolves as the repo's
+active session (so the agent can't bail mid-build and `resume` re-adopts it), and the
+Stop hook (§13) treats it as live.
+
+```
+                                         ┌─ Approve ──────────────► approved (terminal)
+draft ─► in_review ⇄ revising ──────────┤
+                                         └─ Approve & Implement ──► implementing
+                                                                       │
+                                                  implement-done       │
+                                            ┌──────────────────────────┤
+                                            ▼                          ▼
+                                       implemented              implement_failed
+                                        (terminal)                 (terminal)
+```
+
+### Approve & Implement: worktree, per-phase commits, PR
+
+**Approve & Implement** finalizes the plan as Approve does, then flips the session to
+`implementing` and hands the same agent the build (§6). The agent commits the approved
+plan, then opens a git worktree at **`.otacon/worktrees/<slug>`** (gitignored, same as
+the rest of `.otacon/`) on a new branch **`otacon/impl-<slug>`** rooted at the
+plan-doc commit, and walks the phases in order: per phase, a fresh implement+test
+subagent (scoped to that phase's Goal/Files/Verification), then a separate
+`/code-review --fix` subagent that applies findings; a clean+green phase is committed
+(**one commit per green phase**) before the next begins. On the **first** blocked phase
+the agent pauses with an `otacon ask` and parks. When every phase is green it opens a PR
+against the repo's **default branch** with `gh` (PR body = the plan summary + the
+per-phase log; it falls back to noting the local branch + path when there is no remote),
+then reports the outcome with `otacon implement-done --pr <url>` (or `--failed` on
+abort) — flipping the session to `implemented` / `implement_failed` and recording `prUrl`
+on the summary (surfaced as the home card's PR link, §10). `otacon clean` should prune a
+finished or aborted build's impl worktree and branch alongside archiving its session
+state. The whole build runs in native in-session subagents (subscription-covered, §13);
+the daemon never spawns a model.
 
 ---
 
@@ -950,6 +1035,11 @@ Session status machine: `draft → in_review ⇄ revising → approved`.
   the thing subscriptions price. `otacon wait` is indistinguishable from any other Bash
   call. No headless `claude -p`, no Agent SDK, no second metered surface. This makes
   the design immune to Agent-SDK-excluded-from-subscription policy changes.
+- **Approve & Implement keeps the invariant.** The build is orchestrated by the same
+  live interactive session; every phase's real work runs in a **native in-session
+  subagent** (the agent's Task tool), which is subscription-covered exactly like the
+  parent. The daemon still spawns nothing and calls no model — it only records the
+  `implementing` → `implemented`/`implement_failed` transition and the PR link.
 - The protocol demands only "can run shell commands" + "can edit files" — why the
   identical loop works on Claude Code, Codex, and OpenCode subscriptions.
 - **Forward constraint for `snake`:** same rule. Orchestration via instructions + this
@@ -961,7 +1051,7 @@ Session status machine: `draft → in_review ⇄ revising → approved`.
 
 | Failure                                                                 | Mitigation                                                                                                                                                                                                                                                                                                           |
 | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Agent lazily ends its turn mid-review                                   | Skill instruction ("never end your turn while the session is open") + **Claude Code Stop hook** (plain shell script): if an open session exists, block the stop with "plan session still active — run `otacon wait`". Codex/OpenCode start instruction-only; both have notify/plugin equivalents for later hardening |
+| Agent lazily ends its turn mid-review or mid-build                      | Skill instruction ("never end your turn while the session is open") + **Claude Code Stop hook** (plain shell script): if a non-terminal session exists, block the stop with "plan session still active — run `otacon wait`". An `implementing` session blocks too (the build is live; only `approved`/`implemented`/`implement_failed` let the agent stop). Codex/OpenCode start instruction-only; both have notify/plugin equivalents for later hardening |
 | Agent bypasses the remote channel with native AskUserQuestion           | Skill forbids it; v1.5: PreToolUse hook blocks AskUserQuestion (and optionally Edit/Write outside `.otacon/`) while a plan session is active                                                                                                                                                                         |
 | Session dies (crash, closed laptop, context compaction)                 | Agent is stateless; events queue on the daemon. Any new session: `otacon status` → open session, current revision, undelivered events → resume the loop                                                                                                                                                              |
 | Detail-tier smuggling (load-bearing content hidden in collapsed blocks) | Normative/informative contract + lint L4 heuristics + size badges + diff gutter markers on detail changes                                                                                                                                                                                                            |
@@ -973,7 +1063,9 @@ Session status machine: `draft → in_review ⇄ revising → approved`.
 
 ## 14. Out of scope (v2+)
 
-- **`snake`** — the implementer skill: consumes approved plans, executes phase-per-fresh-session.
+- **`snake`** — a *detached* implementer skill: consumes an approved plan from a fresh,
+  unattended session (phone-only, fire-and-forget), rather than the live same-agent build
+  that **Approve & Implement** (§6) now ships. Still future.
 - Hosted relay (Cloudflare Worker + DO) — protocol is plain HTTP so this stays a clean lift.
 - **Web Push (phone) attention notifications.** Desktop banners shipped (§6); the phone
   surface is deferred. Agreed future approach: zero-dependency hand-rolled VAPID
@@ -1056,9 +1148,11 @@ Budgets/lint config is global (`~/.otacon/config.json`); a committed
 3. The agent drafts, passes the linter, submits. You review: questions fire instantly,
    comments stack in the drawer, **Send all** when done.
 4. Agent revises; you re-review via changelog + threads + diff-vs-last-reviewed. Repeat
-   until **Approve**.
-5. The approved plan lands in `docs/plans/YYYY-MM-DD-<slug>.md`, committed by the
-   agent. The planning session ends; hand the file to your implementer (future: `snake`).
+   until **Approve** (or **Approve & Implement**).
+5. The approved plan lands in `docs/plans/YYYY-MM-DD-<slug>.md`, committed by the agent.
+   On plain Approve the session ends. On **Approve & Implement** the same agent carries
+   on building it — worktree, per-phase implement+review subagents, pause-on-first-blocker
+   — and opens a PR, surfaced on the home card (§6, §12).
 
 ### Updating
 

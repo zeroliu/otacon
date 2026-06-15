@@ -67,9 +67,10 @@ machine-readable error you can fix (read the JSON); exit 2 = you invoked it wron
      thread's prior turns for context, but still answer the new \`q<n>\`.
    - \`answer\` → use it and continue; park again whenever you are waiting.
    - \`timeout\` → park again immediately. A timeout is NEVER completion.
-   - \`approved\` → \`git add\` + commit the plan file at the printed \`path\`, print a
-     one-line summary, and STOP. Planning only — implementation is another
-     session's job.
+   - \`approved\` → \`git add\` + commit the plan file at the printed \`path\`. Plain
+     \`approved\` (no \`implement\`) → print a one-line summary and STOP. \`approved\`
+     **with \`implement:true\`** → after committing, enter the **Implement loop**
+     (below) — do NOT stop; the session is now \`implementing\`.
    - \`deleted\` → the user deleted this session in the review UI. It is over:
      STOP. There is no approved plan and nothing to commit.
 6. **Never end your turn while the session is open.** Nothing to do = park in
@@ -80,7 +81,37 @@ machine-readable error you can fix (read the JSON); exit 2 = you invoked it wron
 
 - \`${cmd} start --title <t> [--quick]\` · \`${cmd} progress "<note>"\` ·
   \`${cmd} ask ...\` · \`${cmd} wait --timeout 540\` · \`${cmd} submit [--resolutions f]\` ·
-  \`${cmd} answer <q> --body "..."\` · \`${cmd} status\` · \`${cmd} open\`
+  \`${cmd} answer <q> --body "..."\` · \`${cmd} implement-done [--pr <url>] [--failed]\` ·
+  \`${cmd} status\` · \`${cmd} open\`
+
+## Implement loop (on \`approved\` with \`implement:true\`)
+
+You are the **orchestrator**: you only coordinate and narrate
+(\`${cmd} progress\` at each checkpoint) — every phase's real work runs in a fresh
+native subagent (Task tool, subscription-covered) so your own context stays lean.
+
+1. **Setup.** Commit the plan file at the event \`path\` (exactly as plain Approve),
+   then \`git worktree add .otacon/worktrees/<slug> -b otacon/impl-<slug>\` off that
+   commit (\`.otacon/\` is gitignored). \`${cmd} progress\` each checkpoint throughout.
+2. **Per phase, in order** (read the phases from the committed plan):
+   - \`${cmd} progress "phase N — implementing"\`; spawn an **implement+test**
+     subagent (Task tool) scoped to that phase's Goal/Files/Verification — it
+     implements and runs the phase Verification plus the repo gates.
+   - spawn a **separate** \`/code-review --fix\` subagent on the phase's working
+     diff; it applies findings; re-review. (\`/code-review\` effort is config — start
+     moderate so false positives don't become needless pauses.)
+   - **clean + green** → commit the phase and continue. **Blocked** (tests stay red,
+     review still flags, or a subagent is stuck) → on the FIRST blocker,
+     \`${cmd} ask\` with options \`retry|skip|abort|guidance\`, park in \`${cmd} wait\`,
+     and act on the answer. No auto-retry.
+3. **Finish.** \`gh pr create\` against the default branch (PR body = the plan
+   summary + the per-phase log; fall back to the local branch + path when there is
+   no remote), then \`${cmd} implement-done --pr <url>\` (or
+   \`${cmd} implement-done --failed\` on abort).
+
+While \`implementing\` the Stop hook still keeps you on the line — never end the turn
+until \`implement-done\`. Remind the user to keep the Mac awake (\`caffeinate -i\`) for
+a long build.
 
 ## Plan schema (linted on submit)
 
@@ -237,7 +268,9 @@ ${protocolCard("./bin/otacon")}`;
  * open otacon session exists in the cwd's repo. Plain sh, fast, fail-open —
  * any failure (daemon down, curl missing, no match) allows the stop. With no
  * local pointer, the open session is found by scanning the daemon registry for
- * a non-approved session whose repo equals the cwd's git root (DESIGN.md §7).
+ * a non-terminal session whose repo equals the cwd's git root (DESIGN.md §7) —
+ * `implementing` still blocks (the build is live); only the terminal states
+ * (approved/implemented/implement_failed) let the agent end its turn.
  */
 export const STOP_HOOK_SCRIPT = `#!/bin/sh
 # otacon Stop hook — ${MANAGED_MARKER}; reinstall overwrites this file.
@@ -252,10 +285,12 @@ root=$(cd "$root" 2>/dev/null && pwd -P) || exit 0
 port=\${OTACON_PORT:-4747}
 list=$(curl -fsS --max-time 2 "http://127.0.0.1:$port/api/sessions" 2>/dev/null) || exit 0
 # Split the compact registry array one session-object per line, keep this repo's
-# open (non-approved) sessions, take the first id. The repo match is exact: the
-# pattern includes the closing quote of the JSON value.
+# open (non-terminal) sessions, take the first id. The repo match is exact: the
+# pattern includes the closing quote of the JSON value. Terminal statuses
+# (approved/implemented/implement_failed) are over -- drop them so a finished
+# build no longer traps the agent, while an in-flight implementing still blocks.
 sid=$(printf '%s' "$list" | sed 's/},{/}\\
-{/g' | grep -F "\\"repo\\":\\"$root\\"" | grep -v '"status":"approved"' | sed -n '1s/.*"id":"\\([^"]*\\)".*/\\1/p')
+{/g' | grep -F "\\"repo\\":\\"$root\\"" | grep -vE '"status":"(approved|implemented|implement_failed)"' | sed -n '1s/.*"id":"\\([^"]*\\)".*/\\1/p')
 [ -n "$sid" ] || exit 0
 printf '{"decision":"block","reason":"otacon plan session %s is still open — run otacon wait --timeout 540 (Bash timeout 600000 ms) and keep handling events until the plan is approved; run otacon status to re-orient."}\\n' "$sid"
 exit 0

@@ -1613,6 +1613,232 @@ describe("approve and the status machine (M4)", () => {
   });
 });
 
+describe("Approve & Implement and the implement lifecycle (implement-approved-plan)", () => {
+  const submitValid = async (id: string) => {
+    const res = await app.request(`/api/sessions/${id}/submit`, {
+      method: "POST",
+      body: validPlanFor(id),
+    });
+    expect(res.status).toBe(200);
+  };
+  const approve = (id: string, body: unknown = {}) =>
+    postJson(`/api/sessions/${id}/approve`, body);
+  const implementDone = (id: string, body: unknown = {}) =>
+    postJson(`/api/sessions/${id}/implement-done`, body);
+  const statusOf = async (id: string): Promise<string> =>
+    ((await (await app.request(`/api/sessions/${id}`)).json()) as { status: string }).status;
+
+  test("approve {implement:true} flips to implementing and queues approved {implement:true}", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+
+    const res = await approve(session.id, { implement: true });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { implement: boolean; path: string };
+    expect(body.implement).toBe(true);
+    // Non-terminal: the session is now building, not over.
+    expect(await statusOf(session.id)).toBe("implementing");
+    expect(store.getSession(session.id)?.status).toBe("implementing");
+    // The artifact is still written exactly as plain Approve.
+    expect(body.path).toMatch(/^docs\/plans\/\d{4}-\d{2}-\d{2}-e2e-plan\.md$/);
+    expect(existsSync(join(repo, body.path))).toBeTrue();
+
+    // The wake-up carries the implement flag plus the same commit path.
+    const event = await app.request(`/api/sessions/${session.id}/events`);
+    expect(await event.json()).toEqual({
+      event: "approved",
+      session: session.id,
+      path: body.path,
+      implement: true,
+    });
+  });
+
+  test("plain approve (no flag / implement:false) flips to approved and queues no flag", async () => {
+    const noFlag = mintSession();
+    await submitValid(noFlag.id);
+    const a = await approve(noFlag.id);
+    expect(((await a.json()) as { implement: boolean }).implement).toBe(false);
+    expect(await statusOf(noFlag.id)).toBe("approved");
+    const aEvent = await app.request(`/api/sessions/${noFlag.id}/events`);
+    expect(await aEvent.json()).toEqual({
+      event: "approved",
+      session: noFlag.id,
+      path: expect.stringMatching(/^docs\/plans\//),
+    });
+
+    const falseFlag = mintSession();
+    await submitValid(falseFlag.id);
+    const b = await approve(falseFlag.id, { implement: false });
+    expect(((await b.json()) as { implement: boolean }).implement).toBe(false);
+    expect(await statusOf(falseFlag.id)).toBe("approved");
+    const bEvent = await app.request(`/api/sessions/${falseFlag.id}/events`);
+    const bPayload = (await bEvent.json()) as Record<string, unknown>;
+    expect(bPayload).not.toHaveProperty("implement");
+  });
+
+  test("approve validates implement is a boolean", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    const res = await approve(session.id, { implement: "yes" });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("E_BAD_REQUEST");
+  });
+
+  test("mutating verbs stay open while implementing, then refuse once terminal", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    expect((await approve(session.id, { implement: true })).status).toBe(200);
+    await app.request(`/api/sessions/${session.id}/events`); // drain the wake-up
+
+    // While implementing, the agent keeps narrating and asking.
+    expect((await postJson(`/api/sessions/${session.id}/progress`, { note: "phase 1" })).status).toBe(200);
+    const asked = await postJson(`/api/sessions/${session.id}/ask`, { question: "retry or skip?" });
+    expect(asked.status).toBe(201);
+
+    // Build finishes → implemented (terminal): every mutating verb now refuses.
+    expect((await implementDone(session.id, { pr: "https://example.test/pr/1" })).status).toBe(200);
+    expect(await statusOf(session.id)).toBe("implemented");
+    const attempts: [string, Response | Promise<Response>][] = [
+      ["progress", postJson(`/api/sessions/${session.id}/progress`, { note: "x" })],
+      ["ask", postJson(`/api/sessions/${session.id}/ask`, { question: "x" })],
+      ["comments", postJson(`/api/sessions/${session.id}/comments`, { items: [{ body: "x" }] })],
+    ];
+    for (const [verb, pending] of attempts) {
+      const res = await pending;
+      expect(res.status, `${verb} should 409 once implemented`).toBe(409);
+      expect(((await res.json()) as { error: { code: string } }).error.code, verb).toBe(
+        "E_SESSION_OVER",
+      );
+    }
+  });
+
+  test("implement_failed is terminal too — mutating verbs refuse", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await approve(session.id, { implement: true });
+    expect((await implementDone(session.id, { failed: true })).status).toBe(200);
+    expect(await statusOf(session.id)).toBe("implement_failed");
+    const res = await postJson(`/api/sessions/${session.id}/progress`, { note: "x" });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("E_SESSION_OVER");
+  });
+
+  test("a second approve on an implementing session is refused E_ALREADY_IMPLEMENTING", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    expect((await approve(session.id, { implement: true })).status).toBe(200);
+    const again = await approve(session.id, { implement: true });
+    expect(again.status).toBe(409);
+    expect(((await again.json()) as { error: { code: string } }).error.code).toBe(
+      "E_ALREADY_IMPLEMENTING",
+    );
+    // A plain re-approve is refused the same way.
+    const plain = await approve(session.id);
+    expect(plain.status).toBe(409);
+    expect(((await plain.json()) as { error: { code: string } }).error.code).toBe(
+      "E_ALREADY_IMPLEMENTING",
+    );
+  });
+
+  test("implement-done records the PR url, visible in the summary frame", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await approve(session.id, { implement: true });
+
+    const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
+    expect((await reader.next()).event).toBe("snapshot");
+
+    const res = await implementDone(session.id, { pr: "https://example.test/pr/42" });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      status: string;
+      prUrl?: string;
+      session: { status: string; prUrl?: string };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.status).toBe("implemented");
+    expect(body.prUrl).toBe("https://example.test/pr/42");
+    expect(body.session.status).toBe("implemented");
+    expect(body.session.prUrl).toBe("https://example.test/pr/42");
+
+    // The live session frame carries the flipped chip + the PR link.
+    const frame = await reader.next();
+    expect(frame.event).toBe("session");
+    const summary = (frame.data as { session: { status: string; prUrl?: string } }).session;
+    expect(summary.status).toBe("implemented");
+    expect(summary.prUrl).toBe("https://example.test/pr/42");
+    await reader.cancel();
+
+    // It persists on the registry session (and re-reads via the detail route).
+    expect(store.getSession(session.id)?.prUrl).toBe("https://example.test/pr/42");
+    const detail = (await (await app.request(`/api/sessions/${session.id}`)).json()) as {
+      prUrl?: string;
+    };
+    expect(detail.prUrl).toBe("https://example.test/pr/42");
+  });
+
+  test("implement-done {failed:true} flips to implement_failed; no pr is fine", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await approve(session.id, { implement: true });
+    const res = await implementDone(session.id, { failed: true });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { status: string; prUrl?: string };
+    expect(body.status).toBe("implement_failed");
+    expect(body.prUrl).toBeUndefined();
+    expect(store.getSession(session.id)?.prUrl).toBeUndefined();
+  });
+
+  test("implement-done on a non-implementing session 409s E_NOT_IMPLEMENTING", async () => {
+    // Fresh draft: never implementing.
+    const draft = mintSession();
+    const onDraft = await implementDone(draft.id, { pr: "https://example.test/pr/1" });
+    expect(onDraft.status).toBe(409);
+    expect(((await onDraft.json()) as { error: { code: string } }).error.code).toBe(
+      "E_NOT_IMPLEMENTING",
+    );
+
+    // Plain-approved (terminal, never entered implementing) is refused too.
+    const approved = mintSession();
+    await submitValid(approved.id);
+    await approve(approved.id);
+    const onApproved = await implementDone(approved.id, { failed: true });
+    expect(onApproved.status).toBe(409);
+    expect(((await onApproved.json()) as { error: { code: string } }).error.code).toBe(
+      "E_NOT_IMPLEMENTING",
+    );
+
+    // Unknown session 404s before the status check.
+    expect((await implementDone("otc_zzzzzz", {})).status).toBe(404);
+  });
+
+  test("a double implement-done refuses the second call", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await approve(session.id, { implement: true });
+    expect((await implementDone(session.id, { pr: "https://example.test/pr/1" })).status).toBe(200);
+    const second = await implementDone(session.id, { pr: "https://example.test/pr/2" });
+    expect(second.status).toBe(409);
+    expect(((await second.json()) as { error: { code: string } }).error.code).toBe(
+      "E_NOT_IMPLEMENTING",
+    );
+    // The second call never overwrote the first PR url.
+    expect(store.getSession(session.id)?.prUrl).toBe("https://example.test/pr/1");
+  });
+
+  test("implement-done validates pr is a non-empty string and failed is a boolean", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await approve(session.id, { implement: true });
+    expect((await implementDone(session.id, { pr: "   " })).status).toBe(400);
+    expect((await implementDone(session.id, { pr: 7 })).status).toBe(400);
+    expect((await implementDone(session.id, { failed: "yes" })).status).toBe(400);
+    // The session is still implementing — a rejected report changed nothing.
+    expect(await statusOf(session.id)).toBe("implementing");
+  });
+});
+
 describe("DELETE /api/sessions/:id (otacon clean, M5)", () => {
   test("404 on an unknown session", async () => {
     const res = await app.request("/api/sessions/otc_nope", { method: "DELETE" });
@@ -1650,6 +1876,29 @@ describe("DELETE /api/sessions/:id (otacon clean, M5)", () => {
     expect(existsSync(revisionPath(repo, session.id, 1))).toBe(false);
     expect(existsSync(join(repo, ".otacon", "archive", session.id, "r1.md"))).toBe(true);
     expect(existsSync(join(repo, ".otacon", "archive", session.id, "events.json"))).toBe(true);
+  });
+
+  test("archives an implemented session too — its plan is committed, so it is recoverable", async () => {
+    // A finished build (implemented/implement_failed) is terminal with a
+    // committed plan, exactly like approved — the archive branch is gated on
+    // TERMINAL_STATUSES, not the literal "approved", so the UI's "archived
+    // (recoverable)" promise (approved={isOver(status)}) holds.
+    const session = mintSession();
+    await app.request(`/api/sessions/${session.id}/submit`, {
+      method: "POST",
+      body: validPlanFor(session.id),
+    });
+    await postJson(`/api/sessions/${session.id}/approve`, { force: true, implement: true });
+    await postJson(`/api/sessions/${session.id}/implement-done`, {});
+    expect(store.getSession(session.id)?.status).toBe("implemented");
+
+    const res = await app.request(`/api/sessions/${session.id}`, { method: "DELETE" });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { archivedTo: string | null };
+    // Archived, not hard-removed: the dir moved under .otacon/archive/<id>/.
+    expect(body.archivedTo).toBe(join(repo, ".otacon", "archive", session.id));
+    expect(existsSync(sessionDir(repo, session.id))).toBe(false);
+    expect(existsSync(join(repo, ".otacon", "archive", session.id, "r1.md"))).toBe(true);
   });
 
   test("deletion publishes a `removed` frame on the index and per-session streams", async () => {

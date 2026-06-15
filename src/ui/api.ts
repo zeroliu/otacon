@@ -339,12 +339,27 @@ export type ApproveResult =
   | { ok: true; path: string; revision: number }
   | { ok: false; code: string; message?: string; unresolved?: number };
 
-export async function postApprove(id: string, force: boolean): Promise<ApproveResult> {
+/**
+ * Approve the plan (DESIGN.md §6 step 6, §12). `implement:true` is the Approve &
+ * Implement variant: the daemon finalizes the artifact exactly as a plain
+ * approve, then flips the session to `implementing` (not over) and wakes the
+ * agent with `implement:true` to build it. On that branch the SSE `implementing`
+ * frame drives the UI; the success shape is unchanged ({ok,path,revision}).
+ * `force` carries past the unresolved-threads warning; both fold into the body.
+ */
+export async function postApprove(
+  id: string,
+  force: boolean,
+  implement = false,
+): Promise<ApproveResult> {
   try {
+    const request: { force?: true; implement?: true } = {};
+    if (force) request.force = true;
+    if (implement) request.implement = true;
     const res = await fetch(`/api/sessions/${id}/approve`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(force ? { force: true } : {}),
+      body: JSON.stringify(request),
     });
     const body = (await res.json()) as {
       path?: string;

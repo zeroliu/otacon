@@ -1677,3 +1677,80 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   diagram should satisfy it too), the ~90% target proves wrong, or a forced TL;DR /
   collapse-all altitude control earns its keep after all (both were considered and dropped
   — D6, D12).
+
+## Approve & Implement: the same live agent orchestrates per-phase native subagents
+
+- **Decision:** **Approve & Implement** keeps the planning agent on the line after
+  approve and has *it* orchestrate the build — it commits the plan, opens a worktree,
+  and walks the phases, spawning a fresh **native in-session subagent** (Task tool) for
+  each phase's implement+test and a separate one for `/code-review --fix`. The
+  orchestrator only coordinates and narrates (`otacon progress`); it does not write code
+  itself. The rejected alternatives: a **detached fresh-spawn** that the daemon launches
+  unattended (the old `spawn-sessions-from-web` plan, now removed), and a **daemon/SDK-
+  driven** build.
+- **Why:** Same-agent continuity means the builder already holds the full planning
+  context and the grill rationale, with no handoff; per-phase subagents solve the "one
+  long session degrades, gets lazy, stops following the plan" failure (DESIGN.md §1.4) by
+  giving every phase fresh context while the orchestrator's own context stays lean. Native
+  subagents are subscription-covered exactly like the parent, so the build keeps the
+  zero-API-spend invariant (§13) the daemon-/SDK-driven option would break. The detached
+  fresh-spawn bought phone-only/unattended runs but at the cost of a disconnected fire-and-
+  forget process with no live reviewer in the loop — against otacon's whole identity of
+  keeping you on the codec.
+- **Revisit when:** Truly unattended phone-only builds become a real need (then the
+  detached `snake` variant, DESIGN.md §14, comes back as a sibling, not a replacement), or
+  native subagents stop being subscription-covered.
+
+## Pause-and-ask on the FIRST blocked phase, no auto-retry
+
+- **Decision:** When a phase is blocked — tests stay red, `/code-review` still flags, or
+  a subagent is stuck — the orchestrator stops on the **first** blocker, posts an
+  `otacon ask` (retry | skip | abort | guidance), parks in `wait`, and acts on the answer.
+  It does **not** auto-retry a few times before surfacing. `/code-review` effort is a
+  config knob, started moderate.
+- **Why:** otacon's identity is keeping the human in the loop from the phone; max control
+  beats max autonomy here, and surfacing immediately is the honest move for a tool whose
+  point is review. Bounded auto-retry was the considered alternative (fewer
+  interruptions), but it spends time and tokens guessing at a fix the human might resolve
+  in one tap, and an auto-retry that "succeeds" by drifting from the plan is exactly the
+  laziness the per-phase split exists to prevent. The moderate review effort keeps
+  false-positive findings from turning into needless pauses.
+- **Revisit when:** Real builds show the first-blocker pause interrupting too often on
+  transient/flaky failures a single retry would clear (then a *bounded* retry-then-ask),
+  or the review-effort default proves wrong.
+
+## A distinct terminal `implement_failed`, not folding abort back to `approved`
+
+- **Decision:** An aborted/failed build lands in its own terminal status
+  `implement_failed` (via `otacon implement-done --failed`), distinct from `implemented`
+  and from `approved`. The terminal *set* is `{approved, implemented, implement_failed}`;
+  `implementing` is non-terminal. **Provisional.**
+- **Why:** The home card's status chip (D4) assumes a visibly-distinct failed state, and
+  folding a failed build back to `approved` would erase that a build was attempted and
+  abandoned — the card would read identically to a never-built approved plan, hiding a
+  half-finished worktree/branch on disk the user still has to clean up. A separate state
+  keeps "approved, never built" and "built, failed" legibly apart for both the chip and
+  the open-verb guard.
+- **Revisit when:** The terminal-state naming settles (it is flagged provisional in the
+  plan's Open Questions) — e.g. if a single `done`/`closed` state with an outcome field
+  proves cleaner than two sibling terminal statuses.
+
+## Build layout: worktree under .otacon, one commit per green phase, PR vs default branch
+
+- **Decision:** The build runs in a git worktree at `.otacon/worktrees/<slug>`
+  (gitignored, like the rest of `.otacon/`) on branch `otacon/impl-<slug>` rooted at the
+  plan-doc commit; each clean+green phase is its own commit; the finish is a `gh pr
+  create` against the repo's **default branch**, with a fall back to noting the local
+  branch + path when there is no remote. `otacon clean` should prune the worktree and
+  branch of a finished/aborted build.
+- **Why:** A worktree isolates the build from the user's working tree (the planning
+  session's checkout stays untouched), and putting it under the already-gitignored
+  `.otacon/` needs no new ignore rule. Rooting the branch at the plan commit ties the
+  implementation to exactly the approved artifact. Per-phase commits make the build
+  legible and bisectable and give the pause-on-blocker flow a clean rollback point; the
+  local-branch fallback keeps the loop working in a repo with no remote. **Open question:**
+  per-phase commits vs a final squash, and whether the PR bundles the plan-doc commit, are
+  not yet settled — easy to flip since they only affect the finish step, not the protocol.
+- **Revisit when:** The commit-granularity / squash question is decided, builds want to
+  target a non-default base branch, or worktree-under-`.otacon` collides with the build's
+  own tooling.

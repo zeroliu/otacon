@@ -17,6 +17,7 @@ import { isAbsolute, join } from "node:path";
 import { loadConfig } from "../shared/config.js";
 import { otaconPort } from "../shared/paths.js";
 import { parseQuestionSpec } from "../shared/question-spec.js";
+import { TERMINAL_STATUSES } from "../shared/types.js";
 import type {
   Anchor,
   CommentItem,
@@ -84,14 +85,16 @@ const badRequest = (c: AppContext, message: string) =>
 const notFound = (c: AppContext, message: string) =>
   c.json({ error: { code: "E_NOT_FOUND", message } }, 404);
 const timeoutEvent = (c: AppContext) => c.json({ event: "timeout" });
-// Approved sessions are over (DESIGN.md §6, §12 status machine): every
-// state-mutating verb refuses — the CLI's pointer rules guard its side, but
-// curl/UI/--session calls must hit the same wall. Each route checks *after*
+// A session in a terminal state is over (DESIGN.md §6, §12 status machine):
+// every state-mutating verb refuses — the CLI's pointer rules guard its side,
+// but curl/UI/--session calls must hit the same wall. Each route checks *after*
 // its body await (see sessionEnded in createApp): a pre-await snapshot goes
-// stale when a concurrent approve lands while the bytes stream in.
+// stale when a concurrent approve lands while the bytes stream in. (Note
+// `implementing` is non-terminal — it deliberately re-opens the mutating verbs
+// while the agent builds the approved plan, so it does NOT trip this wall.)
 const sessionOver = (c: AppContext, id: string) =>
   c.json(
-    { error: { code: "E_SESSION_OVER", message: `session ${id} is approved — the session is over` } },
+    { error: { code: "E_SESSION_OVER", message: `session ${id} is over (terminal)` } },
     409,
   );
 
@@ -188,8 +191,13 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   // body yields, and a concurrent approve can flip the session mid-read — a
   // status captured before the await would let the stale handler mutate (or
   // re-approve) an ended session. Everything from this re-check to the state
-  // writes is synchronous, so the answer cannot rot again.
-  const sessionEnded = (id: string): boolean => store.getSession(id)?.status === "approved";
+  // writes is synchronous, so the answer cannot rot again. Gates on the
+  // terminal set (TERMINAL_STATUSES), so an `implementing` session — which
+  // re-opens the mutating verbs — sails through.
+  const sessionEnded = (id: string): boolean => {
+    const status = store.getSession(id)?.status;
+    return status !== undefined && TERMINAL_STATUSES.includes(status);
+  };
 
   // Agent presence (DESIGN.md §6): ephemeral, in-memory liveness only — the
   // epoch-ms of each session's last agent contact. Every mutating verb and each
@@ -368,21 +376,25 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   });
 
   // DELETE removes a session from the registry, status-branched on whether it
-  // has committed value (DESIGN.md §6, §12). **Approved**: its plan + transcript
+  // has committed value (DESIGN.md §6, §12). **Terminal** (approved, plus
+  // implemented/implement_failed once a build finishes): its plan + transcript
   // are committed under docs/plans/, so the working dir is *archived* to
   // .otacon/archive/ (recoverable) — `otacon clean` and the UI's delete of an
-  // approved session both take this path. **Pending** (no committed artifact):
-  // the working dir is *hard-removed* (permanent), and any parked agent is woken
-  // with a terminal `deleted` event so its `wait` loop stops cleanly. Both
-  // publish the same terminal `removed` frame; the response carries `archivedTo`
-  // (the archive path, or null for a hard-delete).
+  // over session both take this path. Gated on TERMINAL_STATUSES so this split
+  // agrees with the UI's `over` (which passes `approved={isOver(status)}` to the
+  // confirm sheet) — otherwise an `implemented` delete would promise archival
+  // and silently hard-delete. **Non-terminal** (draft/in_review/revising, and a
+  // live `implementing` build): the working dir is *hard-removed* (permanent),
+  // and any parked agent is woken with a terminal `deleted` event so its `wait`
+  // loop stops cleanly. Both publish the same terminal `removed` frame; the
+  // response carries `archivedTo` (the archive path, or null for a hard-delete).
   app.delete("/api/sessions/:id", (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
     const queue = queueFor(session.id);
     const pendingEvents = queue.size;
     let archivedTo: string | null = null;
-    if (session.status === "approved") {
+    if (TERMINAL_STATUSES.includes(session.status)) {
       // Deregister first — it can throw (registry flush), and an early queue
       // eviction would orphan in-flight ack tracking for a session that is in
       // fact still registered. Close the evicted instance before the move so a
@@ -990,11 +1002,15 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     return c.json({ ok: true, session: session.id, note: text });
   });
 
-  // Approve ends the session (DESIGN.md §6 step 6, §12): the daemon writes
-  // docs/plans/YYYY-MM-DD-<slug>.md (final revision, status: approved, grill
-  // transcript appended), flips the session approved — after which every
-  // mutating verb refuses — and queues the `approved` event for the parked
-  // agent to commit the file. Unresolved threads refuse 409 unless {force}.
+  // Approve ends the planning session (DESIGN.md §6 step 6, §12): the daemon
+  // writes docs/plans/YYYY-MM-DD-<slug>.md (final revision, status: approved,
+  // grill transcript appended) and queues the `approved` event for the parked
+  // agent to commit the file. Plain Approve flips the session `approved` —
+  // terminal, every mutating verb then refuses. **Approve & Implement**
+  // ({implement:true}) instead flips it to the non-terminal `implementing` and
+  // sets `implement:true` on the event: the agent commits the plan exactly as
+  // plain Approve, then proceeds to build it (DESIGN.md §12). Unresolved
+  // threads refuse 409 unless {force}.
   app.post("/api/sessions/:id/approve", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
@@ -1004,9 +1020,28 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     // snapshot in_review, but the loser re-checks here after its body await
     // and refuses instead of writing a second (-2 suffixed) artifact.
     if (sessionEnded(session.id)) return sessionOver(c, session.id);
+    // `implementing` is non-terminal, so it slips past sessionEnded — but a
+    // build is already under way, and re-approving would re-write the artifact
+    // and re-queue the wake-up. Refuse it explicitly (the second tap on an
+    // Approve & Implement, or a stray approve while the agent builds).
+    if (store.getSession(session.id)?.status === "implementing") {
+      return c.json(
+        {
+          error: {
+            code: "E_ALREADY_IMPLEMENTING",
+            message: `session ${session.id} is already implementing`,
+          },
+        },
+        409,
+      );
+    }
     if (body.force !== undefined && typeof body.force !== "boolean") {
       return badRequest(c, "force must be a boolean");
     }
+    if (body.implement !== undefined && typeof body.implement !== "boolean") {
+      return badRequest(c, "implement must be a boolean");
+    }
+    const implement = body.implement === true;
     const state = store.readState(session.id);
     if (state.revision === 0) {
       return c.json(
@@ -1043,10 +1078,16 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     });
     const relPath = pickArtifactRelPath(session.repo, session.title, localDate());
     // Artifact on disk first, then the status flip (the registry is the commit
-    // point — same ordering argument as createSession), then the wake-up.
+    // point — same ordering argument as createSession), then the wake-up. The
+    // artifact + `path` are identical on both branches: the agent commits the
+    // plan the same way; `implement` only tells it whether to keep building.
     writeFileAtomic(join(session.repo, relPath), artifact);
-    const updated = store.updateSession(session.id, { status: "approved" });
-    const payload: EventPayload = { event: "approved", session: session.id, path: relPath };
+    const updated = store.updateSession(session.id, {
+      status: implement ? "implementing" : "approved",
+    });
+    const payload: EventPayload = implement
+      ? { event: "approved", session: session.id, path: relPath, implement: true }
+      : { event: "approved", session: session.id, path: relPath };
     queue.enqueue(payload, store.bumpCounter(session.id, "eventSeq"));
     publishSession(updated); // after the enqueue, so the summary carries the fresh pending count
     return c.json({
@@ -1055,7 +1096,48 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       revision: state.revision,
       path: relPath,
       unresolved,
+      implement,
     });
+  });
+
+  // Approve & Implement's outcome report (DESIGN.md §6, §12): once the agent has
+  // built the approved plan it reports here. `failed:true` flips the session
+  // `implement_failed`, otherwise `implemented` (both terminal). A `pr` URL is
+  // persisted on the registry session so the home card can surface the link.
+  // The session must currently be `implementing` — that check runs FIRST, so a
+  // double-report (the second sees a terminal state) and a stray call on a
+  // never-implementing session both get a clear E_NOT_IMPLEMENTING instead of
+  // the generic terminal wall.
+  app.post("/api/sessions/:id/implement-done", async (c) => {
+    const session = sessionFor(c);
+    if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    const body = (await readJsonBody(c)) ?? {};
+    bumpContact(session.id);
+    if (store.getSession(session.id)?.status !== "implementing") {
+      return c.json(
+        {
+          error: {
+            code: "E_NOT_IMPLEMENTING",
+            message: `session ${session.id} is not implementing`,
+          },
+        },
+        409,
+      );
+    }
+    const { pr, failed } = body;
+    if (pr !== undefined && (typeof pr !== "string" || pr.trim() === "")) {
+      return badRequest(c, "pr must be a non-empty string");
+    }
+    if (failed !== undefined && typeof failed !== "boolean") {
+      return badRequest(c, "failed must be a boolean");
+    }
+    const status = failed === true ? "implement_failed" : "implemented";
+    const updated = store.updateSession(session.id, {
+      status,
+      ...(typeof pr === "string" ? { prUrl: pr } : {}),
+    });
+    publishSession(updated); // the chip flips + the PR link appears live
+    return c.json({ ok: true, session: updated, status, prUrl: updated.prUrl });
   });
 
   app.get("/api/sessions/:id/revisions/:n", (c) => {

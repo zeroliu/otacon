@@ -11,7 +11,7 @@ import { relativeTime, repoName } from "./format";
 import { DeleteDialog } from "./review/delete";
 import { navigate } from "./router";
 import { unreadCount } from "./seen";
-import { partitionByApproval } from "./session-filter";
+import { isOver, partitionByApproval } from "./session-filter";
 import { useNow } from "./tick";
 
 export function IndexScreen() {
@@ -19,11 +19,13 @@ export function IndexScreen() {
   // One ticking clock for the whole list: keeps "3m ago" and every card's
   // agent-presence dot honest while the page idles between SSE frames.
   const now = useNow(30_000);
-  // Approved sessions leave the main list for a collapsed section below
-  // (DESIGN.md §10) so finished plans stop crowding what still needs you; the
-  // switcher hides them outright (§7). One shared split keeps the two surfaces
-  // in agreement.
-  const { active, approved } = partitionByApproval(sessions);
+  // Over sessions (the terminal set: approved/implemented/implement_failed)
+  // leave the main list for a collapsed section below (DESIGN.md §10, §12) so
+  // finished plans stop crowding what still needs you; the switcher hides them
+  // outright (§7). `implementing` is NOT over — the agent is still building, so
+  // it stays in the active list. One shared split keeps the two surfaces in
+  // agreement.
+  const { active, over } = partitionByApproval(sessions);
   return (
     <div className="page">
       <header className="masthead">
@@ -55,7 +57,7 @@ export function IndexScreen() {
               ))}
             </main>
           )}
-          {approved.length > 0 && <ApprovedSection sessions={approved} now={now} />}
+          {over.length > 0 && <ApprovedSection sessions={over} now={now} />}
         </>
       )}
     </div>
@@ -63,11 +65,12 @@ export function IndexScreen() {
 }
 
 /**
- * Approved sessions, collapsed by default behind an `approved (n)` heading (D4):
- * declutters the main list while keeping finished plans one tap away. Reuses the
- * activity panel's disclosure idiom (button + aria-expanded + caret + useState)
- * and the same `SessionCard` rows, so an approved plan opens read-only from here
- * (and is the only place it opens — the switcher no longer lists it).
+ * Over sessions — the terminal set (approved, plus implemented/implement_failed
+ * once a build finishes) — collapsed by default behind an `approved (n)` heading
+ * (D4): declutters the main list while keeping finished plans one tap away.
+ * Reuses the activity panel's disclosure idiom (button + aria-expanded + caret +
+ * useState) and the same `SessionCard` rows, so an over plan opens read-only
+ * from here (and is the only place it opens — the switcher no longer lists it).
  */
 function ApprovedSection({ sessions, now }: { sessions: LiveSession[]; now: number }) {
   const [open, setOpen] = useState(false);
@@ -108,9 +111,11 @@ function SessionCard({
   const unread = unreadCount(session.id, session.revision) > 0;
   const href = `/s/${session.id}`;
   const style = { ...accentStyle(session.id), "--i": index } as CSSProperties;
-  // Any session can be deleted from the list (DESIGN.md §10): approved ones are
-  // archived (recoverable, like `otacon clean`), pending ones hard-deleted.
-  const approved = session.status === "approved";
+  // Any session can be deleted from the list (DESIGN.md §10): over (terminal)
+  // ones are archived (recoverable, like `otacon clean`), still-live ones
+  // hard-deleted — the daemon gates on the same terminal set, so this drives
+  // only the confirm copy.
+  const over = isOver(session.status);
   const [deleting, setDeleting] = useState(false);
   const onClick = (event: MouseEvent) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey) return;
@@ -146,6 +151,22 @@ function SessionCard({
             lastContactAt={session.lastContactAt}
             now={now}
           />
+          {/* The PR the agent opened once the build finished (DESIGN.md §12):
+              surfaced beside the chip so an implemented plan is one tap from its
+              code review. New tab — leaving the codec for GitHub. The click is
+              swallowed so it doesn't navigate the card-link underneath. */}
+          {session.prUrl !== undefined && (
+            <a
+              className="card-pr"
+              href={session.prUrl}
+              target="_blank"
+              rel="noreferrer noopener"
+              title={session.prUrl}
+              onClick={(event) => event.stopPropagation()}
+            >
+              PR ↗
+            </a>
+          )}
           <span className="card-time">{relativeTime(session.updatedAt, now)}</span>
           <button
             type="button"
@@ -166,7 +187,7 @@ function SessionCard({
       {deleting && (
         <DeleteDialog
           sessionId={session.id}
-          approved={approved}
+          approved={over}
           onClose={() => setDeleting(false)}
           // The `removed` SSE frame drops the card; closing state is housekeeping.
           onDeleted={() => setDeleting(false)}

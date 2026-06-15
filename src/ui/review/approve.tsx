@@ -1,11 +1,17 @@
-// The approve flow (DESIGN.md §6 step 6, §9, §10): a deliberate control —
+// The approve flow (DESIGN.md §6 step 6, §9, §10, §12): a deliberate control —
 // no keyboard shortcut exists, on purpose — opening a confirm sheet whose
-// copy is honest about what happens: the daemon finalizes rN into docs/plans/
-// (the exact filename is picked at approve time, so only the folder is
-// promised) and the session ends. Unresolved threads answer 409 with the
-// count; the sheet flips to its amber warning state and "approve anyway"
-// retries with force. After the flip the screen goes read-only behind the
-// quiet approved notice.
+// copy is honest about what happens. Two primary actions:
+//   • finalize & end — the daemon writes rN into docs/plans/ (the exact filename
+//     is picked at approve time, so only the folder is promised), the agent
+//     commits it, and the session is over.
+//   • approve & implement — same finalize+commit, but the agent then keeps
+//     building (worktree → per-phase implement+review loop → PR); the session
+//     stays live as `implementing` rather than ending.
+// Unresolved threads answer 409 with the count; the sheet flips to its amber
+// warning state and "approve anyway" retries with force — re-firing the SAME
+// variant the user picked (the warn stage remembers it). A plain approve ends
+// read-only behind the quiet approved notice; an implement approve hands off to
+// the live `implementing` frame.
 
 import { useEffect, useState } from "react";
 import { postApprove } from "../api";
@@ -21,12 +27,21 @@ export function ApproveDialog({
   sessionId: string;
   revision: number;
   onClose: () => void;
-  /** Receives the artifact's repo-relative path; the session frame flips the UI. */
-  onApproved: (path: string) => void;
+  /**
+   * Receives the artifact's repo-relative path; the session frame flips the UI.
+   * `implement` is the chosen variant — the caller leaves the screen interactive
+   * for it (the `implementing` frame drives the UI), read-only for a plain end.
+   */
+  onApproved: (path: string, implement: boolean) => void;
 }) {
   const [stage, setStage] = useState<Stage>({ kind: "confirm" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The variant a force retry must re-fire. Set when the unresolved-threads
+  // warning bounces the first attempt, so "approve anyway" carries the same
+  // implement flag the user chose at the confirm stage (rather than silently
+  // downgrading an Approve & Implement to a plain approve).
+  const [pendingImplement, setPendingImplement] = useState(false);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -36,17 +51,18 @@ export function ApproveDialog({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const fire = (force: boolean) => {
+  const fire = (force: boolean, implement: boolean) => {
     if (busy) return;
     setBusy(true);
     setError(null);
-    void postApprove(sessionId, force).then((result) => {
+    void postApprove(sessionId, force, implement).then((result) => {
       setBusy(false);
       if (result.ok) {
-        onApproved(result.path);
+        onApproved(result.path, implement);
         return;
       }
       if (!force && result.code === "E_UNRESOLVED_THREADS" && result.unresolved !== undefined) {
+        setPendingImplement(implement);
         setStage({ kind: "warn", unresolved: result.unresolved });
         return;
       }
@@ -82,12 +98,15 @@ export function ApproveDialog({
         {stage.kind === "confirm" ? (
           <>
             <p className="approve-copy">
-              Finalize <strong>r{revision}</strong> → <code>docs/plans/</code> and end the
-              session.
+              Finalize <strong>r{revision}</strong> → <code>docs/plans/</code>; the agent commits
+              it. Then either end here, or keep the agent building.
             </p>
             <p className="approve-sub">
-              otacond writes the approved plan (interview transcript appended) into the repo's
-              docs/plans/; the agent commits it. No revisions after this — the session is over.
+              <strong>Finalize &amp; end</strong> stops after the commit — no revisions after
+              this, the session is over. <strong>Approve &amp; implement</strong> hands the same
+              agent the build: it opens a worktree and walks the phases (implement → review → fix
+              → commit), opening a PR when every phase is green. The session stays live as{" "}
+              <em>implementing</em> and asks you on the first blocker.
             </p>
           </>
         ) : (
@@ -98,8 +117,9 @@ export function ApproveDialog({
               or questions still unanswered.
             </p>
             <p className="approve-sub">
-              Approving anyway finalizes the plan as it stands; the open threads end with the
-              session.
+              {pendingImplement
+                ? "Implementing anyway finalizes the plan as it stands and starts the build; the open threads close unaddressed."
+                : "Approving anyway finalizes the plan as it stands; the open threads end with the session."}
             </p>
           </>
         )}
@@ -111,22 +131,40 @@ export function ApproveDialog({
             cancel
           </button>
           {stage.kind === "confirm" ? (
-            <button
-              type="button"
-              className="btn btn-approve"
-              disabled={busy}
-              onClick={() => fire(false)}
-            >
-              {busy ? "finalizing…" : "✓ finalize & end"}
-            </button>
+            <>
+              <button
+                type="button"
+                className="btn btn-approve"
+                disabled={busy}
+                onClick={() => fire(false, false)}
+              >
+                {busy ? "finalizing…" : "✓ finalize & end"}
+              </button>
+              <button
+                type="button"
+                className="btn btn-implement"
+                disabled={busy}
+                onClick={() => fire(false, true)}
+              >
+                {busy ? "starting…" : "⚙ approve & implement"}
+              </button>
+            </>
           ) : (
             <button
               type="button"
               className="btn btn-force"
               disabled={busy}
-              onClick={() => fire(true)}
+              // Re-fire the SAME variant the user chose: an Approve & Implement
+              // that hit unresolved threads must still implement on retry.
+              onClick={() => fire(true, pendingImplement)}
             >
-              {busy ? "approving…" : "approve anyway"}
+              {busy
+                ? pendingImplement
+                  ? "starting…"
+                  : "approving…"
+                : pendingImplement
+                  ? "implement anyway"
+                  : "approve anyway"}
             </button>
           )}
         </div>
