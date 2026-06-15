@@ -1,15 +1,29 @@
 // The /settings screen (DESIGN.md §6 config surface): toggle User | Project
 // scope, pick the Project repo, surface the exact target file the scope writes,
 // and render every config field with its current value (schema default shown as
-// the placeholder when unset). Phase 3 is render + navigation only — inputs hold
-// local state but there is no Save/validation/reset/POST yet (Phase 4).
+// the placeholder when unset). Phase 4 makes the fields editable and saveable:
+// a Save posts a *sparse* payload (settings-form.buildPayload) that REPLACES the
+// scope file, so the form models the complete desired override set. 422 errors
+// render inline; each field can be reset to inherit (cleared from the payload).
 
 import type { ChangeEvent } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ConfigField, ConfigScope } from "./api";
-import { useConfig, useSessions } from "./api";
+import { saveConfig, useConfig, useSessions } from "./api";
 import { linkClick } from "./router";
-import { currentValue, distinctRepos, fieldsBySection, isSet } from "./settings";
+import { distinctRepos, fieldsBySection } from "./settings";
+import type { FormState } from "./settings-form";
+import {
+  buildPayload,
+  clearField,
+  errorsByField,
+  fieldId,
+  fieldState,
+  initFormState,
+  isModified,
+  setFieldBool,
+  setFieldText,
+} from "./settings-form";
 
 type Scope = "user" | "project";
 
@@ -29,7 +43,7 @@ export function SettingsScreen() {
   // Only project scope needs a repo; the GET omits the param (so no project
   // scope comes back) until one is chosen.
   const repoForFetch = scope === "project" && projectRepo !== "" ? projectRepo : undefined;
-  const { schema, scopes, loading, error } = useConfig(repoForFetch);
+  const { schema, scopes, loading, error, reload } = useConfig(repoForFetch);
 
   // The scope file to edit. Project scope only resolves once an *absolute* repo
   // comes back from the daemon (it omits the project scope otherwise), so a
@@ -60,7 +74,14 @@ export function SettingsScreen() {
       ) : target === undefined ? (
         <p className="settings-inert">No project config for this repo — it must be an absolute path.</p>
       ) : (
-        <ScopeFields schema={schema} target={target} />
+        <ScopeFields
+          key={`${scope}:${repoForFetch ?? ""}`}
+          schema={schema}
+          target={target}
+          scope={scope}
+          repo={scope === "project" ? target.repo : undefined}
+          onSaved={reload}
+        />
       )}
     </div>
   );
@@ -115,8 +136,89 @@ function RepoPicker({
   );
 }
 
-/** The prominent target-file banner + the schema fields for the active scope. */
-function ScopeFields({ schema, target }: { schema: ConfigField[]; target: ConfigScope }) {
+/** The save lifecycle the footer renders from. `saved` is the transient "✓" tick. */
+type SaveStatus =
+  | { kind: "idle" }
+  | { kind: "saving" }
+  | { kind: "saved" }
+  | { kind: "error"; message: string };
+
+/**
+ * The prominent target-file banner + the editable schema fields for the active
+ * scope, plus the Save action. Owns the form state (settings-form): seeded from
+ * the scope's sparse `values`, re-seeded whenever the fetched values change
+ * (a save's reload, or a scope/repo switch — the parent also re-keys this
+ * component so a switch is a clean remount). Save posts the buildPayload sparse
+ * body; 422 errors render inline; each field resets to inherit independently.
+ */
+function ScopeFields({
+  schema,
+  target,
+  scope,
+  repo,
+  onSaved,
+}: {
+  schema: ConfigField[];
+  target: ConfigScope;
+  scope: Scope;
+  repo: string | undefined;
+  onSaved: () => void;
+}) {
+  // The seeded baseline (what's persisted) drives the "modified" markers; `form`
+  // is the live edit state. Reseed both when the fetched values change.
+  const seeded = useMemo(() => initFormState(schema, target.values), [schema, target.values]);
+  const [form, setForm] = useState<FormState>(seeded);
+  const [status, setStatus] = useState<SaveStatus>({ kind: "idle" });
+  const [errors, setErrors] = useState<Map<string, string>>(() => new Map());
+
+  // A save's await resolves on the next tick; if the user switched scope/repo
+  // meanwhile the parent re-keys (remounts) this component, so guard the
+  // post-await setState + reload against the dead instance.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  // A save's reload (or a same-component values change) re-seeds the form to the
+  // freshly persisted state, clearing in-flight 422 errors.
+  useEffect(() => {
+    setForm(seeded);
+    setErrors(new Map());
+  }, [seeded]);
+
+  const onSave = async (): Promise<void> => {
+    setStatus({ kind: "saving" });
+    const values = buildPayload(form, schema);
+    const result = await saveConfig(scope, repo, values);
+    if (!mounted.current) return;
+    if (result.ok) {
+      setErrors(new Map());
+      setStatus({ kind: "saved" });
+      onSaved(); // re-fetch so displayed values reflect the persisted state
+    } else if (result.status === 422) {
+      setErrors(errorsByField(result.fieldErrors ?? []));
+      setStatus({ kind: "error", message: "some fields are invalid — see below" });
+    } else {
+      setStatus({ kind: "error", message: result.error?.message ?? "save failed" });
+    }
+  };
+
+  // Clear the transient "Saved ✓" tick after a beat (back to idle).
+  useEffect(() => {
+    if (status.kind !== "saved") return;
+    const t = setTimeout(() => setStatus({ kind: "idle" }), 2400);
+    return () => clearTimeout(t);
+  }, [status]);
+
+  const editField = (next: FormState): void => {
+    setForm(next);
+    // A fresh edit invalidates the saved tick / stale error banner.
+    setStatus((s) => (s.kind === "idle" || s.kind === "saving" ? s : { kind: "idle" }));
+  };
+
   return (
     <>
       <div className="path-banner">
@@ -127,75 +229,129 @@ function ScopeFields({ schema, target }: { schema: ConfigField[]; target: Config
         <section key={section} className="settings-section">
           <h2 className="settings-section-title">{section}</h2>
           {fields.map((field) => (
-            <FieldRow key={`${field.section}.${field.key}`} field={field} target={target} />
+            <FieldRow
+              key={fieldId(field)}
+              field={field}
+              state={fieldState(form, field)}
+              modified={isModified(form, seeded, field)}
+              error={errors.get(fieldId(field))}
+              onText={(text) => editField(setFieldText(form, field, text))}
+              onBool={(value) => editField(setFieldBool(form, field, value))}
+              onClear={() => editField(clearField(form, field))}
+            />
           ))}
         </section>
       ))}
+      <SaveBar status={status} onSave={onSave} />
     </>
   );
 }
 
+/** The sticky-feel save footer: the button plus the saved/error affordance. */
+function SaveBar({ status, onSave }: { status: SaveStatus; onSave: () => void }) {
+  return (
+    <div className="settings-save">
+      <button
+        type="button"
+        className="btn btn-primary settings-save-btn"
+        disabled={status.kind === "saving"}
+        onClick={onSave}
+      >
+        {status.kind === "saving" ? "saving…" : "save"}
+      </button>
+      {status.kind === "saved" && (
+        <span className="settings-saved" role="status">
+          saved ✓
+        </span>
+      )}
+      {status.kind === "error" && (
+        <span className="settings-save-error" role="alert">
+          {status.message}
+        </span>
+      )}
+    </div>
+  );
+}
+
 /**
- * One config field: label + description and a type-driven input, seeded from the
- * scope's current value (the schema default shown as the placeholder when
- * unset). Local state only — no save/validation/reset in Phase 3.
+ * One config field: label + description, a type-driven input, an inline error
+ * slot, and a reset-to-inherit control (hidden when the field is already
+ * inheriting). The input is controlled by the lifted form state; the schema
+ * default shows as the placeholder / unchecked fallback when unset.
  */
-function FieldRow({ field, target }: { field: ConfigField; target: ConfigScope }) {
-  const set = isSet(target.values, field);
-  const value = currentValue(target.values, field);
+function FieldRow({
+  field,
+  state,
+  modified,
+  error,
+  onText,
+  onBool,
+  onClear,
+}: {
+  field: ConfigField;
+  state: ReturnType<typeof fieldState>;
+  modified: boolean;
+  error: string | undefined;
+  onText: (text: string) => void;
+  onBool: (value: boolean) => void;
+  onClear: () => void;
+}) {
+  const reset = state.set ? (
+    <button type="button" className="field-reset" onClick={onClear} title="reset to inherited default">
+      reset
+    </button>
+  ) : null;
 
   if (field.type === "bool") {
     return (
-      <label className="field-row field-row-bool">
+      <div className={`field-row field-row-bool${modified ? " field-modified" : ""}`}>
         <span className="field-text">
-          <span className="field-name">{field.label}</span>
+          <span className="field-name">
+            {field.label}
+            {modified && <span className="field-dot" aria-hidden="true" />}
+          </span>
           {field.description && <span className="field-desc">{field.description}</span>}
+          {error && <span className="field-error">{error}</span>}
         </span>
-        <BoolInput field={field} initial={set ? Boolean(value) : Boolean(field.default)} />
-      </label>
+        <span className="field-control">
+          {reset}
+          <input
+            className="field-checkbox"
+            type="checkbox"
+            checked={state.set ? state.bool : Boolean(field.default)}
+            aria-label={field.label}
+            onChange={(e) => onBool(e.target.checked)}
+          />
+        </span>
+      </div>
     );
   }
 
+  const onChange = (e: ChangeEvent<HTMLInputElement>) => onText(e.target.value);
   return (
-    <label className="field-row">
+    <div className={`field-row${modified ? " field-modified" : ""}`}>
       <span className="field-text">
-        <span className="field-name">{field.label}</span>
+        <span className="field-name">
+          {field.label}
+          {modified && <span className="field-dot" aria-hidden="true" />}
+        </span>
         {field.description && <span className="field-desc">{field.description}</span>}
+        {error && <span className="field-error">{error}</span>}
       </span>
-      <TextLikeInput field={field} initial={set ? String(value) : ""} />
-    </label>
-  );
-}
-
-/** int → number input, path → text input. Placeholder carries the default. */
-function TextLikeInput({ field, initial }: { field: ConfigField; initial: string }) {
-  const [draft, setDraft] = useState(initial);
-  // Reseed when the scope/repo changes underneath (a new `initial` arrives).
-  useEffect(() => setDraft(initial), [initial]);
-  const onChange = (e: ChangeEvent<HTMLInputElement>) => setDraft(e.target.value);
-  return (
-    <input
-      className="field-input"
-      type={field.type === "int" ? "number" : "text"}
-      inputMode={field.type === "int" ? "numeric" : undefined}
-      min={field.type === "int" ? field.min : undefined}
-      value={draft}
-      placeholder={`default: ${field.default}`}
-      onChange={onChange}
-    />
-  );
-}
-
-/** bool → checkbox. Seeded from the scope value, falling back to the default. */
-function BoolInput({ field, initial }: { field: ConfigField; initial: boolean }) {
-  const [checked, setChecked] = useState(initial);
-  useEffect(() => setChecked(initial), [initial]);
-  return (
-    <input
-      className="field-checkbox"
-      type="checkbox"
-      checked={checked}
-      onChange={(e) => setChecked(e.target.checked)}
-    />
+      <span className="field-control">
+        {reset}
+        <input
+          className={`field-input${error ? " field-input-invalid" : ""}`}
+          type={field.type === "int" ? "number" : "text"}
+          inputMode={field.type === "int" ? "numeric" : undefined}
+          min={field.type === "int" ? field.min : undefined}
+          value={state.set ? state.text : ""}
+          placeholder={`default: ${field.default}`}
+          aria-label={field.label}
+          aria-invalid={error ? true : undefined}
+          onChange={onChange}
+        />
+      </span>
+    </div>
   );
 }
