@@ -42,7 +42,7 @@
 
   --shadow: 0 1px 2px rgb(33 31 26 / 4%), 0 8px 24px rgb(33 31 26 / 7%);
   /* Ink on an accent-filled control, and the accent that reads on inverted
-   * (ink-colored) surfaces like the selection toolbar. */
+   * (ink-colored) surfaces like the selection bar. */
   --accent-contrast: #fbfaf7;
   --accent-on-ink: hsl(var(--hue, 152) 55% 62%);
 
@@ -1403,8 +1403,9 @@ code {
 }
 
 /* ───────────────────────── the review loop ─────────────────────────
- * M2c's verbs. The selection toolbar is the UI's one inverted surface — a
- * codec cursor floating above the page; the composer and drawer are accent-
+ * M2c's verbs. The docked selection bar is the UI's one inverted surface — a
+ * codec cursor pinned to the bottom edge, out of the native popover zone (it
+ * no longer floats over the selection); the composer and drawer are accent-
  * bladed instruments; the rail is flat hairline telemetry beside the plan.
  */
 
@@ -1444,48 +1445,35 @@ code {
   }
 }
 
-/* ── selection toolbar: the codec cursor ── */
-
-.sel-toolbar {
+/* ── selection bar: the docked comment/ask affordance ──
+ * Retires the floating "codec cursor" toolbar (DECISIONS.md): the native
+ * selection popovers (iOS long-press callout, macOS force-click Look-Up) can't
+ * be suppressed on the web and land right over the selection, so the bar docks
+ * at a fixed bottom edge — out of that zone on both platforms — instead of
+ * floating over the text. It keeps the inverted paper-on-ink treatment so it
+ * reads as an instrument above the glass drawer it sits over. */
+.sel-bar {
   position: fixed;
   z-index: 40;
-  transform: translate(-50%, -100%);
+  left: 50%;
+  /* Sits above the bottom drawer bar (z30); 60px clears the desktop bar. */
+  bottom: calc(60px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
   display: flex;
   align-items: center;
+  max-width: calc(100vw - 24px);
   background: var(--ink);
   color: var(--bg);
   border-radius: 9px;
   box-shadow: 0 3px 8px rgb(0 0 0 / 22%), 0 12px 32px rgb(0 0 0 / 18%);
-  animation: toolbar-in 0.14s cubic-bezier(0.2, 0.9, 0.3, 1.3) both;
+  animation: sel-bar-in 0.16s cubic-bezier(0.22, 0.7, 0.3, 1) both;
   user-select: none;
 }
 
-.sel-toolbar.sel-below {
-  transform: translate(-50%, 0);
-}
-
-/* The caret nub pointing at the selection. */
-.sel-toolbar::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  bottom: -5px;
-  width: 10px;
-  height: 10px;
-  background: var(--ink);
-  transform: translateX(-50%) rotate(45deg);
-  border-radius: 2px;
-}
-
-.sel-toolbar.sel-below::after {
-  bottom: auto;
-  top: -5px;
-}
-
-@keyframes toolbar-in {
+@keyframes sel-bar-in {
   from {
     opacity: 0;
-    transform: translate(-50%, calc(-100% + 4px)) scale(0.96);
+    transform: translateX(-50%) translateY(8px);
   }
 }
 
@@ -1555,7 +1543,9 @@ code {
 .composer-sheet {
   left: 50%;
   top: auto;
-  bottom: calc(14px + env(safe-area-inset-bottom));
+  /* --kb-inset lifts the sheet above the on-screen keyboard (DESIGN.md §10);
+   * 0 with no keyboard up or on desktop, so the resting spot is unchanged. */
+  bottom: calc(14px + env(safe-area-inset-bottom) + var(--kb-inset, 0px));
   width: min(520px, calc(100vw - 24px));
 }
 
@@ -3357,7 +3347,9 @@ code {
 .approve-sheet {
   position: fixed;
   left: 50%;
-  bottom: calc(14px + env(safe-area-inset-bottom));
+  /* Rides the keyboard inset like the composer (DESIGN.md §10); the desktop
+   * media query below resets `bottom: auto`, where the inset is always 0. */
+  bottom: calc(14px + env(safe-area-inset-bottom) + var(--kb-inset, 0px));
   transform: translateX(-50%);
   width: min(440px, calc(100vw - 24px));
   padding: 14px 16px 15px;
@@ -3744,7 +3736,10 @@ code {
 /* No popovers on a phone: the menu docks in thumb range, like the composer. */
 .sec-sheet {
   left: 50%;
-  bottom: calc(14px + env(safe-area-inset-bottom));
+  /* Keyboard-aware like the other sheets (DESIGN.md §10); 0 inset when no
+   * keyboard is up — the menu itself has no field, but a shared mechanism keeps
+   * every sheet consistent if one opens a composer over it. */
+  bottom: calc(14px + env(safe-area-inset-bottom) + var(--kb-inset, 0px));
   transform: translateX(-50%);
   width: min(440px, calc(100vw - 24px));
   animation: sheet-in 0.18s cubic-bezier(0.22, 0.7, 0.3, 1) both;
@@ -3826,6 +3821,18 @@ code {
 }
 
 @media (max-width: 639px) {
+  /* iOS auto-zooms the whole page when you focus a field whose text is below
+   * 16px — every tap into the composer, the drawer edit box, or a grill answer
+   * yanks the layout. Sizing touch inputs to 16px defeats that at the source
+   * (DECISIONS.md "Preserve pinch-zoom; kill only the iOS input auto-zoom"),
+   * while the viewport meta stays permissive so pinch-zoom still works. Scoped
+   * under `.page` so it outranks each field's `font:` shorthand. */
+  .page input,
+  .page textarea,
+  .page select {
+    font-size: 16px;
+  }
+
   /* The sticky header goes lean on phone (DESIGN.md §10): title + switcher chips
    * + the clean⇄diff toggle. The revision and Approve fold away — Approve to the
    * fixed bottom bar, so it is never shown in two places; the toggle stays, so
@@ -3853,6 +3860,12 @@ code {
 
   .page-review {
     padding-bottom: 168px; /* the taller one-thumb bar floats over more tail */
+  }
+
+  /* The phone drawer bar is taller (≥44px thumb targets), so the selection bar
+   * docks higher to clear it and stay in thumb range above it. */
+  .sel-bar {
+    bottom: calc(84px + env(safe-area-inset-bottom));
   }
 
   /* The bar compacts to glyph telemetry: ✎ alone, ◆N alone, review folded

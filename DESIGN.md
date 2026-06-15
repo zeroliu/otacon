@@ -808,11 +808,15 @@ returns to the index.
   the Summary section and its diagram lead the reading column, the diagram lifted by a
   2px accent top rule so the change's shape reads before its prose. Absent on plans that
   opted out of a lead diagram.
-- Select text → floating toolbar: **Comment** (→ drawer) | **Ask** (fires immediately;
-  thread shows "answering…" until the reply lands). The toolbar only appears where the
-  anchor can survive: selections touching renderer chrome (mermaid SVG labels, fence
-  captions, slug anchors, size badges — text that exists only in the rendered DOM,
-  never in the plan markdown the agent reads) get no toolbar.
+- Select text → docked Comment/Ask bar: **Comment** (→ drawer) | **Ask** (fires
+  immediately; thread shows "answering…" until the reply lands). The bar docks at a
+  fixed bottom edge instead of floating over the selection: the native selection and
+  dictionary popovers (the iOS long-press callout, the macOS force-click Look-Up) can't
+  be suppressed on the web and land right on the selection, so the bar coexists by
+  staying out of that zone on both phone and desktop. It only appears where the anchor
+  can survive: selections touching renderer chrome (mermaid SVG labels, fence captions,
+  slug anchors, size badges — text that exists only in the rendered DOM, never in the
+  plan markdown the agent reads) get no bar. Desktop keeps the `c`/`q` shortcuts.
 - Drawer = bottom bar: review/edit/delete pending comments, per-comment **send now**,
   **Send all**; when nothing is pending it shrinks to the whole-plan comment
   affordance alone.
@@ -887,6 +891,13 @@ returns to the index.
   bar is the desktop drawer augmented at the phone breakpoint — approve and the
   question tally fold into it and leave the header strip, never shown twice.
 - Agent question cards answerable with chips — designed for grilling on the move.
+- Touch inputs (composer, drawer edit, grill answer) are sized ≥16px so iOS never
+  auto-zooms the page when a field is focused; the viewport meta stays permissive,
+  so pinch-zoom stays available for accessibility.
+- Bottom sheets are keyboard-aware: every sheet (composer, the section ⋯ menu,
+  the approve confirm) rides above the on-screen keyboard — tracked live via the
+  VisualViewport API — so its actions never hide under the fold, and the plan
+  behind a sheet is locked so it stops drifting while you type.
 
 ### Cross-cutting
 

@@ -43,11 +43,12 @@ import { DiffView } from "./review/diff";
 import type { PendingComment } from "./review/drawer";
 import { CommentDrawer } from "./review/drawer";
 import type { ComposerState } from "./review/feedback";
-import { Composer, SelectionToolbar, useSelection } from "./review/feedback";
+import { Composer, SelectionBar, useSelection } from "./review/feedback";
 import { GrillQueue } from "./review/grill";
 import { BackLink, ReviewHeader } from "./review/header";
 import type { InterviewTarget } from "./review/interview";
 import { InterviewPanel } from "./review/interview";
+import { useKeyboardInset, useScrollLock } from "./review/keyboard";
 import { ThreadsRail } from "./review/rail";
 import type { SectionMenuState } from "./review/section-menu";
 import { SectionMenu } from "./review/section-menu";
@@ -176,6 +177,40 @@ function ReviewLoop({
     planRef,
     composer === null && menu === null && view === "clean" && !over,
   );
+
+  // Keyboard-aware bottom sheets (DESIGN.md §10). The keyboard inset publishes
+  // as a CSS var the sheets add to their `bottom`, so they ride above the
+  // keyboard as it animates; it stays 0 on desktop (no on-screen keyboard).
+  const kbInset = useKeyboardInset();
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty("--kb-inset", `${kbInset}px`);
+    return () => {
+      root.style.removeProperty("--kb-inset");
+    };
+  }, [kbInset]);
+  // Scroll-lock + the keyboard inset are phone-sheet concerns; desktop popovers
+  // need neither. Track the breakpoint reactively (matches the CSS max-width:
+  // 639px face swap) so the lock engages exactly when sheets are bottom-docked.
+  const [phone, setPhone] = useState(() => window.innerWidth < SHEET_VIEWPORT);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${SHEET_VIEWPORT - 1}px)`);
+    const update = () => setPhone(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
+  // One shared lock for every bottom sheet (composer, section ⋯ menu, approve),
+  // not just the composer: any open sheet freezes the plan behind it so the
+  // page stops drifting under the keyboard while typing. The gate mirrors the
+  // sheets' own render guards exactly — the composer/menu only render under
+  // `hasPlan && !over`, and approve only under `approveOpen && canApprove`.
+  // Tracking bare `approveOpen` would strand the lock on with no sheet visible
+  // when an SSE status flip (Approve & Implement → `implementing`, or a plain
+  // approve → `over`) clears `canApprove` while `approveOpen` still lingers.
+  const composerOrMenuOpen = hasPlan && !over && (composer !== null || menu !== null);
+  const approveSheetOpen = approveOpen && canApprove;
+  useScrollLock(phone && (composerOrMenuOpen || approveSheetOpen));
 
   const payload = useRevision(session.id, session.revision);
   const from = Math.min(baseline ?? session.lastReviewedRevision, session.revision);
@@ -626,7 +661,7 @@ function ReviewLoop({
       {hasPlan && !over && (
         <>
           {selection !== null && composer === null && (
-            <SelectionToolbar
+            <SelectionBar
               selection={selection}
               onComment={() => openComposer("comment", selection)}
               onAsk={() => openComposer("ask", selection)}

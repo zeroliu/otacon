@@ -344,7 +344,7 @@ test("approve warns on unresolved threads, forces on confirm, locks the session,
   await expect(page.locator(".grill-queue")).toHaveCount(0);
   await expect(page.locator(".drawer-bar")).toHaveCount(0);
   await selectText(page, "#summary .md", "token issuance");
-  await expect(page.locator(".sel-toolbar")).toHaveCount(0);
+  await expect(page.locator(".sel-bar")).toHaveCount(0);
   await page.keyboard.press("c");
   await expect(page.locator(".composer")).toHaveCount(0);
   // …and the daemon refuses mutations outright: the session is over.

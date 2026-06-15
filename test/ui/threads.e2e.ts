@@ -27,7 +27,7 @@ async function openReview(page: Page, request: APIRequestContext, label: string)
   return session;
 }
 
-test("comment flow: selection → toolbar → drawer → Send all wakes a parked CLI wait", async ({
+test("comment flow: selection → bar → drawer → Send all wakes a parked CLI wait", async ({
   page,
   request,
 }) => {
@@ -35,10 +35,10 @@ test("comment flow: selection → toolbar → drawer → Send all wakes a parked
   const exact = "short-lived JWTs issued by the auth service";
 
   await selectText(page, "#summary .md", exact);
-  const toolbar = page.locator(".sel-toolbar");
-  await expect(toolbar).toBeVisible();
-  await expect(toolbar.locator(".sel-slug")).toHaveText("#summary");
-  await toolbar.locator(".sel-btn", { hasText: "comment" }).click();
+  const bar = page.locator(".sel-bar");
+  await expect(bar).toBeVisible();
+  await expect(bar.locator(".sel-slug")).toHaveText("#summary");
+  await bar.locator(".sel-btn", { hasText: "comment" }).click();
 
   const composer = page.locator(".composer");
   await expect(composer).toBeVisible();
@@ -206,21 +206,21 @@ test("whole-plan comment goes through the drawer affordance with a null anchor",
   await expect(thread.locator(".thread-quote")).toHaveCount(0);
 });
 
-test("renderer chrome never offers the toolbar — its text is not in the plan source", async ({
+test("renderer chrome never offers the bar — its text is not in the plan source", async ({
   page,
   request,
 }) => {
   await openReview(page, request, "chrome-guard");
 
-  // Sanity: prose selections do get the toolbar…
+  // Sanity: prose selections do get the bar…
   await selectText(page, "#summary .md", "token issuance");
-  await expect(page.locator(".sel-toolbar")).toBeVisible();
+  await expect(page.locator(".sel-bar")).toBeVisible();
 
   // …but the section's #slug anchor exists only in the rendered DOM — an
-  // anchor captured from it could never be re-located, so no toolbar.
+  // anchor captured from it could never be re-located, so no bar.
   // (The slug renders as two text nodes, "#" + id; selecting the id is enough.)
   await selectText(page, "#summary .anchor-slug", "summary");
-  await expect(page.locator(".sel-toolbar")).toHaveCount(0);
+  await expect(page.locator(".sel-bar")).toHaveCount(0);
 });
 
 test("keyboard: c opens the comment composer, q the ask composer, on the selection", async ({
@@ -245,7 +245,7 @@ test("keyboard: c opens the comment composer, q the ask composer, on the selecti
   await expect(page.locator(".composer-mode")).toHaveText("ask");
 });
 
-test("375px viewport: toolbar works, composer becomes a sheet, rail stacks below", async ({
+test("375px viewport: selection bar works, composer becomes a sheet, rail stacks below", async ({
   page,
   request,
 }) => {
@@ -257,7 +257,7 @@ test("375px viewport: toolbar works, composer becomes a sheet, rail stacks below
   });
 
   await selectText(page, "#summary .md", "token issuance");
-  await expect(page.locator(".sel-toolbar")).toBeVisible();
+  await expect(page.locator(".sel-bar")).toBeVisible();
   await page.locator(".sel-btn", { hasText: "comment" }).click();
   await expect(page.locator(".composer")).toHaveClass(/composer-sheet/);
   await page.locator(".composer-close").click();
@@ -286,12 +286,12 @@ test("dark scheme renders the loop surfaces", async ({ page, request }) => {
   await expect(page.locator(".drawer-whole")).toBeVisible();
 
   await selectText(page, "#summary .md", "token issuance");
-  await expect(page.locator(".sel-toolbar")).toBeVisible();
-  // The inverted toolbar flips with the scheme: light surface on dark pages.
-  const toolbarBg = (await page.evaluate(
-    "getComputedStyle(document.querySelector('.sel-toolbar')).backgroundColor",
+  await expect(page.locator(".sel-bar")).toBeVisible();
+  // The inverted bar flips with the scheme: light surface on dark pages.
+  const barBg = (await page.evaluate(
+    "getComputedStyle(document.querySelector('.sel-bar')).backgroundColor",
   )) as string;
-  const match = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(toolbarBg);
+  const match = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(barBg);
   expect(match).not.toBeNull();
   const luminance = (Number(match![1]) + Number(match![2]) + Number(match![3])) / 3;
   expect(luminance).toBeGreaterThan(128);

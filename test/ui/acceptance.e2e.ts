@@ -131,8 +131,8 @@ test("UI acceptance: the whole §6 loop renders and round-trips in the browser",
   await page.screenshot({ path: join(shotsDir, "01-desktop-review.png"), fullPage: true });
 
   // ── 4. Review: a comment composed in the UI reaches a parked CLI wait ─────
-  // Scroll the section into view first so the floating selection toolbar lands
-  // inside the viewport (the rich-plan dossier is tall).
+  // Scroll the section into view first so its text is selectable (the rich-plan
+  // dossier is tall); the selection bar itself docks at the bottom edge.
   await page.locator("#decisions").scrollIntoViewIfNeeded();
   await selectText(page, "#decisions .md", "RS256 over HS256");
   await page.locator(".sel-btn", { hasText: "comment" }).click();
