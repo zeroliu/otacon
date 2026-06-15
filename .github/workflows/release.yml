@@ -1,0 +1,78 @@
+name: Release
+
+# Publishes otacon to npm when a `vX.Y.Z` tag is pushed (see scripts/release.sh,
+# run via `bun run release`, which bumps + tags + pushes WITHOUT publishing).
+# Gates (typecheck/test/build) run BEFORE publish so a failing gate stops the publish.
+on:
+  push:
+    tags:
+      # Match release tags `vX.Y.Z` only (must be quoted — a bare leading `*` is
+      # invalid YAML). `v[0-9]*` avoids spinning up a publish run for unrelated
+      # `v`-prefixed tags (e.g. `vendor-snapshot`); the version guard backstops it.
+      - 'v[0-9]*'
+
+# Serializes concurrent runs of this workflow for a given ref so two in-flight
+# pushes of the same tag don't race. (It does NOT stop a sequential re-push from
+# re-running — npm rejecting a duplicate version is the real double-publish guard.)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15 # cap a hung publish/release instead of inheriting the 6h default
+    permissions:
+      contents: write # create the GitHub Release for the tag
+      id-token: write # npm provenance (--provenance) signs via OIDC
+    steps:
+      # Third-party actions are pinned to a commit SHA (not a mutable tag) because
+      # this job holds id-token:write + the npm automation token; a moved tag could
+      # otherwise inject code into a credentialed publish. Bump the SHA + comment together.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0 # full history+tags so `gh release create --generate-notes` can range from the previous tag
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+
+      # setup-node wires the npm auth env so `npm publish` reads NODE_AUTH_TOKEN.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Guard: the pushed tag must match package.json's version, or we'd publish a
+      # mismatched version. GITHUB_REF_NAME is the tag name (e.g. v0.2.0).
+      - name: Verify tag matches package.json version
+        run: |
+          PKG_TAG="v$(node -p "require('./package.json').version")"
+          if [ "$PKG_TAG" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version ($PKG_TAG)" >&2
+            exit 1
+          fi
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun test
+
+      - name: Build
+        run: bun run build
+
+      # Publish to npm. NPM_TOKEN must be an npm **automation** token so the publish
+      # bypasses 2FA on the runner. setup-node above exposes it as NODE_AUTH_TOKEN.
+      # --provenance pairs with id-token: write to attach a signed provenance statement.
+      # prepublishOnly also runs `npm run build` — harmless, it just rebuilds dist/.
+      - name: Publish to npm
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes --title "$GITHUB_REF_NAME"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
