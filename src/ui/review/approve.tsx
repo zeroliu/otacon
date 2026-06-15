@@ -38,7 +38,7 @@ export function ApproveDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // The variant a force retry must re-fire. Set when the unresolved-threads
-  // warning bounces the first attempt, so "approve anyway" carries the same
+  // warning bounces the first attempt, so "commit anyway" carries the same
   // implement flag the user chose at the confirm stage (rather than silently
   // downgrading an Approve & Implement to a plain approve).
   const [pendingImplement, setPendingImplement] = useState(false);
