@@ -24,22 +24,28 @@ jobs:
     timeout-minutes: 15 # cap a hung publish/release instead of inheriting the 6h default
     permissions:
       contents: write # create the GitHub Release for the tag
-      id-token: write # npm provenance (--provenance) signs via OIDC
+      id-token: write # mint the OIDC token npm exchanges for trusted publishing (+ provenance)
     steps:
       # Third-party actions are pinned to a commit SHA (not a mutable tag) because
-      # this job holds id-token:write + the npm automation token; a moved tag could
-      # otherwise inject code into a credentialed publish. Bump the SHA + comment together.
+      # this job holds id-token:write — the OIDC token authorizes the npm publish, so
+      # a moved tag could otherwise inject code into a credentialed publish. Bump the
+      # SHA + comment together.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0 # full history+tags so `gh release create --generate-notes` can range from the previous tag
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
 
-      # setup-node wires the npm auth env so `npm publish` reads NODE_AUTH_TOKEN.
+      # Trusted publishing needs Node >= 22.14. No registry-url / NODE_AUTH_TOKEN:
+      # OIDC replaces the token, and a setup-node .npmrc auth line (with always-auth)
+      # would only get in the way.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20
-          registry-url: 'https://registry.npmjs.org'
+          node-version: 22
+
+      # Trusted publishing requires npm CLI >= 11.5.1; the bundled npm is older.
+      - name: Upgrade npm for trusted publishing
+        run: npm install -g npm@latest
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -63,14 +69,13 @@ jobs:
       - name: Build
         run: bun run build
 
-      # Publish to npm. NPM_TOKEN must be an npm **automation** token so the publish
-      # bypasses 2FA on the runner. setup-node above exposes it as NODE_AUTH_TOKEN.
-      # --provenance pairs with id-token: write to attach a signed provenance statement.
+      # Publish via npm trusted publishing (OIDC) — no stored token. npm exchanges
+      # the id-token for a short-lived credential; this works only because a Trusted
+      # Publisher for this repo + workflow file is configured on npmjs.com (see
+      # RELEASING.md). Provenance is attached automatically under trusted publishing.
       # prepublishOnly also runs `npm run build` — harmless, it just rebuilds dist/.
       - name: Publish to npm
-        run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
 
       - name: Create GitHub Release
         run: gh release create "$GITHUB_REF_NAME" --generate-notes --title "$GITHUB_REF_NAME"

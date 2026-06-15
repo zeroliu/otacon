@@ -1855,8 +1855,9 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   `v[0-9]*` tag triggers `.github/workflows/release.yml`, which re-runs the gates and
   `npm publish`es from a clean CI checkout. `--dry-run` rehearses without mutating.
 - **Why:** Splitting "decide to release" (local, no credentials) from "publish" (CI,
-  credentialed) means no npm secret ever lives on a maintainer's machine and every
-  publish is a clean-room, reproducible build. Re-running the gates in CI before the
+  OIDC trusted publishing) means no npm secret lives anywhere — not on a maintainer's
+  machine, not in repo secrets — and every publish is a clean-room, reproducible build.
+  Re-running the gates in CI before the
   publish step makes a red gate stop the publish; the tag-vs-`package.json` guard stops
   a mismatched version; npm rejecting a duplicate version makes a re-pushed tag a no-op.
   (← grill q2.)
@@ -1877,19 +1878,28 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Another consumer needs the version in a form a flat constant can't
   provide.
 
-## npm provenance + SHA-pinned actions for the publish job
+## npm trusted publishing (OIDC), no stored token; provenance + SHA-pinned actions
 
-- **Decision:** The release workflow publishes with `npm publish --access public
-  --provenance` under `permissions: id-token: write` (OIDC signs the provenance
-  statement), and every third-party action is pinned to a commit SHA, not a mutable
-  tag. Provenance requires `package.json`'s `repository` field to validate the source.
-- **Why:** The publish job holds a credential (the `NPM_TOKEN` automation token) plus
-  `id-token: write`; a moved action tag could otherwise inject code into a credentialed
-  publish, so SHA-pinning closes that supply-chain hole. Provenance gives installers a
-  verifiable link from the published tarball back to the exact repo + workflow run that
-  built it — supply-chain integrity for a package run with `-g`.
-- **Revisit when:** npm changes its provenance/OIDC contract, or a pinned action needs
-  a SHA bump (update the SHA and its trailing version comment together).
+- **Decision:** The release workflow publishes with `npm publish --access public` and
+  **no npm token** — authentication is npm **trusted publishing** via the job's
+  `permissions: id-token: write` OIDC token, against a Trusted Publisher (repo + the
+  `release.yml` workflow file) configured once on npmjs.com. This needs npm CLI
+  ≥ 11.5.1 / Node ≥ 22.14, so the workflow runs on Node 22 and `npm i -g npm@latest`.
+  Provenance is attached automatically (still requires `package.json`'s `repository`
+  field); every third-party action is pinned to a commit SHA. Because a Trusted
+  Publisher can only attach to an existing package, the very first publish is a manual
+  `npm publish` from a maintainer's `npm login` session (see RELEASING.md).
+- **Why:** A long-lived `NPM_TOKEN` automation secret is the highest-value thing in the
+  repo — it can publish at any time and must be rotated and guarded. OIDC removes it
+  entirely: the credential is minted per-run, scoped to this repo+workflow, and expires
+  immediately, so there is nothing to leak or rotate. The job still wields publish
+  rights via `id-token: write`, so SHA-pinning every action stays essential — a moved
+  tag could otherwise inject code into a run that can publish. Provenance gives
+  installers a verifiable link from the tarball back to the exact repo + workflow run —
+  supply-chain integrity for a package run with `-g`.
+- **Revisit when:** npm supports configuring a Trusted Publisher for a not-yet-published
+  package (removes the manual first-publish bootstrap), npm changes its OIDC/provenance
+  contract, or a pinned action needs a SHA bump (update the SHA + its version comment).
 
 ## Maintainer release steps live in RELEASING.md; README stays user-facing
 

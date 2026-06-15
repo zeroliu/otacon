@@ -10,24 +10,40 @@ gates and publishes from a clean CI checkout.
 
 ## One-time setup
 
-- **Own the npm package.** Releases publish the unscoped public package `otacon`. The
-  name was verified **available** on the public registry on 2026-06-15 — the first
-  publish reserves it. Use an npm account that will own it. If the name gets squatted
-  before the first publish, fall back to the scoped `@zeroliu/otacon` (and update
-  `name` in `package.json` accordingly).
-- **Create an npm automation token.** On npmjs.com → Access Tokens, create an
-  **automation** token (these bypass 2FA, which is what lets CI publish unattended).
-- **Store it as a repo secret named `NPM_TOKEN`:**
+CI publishes via **npm trusted publishing** (OIDC) — there is **no stored npm token**.
+GitHub Actions mints a short-lived OpenID Connect token at publish time, and npm
+exchanges it for a one-shot publish credential. Setup is a one-time bootstrap because
+a Trusted Publisher can only be attached to a package that **already exists**.
 
-  ```sh
-  gh secret set NPM_TOKEN   # paste the automation token when prompted
-  ```
+1. **Own the npm package + bootstrap the first publish.** Releases publish the
+   unscoped public package `otacon`. The name was verified **available** on the public
+   registry on 2026-06-15 — the first publish reserves it. Trusted publishing can't do
+   the *first* publish (the package doesn't exist yet to attach a publisher to), so do
+   it once from your own machine:
 
-  The workflow exposes it to `npm publish` as `NODE_AUTH_TOKEN`.
-- **`GITHUB_TOKEN` is automatic** — the workflow uses the default token (with
-  `contents: write`) to create the GitHub Release; you do not configure it.
-- **Keep the `repository` field in `package.json`.** `--provenance` validates the
-  package's source repo against it; remove it and the provenance publish fails.
+   ```sh
+   npm login                       # interactive; no long-lived token stored
+   git checkout main && git pull   # clean checkout at the version you want to ship
+   npm publish --access public     # prepublishOnly builds dist/; reserves the name
+   ```
+
+   If the name gets squatted first, fall back to the scoped `@zeroliu/otacon` (update
+   `name` in `package.json`, and publish that scope's first version the same way).
+2. **Attach the Trusted Publisher.** On npmjs.com go to the package's access page —
+   `https://www.npmjs.com/package/otacon/access` → **Trusted Publisher** → add a
+   GitHub Actions publisher with:
+   - **Organization or user:** `zeroliu`
+   - **Repository:** `otacon`
+   - **Workflow filename:** `release.yml` (filename only, not a path)
+   - **Environment:** leave blank (the workflow uses no GitHub Environment)
+3. **`GITHUB_TOKEN` is automatic** — the workflow uses the default token (with
+   `contents: write`) to create the GitHub Release; you do not configure it.
+4. **Keep the `repository` field in `package.json`.** Provenance (attached
+   automatically under trusted publishing) validates the package's source repo against
+   it; remove it and the provenance publish fails.
+
+After this, every tagged release publishes from CI with **no secret to rotate** — and
+you can delete any old `NPM_TOKEN` repo secret if one was ever set.
 
 ## Cutting a release
 
@@ -60,12 +76,13 @@ bumped, committed, tagged, or pushed.
 The pushed `v[0-9]*` tag triggers the **Release** workflow
 ([`.github/workflows/release.yml`](.github/workflows/release.yml)):
 
-1. Checks out, sets up bun + Node 20, installs with `--frozen-lockfile`.
+1. Checks out, sets up bun + Node 22, upgrades npm to latest (trusted publishing needs
+   npm ≥ 11.5.1 / Node ≥ 22.14), installs with `--frozen-lockfile`.
 2. **Verifies the tag matches `package.json`'s version** (refuses a mismatch).
 3. Re-runs the gates: `bun run typecheck`, `bun test`, `bun run build`.
-4. **`npm publish --access public --provenance`** — `--provenance` pairs with the
-   job's `id-token: write` to attach a signed provenance statement; the
-   `NPM_TOKEN` secret authenticates the publish.
+4. **`npm publish --access public`** — authenticated by the job's `id-token: write`
+   OIDC token via the Trusted Publisher configured above (no token env). Provenance is
+   attached automatically.
 5. **`gh release create`** — creates the GitHub Release for the tag with generated
    notes.
 
