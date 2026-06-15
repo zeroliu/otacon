@@ -557,8 +557,8 @@ is not attention). The agent's parked `otacon wait` hits `/events`, never
 `/presence`, so a waiting agent never suppresses your banners.
 
 On by default; toggle with a `notifications.desktop` boolean in
-`~/.otacon/config.json` (repo `otacon.config.json` override allowed), mirroring the
-budgets config. Off macOS the banner is a silent no-op.
+`~/.otacon/config.json` (the gitignored `<repo>/.otacon/config.json` overrides it),
+mirroring the budgets config. Off macOS the banner is a silent no-op.
 
 ### The full loop
 
@@ -1166,8 +1166,12 @@ writes elsewhere and what this repo runs.
 **None.** Otacon works in any git repo with zero configuration. The first
 `otacon start` in a repo creates `.otacon/` and appends `.otacon/` to the repo's
 `.gitignore` if missing (with a notice). `docs/plans/` is created on first approve.
-Budgets/lint config is global (`~/.otacon/config.json`); a committed
-`otacon.config.json` at the repo root overrides it if present.
+Config is layered built-in defaults ← `~/.otacon/config.json` (user) ←
+`<repo>/.otacon/config.json` (project, gitignored) — closest wins. Both override
+files are optional and untracked. Tunables include budgets/lint caps, the activity
+feed (`activity.cap`, `activity.noteMaxChars`), `notifications.desktop`, and
+`worktree.dir` (base dir for Approve & Implement build worktrees, default
+`.otacon/worktrees`).
 
 ### Daily flow
 

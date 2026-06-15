@@ -5,7 +5,13 @@ import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hono } from "hono";
-import { eventsPath, otaconPort, revisionPath, sessionDir } from "../shared/paths.js";
+import {
+  eventsPath,
+  otaconPort,
+  repoLocalConfigPath,
+  revisionPath,
+  sessionDir,
+} from "../shared/paths.js";
 import type { RegistrySession } from "../shared/types.js";
 import { VERSION } from "../shared/version.js";
 import type { NodeBindings } from "./app.js";
@@ -2080,8 +2086,9 @@ describe("desktop attention notifications (M6)", () => {
   });
 
   test("silent when notifications.desktop is configured off in the repo", async () => {
+    mkdirSync(join(repo, ".otacon"), { recursive: true });
     writeFileSync(
-      join(repo, "otacon.config.json"),
+      repoLocalConfigPath(repo),
       JSON.stringify({ notifications: { desktop: false } }),
     );
     const session = mintSession();

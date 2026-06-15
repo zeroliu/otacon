@@ -156,6 +156,34 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   and an escape hatch for port conflicts. Harmless otherwise.
 - **Revisit when:** Real config wants to subsume them.
 
+## Project config: gitignored `<repo>/.otacon/config.json`, no committed layer
+
+- **Decision:** The per-repo config override is `<repo>/.otacon/config.json` (in the
+  already-gitignored `.otacon/` dir). The old committed `<repo>/otacon.config.json`
+  layer is dropped — the read order is now defaults ← `~/.otacon/config.json` ←
+  `<repo>/.otacon/config.json`.
+- **Why:** The upcoming Settings UI writes project config; pointing it at the gitignored
+  dir means it never mutates a tracked, team-shared file (zero tracked edits, ever).
+  Config is per-developer tuning, not a shared contract, so a committed layer wasn't
+  earning its keep. No repos rely on the old path yet, so a hard drop beats migration
+  ceremony.
+- **Revisit when:** A genuinely shared, reviewed project config (committed, PR-edited)
+  becomes worth reintroducing as a distinct layer.
+
+## Single `CONFIG_SCHEMA` as the source of truth; `worktree.dir` tunable
+
+- **Decision:** One `CONFIG_SCHEMA` (field metadata: section/key/label/type/default/min)
+  enumerates every leaf config key; runtime merging, the API validator, and the future
+  UI all derive from it. A guard test asserts it matches `DEFAULT_CONFIG` exactly. Added
+  a `worktree.dir` field (`type:"path"`, default `.otacon/worktrees`).
+- **Why:** Two parallel code paths (file merge + API validation) drifting apart is the
+  obvious failure mode once a UI can write config; one schema with one `coerceFieldValue`
+  rule per type keeps them in lockstep, and the guard test makes "added a key but forgot
+  the schema/UI" a test failure. `worktree.dir` lets builds land outside `.otacon/` when
+  a developer prefers it, without a new bespoke knob.
+- **Revisit when:** A field needs validation richer than int/bool/path (enums, ranges,
+  cross-field constraints), or config grows nested structures the flat schema can't model.
+
 ## Per-worktree daemon isolation in the dogfood shim
 
 - **Decision:** `bin/otacon` detects a linked git worktree (`.git` is a *file*, not a

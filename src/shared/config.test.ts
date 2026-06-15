@@ -1,9 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_CONFIG, loadConfig } from "./config.js";
-import { otaconHome, otaconPort } from "./paths.js";
+import {
+  CONFIG_SCHEMA,
+  DEFAULT_CONFIG,
+  loadConfig,
+  readScopeValues,
+  validateScopeInput,
+} from "./config.js";
+import { otaconHome, otaconPort, repoLocalConfigPath } from "./paths.js";
 
 let home: string;
 let repo: string;
@@ -31,7 +37,9 @@ function writeGlobal(config: unknown): void {
 }
 
 function writeRepo(config: unknown): void {
-  writeFileSync(join(repo, "otacon.config.json"), JSON.stringify(config));
+  const path = repoLocalConfigPath(repo);
+  mkdirSync(join(repo, ".otacon"), { recursive: true });
+  writeFileSync(path, JSON.stringify(config));
 }
 
 describe("loadConfig", () => {
@@ -130,6 +138,122 @@ describe("loadConfig notifications", () => {
     const config = loadConfig(repo);
     expect(config.budgets.summaryLines).toBe(9);
     expect(config.notifications.desktop).toBe(false);
+  });
+});
+
+describe("loadConfig worktree", () => {
+  test("worktree.dir defaults to .otacon/worktrees", () => {
+    expect(loadConfig(repo).worktree.dir).toBe(".otacon/worktrees");
+  });
+
+  test("global config can override worktree.dir", () => {
+    writeGlobal({ worktree: { dir: "build/wt" } });
+    expect(loadConfig(repo).worktree.dir).toBe("build/wt");
+  });
+
+  test("repo config overrides global for worktree.dir", () => {
+    writeGlobal({ worktree: { dir: "build/wt" } });
+    writeRepo({ worktree: { dir: ".otacon/builds" } });
+    expect(loadConfig(repo).worktree.dir).toBe(".otacon/builds");
+  });
+
+  test("an empty or non-string worktree.dir is ignored, keeping the default", () => {
+    writeGlobal({ worktree: { dir: "   " } });
+    expect(loadConfig(repo).worktree.dir).toBe(".otacon/worktrees");
+    writeGlobal({ worktree: { dir: 5 } });
+    expect(loadConfig(repo).worktree.dir).toBe(".otacon/worktrees");
+  });
+
+  test("worktree.dir is trimmed", () => {
+    writeGlobal({ worktree: { dir: "  build/wt  " } });
+    expect(loadConfig(repo).worktree.dir).toBe("build/wt");
+  });
+});
+
+describe("CONFIG_SCHEMA guard", () => {
+  test("enumerates exactly the leaf keys of DEFAULT_CONFIG", () => {
+    const schemaLeaves = new Set(CONFIG_SCHEMA.map((f) => `${f.section}.${f.key}`));
+    const configLeaves = new Set<string>();
+    for (const [section, obj] of Object.entries(DEFAULT_CONFIG)) {
+      for (const key of Object.keys(obj as Record<string, unknown>)) {
+        configLeaves.add(`${section}.${key}`);
+      }
+    }
+    expect(schemaLeaves).toEqual(configLeaves);
+  });
+
+  test("each field's default matches DEFAULT_CONFIG", () => {
+    const sections = DEFAULT_CONFIG as unknown as Record<string, Record<string, unknown>>;
+    for (const field of CONFIG_SCHEMA) {
+      const value = sections[field.section]?.[field.key];
+      expect(field.default).toBe(value as never);
+    }
+  });
+});
+
+describe("validateScopeInput", () => {
+  test("accepts valid sparse input and ignores unknown keys", () => {
+    const { values, errors } = validateScopeInput({
+      budgets: { summaryLines: 8 },
+      notifications: { desktop: false },
+      worktree: { dir: "build/wt" },
+      bogusSection: { x: 1 },
+      activity: { unknownKey: 3 },
+    });
+    expect(errors).toEqual([]);
+    expect(values).toEqual({
+      budgets: { summaryLines: 8 },
+      notifications: { desktop: false },
+      worktree: { dir: "build/wt" },
+    });
+  });
+
+  test("rejects summaryLines=0 with a field error", () => {
+    const { values, errors } = validateScopeInput({ budgets: { summaryLines: 0 } });
+    expect(values).toEqual({});
+    expect(errors).toEqual([
+      { section: "budgets", key: "summaryLines", message: expect.any(String) },
+    ]);
+  });
+
+  test("rejects a non-number int value", () => {
+    const { errors } = validateScopeInput({ budgets: { summaryLines: "ten" } });
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({ section: "budgets", key: "summaryLines" });
+  });
+
+  test("rejects an empty path", () => {
+    const { errors } = validateScopeInput({ worktree: { dir: "   " } });
+    expect(errors).toEqual([
+      { section: "worktree", key: "dir", message: expect.any(String) },
+    ]);
+  });
+
+  test("non-object input yields no values and no errors", () => {
+    expect(validateScopeInput(null)).toEqual({ values: {}, errors: [] });
+    expect(validateScopeInput(42)).toEqual({ values: {}, errors: [] });
+  });
+});
+
+describe("readScopeValues", () => {
+  test("returns sparse known-good values and ignores junk", () => {
+    const path = join(home, "scope.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        budgets: { summaryLines: 9, phaseGoalLines: -1, unknownKey: 1 },
+        worktree: { dir: "  build/wt  " },
+        bogus: { x: 1 },
+      }),
+    );
+    expect(readScopeValues(path)).toEqual({
+      budgets: { summaryLines: 9 },
+      worktree: { dir: "build/wt" },
+    });
+  });
+
+  test("missing file returns {}", () => {
+    expect(readScopeValues(join(home, "does-not-exist.json"))).toEqual({});
   });
 });
 
