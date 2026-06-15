@@ -89,7 +89,7 @@ machine-readable error you can fix (read the JSON); exit 2 = you invoked it wron
 - `./bin/otacon start --title <t> [--quick]` · `./bin/otacon progress "<note>"` ·
   `./bin/otacon ask ...` · `./bin/otacon wait --timeout 540` · `./bin/otacon submit [--resolutions f]` ·
   `./bin/otacon answer <q> --body "..."` · `./bin/otacon implement-done [--pr <url>] [--failed]` ·
-  `./bin/otacon status` · `./bin/otacon open`
+  `./bin/otacon status` · `./bin/otacon open` · `./bin/otacon config [get <key>]`
 
 ## Implement loop (on `approved` with `implement:true`)
 
@@ -98,8 +98,10 @@ You are the **orchestrator**: you only coordinate and narrate
 native subagent (Task tool) so your own context stays lean.
 
 1. **Setup.** Commit the plan file at the event `path` (exactly as plain Approve),
-   then `git worktree add .otacon/worktrees/<slug> -b otacon/impl-<slug>` off that
-   commit (`.otacon/` is gitignored). `./bin/otacon progress` each checkpoint throughout.
+   then create the worktree under the configured `worktree.dir`
+   (`./bin/otacon config get worktree.dir` — default `.otacon/worktrees`):
+   `git worktree add <worktree.dir>/<slug> -b otacon/impl-<slug>` off that commit
+   (the default `.otacon/` is gitignored). `./bin/otacon progress` each checkpoint throughout.
 2. **Per phase, in order** (read the phases from the committed plan):
    - `./bin/otacon progress "phase N — implementing"`; spawn an **implement+test**
      subagent (Task tool) scoped to that phase's Goal/Files/Verification — it

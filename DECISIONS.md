@@ -200,6 +200,24 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Concurrent editors of the same scope file need field-level merge, or
   a partial-update (PATCH-style) verb proves worth the extra surface.
 
+## `otacon config` opens the Settings UI; `config get` is read-only; no CLI editing
+
+- **Decision:** Two CLI forms only: `otacon config` (open the `/settings` web UI URL —
+  `?repo=<cwd repo root>` inside a repo, bare `/settings` outside one; print, never
+  launch, like `otacon open`) and `otacon config get <key>` (read-only merged lookup of
+  one dotted key via `loadConfig`, validated against `CONFIG_SCHEMA`, no daemon). There
+  is deliberately **no** `config set` / write verb — editing config stays UI-only.
+- **Why:** q4 declined a get/set *editing* CLI; the Settings UI is the one writer, which
+  keeps the write surface (validation, scope/repo targeting, replace semantics) in one
+  place. But the agent's Approve & Implement loop needs to *read* `worktree.dir` to place
+  its build worktree (§12), so a strictly read-only `config get` is the minimum surface
+  that unblocks that without reopening CLI writes. Reading config never needs the daemon
+  (the files are the source of truth), so `config get` reads them directly and stays fast
+  and dependency-free.
+- **Revisit when:** Agents or scripts need to read whole config sections (not single
+  keys), or a non-interactive write path (CI seeding a project config) proves worth the
+  editing surface q4 declined.
+
 ## Per-worktree daemon isolation in the dogfood shim
 
 - **Decision:** `bin/otacon` detects a linked git worktree (`.git` is a *file*, not a

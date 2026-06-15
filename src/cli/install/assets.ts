@@ -84,7 +84,7 @@ machine-readable error you can fix (read the JSON); exit 2 = you invoked it wron
 - \`${cmd} start --title <t> [--quick]\` · \`${cmd} progress "<note>"\` ·
   \`${cmd} ask ...\` · \`${cmd} wait --timeout 540\` · \`${cmd} submit [--resolutions f]\` ·
   \`${cmd} answer <q> --body "..."\` · \`${cmd} implement-done [--pr <url>] [--failed]\` ·
-  \`${cmd} status\` · \`${cmd} open\`
+  \`${cmd} status\` · \`${cmd} open\` · \`${cmd} config [get <key>]\`
 
 ## Implement loop (on \`approved\` with \`implement:true\`)
 
@@ -93,8 +93,10 @@ You are the **orchestrator**: you only coordinate and narrate
 native subagent (Task tool) so your own context stays lean.
 
 1. **Setup.** Commit the plan file at the event \`path\` (exactly as plain Approve),
-   then \`git worktree add .otacon/worktrees/<slug> -b otacon/impl-<slug>\` off that
-   commit (\`.otacon/\` is gitignored). \`${cmd} progress\` each checkpoint throughout.
+   then create the worktree under the configured \`worktree.dir\`
+   (\`${cmd} config get worktree.dir\` — default \`.otacon/worktrees\`):
+   \`git worktree add <worktree.dir>/<slug> -b otacon/impl-<slug>\` off that commit
+   (the default \`.otacon/\` is gitignored). \`${cmd} progress\` each checkpoint throughout.
 2. **Per phase, in order** (read the phases from the committed plan):
    - \`${cmd} progress "phase N — implementing"\`; spawn an **implement+test**
      subagent (Task tool) scoped to that phase's Goal/Files/Verification — it
