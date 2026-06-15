@@ -779,7 +779,7 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   rail with no body; changed/added/removed ones render their server hunks (mono op
   gutter, add/del washes). Diff units reuse the real slug ids — only one view is
   ever mounted — so j/k jumps and thread click-to-flash work in both views from one
-  implementation. The selection toolbar and the c/q shortcuts are disabled in diff
+  implementation. The selection bar and the c/q shortcuts are disabled in diff
   mode.
 - **Why:** The diff exists to audit change; re-rendering full prose for unchanged
   sections buries the hunks under exactly the content the user already reviewed,
@@ -1155,6 +1155,65 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   screenshot audit.
 - **Revisit when:** The bar wants a sixth instrument (it is full at 375px), or
   thread bottom-sheets land and need their own bar seat.
+
+## Preserve pinch-zoom; kill only the iOS input auto-zoom
+
+- **Decision:** The viewport meta stays permissive (`width=device-width,
+  initial-scale=1` — no `maximum-scale`/`user-scalable=no`), so pinch-zoom keeps
+  working. iOS's *other* zoom — the auto-zoom that fires when you focus a field
+  whose text is below 16px — is defeated instead by sizing every touch input
+  (`input`/`textarea`/`select`) to 16px at the ≤639px breakpoint. CSS only.
+- **Why:** The two zooms are different mechanisms and only one is the bug.
+  `maximum-scale=1` would kill both, but pinch-zoom is a baseline accessibility
+  affordance (low-vision users magnify), so suppressing it to fix a focus jank is
+  the wrong trade. 16px is the documented threshold below which iOS Safari decides
+  the field is too small to type into and zooms — meeting it removes the trigger
+  without touching the meta. The grill interview reversed the initial
+  "disable both" answer for exactly this a11y reason.
+- **Revisit when:** A field must render below 16px on a phone for layout reasons
+  (then: scope the rule, or accept the zoom there), or iOS changes the threshold.
+
+## Keyboard-aware sheets: VisualViewport inset + a body scroll-lock, one shared mechanism
+
+- **Decision:** Bottom sheets clear the on-screen keyboard by adding a live
+  `--kb-inset` CSS var to their `bottom`, measured from `window.visualViewport`
+  (`innerHeight − (vv.height + vv.offsetTop)`, clamped ≥0); a sibling
+  `useScrollLock` pins `<body>` (`position: fixed; top: −scrollY`) behind any open
+  sheet. One mechanism covers all sheets (composer, section ⋯ menu, approve), gated
+  to phone widths so desktop is untouched. The pure inset math and the lock/restore
+  live as DOM-free functions in `keyboard.ts` for unit tests.
+- **Why:** VisualViewport is the only API that reports the keyboard's real size
+  across iOS/Android; the rejected alternatives each fall short — `interactive-
+  widget=resizes-content` + dvh is Chromium-only and still untested on iOS, and
+  top-anchoring the composer abandons thumb reach. The body-lock is the separate
+  half of the bug the grill surfaced ("the UI behind it is also affected"):
+  `overflow: hidden` alone does not hold iOS momentum scroll, so the fixed-position
+  technique is required. Sharing one mechanism (not just the composer that
+  triggered the report) means no sheet can regress into the keyboard later.
+- **Revisit when:** `interactive-widget` ships and is reliable on iOS (it would
+  replace the inset math), or a sheet needs to stay keyboard-anchored on desktop.
+
+## Selection affordance is a docked bar: coexist with native popovers by placement
+
+- **Decision:** The select-to-comment affordance is a Comment/Ask bar docked at a
+  fixed bottom edge (thumb range on phone, a slim strip on desktop), not a toolbar
+  floating over the selection. It retires the old "codec cursor" toolbar on both
+  platforms; desktop keeps the `c`/`q` shortcuts. The composer's at-the-selection
+  placement on desktop is unchanged (it opens on a click that has already dismissed
+  the native popover).
+- **Why:** Native selection popovers cannot be suppressed on the web — not the iOS
+  long-press callout, not the macOS force-click "Look Up" dictionary (an OS trackpad
+  feature with no JS hook). The old toolbar floated *exactly* where those land, so
+  they stacked, on desktop as much as phone. Google Docs only dodges this by
+  rendering text to a canvas (reimplementing selection + a11y — overkill for a review
+  tool); Notion/Medium just coexist by placement. Relocating out of the popover zone
+  is the cheap, correct version of the same move. The deliberate cost — the bar sits
+  farther from the selection than a floating one — is paid down by the `c`/`q`
+  shortcuts on desktop and thumb-range placement on phone. A left-margin gutter pip
+  (the other coexisting option) was rejected because it anchors to the block, not the
+  exact selection span.
+- **Revisit when:** Browsers gain a real hook to suppress or reposition the native
+  popover, or selection moves to a canvas surface that eliminates it.
 
 ## Switcher rides the index stream; current chip leads; unread is device-local
 

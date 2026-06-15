@@ -1,10 +1,14 @@
-// The selection instruments (DESIGN.md §10): a floating toolbar over selected
-// plan text — Comment stacks into the drawer, Ask fires instantly — and the
-// anchored composer both actions open. The toolbar is the UI's one inverted
-// surface (paper-on-ink): it floats above the page, so it reads as the codec
-// cursor, not part of the document. The toolbar re-derives its spot from the
-// live selection on scroll, so it never strands; the composer pins where it
-// opened — its anchor is already captured, so the selection no longer matters.
+// The selection instruments (DESIGN.md §10): a docked Comment/Ask bar that
+// appears when plan text is selected — Comment stacks into the drawer, Ask
+// fires instantly — and the anchored composer both actions open. The bar is
+// pinned to a fixed bottom edge (thumb range on phone, a slim strip on
+// desktop), not floating over the selection, so it never lands in the zone
+// where the OS draws its own un-suppressable selection/dictionary popover
+// (DECISIONS.md: coexist by placement). It keeps the inverted paper-on-ink
+// treatment — the UI's one inverted surface — so it still reads as the codec
+// cursor, an instrument over the document rather than part of it. The composer
+// pins where it opened — its anchor is already captured, so the live selection
+// no longer matters once it is open.
 
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, RefObject } from "react";
 import { useEffect, useRef, useState } from "react";
@@ -49,7 +53,7 @@ export function useSelection(
   return selection;
 }
 
-export function SelectionToolbar({
+export function SelectionBar({
   selection,
   onComment,
   onAsk,
@@ -58,14 +62,12 @@ export function SelectionToolbar({
   onComment: () => void;
   onAsk: () => void;
 }) {
-  const { rect, anchor } = selection;
-  const below = rect.top < 72; // no room above the selection: flip under it
-  const x = Math.min(Math.max(rect.left + rect.width / 2, 140), window.innerWidth - 140);
-  const y = below ? rect.bottom + 10 : rect.top - 10;
+  // Docked, so the live rect no longer drives placement — only the anchor's
+  // section slug is shown; CSS pins the bar to the bottom edge (styles.css).
+  const { anchor } = selection;
   return (
     <div
-      className={below ? "sel-toolbar sel-below" : "sel-toolbar"}
-      style={{ left: x, top: y }}
+      className="sel-bar"
       role="toolbar"
       aria-label="selection actions"
       // preventDefault keeps the text selection alive through the click
