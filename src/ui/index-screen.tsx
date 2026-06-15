@@ -13,6 +13,7 @@ import { navigate } from "./router";
 import { unreadCount } from "./seen";
 import { isOver, partitionByApproval } from "./session-filter";
 import { useNow } from "./tick";
+import wordmarkUrl from "./otacon.svg";
 
 export function IndexScreen() {
   const { sessions, connected } = useSessions();
@@ -30,8 +31,13 @@ export function IndexScreen() {
     <div className="page">
       <header className="masthead">
         <div>
-          <h1 className="wordmark">otacon</h1>
-          <p className="tagline">mission support · plan review</p>
+          {/* Graphic OTACON wordmark, painted in the brand accent via CSS mask
+              so it tracks light/dark and per-session hue (DESIGN.md §3). */}
+          <h1
+            className="wordmark"
+            aria-label="otacon"
+            style={{ "--wordmark": `url(${wordmarkUrl})` } as CSSProperties}
+          />
         </div>
         <LinkState connected={connected} />
       </header>
