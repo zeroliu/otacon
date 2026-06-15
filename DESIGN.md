@@ -109,6 +109,14 @@ files under `.otacon/`. System fonts, light/dark via media query. ~720px max-wid
 reading column on desktop. Dev tooling is bun (installs, tests); the shipped artifact
 builds with `tsc` and runs on plain Node.
 
+Brand identity is the **OTACON wordmark** (`src/ui/otacon.svg`, the gear-as-O mark) — a
+flat single-color silhouette shown in the index masthead, painted in the brand accent via
+CSS mask so it tracks light/dark and per-session hue rather than baking a color. The brand
+accent is a **lime green** (hue ~82°, the wordmark's own green) — the default for
+`var(--hue, 82)`; per-session accents still vary by hash (§7). Semantic state colors
+(approved/added green, await amber, revise blue, fail red) are a separate palette and keep
+their own hues.
+
 ---
 
 ## 4. Plan artifact schema
@@ -743,7 +751,9 @@ gracefully rather than misattaching.
 
 ### Index (the phone bookmark)
 
-Card per session: title, repo + branch, status chip, agent-presence dot,
+The masthead carries the graphic OTACON wordmark (§3), with the browser↔daemon link
+state opposite. Below it, a card per session: title, repo + branch, status chip,
+agent-presence dot,
 unread-change badge, last activity, accent color. Tap → review screen. The status
 chip is `awaiting your review` / `agent revising` / `questions pending` /
 `approved` / `implementing` / `implemented` / `implement failed`, plus an

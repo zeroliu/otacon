@@ -1912,3 +1912,26 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   diluting the user-facing entry point. (← grill q4.)
 - **Revisit when:** Releasing gets automated enough that the runbook shrinks to a single
   command worth folding back into a CONTRIBUTING doc.
+
+## Graphic OTACON wordmark + brand accent shifted to the logo's lime
+
+- **Decision:** The index masthead's mono text wordmark (`otacon`) is replaced by a graphic
+  **OTACON wordmark** (`src/ui/otacon.svg`, the gear-as-O mark). The source export was a 3-D
+  extruded mark with a dark-green halo over a full-bleed dark background and outline strokes;
+  we ship only the flat light-green face silhouette (the dark halo/background + strokes
+  stripped), transparent. It renders in the masthead via a CSS `mask` painted in `--accent`,
+  so it inherits light/dark and per-session hue instead of baking a fixed color. The UI brand
+  accent (`--accent`, `--accent-on-ink`, `--live`, and the `var(--hue, …)` default) moves from
+  the old true-green (hue ~131–152°) to the wordmark's **lime** (hue ~82°). Semantic state
+  colors (approved/added green, await amber, revise blue, fail red) are deliberately left on
+  their own hues. The inline favicon's green is recolored to the wordmark lime to match.
+- **Why:** The export's gradient halo and 3-D depth are visual noise that fight the flat
+  hairline-telemetry aesthetic, and its lime green clashed with the UI's true-green accent.
+  Stripping to the flat silhouette keeps the codec-instrument identity sharp; unifying the
+  brand accent on the wordmark's own green makes the logo *be* the brand color rather than a
+  foreign mark sitting on a different green. Painting the masthead instance through a mask
+  (rather than an `<img>` of the baked `#d9fb9e`) keeps it legible on the light "warm paper"
+  background, where the raw light-green would be too low-contrast. Keeping semantic colors
+  separate preserves the meaning system (green = approved/success is distinct from brand).
+- **Revisit when:** The lime accent fails WCAG contrast on any surface, the brand mark
+  changes, or semantic green and brand lime are judged too close on a live screen.
