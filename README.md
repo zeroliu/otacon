@@ -18,13 +18,13 @@ an LLM.
 
 ## Install
 
-One-time machine setup (DESIGN.md §16). Until published to npm, install from GitHub:
+One-time machine setup (DESIGN.md §16):
 
 ```sh
-npm install -g github:zeroliu/otacon   # one package: CLI + daemon (Node ≥ 20)
-otacon install --all                   # agent wrappers; or --agent claude|codex|opencode
-otacon install --agent claude --hooks  # also register the Claude Code Stop hook
-otacon doctor                          # verify: node, daemon boots, wrappers, Tailscale
+npm install -g otacon                   # one package: CLI + daemon (Node ≥ 20)
+otacon install --all                    # agent wrappers; or --agent claude|codex|opencode
+otacon install --agent claude --hooks   # also register the Claude Code Stop hook
+otacon doctor                           # verify: node, daemon boots, wrappers, Tailscale
 ```
 
 `otacon install` writes the protocol wrapper into each agent's skill location —
@@ -39,6 +39,29 @@ any `otacon` command auto-spawns it.
 Per-repo setup: **none.** The first `otacon start` in a repo creates `.otacon/` and
 gitignores it. Approved plans land committed in `docs/plans/`. `otacon clean` archives
 ended sessions' working state to `.otacon/archive/`.
+
+### Updating
+
+```sh
+npm update -g otacon   # the version handshake restarts the daemon on next use
+```
+
+### Build from source (contributors)
+
+For contributors or the bleeding edge only — the published npm package is the
+supported user path. Clone the repo and run from source:
+
+```sh
+git clone https://github.com/zeroliu/otacon && cd otacon
+bun install
+./bin/otacon doctor              # run straight from source
+# — or build a Node artifact and link it onto PATH —
+bun run build && npm link        # `otacon` now points at this checkout
+```
+
+(`npm i -g github:zeroliu/otacon` is **not** a supported install — the published
+package ships a prebuilt `dist/`, and a GitHub install would need a build-on-install
+step that is intentionally not wired.)
 
 ## Phone access
 
@@ -61,3 +84,7 @@ provision; re-run `expose`.)
 On the Mac App Store Tailscale, putting `tailscale` on your `PATH` needs a manual
 launcher — a wrapper script that runs the app-bundle binary (a bare symlink crashes).
 otacon finds the app-bundle binary on its own either way.
+
+---
+
+Maintainers cutting a release: see [RELEASING.md](RELEASING.md).
