@@ -31,10 +31,10 @@ otacon doctor                           # verify: node, daemon boots, wrappers, 
 
 `otacon install` writes the protocol wrapper into each agent's skill location —
 Claude Code: `~/.claude/skills/otacon/SKILL.md` (+ the Stop hook script at
-`~/.claude/hooks/otacon-stop.sh`); Codex: a marked block in `~/.codex/AGENTS.md`;
-OpenCode: `~/.config/opencode/skills/otacon/SKILL.md`. Wrappers are managed files:
-reinstalls overwrite them (outside-the-markers content in Codex's shared file
-survives). `--hooks` merges the Stop hook into `~/.claude/settings.json` additively
+`~/.claude/hooks/otacon-stop.sh`); Codex: `~/.codex/skills/otacon/SKILL.md`;
+OpenCode: `~/.config/opencode/skills/otacon/SKILL.md`. All three are the same
+SKILL.md skill folder. Wrappers are managed files: reinstalls overwrite them
+wholesale. `--hooks` merges the Stop hook into `~/.claude/settings.json` additively
 and idempotently, backing the file up first. The daemon is never started by hand —
 any `otacon` command auto-spawns it.
 

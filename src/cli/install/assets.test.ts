@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { codexBlock, dogfoodSkillMd, skillMd } from "./assets.js";
+import { dogfoodSkillMd, skillMd } from "./assets.js";
 
 // The committed dogfood wrapper, regenerated from dogfoodSkillMd() (D7).
 const DOGFOOD_SKILL_PATH = join(
@@ -28,13 +28,13 @@ describe("single-source wrappers (D7)", () => {
     expect(dogfood).toContain("./bin/otacon start --title");
     expect(dogfood).toContain("./bin/otacon progress");
     expect(dogfood).toContain("./bin/otacon restart"); // the repo preamble
-    // The global wrappers carry no source-mode command prefix.
+    // The installed wrapper (Claude/Codex/OpenCode share it) carries no
+    // source-mode command prefix.
     expect(skillMd()).not.toContain("./bin/otacon");
-    expect(codexBlock()).not.toContain("./bin/otacon");
   });
 
   test("every wrapper teaches the start-first loop and the progress verb", () => {
-    for (const text of [skillMd(), codexBlock(), dogfoodSkillMd()]) {
+    for (const text of [skillMd(), dogfoodSkillMd()]) {
       // start-first (D6): the start step leads, before research.
       expect(text).toContain("first, before you research");
       expect(text).toMatch(/2\. \*\*Research the codebase\*\*/);
@@ -44,7 +44,7 @@ describe("single-source wrappers (D7)", () => {
   });
 
   test("every wrapper teaches the terminal `deleted` event (delete-pending-session)", () => {
-    for (const text of [skillMd(), codexBlock(), dogfoodSkillMd()]) {
+    for (const text of [skillMd(), dogfoodSkillMd()]) {
       // The review loop must stop, not re-park or error, when the user deletes
       // a pending session in the UI (DESIGN.md §6).
       expect(text).toContain("`deleted`");

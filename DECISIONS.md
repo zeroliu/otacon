@@ -960,35 +960,33 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 - **Decision:** `otacon install` owns wrapper content. SKILL.md files are rewritten
   byte-for-byte on every install and carry a visible ``managed by `otacon install` ``
-  marker; Codex's shared `AGENTS.md` gets a BEGIN/END-marked block that is replaced in
-  place (user content outside the markers survives verbatim). User edits inside
-  managed content are not preserved.
+  marker (Codex's SKILL.md included — see "Codex moves to a `.codex/skills/` SKILL.md
+  folder"). User edits inside managed content are not preserved.
 - **Why:** The wrapper is product behavior — it must track the CLI version exactly
   (`npm update -g` then reinstall, §16), and a three-way merge with user edits would
   fork the protocol invisibly: an agent following last month's card against this
   month's linter is a support nightmare. The marker makes the policy legible at the
-  point of temptation. Codex is block-scoped (not whole-file) only because its file is
-  a shared instructions surface other tools and humans also write to.
+  point of temptation.
 - **Revisit when:** Wrapper customization becomes a real need (then: a user-content
   slot outside the managed region, never merge).
 
-## Wrapper destinations: claude skills dir, codex AGENTS.md block, opencode config skills dir
+## Wrapper destinations: a SKILL.md skill folder per agent
 
 - **Decision:** Claude Code `~/.claude/skills/otacon/SKILL.md` + the hook script
-  `~/.claude/hooks/otacon-stop.sh`; Codex a marked block in `$CODEX_HOME/AGENTS.md`
+  `~/.claude/hooks/otacon-stop.sh`; Codex `$CODEX_HOME/skills/otacon/SKILL.md`
   (default `~/.codex/`); OpenCode `$XDG_CONFIG_HOME/opencode/skills/otacon/SKILL.md`.
-  All three are fully implemented; one protocol card is the single source for all of
-  them.
-- **Why:** Verified conventions (June 2026): Codex reads global instructions from
-  `~/.codex/AGENTS.md` and has no stable global skills contract, so the shared
-  instructions file with a managed block is the honest integration; OpenCode reads
-  Claude-compatible SKILL.md skills from `~/.config/opencode/skills/` (it also reads
-  `~/.claude/skills/`, so the Claude install alone would work — the dedicated copy
-  exists so installing/uninstalling one agent never silently depends on another's
-  files). One card for all three because the protocol is agent-agnostic by
-  construction (§13: "can run shell commands + can edit files").
-- **Revisit when:** Codex ships a real global skills dir, or the agents' conventions
-  drift apart enough that one card stops fitting all.
+  All three are the same SKILL.md skill folder, fully implemented; one protocol card is
+  the single source for all of them.
+- **Why:** Verified conventions (June 2026): all three agents now read the
+  cross-agent SKILL.md skill convention from their own skills dir, so a uniform skill
+  folder is the honest integration for each (Codex's move off `~/.codex/AGENTS.md` is
+  recorded separately below). OpenCode also reads `~/.claude/skills/`, so the Claude
+  install alone would work — the dedicated copy exists so installing/uninstalling one
+  agent never silently depends on another's files. One card for all three because the
+  protocol is agent-agnostic by construction (§13: "can run shell commands + can edit
+  files").
+- **Revisit when:** The agents' skill conventions drift apart enough that one card
+  stops fitting all.
 
 ## Stop hook: plain sh, block-decision JSON, fail-open, stop_hook_active ignored
 
@@ -1390,8 +1388,8 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 - **Decision:** The canonical loop runs `otacon start` *before* research (not after),
   so the review UI exists from the first second. The protocol card is built once by
-  `protocolCard(cmd)`, parametrized only by command prefix: installed wrappers
-  (`skillMd`/`codexBlock`) use `otacon`; this repo's committed dogfood wrapper
+  `protocolCard(cmd)`, parametrized only by command prefix: the installed wrapper
+  (`skillMd`, shared by all three agents) uses `otacon`; this repo's committed dogfood wrapper
   (`dogfoodSkillMd`, written to `.claude/skills/otacon/SKILL.md`) uses `./bin/otacon`
   and prepends a repo preamble. The dogfood file is generated, never hand-edited, and
   `assets.test.ts` asserts the committed file equals `dogfoodSkillMd()`.
@@ -1957,3 +1955,92 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   separate preserves the meaning system (green = approved/success is distinct from brand).
 - **Revisit when:** The lime accent fails WCAG contrast on any surface, the brand mark
   changes, or semantic green and brand lime are judged too close on a live screen.
+
+## Codex moves to a `.codex/skills/` SKILL.md folder; `InstallScope` seams in project install
+
+- **Decision:** Codex's wrapper is the same managed `SKILL.md` as Claude/OpenCode,
+  written to `$CODEX_HOME/skills/otacon/SKILL.md` at user scope and
+  `<root>/.codex/skills/otacon/SKILL.md` at project scope. The old `~/.codex/AGENTS.md`
+  marker-delimited block is fully deleted — `codexBlock()`, the `CODEX_BEGIN`/`CODEX_END`
+  markers, `codexAgentsPath()`, and the generic `upsertMarkedBlock()` are all removed
+  (no other caller). The three skill-path helpers (`claudeSkillPath`, `codexSkillPath`,
+  `opencodeSkillPath`) now take an `InstallScope = { kind: "user" } | { kind: "project";
+  root }`; `claudeHookScriptPath`/`claudeSettingsPath` stay user-only. Call sites pass
+  `{ kind: "user" }` for now.
+- **Why:** Codex now natively supports the cross-agent SKILL.md skill convention at
+  `~/.codex/skills/` (and `.codex/skills/` per repo), verified against OpenAI's docs
+  (June 2026) — so a uniform skill folder replaces the AGENTS.md special case, dropping
+  the only marker-block machinery in the tree. No migration or cleanup of installed
+  files is needed: the marker-block install was never shipped or used. `InstallScope` is
+  the seam the subsequent `--project` flag turns on without re-plumbing every helper;
+  introducing it now (with only the user branch wired) keeps that later change tiny and
+  keeps each helper's user/project split in one place. Note the base asymmetry the type
+  encodes: codex's user base is `$CODEX_HOME` (default `~/.codex`) while its project
+  base is `<root>/.codex`; opencode's user base is `$XDG_CONFIG_HOME/opencode` while its
+  project base is `<root>/.opencode` (each then `/skills/otacon/SKILL.md`).
+- **Revisit when:** Codex's skills path convention changes, or project scope needs a
+  destination layout the two-branch `InstallScope` can't express (e.g. a third scope).
+
+## `--project` resolves to the git repo root, erroring outside a repo
+
+- **Decision:** `otacon install --project` resolves its install base to the current
+  git repo root via `findRepoRoot(process.cwd())` (the same `git rev-parse
+  --show-toplevel` helper session resolution uses). Outside any git repo it is a hard
+  usage error (exit 2: "otacon install --project must run inside a git repo; none found
+  at <cwd>"), never a fallback to cwd or home. There is no `--dir <path>` escape hatch.
+- **Why:** "Install into the current project" means the repo a teammate clones and the
+  wrappers get committed to — the repo root is the only base where `<root>/.claude`,
+  `<root>/.codex/skills`, `<root>/.opencode` land where each agent looks per-repo.
+  Falling back to cwd on no-repo would silently scatter wrapper dirs into arbitrary
+  subdirectories or non-repos that can never be committed as intended; erroring makes
+  the misuse obvious immediately. Reusing `findRepoRoot` keeps repo-root resolution
+  defined once. `--dir` was declined (q1) as surface for a rarer case.
+- **Revisit when:** A real need appears to install wrappers into an explicit
+  non-repo-root directory (then add `--dir <path>` as a separate base, not a fallback).
+
+## Stop hook deferred at project scope; `--hooks --project` rejected
+
+- **Decision:** The Claude Code Stop hook is **not** installed at project scope. A
+  `--project` install writes only the inert skill wrappers — no `.claude/hooks/`
+  script, no `settings.json` registration — and `--hooks --project` is a usage error
+  (exit 2). The hooks report (`applyStopHook`/`offerStopHook`) is gated on user scope,
+  so a project install neither offers nor checks the user Stop hook; the wrapper write
+  itself drops the hook-script write/chmod when `scope.kind !== "user"`.
+- **Why:** A committed `.claude/` is inherited by every teammate who clones the repo,
+  including those without otacon installed. A skill wrapper is inert for them — the
+  agent acts on it only when they actually invoke otacon — but a registered Stop hook
+  is a turn-blocking command that would fire on every stop and fail (or hang) pointing
+  at `otacon-stop.sh` they don't have. Deferring the project hook is precisely what
+  keeps the committed `.claude/` a fail-safe rather than a footgun (q3); the hook stays
+  a user-machine opt-in via `--hooks` at user scope. `offerStopHook()` also reads the
+  user `~/.claude/settings.json`, which is meaningless for a project install — gating
+  it on user scope keeps the project JSON honest.
+- **Revisit when:** Claude Code gains a portable, fail-safe project hook mechanism
+  (e.g. a `$CLAUDE_PROJECT_DIR`-relative command that no-ops when the script is
+  absent), at which point a committed project hook could be reconsidered.
+
+## `otacon doctor` checks project wrappers when in a repo; "otacon protocol skill" wording
+
+- **Decision:** Each per-agent wrapper check in `otacon doctor` now passes against a
+  list of candidate paths and is `ok` if the managed `SKILL.md` (file present AND
+  containing `MANAGED_MARKER`) exists at any of them. The candidates are the user path
+  always, plus — when `findRepoRoot(process.cwd())` resolves — the project path
+  (`<root>/.claude/...`, `<root>/.codex/skills/...`, `<root>/.opencode/...`). The
+  satisfying scope is named in `detail` (`<path> (project)` / `<path> (user)`); the user
+  candidate is listed first, so when both exist user wins the report. A miss stays a
+  `warn` (never a failure — wrappers are optional), reworded from "wrapper not installed
+  at <path>" to "otacon protocol skill not found for <agent> (looked in <paths>); run
+  `otacon install --agent <agent>`" plus ", or add --project to install it into this
+  repo" only when a project candidate was in play. The node/daemon/Stop-hook/Tailscale
+  checks are unchanged — they are user-machine concerns with no project scope.
+- **Why:** After `otacon install --project` (Phase 2), doctor checking only `~/` would
+  cry wolf — warn "not installed" while a perfectly good committed wrapper sits in the
+  repo. Accepting either scope and naming which one matched makes doctor honest about a
+  project install and tells the user where the live wrapper actually is. The wording
+  change answers the reviewer's literal question — "what does 'wrapper not installed'
+  mean" (q4): "wrapper" is otacon jargon, so the message now names the concrete artifact
+  (the otacon protocol skill, the `SKILL.md` that `otacon install` writes), shows the
+  exact paths it probed, and surfaces `--project` as the in-repo fix. Keeping the miss a
+  warning preserves today's contract that wrappers for unused agents never fail the run.
+- **Revisit when:** Agents gain more wrapper search locations doctor should accept, or a
+  per-agent "expected scope" makes listing every candidate path too noisy.
