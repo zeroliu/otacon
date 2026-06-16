@@ -510,18 +510,22 @@ export function useRevision(id: string, n: number): RevisionPayload | undefined 
 export interface ConfigScope {
   path: string;
   values: ScopeValues;
-  /** The absolute repo this project scope writes under — project scope only. */
+  /** The absolute repo this project scope writes under — project scopes only. */
   repo?: string;
 }
+
+/** The three config scopes, in file-overlay precedence (low → high, §16). */
+export type ConfigScopeName = "user" | "project" | "project.local";
 
 /**
  * GET /api/config payload (DESIGN.md §6 config surface): the full field schema
  * plus each scope's target path and current values. `user` is always present;
- * `project` only when an absolute `repo` was supplied.
+ * `project` (committed) and `project.local` (gitignored) only when an absolute
+ * `repo` was supplied.
  */
 export interface ConfigPayload {
   schema: ConfigField[];
-  scopes: { user: ConfigScope; project?: ConfigScope };
+  scopes: { user: ConfigScope; project?: ConfigScope; "project.local"?: ConfigScope };
 }
 
 export interface ConfigState extends Partial<ConfigPayload> {
@@ -590,7 +594,7 @@ export type SaveConfigResult =
  * non-JSON body lands as a status-0 error so the screen can message it.
  */
 export async function saveConfig(
-  scope: "user" | "project",
+  scope: ConfigScopeName,
   repo: string | undefined,
   values: ScopeValues,
 ): Promise<SaveConfigResult> {

@@ -252,25 +252,34 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 ## Settings screen shows inherited defaults + cross-scope override flags
 
 - **Decision:** The Settings screen presents each field's *inherited* fallback, not just
-  the schema default: on the Project scope the placeholder/unchecked value is the user
-  profile's override when the profile set it (flagged "default from user profile"), else
-  the schema default; on the User scope a field the compared project overrides is flagged
-  "overridden by project". To compute those flags the screen fetches `GET /api/config`
-  with `?repo=` whenever a repo is selected — on *both* tabs, not only Project — so both
-  scopes are always in hand. The repo selector therefore stays visible on the User tab as
-  an optional "compare repo" (the user file it writes is global regardless). No API or
-  storage change: the GET already returns both scopes, and POST still replaces one file.
-- **Why:** The overlay order (defaults ← user ← project) is invisible if every field just
-  shows its hardcoded schema default — a Project value that "looks unset" is actually
-  inheriting a user override, and a user setting silently loses to a project one. Showing
-  the *effective* inherited value and the override direction makes the precedence legible
-  at the point of editing. Fetching the project scope on the User tab is the cheapest way
-  to know the override direction without a new endpoint; the cost is that picking a
-  compare repo re-fetches and re-seeds the form (mirroring the existing reload-reseed), so
-  an in-progress User edit is discarded on repo change — acceptable for a rare action.
+  the schema default, across all three scopes (user < project < project.local). When a
+  field is unset in the active scope it shows the value it inherits and flags its source:
+  Project inherits the user profile ("default from user profile"); Project · local
+  inherits the committed project first, then the user profile ("default from project" /
+  "default from user profile"). It also flags a value shadowed from above: User flags a
+  field a project or project · local overrides ("overridden by project" / "overridden by
+  project · local"); Project flags a project · local override. The inherit/override chains
+  are computed by walking ordered ancestor/overrider lists (highest precedence first), so
+  the first scope that sets the field wins and names itself — there is no fixed two-scope
+  special-casing. An override hint wins the single hint slot over an inherit hint. To
+  compute these the screen fetches `GET /api/config` with `?repo=` whenever a repo is
+  selected — on *every* tab, not only the project ones — so all three scopes are always in
+  hand. The repo selector stays visible on the User tab as an optional "compare repo" (the
+  user file it writes is global regardless). No API or storage change: the GET already
+  returns all three scopes, and POST still replaces one file.
+- **Why:** The overlay order is invisible if every field just shows its hardcoded schema
+  default — a value that "looks unset" is actually inheriting from a lower scope, and a
+  setting can silently lose to a higher one. Showing the *effective* inherited value and
+  the override direction makes the precedence legible at the point of editing. Walking
+  ordered scope lists (rather than a per-pair flag) is what let the third scope drop in
+  without re-special-casing the hint logic. Fetching the project scopes on the User tab is
+  the cheapest way to know the override direction without a new endpoint; the cost is that
+  picking a compare repo re-fetches and re-seeds the form (mirroring the existing
+  reload-reseed), so an in-progress User edit is discarded on repo change — acceptable for
+  a rare action.
 - **Revisit when:** A worktree config *scope* lands (today worktree is a section, not a
-  layer), adding a third precedence level the two-flag model can't express; or editing one
-  scope while comparing against several repos at once becomes a real need.
+  layer), adding a fourth precedence level; or editing one scope while comparing against
+  several repos at once becomes a real need.
 
 ## Settings auto-saves on blur; no Save button
 

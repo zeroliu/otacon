@@ -787,11 +787,16 @@ config`). Config is
 still file-backed (§16); the Settings screen is a web editor over those files. Sections
 render worktree → notifications → budgets → activity (the build-time and attention
 knobs lead; the line budgets are the long tail). Each field surfaces what it inherits
-when left unset, mirroring the file overlay order
-(defaults ← user ← project ← project.local, §16): the
-Project scope shows the user profile's value as the field's default and flags it
-"default from user profile" when the profile set it; the User scope flags a field a
-project overrides as "overridden by project". A repo selector names the Project scope
+when left unset and what shadows it from above, mirroring the file overlay order
+(defaults ← user ← project ← project.local, §16). The inherit hint names the nearest
+scope below the active one that sets the field: the Project scope shows the user
+profile's value ("default from user profile"); the Project · local scope shows the
+committed project's value ("default from project") if the project sets it, else the
+user profile's, else the schema default (no hint). The override hint names the nearest
+scope above that shadows the field: the User scope flags a field a project or
+project · local overrides ("overridden by project" / "overridden by project · local");
+the Project scope flags a project · local override; an override hint wins the slot over
+an inherit hint. A repo selector names the Project scope
 file (the committed `<repo>/.otacon/config.json`; the Project · local scope edits the
 gitignored `<repo>/.otacon/config.local.json` sibling that wins over it); on the User
 scope it's an optional "compare repo" that only chooses which project's overrides to
