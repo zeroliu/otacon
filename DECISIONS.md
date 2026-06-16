@@ -1956,6 +1956,25 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** The lime accent fails WCAG contrast on any surface, the brand mark
   changes, or semantic green and brand lime are judged too close on a live screen.
 
+## Doc audience split: README + docs/ are user-facing; DESIGN/DECISIONS/AGENTS are internal
+
+- **Decision:** README and the `docs/` directory are otacon's user-facing documentation
+  surface; `DESIGN.md` / `DECISIONS.md` / `AGENTS.md` are internal-facing. Installation is
+  lean enough to live inline in the README (prerequisites + `npm install`, then the
+  `otacon install` skill step in Get started); there is **no** `docs/INSTALL.md`. Only the
+  phone how-to keeps a focused user doc, `docs/PHONE-ACCESS.md`.
+- **Why:** A value-prop-forward ("revolutionize agentic coding review") README should not
+  route users into an internal product spec — DESIGN.md is a timeless behavior spec for
+  contributors, not an onboarding guide. But a dedicated install guide turned out to be the
+  wrong cut: it filled up with implementation detail (managed-file write locations, marker
+  semantics, the Stop hook merge) that no installing user needs, while the install a user
+  *does* need is two commands. So install collapses back into the README happy path and the
+  detail-heavy `docs/INSTALL.md` is dropped; phone access stays split out because it is a
+  genuinely optional, multi-step setup. (← q3, q4.)
+- **Revisit when:** Install grows enough genuinely user-facing steps (new platforms, auth,
+  multiple runtimes) that the README happy path can no longer hold it, or a generated docs
+  site replaces the hand-written `docs/`.
+
 ## Codex moves to a `.codex/skills/` SKILL.md folder; `InstallScope` seams in project install
 
 - **Decision:** Codex's wrapper is the same managed `SKILL.md` as Claude/OpenCode,
