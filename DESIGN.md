@@ -854,6 +854,18 @@ returns to the index.
 - Drawer = bottom bar: review/edit/delete pending comments, per-comment **send now**,
   **Send all**; when nothing is pending it shrinks to the whole-plan comment
   affordance alone.
+- Unsent-drafts gate: drawer comments live only in the browser until **Send all**,
+  so picking a commit variant while N drafts are staged opens a drafts stage with
+  three moves. **Send & commit** flushes the batch into open threads and folds them
+  in through the comment & approve path in one click; **Discard & commit** drops the
+  local drafts (irreversible) and finalizes the chosen variant; **Cancel** backs out
+  (the safe default). The gate fires after the variant pick, so Send/Discard inherit
+  Commit Plan vs Commit & Implement. The same staged drafts also arm a
+  reload/close-tab guard (`beforeunload`) so a page unload warns before wiping them;
+  the guard is scoped strictly to staged drafts (a clean drawer never prompts) and
+  covers reload and close-tab only, with navigate-away and half-typed composer text
+  out of scope. Everything here is browser-only: the daemon never sees these drafts,
+  so nothing in this gate touches the protocol.
 - Threads rail: clicking an anchored thread scrolls to its section and flashes the
   quoted text in the plan. A question and its follow-ups render as one **conversation
   card** — each turn with its answer (or the blinking "answering…" cursor) — with a
@@ -1023,6 +1035,11 @@ transcript appends no section. When the approval went through **comment & approv
 per comment the agent folded in unreviewed, the reviewer's comment as a blockquote
 and the agent's resolution beneath it — so the trusted fold-in stays auditable in git
 (a plain or *commit-anyway* approve folds nothing in, so the section is omitted).
+The reviewer reaches this same fold-in in one click even from browser-only drafts the
+daemon never received: picking a commit variant with unsent drawer comments opens the
+client-side drafts gate (§10), whose **Send & commit** flushes the batch into open
+threads and then approves with `{sendOpenComments}`, so staged-but-unsent comments
+count toward the plan instead of vanishing at approve.
 The filename is dated with the approve day and slugged
 from the session title; a taken name gets a `-2`, `-3`, … suffix — never overwritten.
 The artifact is post-lint output: the closed plan schema (§4-5) governs submits, not

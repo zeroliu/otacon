@@ -320,6 +320,22 @@ function ReviewLoop({
   // teardown, not on mount.
   useEffect(() => clearThreadHighlights, []);
 
+  // Reload / close-tab guard (DESIGN.md §10): drawer drafts live only in this
+  // browser until Send, so a reload or tab-close would wipe them with no warning.
+  // Register beforeunload only while drafts are actually staged and tear it down
+  // the moment the drawer empties (sent or deleted), so a clean session never
+  // prompts. Scope is reload/close-tab only (navigate-away and half-typed
+  // composer text stay out of scope, plan q2); the daemon never sees them (D5).
+  useEffect(() => {
+    if (pending.length === 0) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = ""; // some browsers gate the prompt on a set returnValue
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [pending.length]);
+
   // No re-review prompt while the editing surface is locked: not on an approved
   // session (the review is over), and not while `finalizing` (the agent's fold-in
   // bumps the revision, but the screen is read-only awaiting the commit).
@@ -429,23 +445,41 @@ function ReviewLoop({
       ? submitComposer(() => postQuestion(session.id, composer.anchor, body))
       : Promise.resolve(false);
 
+  // Drop exactly the sent drafts from pending: a draft stacked from the composer
+  // while the POST was in flight stays pending instead of being silently wiped.
+  const dropSent = (batch: PendingComment[]) =>
+    setPending((prev) => {
+      const sent = new Set(batch.map((item) => item.key));
+      return prev.filter((entry) => !sent.has(entry.key));
+    });
+
   const sendAll = async () => {
     if (pending.length === 0) return;
     const batch = pending;
-    const ok = await sendItems(batch.map(({ anchor, body }) => ({ anchor, body })));
-    // Remove exactly what was sent: a draft stacked from the composer while
-    // the POST was in flight stays pending instead of being silently wiped.
-    if (ok) {
-      const sent = new Set(batch.map((item) => item.key));
-      setPending((prev) => prev.filter((entry) => !sent.has(entry.key)));
-    }
+    if (await sendItems(batch.map(({ anchor, body }) => ({ anchor, body })))) dropSent(batch);
+  };
+
+  // The approve drafts gate's flush (DESIGN.md §10): POST the non-blank drafts and
+  // drop exactly those, WITHOUT lighting the drawer's busy/failed. The dialog owns
+  // its own busy/error, and the drawer dimmed behind the approve scrim must not
+  // flash state for a batch its own Send never started. Blank drafts are skipped,
+  // mirroring the drawer's send-all `blocked` guard: the daemon 400s a whole batch
+  // that carries any empty body, which would otherwise strand every draft.
+  const flushDrafts = async (): Promise<boolean> => {
+    const batch = pending.filter((item) => item.body.trim() !== "");
+    if (batch.length === 0) return true;
+    const ok = await postComments(
+      session.id,
+      batch.map(({ anchor, body }) => ({ anchor, body })),
+    );
+    if (ok) dropSent(batch);
+    return ok;
   };
 
   const sendOne = async (key: number) => {
     const item = pending.find((entry) => entry.key === key);
     if (!item) return;
-    const ok = await sendItems([{ anchor: item.anchor, body: item.body }]);
-    if (ok) setPending((prev) => prev.filter((entry) => entry.key !== key));
+    if (await sendItems([{ anchor: item.anchor, body: item.body }])) dropSent([item]);
   };
 
   const edit = (key: number, body: string) =>
@@ -648,6 +682,15 @@ function ReviewLoop({
         <ApproveDialog
           sessionId={session.id}
           revision={session.revision}
+          // The drawer holds browser-only drafts the daemon never saw; the gate
+          // catches them before finalize (Send & commit flushes + folds in,
+          // Discard & commit drops them) rather than letting Approve silently
+          // skip them (DESIGN.md §10, §12). Count only sendable (non-blank)
+          // drafts: a half-typed blank isn't a comment to protect, and flushing
+          // it would 400 the whole batch.
+          pendingCount={pending.filter((item) => item.body.trim() !== "").length}
+          onFlushDrafts={flushDrafts}
+          onDiscardDrafts={() => setPending([])}
           onClose={() => setApproveOpen(false)}
           onApproved={(path, implement) => {
             // Plain approve: the session SSE frame flips the status (and this

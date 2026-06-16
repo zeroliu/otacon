@@ -3403,6 +3403,18 @@ code {
   color: var(--chip-await-ink);
 }
 
+/* The drafts gate (confirm-uncommitted-comment): unsent drawer drafts caught
+ * before finalize. A caution interjection, not a server warning, so it borrows
+ * the await amber top edge to read as "decide about these first". */
+.approve-drafts {
+  border-color: color-mix(in srgb, var(--chip-await-ink) 50%, var(--line-strong));
+  border-top-color: var(--chip-await-ink);
+}
+
+.approve-drafts .approve-head {
+  color: var(--chip-await-ink);
+}
+
 .approve-head .composer-close {
   margin-left: auto;
 }

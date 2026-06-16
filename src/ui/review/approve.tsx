@@ -20,21 +20,63 @@
 // shows the read-only finalizing notice (ApprovingNote) until the agent commits.
 
 import { useEffect, useState } from "react";
-import type { ApproveOptions } from "../api";
+import type { ApproveOptions, ApproveResult } from "../api";
 import { postApprove } from "../api";
 
 type Stage =
   | { kind: "confirm" }
+  // The drafts gate (DESIGN.md §10, D1/D3): a commit variant was picked while
+  // unsent drawer drafts are staged. Interjects before finalize so they're
+  // never silently dropped; carries the variant on `pendingImplement`.
+  | { kind: "drafts" }
   | { kind: "warn"; unresolved: number; openComments: number };
+
+/**
+ * The next UI move from an approve POST result, factored out so the direct
+ * "fire" path and the drafts "Send & commit" flush-then-fold path share one
+ * honest translation (and it stays unit-testable without a live daemon). A
+ * `force` caller never bounces to the warn stage: a forced commit drops the
+ * open threads on purpose, so its 409 surfaces as an error, not a second warn.
+ */
+export type ApproveMove =
+  | { kind: "approved"; path: string }
+  | { kind: "finalizing" }
+  | { kind: "warn"; unresolved: number; openComments: number }
+  | { kind: "error"; message: string };
+
+export function approveMove(result: ApproveResult, force: boolean): ApproveMove {
+  if (result.ok) {
+    return "finalizing" in result ? { kind: "finalizing" } : { kind: "approved", path: result.path };
+  }
+  if (!force && result.code === "E_UNRESOLVED_THREADS" && result.unresolved !== undefined) {
+    return { kind: "warn", unresolved: result.unresolved, openComments: result.openComments ?? 0 };
+  }
+  return {
+    kind: "error",
+    message:
+      result.code === "E_UNREACHABLE"
+        ? "couldn't reach otacond — is it up?"
+        : (result.message ?? result.code),
+  };
+}
 
 export function ApproveDialog({
   sessionId,
   revision,
+  pendingCount,
+  onFlushDrafts,
+  onDiscardDrafts,
   onClose,
   onApproved,
 }: {
   sessionId: string;
   revision: number;
+  /** Unsent drawer drafts (browser-only until Send): >0 arms the drafts gate. */
+  pendingCount: number;
+  /** Flush the staged drafts as one batch (POST /comments); true on the 202. */
+  onFlushDrafts: () => Promise<boolean>;
+  /** Drop the browser-only drafts (irreversible); local drawer state only. */
+  onDiscardDrafts: () => void;
   onClose: () => void;
   /**
    * Receives the artifact's repo-relative path; the session frame flips the UI.
@@ -60,46 +102,95 @@ export function ApproveDialog({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // Consume a move from approveMove: approved closes through onApproved (the
+  // caller pins the path / leaves the build live), a deferred finalize just
+  // closes (the SSE `finalizing` frame drives the screen), an unresolved 409
+  // re-asks on the warn stage carrying the chosen variant, and an error stays
+  // put with the reason shown. The "lost race" re-render (a Send-to-agent retry
+  // whose open comments vanished, now openComments=0) rides the warn case too.
+  const apply = (move: ApproveMove, implement: boolean) => {
+    switch (move.kind) {
+      case "approved":
+        onApproved(move.path, implement);
+        return;
+      case "finalizing":
+        onClose();
+        return;
+      case "warn":
+        setPendingImplement(implement);
+        setStage({ kind: "warn", unresolved: move.unresolved, openComments: move.openComments });
+        return;
+      case "error":
+        setError(move.message);
+        return;
+    }
+  };
+
   const fire = (opts: ApproveOptions) => {
     if (busy) return;
     setBusy(true);
     setError(null);
     void postApprove(sessionId, opts).then((result) => {
       setBusy(false);
-      if (result.ok) {
-        // Comment & approve: the daemon deferred the finalize. The SSE
-        // `finalizing` frame drives the screen — just close the sheet.
-        if ("finalizing" in result) {
-          onClose();
+      apply(approveMove(result, opts.force ?? false), opts.implement ?? false);
+    });
+  };
+
+  // A commit variant was chosen (Commit Plan / Commit & Implement). With unsent
+  // drawer drafts staged, interject the drafts gate carrying the variant (D1/D3);
+  // a clean drawer finalizes straight away.
+  const pickVariant = (implement: boolean) => {
+    if (busy) return;
+    setError(null); // a prior sendAndCommit error bounced us here; don't carry it in
+    if (pendingCount > 0) {
+      setPendingImplement(implement);
+      setStage({ kind: "drafts" });
+      return;
+    }
+    fire({ implement });
+  };
+
+  // Send & commit (D2): flush the staged drafts into real OPEN threads, then fold
+  // them in through the existing comment & approve path in one click. Busy stays
+  // lit across both legs (the `finally` is the single release, so even a thrown
+  // post can't strand it). A failed flush keeps the drafts (never sent) and shows
+  // the reason. Once the flush lands the drafts are real threads (not lost), so a
+  // later approve *error* drops back to confirm with the reason shown (retry the
+  // commit, nothing to re-send); a residual 409 (the open comments were resolved
+  // out from under the flush) re-asks on the warn stage through `apply`.
+  const sendAndCommit = () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    void (async () => {
+      try {
+        if (!(await onFlushDrafts())) {
+          setError("couldn't send your staged comments. They're still here; try again");
           return;
         }
-        onApproved(result.path, opts.implement ?? false);
-        return;
+        const move = approveMove(
+          await postApprove(sessionId, { sendOpenComments: true, implement: pendingImplement }),
+          false,
+        );
+        if (move.kind === "error") {
+          setStage({ kind: "confirm" });
+          setError(move.message);
+          return;
+        }
+        apply(move, pendingImplement);
+      } finally {
+        setBusy(false);
       }
-      // The unresolved-threads warning — on the first attempt, or when a "Send to
-      // agent" retry lost its race (the open comments were resolved out from under
-      // the click, so the daemon refused the defer and 409'd; re-render the warn
-      // stage, now with openComments=0, so the user keeps the friendly escape
-      // instead of dropping into a raw error). A `force` attempt never bounces here.
-      if (
-        !opts.force &&
-        result.code === "E_UNRESOLVED_THREADS" &&
-        result.unresolved !== undefined
-      ) {
-        setPendingImplement(opts.implement ?? false);
-        setStage({
-          kind: "warn",
-          unresolved: result.unresolved,
-          openComments: result.openComments ?? 0,
-        });
-        return;
-      }
-      setError(
-        result.code === "E_UNREACHABLE"
-          ? "couldn't reach otacond — is it up?"
-          : (result.message ?? result.code),
-      );
-    });
+    })();
+  };
+
+  // Discard & commit: drop the browser-only drafts (irreversible) and finalize the
+  // chosen variant. Server-side open threads, if any, still route through the
+  // normal warn on the fire below; only the local drafts are dropped here.
+  const discardAndCommit = () => {
+    if (busy) return;
+    onDiscardDrafts();
+    fire({ implement: pendingImplement });
   };
 
   const canSend = stage.kind === "warn" && stage.openComments > 0;
@@ -112,14 +203,24 @@ export function ApproveDialog({
       }}
     >
       <div
-        className={stage.kind === "warn" ? "approve-sheet approve-warning" : "approve-sheet"}
+        className={
+          stage.kind === "warn"
+            ? "approve-sheet approve-warning"
+            : stage.kind === "drafts"
+              ? "approve-sheet approve-drafts"
+              : "approve-sheet"
+        }
         role="dialog"
         aria-modal="true"
         aria-label="approve plan"
       >
         <div className="approve-head">
           <span className="approve-mode">
-            {stage.kind === "warn" ? "⚠ unresolved threads" : "approve plan"}
+            {stage.kind === "warn"
+              ? "⚠ unresolved threads"
+              : stage.kind === "drafts"
+                ? "✎ unsent comments"
+                : "approve plan"}
           </span>
           <button type="button" className="composer-close" onClick={onClose}>
             esc
@@ -137,6 +238,24 @@ export function ApproveDialog({
               build: it opens a worktree and walks the phases (implement → review → fix → commit),
               opening a PR when every phase is green. The session stays live as{" "}
               <em>implementing</em> and asks you on the first blocker.
+            </p>
+          </>
+        ) : stage.kind === "drafts" ? (
+          <>
+            <p className="approve-copy">
+              <strong>{pendingCount}</strong> staged{" "}
+              {pendingCount === 1 ? "comment" : "comments"} in the drawer{" "}
+              {pendingCount === 1 ? "hasn't" : "haven't"} been sent yet. Send{" "}
+              {pendingCount === 1 ? "it" : "them"} to the agent with this commit, or discard{" "}
+              {pendingCount === 1 ? "it" : "them"}.
+            </p>
+            <p className="approve-sub">
+              <strong>Send &amp; commit</strong> flushes{" "}
+              {pendingCount === 1 ? "the comment" : `the ${pendingCount} comments`} as open
+              threads and hands {pendingCount === 1 ? "it" : "them"} to the agent to fold in, then{" "}
+              {pendingImplement ? "commits and starts the build" : "commits"}.{" "}
+              <strong>Discard &amp; commit</strong> drops {pendingCount === 1 ? "it" : "them"} from
+              your browser (this can't be undone) and finalizes the plan as it stands.
             </p>
           </>
         ) : (
@@ -177,7 +296,7 @@ export function ApproveDialog({
                 type="button"
                 className="btn btn-approve"
                 disabled={busy}
-                onClick={() => fire({ implement: false })}
+                onClick={() => pickVariant(false)}
               >
                 {busy ? "committing…" : "Commit Plan"}
               </button>
@@ -185,9 +304,31 @@ export function ApproveDialog({
                 type="button"
                 className="btn btn-implement"
                 disabled={busy}
-                onClick={() => fire({ implement: true })}
+                onClick={() => pickVariant(true)}
               >
                 {busy ? "starting…" : "Commit & Implement"}
+              </button>
+            </>
+          ) : stage.kind === "drafts" ? (
+            <>
+              {/* Discard is the irreversible move, so it carries the amber escape
+                  tone and sits left of the recommended Send; Cancel stays the
+                  safe default (leftmost, plain). */}
+              <button
+                type="button"
+                className="btn btn-force"
+                disabled={busy}
+                onClick={discardAndCommit}
+              >
+                {busy ? (pendingImplement ? "starting…" : "committing…") : "Discard & commit"}
+              </button>
+              <button
+                type="button"
+                className="btn btn-send"
+                disabled={busy}
+                onClick={sendAndCommit}
+              >
+                {busy ? "sending…" : "Send & commit"}
               </button>
             </>
           ) : (

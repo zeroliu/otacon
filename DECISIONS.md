@@ -1877,3 +1877,41 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   agent, which already holds the git worktree, is the natural owner of a committed-file move).
 - **Revisit when:** A flat `archive/` grows unwieldy (consider per-month subdirs), or plain
   Approve should archive too (right now an un-built approved plan stays in `docs/plans/`).
+
+## Unsent drawer drafts gate Approve client-side; Send & commit reuses the fold-in
+
+- **Decision:** Drawer comments are browser-only until **Send all** flushes them, so a
+  server-side approve cannot see them. Rather than block Approve or change a protocol the
+  daemon never knew about, the gate is **client-side** (D5): when a commit variant is picked
+  with `pendingCount > 0` unsent drafts, `ApproveDialog` enters a new `drafts` stage before
+  any `postApprove` fires (D1). `pendingCount` counts only non-blank drafts, so a half-typed
+  blank neither arms the gate nor poisons the flush. It offers **Send & commit** /
+  **Discard & commit** / **Cancel**. **Send & commit** flushes the non-blank batch through a
+  gate-local `flushDrafts` (`POST /comments`) that shares the drawer's "remove exactly what was
+  sent" set but keeps its OWN busy/error channel: the dimmed drawer behind the approve scrim
+  must not flash "sending…"/"send failed" for a batch its own Send never started, and blank
+  drafts are skipped because the daemon 400s a whole batch with any empty body. On the 202 it
+  approves with `{sendOpenComments, implement}`, folding the now-open threads in through the
+  existing comment & approve hop in one click (D2), no redundant second warn. **Discard & commit** clears the local drafts then
+  fires the plain variant. The gate fires *after* the variant pick and carries the same
+  `pendingImplement` the warn stage uses, so Send/Discard inherit Commit Plan vs Commit &
+  Implement (D3). A `beforeunload` guard, registered in `ReviewLoop` only while
+  `pending.length > 0`, covers reload/close-tab; navigate-away and half-typed composer text
+  stay out of scope (D4). The pure `approveMove(result, force)` translation is shared by the
+  direct fire and the Send & commit path (and unit-tested) so both read a 409/finalizing/error
+  the same way.
+- **Why:** The silent drop was a real loss: staged comments the reviewer believed counted
+  vanished when the session ended. A client-side gate keeps the fix where the state lives (the
+  daemon has no browser drafts to reason about) and leans on two unchanged daemon paths, so the
+  blast radius is the approve sheet plus the unload listener: no server, CLI, or schema move.
+  Routing Send & commit straight into `{sendOpenComments}` (the q4 choice: one click, agent
+  always addresses them) matches "these should count" without a double warn, and reuses the
+  audited `## Review notes` fold-in rather than a parallel path. Once the flush lands the drafts
+  are real OPEN threads (not lost), so a later approve *error* drops back to confirm with the
+  reason shown (retry the commit, nothing to re-send); a residual 409, the rare case where the
+  open comments were resolved out from under the flush before approve read them, re-asks on the
+  warn stage instead. Scoping the unload guard strictly to staged drafts is what keeps
+  `beforeunload` (browser-controlled copy, fires on every unload) from nagging a clean session.
+- **Revisit when:** Drafts ever grow long-lived enough that a reload warning feels too weak
+  (consider `localStorage` draft-persistence), or navigate-away / composer text join the
+  silent-loss set the gate must cover.
