@@ -265,6 +265,64 @@ describe("Store counters and revisions", () => {
   });
 });
 
+describe("Store pendingApproval (comment & approve)", () => {
+  test("set/clear round-trips on disk and survives a fresh Store", () => {
+    const store = new Store();
+    const { id } = store.createSession({ title: "t", repo });
+    expect(store.readState(id).pendingApproval).toBeUndefined();
+
+    store.setPendingApproval(id, { implement: true, threads: ["t1", "t3"] });
+    expect(store.readState(id).pendingApproval).toEqual({ implement: true, threads: ["t1", "t3"] });
+    // A restart still sees the armed defer (it persists on session.json).
+    expect(new Store().readState(id).pendingApproval).toEqual({
+      implement: true,
+      threads: ["t1", "t3"],
+    });
+
+    store.clearPendingApproval(id);
+    expect(store.readState(id).pendingApproval).toBeUndefined();
+    expect(new Store().readState(id).pendingApproval).toBeUndefined();
+  });
+
+  test("setPendingApproval leaves the counters and revision intact", () => {
+    const store = new Store();
+    const { id } = store.createSession({ title: "t", repo });
+    store.saveRevision(id, "# v1\n");
+    store.bumpCounters(id, { thread: 2, batch: 1, eventSeq: 1 });
+    store.setPendingApproval(id, { implement: false, threads: ["t2"] });
+    const state = store.readState(id);
+    expect(state.revision).toBe(1);
+    expect(state.counters).toEqual({ batch: 1, thread: 2, question: 0, eventSeq: 1 });
+    expect(state.pendingApproval).toEqual({ implement: false, threads: ["t2"] });
+  });
+
+  test("clearPendingApproval is a no-op when nothing is armed", () => {
+    const store = new Store();
+    const { id } = store.createSession({ title: "t", repo });
+    expect(() => store.clearPendingApproval(id)).not.toThrow();
+    expect(store.readState(id).pendingApproval).toBeUndefined();
+  });
+
+  test("a malformed pendingApproval is dropped, not flowed through", () => {
+    const store = new Store();
+    const { id } = store.createSession({ title: "t", repo });
+    const statePath = join(sessionDir(repo, id), "session.json");
+    // implement must be a boolean and threads a string[]; a wrong shape is
+    // dropped (defaulting beats quarantining a recoverable, valid-otherwise file).
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        id,
+        revision: 0,
+        lastReviewedRevision: 0,
+        counters: { batch: 0, thread: 0, question: 0, eventSeq: 0 },
+        pendingApproval: { implement: "yes", threads: [1, 2] },
+      }),
+    );
+    expect(store.readState(id).pendingApproval).toBeUndefined();
+  });
+});
+
 describe("end to end: store + queue across instances", () => {
   test("mint, enqueue, restart, drain — events survive on disk", () => {
     // First "daemon": mint a session and queue two events.

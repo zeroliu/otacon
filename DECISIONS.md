@@ -881,6 +881,54 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** A "withdraw question" verb appears (open-question deadlock
   stops being theoretical), or approve wants per-thread acknowledgment.
 
+## Comment & approve: a deferred-finalize hop, not a relabeled approve button
+
+- **Decision:** When the reviewer approves with open comments, the warn stage
+  offers a third path beside *commit anyway* (force-drop): **Send to agent**
+  (`approve {sendOpenComments:true}`). It does NOT finalize — it flips the session
+  to a new non-terminal status `finalizing`, arms a `pendingApproval` flag on
+  session.json (carrying the Commit-Plan-vs-Implement choice and the swept comment
+  thread ids), and queues a `comments` event marked `final:true` carrying every
+  still-open comment thread. The agent folds them in; the daemon detects
+  `pendingApproval` on its next clean `submit` and finalizes then — composing the
+  artifact (with a `## Review notes` section built from the swept threads' now-
+  landed resolutions), flipping to `approved`/`implementing`, and queuing the
+  `approved` event — instead of returning to `in_review`. The mechanism **reuses
+  the comments→revise→submit loop**: no new agent verb, and L5 already forces every
+  swept comment to carry a resolution before the finalize submit can pass. Only
+  open **comment** threads are swept (the foldable kind); open questions are not
+  (answered via `otacon answer`, never resolved — they still drop on approve as
+  before). The E_UNRESOLVED_THREADS 409 gains an `openComments` count so the UI
+  offers *Send to agent* only when there is something to fold in.
+- **Why:** Leaving a final nit shouldn't cost a full comment→revise→re-review→
+  approve round trip — the reviewer is done the instant they click. A deferred hop
+  reuses the entire revise loop (linter, resolutions, re-anchoring, SSE) rather
+  than inventing a parallel finalize path, so the fold-in is schema-linted (the
+  agent cannot smuggle new scope into a plan the reviewer already left) and
+  auditable (the `## Review notes` git trail is the only check on an unreviewed
+  fold-in). Storing `pendingApproval` on session.json (not the registry) keeps it
+  daemon-owned detail like the counters, and persists the choice across a daemon
+  restart. `finalizing` is non-terminal for the same reason `implementing` is: the
+  agent's submit must still mutate. A hung fold-in is escapable — `approve
+  {force:true}` mid-finalize commits the current revision and force-drops the
+  open threads (honoring the variant the reviewer originally chose). The
+  double-finalize race serializes on the same guards as double-approve: an
+  `approved` finalize is terminal (the loser hits `E_SESSION_OVER`), and an
+  `implementing` finalize is caught by a new `submit`-during-`implementing` refusal
+  (`E_ALREADY_IMPLEMENTING` — submit was never in the implementing verb set).
+  A `finalizing` session also refuses new **comments** (`E_ALREADY_FINALIZING`):
+  the comments route otherwise flips status back to `revising` while leaving
+  `pendingApproval` armed (so a later clean submit silently finalizes the plan the
+  reviewer thought they had reopened) and mints a thread outside `pendingApproval.
+  threads` that L5 then demands the agent resolve though it was never handed it —
+  wedging the fold-in. Locking the window to the agent's solo pass is simpler and
+  truer to "the reviewer is done the instant they click" than queuing the comment
+  for after the finalize or re-disarming on every reopen.
+- **Revisit when:** Open questions need folding in too (a "send questions to agent"
+  needs the agent to answer-then-finalize, which the current submit hop doesn't
+  model), or a hung-finalize timeout should auto-fall-back to drop without the
+  manual escape.
+
 ## Approve archives logically; the artifact appends an "## Interview" section
 
 - **Decision:** Approve writes `docs/plans/YYYY-MM-DD-<slug>.md` (local approve

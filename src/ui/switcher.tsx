@@ -19,6 +19,8 @@ const GLYPHS: Record<SessionStatus, { glyph: string; word: string }> = {
   draft: { glyph: "✎", word: "drafting" },
   in_review: { glyph: "✋", word: "awaiting" },
   revising: { glyph: "⏳", word: "revising" },
+  // comment & approve (§12): the agent is folding open comments in before commit.
+  finalizing: { glyph: "⏳", word: "finalizing" },
   approved: { glyph: "✓", word: "approved" },
   // The implement lifecycle (DESIGN.md §12): a spinner-ish gear while the agent
   // builds, the approved check once it lands, a cross when the build aborted.

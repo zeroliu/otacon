@@ -8,15 +8,24 @@
 //     building (worktree → per-phase implement+review loop → PR); the session
 //     stays live as `implementing` rather than ending.
 // Unresolved threads answer 409 with the count; the sheet flips to its amber
-// warning state and "commit anyway" retries with force — re-firing the SAME
-// variant the user picked (the warn stage remembers it). A plain approve ends
-// read-only behind the quiet approved notice; an implement approve hands off to
-// the live `implementing` frame.
+// warning state with two ways past it (re-firing the SAME variant the user
+// picked — the warn stage remembers it):
+//   • send to agent (comment & approve) — when open comments exist, hand them
+//     to the agent for one fold-in pass; the daemon defers the finalize
+//     (`finalizing`) and the SSE frame drives the screen, so the dialog just
+//     closes. The reviewer is done the instant they click.
+//   • commit anyway — force-drop the open threads and finalize now.
+// A plain approve ends read-only behind the quiet approved notice; an implement
+// approve hands off to the live `implementing` frame; a send-to-agent approve
+// shows the read-only finalizing notice (ApprovingNote) until the agent commits.
 
 import { useEffect, useState } from "react";
+import type { ApproveOptions } from "../api";
 import { postApprove } from "../api";
 
-type Stage = { kind: "confirm" } | { kind: "warn"; unresolved: number };
+type Stage =
+  | { kind: "confirm" }
+  | { kind: "warn"; unresolved: number; openComments: number };
 
 export function ApproveDialog({
   sessionId,
@@ -37,10 +46,10 @@ export function ApproveDialog({
   const [stage, setStage] = useState<Stage>({ kind: "confirm" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // The variant a force retry must re-fire. Set when the unresolved-threads
-  // warning bounces the first attempt, so "commit anyway" carries the same
-  // implement flag the user chose at the confirm stage (rather than silently
-  // downgrading an Approve & Implement to a plain approve).
+  // The variant a warn-stage action must re-fire. Set when the unresolved-threads
+  // warning bounces the first attempt, so both "Send to agent" and "Commit
+  // anyway" carry the same implement flag the user chose at the confirm stage
+  // (rather than silently downgrading an Approve & Implement to a plain approve).
   const [pendingImplement, setPendingImplement] = useState(false);
 
   useEffect(() => {
@@ -51,19 +60,38 @@ export function ApproveDialog({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const fire = (force: boolean, implement: boolean) => {
+  const fire = (opts: ApproveOptions) => {
     if (busy) return;
     setBusy(true);
     setError(null);
-    void postApprove(sessionId, force, implement).then((result) => {
+    void postApprove(sessionId, opts).then((result) => {
       setBusy(false);
       if (result.ok) {
-        onApproved(result.path, implement);
+        // Comment & approve: the daemon deferred the finalize. The SSE
+        // `finalizing` frame drives the screen — just close the sheet.
+        if ("finalizing" in result) {
+          onClose();
+          return;
+        }
+        onApproved(result.path, opts.implement ?? false);
         return;
       }
-      if (!force && result.code === "E_UNRESOLVED_THREADS" && result.unresolved !== undefined) {
-        setPendingImplement(implement);
-        setStage({ kind: "warn", unresolved: result.unresolved });
+      // The unresolved-threads warning — on the first attempt, or when a "Send to
+      // agent" retry lost its race (the open comments were resolved out from under
+      // the click, so the daemon refused the defer and 409'd; re-render the warn
+      // stage, now with openComments=0, so the user keeps the friendly escape
+      // instead of dropping into a raw error). A `force` attempt never bounces here.
+      if (
+        !opts.force &&
+        result.code === "E_UNRESOLVED_THREADS" &&
+        result.unresolved !== undefined
+      ) {
+        setPendingImplement(opts.implement ?? false);
+        setStage({
+          kind: "warn",
+          unresolved: result.unresolved,
+          openComments: result.openComments ?? 0,
+        });
         return;
       }
       setError(
@@ -73,6 +101,8 @@ export function ApproveDialog({
       );
     });
   };
+
+  const canSend = stage.kind === "warn" && stage.openComments > 0;
 
   return (
     <div
@@ -117,9 +147,20 @@ export function ApproveDialog({
               or questions still unanswered.
             </p>
             <p className="approve-sub">
+              {canSend && (
+                <>
+                  <strong>Send to agent</strong> hands{" "}
+                  {stage.openComments === 1
+                    ? "the open comment"
+                    : `the ${stage.openComments} open comments`}{" "}
+                  back for one fold-in pass, then{" "}
+                  {pendingImplement ? "commits and starts the build" : "commits"} — you're done the
+                  moment you click, and the agent's resolutions land in the plan's Review notes.{" "}
+                </>
+              )}
               {pendingImplement
-                ? "Implementing anyway finalizes the plan as it stands and starts the build; the open threads close unaddressed."
-                : "Approving anyway finalizes the plan as it stands; the open threads end with the session."}
+                ? "Commit & Implement anyway finalizes the plan as it stands and starts the build; the open threads close unaddressed."
+                : "Commit anyway finalizes the plan as it stands; the open threads end with the session."}
             </p>
           </>
         )}
@@ -136,7 +177,7 @@ export function ApproveDialog({
                 type="button"
                 className="btn btn-approve"
                 disabled={busy}
-                onClick={() => fire(false, false)}
+                onClick={() => fire({ implement: false })}
               >
                 {busy ? "committing…" : "Commit Plan"}
               </button>
@@ -144,28 +185,40 @@ export function ApproveDialog({
                 type="button"
                 className="btn btn-implement"
                 disabled={busy}
-                onClick={() => fire(false, true)}
+                onClick={() => fire({ implement: true })}
               >
                 {busy ? "starting…" : "Commit & Implement"}
               </button>
             </>
           ) : (
-            <button
-              type="button"
-              className="btn btn-force"
-              disabled={busy}
-              // Re-fire the SAME variant the user chose: a Commit & Implement
-              // that hit unresolved threads must still implement on retry.
-              onClick={() => fire(true, pendingImplement)}
-            >
-              {busy
-                ? pendingImplement
-                  ? "starting…"
-                  : "committing…"
-                : pendingImplement
-                  ? "Commit & Implement anyway"
-                  : "Commit anyway"}
-            </button>
+            <>
+              {canSend && (
+                <button
+                  type="button"
+                  className="btn btn-send"
+                  disabled={busy}
+                  onClick={() => fire({ sendOpenComments: true, implement: pendingImplement })}
+                >
+                  {busy ? "sending…" : "Send to agent"}
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn btn-force"
+                disabled={busy}
+                // Re-fire the SAME variant the user chose: a Commit & Implement
+                // that hit unresolved threads must still implement on retry.
+                onClick={() => fire({ force: true, implement: pendingImplement })}
+              >
+                {busy
+                  ? pendingImplement
+                    ? "starting…"
+                    : "committing…"
+                  : pendingImplement
+                    ? "Commit & Implement anyway"
+                    : "Commit anyway"}
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -189,6 +242,53 @@ export function ApprovedNote({ path }: { path: string | null }) {
         → {path ?? "docs/plans/ (committed by the agent)"}
       </span>
       <span className="approved-over">session over · read-only</span>
+    </aside>
+  );
+}
+
+/**
+ * The read-only finalizing notice (comment & approve, §12, D2): the screen the
+ * reviewer sees the instant they hit "Send to agent" — the agent is folding the
+ * open comments in and will commit on its next pass, after which the SSE frame
+ * flips the screen to the approved notice (or stays live as `implementing`). A
+ * hung fold-in is escapable: "Commit anyway" force-drops the still-open threads
+ * and finalizes the current revision now (D7).
+ */
+export function ApprovingNote({ sessionId }: { sessionId: string }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const commitAnyway = () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    // The daemon honors the implement choice carried on pendingApproval, so the
+    // escape doesn't need to re-send it — just force the current revision through.
+    void postApprove(sessionId, { force: true }).then((result) => {
+      setBusy(false);
+      // Success: the SSE frame flips the screen (approved / implementing). On
+      // the rare failure, surface it so the reviewer isn't left guessing.
+      if (!result.ok) {
+        setError(
+          result.code === "E_UNREACHABLE"
+            ? "couldn't reach otacond — is it up?"
+            : (result.message ?? result.code),
+        );
+      }
+    });
+  };
+
+  return (
+    <aside className="approving-note" role="status">
+      <span className="approving-spin" aria-hidden="true">
+        ⏳
+      </span>
+      <span className="approved-word">approving</span>
+      <span className="approving-detail">agent finalizing — folding open comments in…</span>
+      <button type="button" className="approving-escape" disabled={busy} onClick={commitAnyway}>
+        {busy ? "committing…" : "Commit anyway"}
+      </button>
+      {error !== null && <span className="approving-error">{error}</span>}
     </aside>
   );
 }

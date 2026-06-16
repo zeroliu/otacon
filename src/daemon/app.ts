@@ -35,6 +35,7 @@ import type {
 } from "../shared/types.js";
 import { VERSION } from "../shared/version.js";
 import { appendActivity, latestNote, readActivity } from "./activity.js";
+import type { ReviewNote } from "./approve.js";
 import { composeArtifact, localDate, pickArtifactRelPath } from "./approve.js";
 import type { DesktopNotifier } from "./desktop-notify.js";
 import { createDesktopNotifier } from "./desktop-notify.js";
@@ -51,6 +52,7 @@ import {
   appendThreads,
   applyRevisionToThreads,
   commentThreadStates,
+  openCommentThreads,
   readThreads,
 } from "./threads.js";
 import { answerEntry, appendEntries, appendEntry, readTranscript } from "./transcript.js";
@@ -95,6 +97,29 @@ const timeoutEvent = (c: AppContext) => c.json({ event: "timeout" });
 const sessionOver = (c: AppContext, id: string) =>
   c.json(
     { error: { code: "E_SESSION_OVER", message: `session ${id} is over (terminal)` } },
+    409,
+  );
+// `implementing` is non-terminal so it slips past sessionOver, but a build is
+// under way: submit would clobber the approved plan, and a re-approve would
+// re-write the artifact. Both verbs refuse with this shared 409.
+const alreadyImplementing = (c: AppContext, id: string) =>
+  c.json(
+    { error: { code: "E_ALREADY_IMPLEMENTING", message: `session ${id} is already implementing` } },
+    409,
+  );
+// `finalizing` is non-terminal (the agent's fold-in submit must still mutate),
+// but it is a locked window: only that solo fold-in pass may touch the session.
+// A reviewer comment here would clobber the status back to `revising` while
+// `pendingApproval` stayed armed (a later clean submit would then silently
+// finalize) and hand the agent an un-swept thread that wedges L5. Refuse it.
+const alreadyFinalizing = (c: AppContext, id: string) =>
+  c.json(
+    {
+      error: {
+        code: "E_ALREADY_FINALIZING",
+        message: `session ${id} is finalizing; the agent is folding in comments`,
+      },
+    },
     409,
   );
 
@@ -302,6 +327,41 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     return c.json(event.payload);
   }
 
+  /**
+   * Finalize an approval: compose the committed artifact (with the comment-&-
+   * approve `## Review notes` when `reviewNotes` are present), write it to
+   * docs/plans/ — the crash-safe commit point, file before the status flip —
+   * flip the session to `approved` or `implementing`, disarm any deferred
+   * approval, and queue the `approved` wake-up. Shared by plain/force approve and
+   * the deferred fold-in submit so the artifact and event shapes are identical on
+   * every path. Returns the artifact's repo-relative path.
+   */
+  const finalizeApproval = (
+    session: RegistrySession,
+    opts: { revision: number; markdown: string; implement: boolean; reviewNotes?: ReviewNote[] },
+  ): string => {
+    const artifact = composeArtifact(opts.markdown, {
+      revision: opts.revision,
+      entries: readTranscript(store.transcriptPath(session.id)),
+      reviewNotes: opts.reviewNotes,
+    });
+    const relPath = pickArtifactRelPath(session.repo, session.title, localDate());
+    writeFileAtomic(join(session.repo, relPath), artifact);
+    const updated = store.updateSession(session.id, {
+      status: opts.implement ? "implementing" : "approved",
+    });
+    // Disarm after the flip: a crash between them leaves a stale flag on an
+    // already-terminal/building session (harmless — no further submit finalizes),
+    // never a finalizing session that lost its flag (which would re-open review).
+    store.clearPendingApproval(session.id);
+    const payload: EventPayload = opts.implement
+      ? { event: "approved", session: session.id, path: relPath, implement: true }
+      : { event: "approved", session: session.id, path: relPath };
+    queueFor(session.id).enqueue(payload, store.bumpCounter(session.id, "eventSeq"));
+    publishSession(updated); // after the enqueue, so the summary carries the fresh pending count
+    return relPath;
+  };
+
   const app = new Hono<{ Bindings: NodeBindings }>();
 
   // Loopback binding doesn't stop a malicious webpage from firing fetch() at
@@ -485,6 +545,16 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     // carries no resolutions, so L5 still rejects it when threads are open.
     let content = await c.req.text();
     if (sessionEnded(session.id)) return sessionOver(c, session.id);
+    // A submit cannot land mid-build. `implementing` is non-terminal (it re-opens
+    // progress/ask/wait/answer, DESIGN.md §6) so it slips past sessionEnded — but
+    // submit is not in that verb set, and a revision here would clobber the
+    // approved plan. This also serializes the double-finalize race: a comment-&-
+    // approve fold-in that flips to `implementing` is the winner, and a second
+    // submit racing it is refused here (an `approved` finalize is caught by
+    // sessionEnded above instead).
+    if (store.getSession(session.id)?.status === "implementing") {
+      return alreadyImplementing(c, session.id);
+    }
     bumpContact(session.id);
     let resolutions: Resolutions = {};
     if (c.req.header("content-type")?.includes("json")) {
@@ -539,14 +609,60 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       replies,
       revision,
     });
+    // The accepted revision and its settled threads go out the same way on both
+    // the fold-in and the ordinary path — but at different points relative to the
+    // status flip (finalizeApproval vs publishSession), so each branch fires this.
+    const publishRevision = (): void => {
+      notifier.publish({
+        type: "revision",
+        session: session.id,
+        data: { session: session.id, revision, changelog },
+      });
+      for (const thread of changedThreads) publishThread(session.id, thread);
+    };
+
+    // Deferred approval (comment & approve, DESIGN.md §6, §12): a send-to-agent
+    // approve armed `pendingApproval` and parked the session in `finalizing`.
+    // This clean submit is the agent's fold-in pass — L5 has just vouched that
+    // every open comment carries a resolution — so finalize now instead of
+    // returning to in_review. The swept threads (re-read post-resolution) become
+    // the committed `## Review notes`, so the unreviewed fold-in stays auditable.
+    const pending = state.pendingApproval;
+    if (pending) {
+      const swept = new Set(pending.threads);
+      const reviewNotes: ReviewNote[] = readThreads(store.threadsPath(session.id))
+        .filter((t): t is Extract<Thread, { kind: "comment" }> => t.kind === "comment" && swept.has(t.id))
+        .map((t) => ({
+          thread: t.id,
+          section: t.anchor?.section ?? null,
+          body: t.body,
+          resolution: t.resolution?.body ?? "",
+        }));
+      const path = finalizeApproval(session, {
+        revision,
+        markdown: content,
+        implement: pending.implement,
+        reviewNotes,
+      });
+      // The fold-in produced a real revision and resolved threads; publish them
+      // so the rail/diff stay honest (the implement variant keeps the screen
+      // live, a plain finalize flips it to the approved notice).
+      publishRevision();
+      return c.json({
+        ok: true,
+        session: session.id,
+        revision,
+        status: pending.implement ? "implementing" : "approved",
+        path,
+        finalized: true,
+        warnings: result.warnings,
+        resolved: Object.keys(replies),
+      });
+    }
+
     const updated = store.updateSession(session.id, { status: "in_review" });
     publishSession(updated);
-    notifier.publish({
-      type: "revision",
-      session: session.id,
-      data: { session: session.id, revision, changelog },
-    });
-    for (const thread of changedThreads) publishThread(session.id, thread);
+    publishRevision();
     // The ball is back in the user's court: a fresh revision awaits review.
     maybeNotify(session, { kind: "revision", revision });
     return c.json({
@@ -638,6 +754,12 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     const queue = queueFor(session.id); // before any state write: can throw on a corrupt file
     const body = (await readJsonBody(c)) ?? {};
     if (sessionEnded(session.id)) return sessionOver(c, session.id);
+    // A `finalizing` session is locked to the agent's solo fold-in pass — a new
+    // comment here would clobber it back to `revising` with `pendingApproval`
+    // still armed and hand the agent an un-swept thread that wedges L5 (D7).
+    if (store.getSession(session.id)?.status === "finalizing") {
+      return alreadyFinalizing(c, session.id);
+    }
     bumpContact(session.id);
     const rawItems = body.items;
     if (!Array.isArray(rawItems) || rawItems.length === 0) {
@@ -1009,8 +1131,17 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   // terminal, every mutating verb then refuses. **Approve & Implement**
   // ({implement:true}) instead flips it to the non-terminal `implementing` and
   // sets `implement:true` on the event: the agent commits the plan exactly as
-  // plain Approve, then proceeds to build it (DESIGN.md §12). Unresolved
-  // threads refuse 409 unless {force}.
+  // plain Approve, then proceeds to build it (DESIGN.md §12).
+  //
+  // Unresolved threads refuse 409 carrying the count; the UI's warn stage then
+  // offers two ways past it: **{force:true}** finalizes now and drops the open
+  // threads (today's behavior), or **comment & approve** — {sendOpenComments:true}
+  // — defers the finalize, flipping to the non-terminal `finalizing` and handing
+  // the agent every open comment thread (a `final:true` comments batch) for one
+  // solo fold-in pass; its next clean submit finalizes (carrying the implement
+  // choice). Mid-finalize, a fresh {sendOpenComments} is refused E_ALREADY_FINALIZING,
+  // but {force:true} stays open as the manual escape (force-drop the current
+  // revision).
   app.post("/api/sessions/:id/approve", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
@@ -1020,20 +1151,13 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     // snapshot in_review, but the loser re-checks here after its body await
     // and refuses instead of writing a second (-2 suffixed) artifact.
     if (sessionEnded(session.id)) return sessionOver(c, session.id);
+    const currentStatus = store.getSession(session.id)?.status;
     // `implementing` is non-terminal, so it slips past sessionEnded — but a
     // build is already under way, and re-approving would re-write the artifact
     // and re-queue the wake-up. Refuse it explicitly (the second tap on an
     // Approve & Implement, or a stray approve while the agent builds).
-    if (store.getSession(session.id)?.status === "implementing") {
-      return c.json(
-        {
-          error: {
-            code: "E_ALREADY_IMPLEMENTING",
-            message: `session ${session.id} is already implementing`,
-          },
-        },
-        409,
-      );
+    if (currentStatus === "implementing") {
+      return alreadyImplementing(c, session.id);
     }
     if (body.force !== undefined && typeof body.force !== "boolean") {
       return badRequest(c, "force must be a boolean");
@@ -1041,7 +1165,24 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     if (body.implement !== undefined && typeof body.implement !== "boolean") {
       return badRequest(c, "implement must be a boolean");
     }
-    const implement = body.implement === true;
+    if (body.sendOpenComments !== undefined && typeof body.sendOpenComments !== "boolean") {
+      return badRequest(c, "sendOpenComments must be a boolean");
+    }
+    const force = body.force === true;
+    const sendOpenComments = body.sendOpenComments === true;
+    // A second send-to-agent while the fold-in is in flight is refused; "Commit
+    // anyway" (force) stays open as the manual escape from a hung finalize (D7).
+    if (currentStatus === "finalizing" && !force) {
+      return c.json(
+        {
+          error: {
+            code: "E_ALREADY_FINALIZING",
+            message: `session ${session.id} is already finalizing; approve with {"force":true} to commit anyway`,
+          },
+        },
+        409,
+      );
+    }
     const state = store.readState(session.id);
     if (state.revision === 0) {
       return c.json(
@@ -1054,42 +1195,75 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
         409,
       );
     }
+    // A force escape mid-finalize honors the variant the user originally chose
+    // (carried on pendingApproval); a fresh approve reads the body's flag.
+    const implement =
+      currentStatus === "finalizing"
+        ? (state.pendingApproval?.implement ?? false)
+        : body.implement === true;
+    const threads = readThreads(store.threadsPath(session.id));
+    const openComments = openCommentThreads(threads);
     // Unresolved = comment threads with no resolution + user questions with no
-    // answer — the same open items the rail shows. The 409 carries the count;
-    // the UI warns and retries with {force:true} on confirm.
-    const unresolved = readThreads(store.threadsPath(session.id)).filter((t) =>
+    // answer — the same open items the rail shows.
+    const unresolved = threads.filter((t) =>
       t.kind === "comment" ? t.resolution === undefined : t.answer === undefined,
     ).length;
-    if (unresolved > 0 && body.force !== true) {
+
+    // Comment & approve: defer the finalize and hand the agent every open comment
+    // thread for one solo fold-in pass — its next clean submit finalizes. Only
+    // when there is something to fold in, and not already finalizing (a force then
+    // falls through to the escape below).
+    if (sendOpenComments && currentStatus !== "finalizing" && openComments.length > 0) {
+      const counters = store.bumpCounters(session.id, { batch: 1, eventSeq: 1 });
+      const batch = `b${counters.batch}`;
+      const items: CommentItem[] = openComments.map((t) => ({
+        thread: t.id,
+        anchor: t.anchor,
+        body: t.body,
+      }));
+      store.setPendingApproval(session.id, { implement, threads: items.map((i) => i.thread) });
+      const updated = store.updateSession(session.id, { status: "finalizing" });
+      const payload: EventPayload = {
+        event: "comments",
+        session: session.id,
+        batch,
+        items,
+        final: true,
+      };
+      queue.enqueue(payload, counters.eventSeq);
+      publishSession(updated); // after the enqueue, so the summary carries the fresh pending count
+      return c.json({
+        ok: true,
+        session: session.id,
+        finalizing: true,
+        sent: items.map((i) => i.thread),
+        implement,
+      });
+    }
+
+    // The 409 carries both counts: `unresolved` (the warning's total) and
+    // `openComments` (whether comment & approve has anything to fold in, so the
+    // UI can offer "Send to agent" only when it would do something).
+    if (unresolved > 0 && !force) {
       return c.json(
         {
           error: {
             code: "E_UNRESOLVED_THREADS",
-            message: `session has ${unresolved} unresolved thread(s); approve with {"force":true} to override`,
+            message: `session has ${unresolved} unresolved thread(s); approve with {"force":true} to override, or {"sendOpenComments":true} to fold open comments in`,
           },
           unresolved,
+          openComments: openComments.length,
         },
         409,
       );
     }
-    const artifact = composeArtifact(store.readRevision(session.id, state.revision), {
+    // Finalize now (plain/force approve, or the force escape mid-finalize): no
+    // review notes — a force drop leaves the open threads unaddressed.
+    const relPath = finalizeApproval(session, {
       revision: state.revision,
-      entries: readTranscript(store.transcriptPath(session.id)),
+      markdown: store.readRevision(session.id, state.revision),
+      implement,
     });
-    const relPath = pickArtifactRelPath(session.repo, session.title, localDate());
-    // Artifact on disk first, then the status flip (the registry is the commit
-    // point — same ordering argument as createSession), then the wake-up. The
-    // artifact + `path` are identical on both branches: the agent commits the
-    // plan the same way; `implement` only tells it whether to keep building.
-    writeFileAtomic(join(session.repo, relPath), artifact);
-    const updated = store.updateSession(session.id, {
-      status: implement ? "implementing" : "approved",
-    });
-    const payload: EventPayload = implement
-      ? { event: "approved", session: session.id, path: relPath, implement: true }
-      : { event: "approved", session: session.id, path: relPath };
-    queue.enqueue(payload, store.bumpCounter(session.id, "eventSeq"));
-    publishSession(updated); // after the enqueue, so the summary carries the fresh pending count
     return c.json({
       ok: true,
       session: session.id,

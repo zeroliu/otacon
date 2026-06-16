@@ -33,8 +33,8 @@ describe("isOver", () => {
     }
   });
 
-  test("is false for every active status — including implementing", () => {
-    for (const status of ["draft", "in_review", "revising", "implementing"] as const) {
+  test("is false for every active status — including implementing and finalizing", () => {
+    for (const status of ["draft", "in_review", "revising", "finalizing", "implementing"] as const) {
       expect(isOver(status)).toBe(false);
     }
   });

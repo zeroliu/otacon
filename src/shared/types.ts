@@ -9,6 +9,7 @@ export type SessionStatus =
   | "draft"
   | "in_review"
   | "revising"
+  | "finalizing"
   | "approved"
   | "implementing"
   | "implemented"
@@ -18,6 +19,7 @@ export const SESSION_STATUSES: readonly SessionStatus[] = [
   "draft",
   "in_review",
   "revising",
+  "finalizing",
   "approved",
   "implementing",
   "implemented",
@@ -29,8 +31,11 @@ export const SESSION_STATUSES: readonly SessionStatus[] = [
  * every mutating verb refuses (app.ts `sessionEnded`), and the CLI's pointer
  * rules stop resolving it implicitly. `implementing` is deliberately NOT here:
  * it re-opens progress/ask/wait/answer while the agent builds the approved plan.
- * The single source of truth — the app guard and the CLI resolver both derive
- * from this, so they can never disagree about what "over" means.
+ * `finalizing` is likewise NOT here: a send-to-agent approve (comment & approve)
+ * defers the finalize while the agent folds the open comments in, so its next
+ * `submit` must still mutate the session. The single source of truth — the app
+ * guard and the CLI resolver both derive from this, so they can never disagree
+ * about what "over" means.
  */
 export const TERMINAL_STATUSES: readonly SessionStatus[] = [
   "approved",
@@ -124,7 +129,13 @@ export interface CommentItem {
 }
 
 export type EventPayload =
-  | { event: "comments"; session: string; batch: string; items: CommentItem[] }
+  // `final:true` is the **comment & approve** fold-in batch (DESIGN.md §6, §12):
+  // the reviewer approved while comments were open and chose "Send to agent", so
+  // this batch re-delivers every still-open comment thread for one solo pass —
+  // the agent's next clean `submit` finalizes the plan (it gets `approved`, which
+  // may carry `implement:true`), instead of returning to in_review. Absent on an
+  // ordinary comment batch.
+  | { event: "comments"; session: string; batch: string; items: CommentItem[]; final?: true }
   | {
       event: "question";
       session: string;
@@ -264,6 +275,16 @@ export interface SessionStateFile {
    */
   lastReviewedRevision: number;
   counters: { batch: number; thread: number; question: number; eventSeq: number };
+  /**
+   * A deferred approval armed by **comment & approve** (DESIGN.md §6, §12): the
+   * reviewer approved with open comments and chose "Send to agent", so the
+   * session sits in `finalizing` until the agent's next clean `submit`, which
+   * then finalizes instead of returning to in_review. `implement` carries the
+   * Commit Plan vs Commit & Implement choice through that defer; `threads` is the
+   * swept comment-thread ids, replayed into the committed `## Review notes`
+   * section once the agent has resolved them. Absent on a session not finalizing.
+   */
+  pendingApproval?: { implement: boolean; threads: string[] };
 }
 
 export type LintSeverity = "error" | "warning";
