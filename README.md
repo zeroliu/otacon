@@ -23,10 +23,6 @@ Otacon replaces your coding agent's native plan mode with a review surface you'l
 
 ## Installation
 
-**Prerequisites:** Node ≥ 20, plus a coding agent you already use, such as Claude Code,
-Codex, or OpenCode. Otacon runs every model call inside that agent's session, so there's no
-separate API key or bill.
-
 ```sh
 npm install -g otacon   # one package: the CLI and its daemon
 ```
