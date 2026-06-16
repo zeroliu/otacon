@@ -1163,13 +1163,16 @@ the daemon never spawns a model.
 ### One-time machine setup
 
 ```sh
-npm install -g otacon        # one package: CLI + daemon (npm name verified free)
-                             # until published: npm i -g github:zeroliu/otacon
+npm install -g otacon        # one package: CLI + daemon (Node ≥ 20)
 otacon install --all         # write agent skill wrappers; or --agent claude|codex|opencode
                              # --hooks also registers the Claude Code Stop hook
 otacon doctor                # verify: node ≥ 20, daemon boots + port free-or-ours,
-                             # wrappers present, Stop hook registered, Tailscale status
-                             # (hard failures exit 1; optional pieces are warnings)
+                             # wrappers present, Tailscale status (hard failures exit 1;
+                             # optional pieces are warnings). The Stop hook is optional —
+                             # confirmed when present, never flagged when absent. Run
+                             # inside a repo, each wrapper check also accepts a project
+                             # wrapper (otacon install --project), reporting the scope it
+                             # found; a miss names the otacon protocol skill, not "wrapper"
 otacon expose                # optional, phone access: checks the tailscale CLI exists
                              # and is logged in, runs `tailscale serve` against the
                              # daemon port, verifies the tailnet URL actually serves
@@ -1179,13 +1182,16 @@ otacon expose                # optional, phone access: checks the tailscale CLI 
 `otacon install` writes the thin protocol wrapper — one protocol card teaching the
 full loop (§6), grill discipline (§8), and the never-end-your-turn rule (§13) — into
 each agent's skill location: Claude Code `~/.claude/skills/otacon/SKILL.md` plus the
-Stop hook script `~/.claude/hooks/otacon-stop.sh`; Codex a marker-delimited block in
-`$CODEX_HOME/AGENTS.md` (default `~/.codex/`, user content outside the markers
-preserved); OpenCode `$XDG_CONFIG_HOME/opencode/skills/otacon/SKILL.md`. Wrappers are
-managed files — reinstall overwrites them. The Stop hook registration in
-`~/.claude/settings.json` is offered, applied only by `--hooks`: an additive,
+Stop hook script `~/.claude/hooks/otacon-stop.sh`; Codex
+`$CODEX_HOME/skills/otacon/SKILL.md` (default `~/.codex/`); OpenCode
+`$XDG_CONFIG_HOME/opencode/skills/otacon/SKILL.md`. All three are the same SKILL.md
+skill folder. Wrappers are managed files — reinstall overwrites them. The Stop hook registration in
+`~/.claude/settings.json` is optional, applied only by `--hooks`: an additive,
 idempotent merge that preserves every existing key and backs the file up before the
-first change (unparseable settings are refused, never clobbered). `otacond` is never
+first change (unparseable settings are refused, never clobbered). The hook is a
+belt-and-suspenders guard on top of the skill's never-end-your-turn rule (§13), not a
+required piece — so without `--hooks` install neither registers nor nags about it, and
+`otacon doctor` confirms it when present but never flags its absence. `otacond` is never
 installed or started by hand — any `otacon` command auto-spawns it if it isn't
 running, and the CLI restarts a stale daemon on version mismatch (version handshake
 on every call).
@@ -1199,9 +1205,15 @@ not hand-edited, and a test (`assets.test.ts`) asserts the committed file equals
 output — so a protocol change can never silently drift between what `otacon install`
 writes elsewhere and what this repo runs.
 
+**Single source for the version.** `package.json`'s `version` is authoritative;
+`src/shared/version.ts` (the `VERSION` the version handshake compares, §13) is
+**generated** from it by `scripts/gen-version.ts`, run automatically by the `npm
+version` lifecycle hook on every bump — never hand-edited. A test guards that the two
+stay equal, the same generated-file discipline as the protocol card.
+
 ### Per-repo setup
 
-**None.** Otacon works in any git repo with zero configuration. The first
+**None required.** Otacon works in any git repo with zero configuration. The first
 `otacon start` in a repo creates `.otacon/` and appends `.otacon/` to the repo's
 `.gitignore` if missing (with a notice). `docs/plans/` is created on first approve.
 Config is layered built-in defaults ← `~/.otacon/config.json` (user) ←
@@ -1218,6 +1230,22 @@ the **web Settings screen** (`/settings`, reached via `otacon config` or the mas
 `otacon config` only launches the Settings screen, and `otacon config get <key>` is a
 read-only merged lookup — the agent's Approve & Implement loop reads `worktree.dir`
 through it (`otacon config get worktree.dir`) instead of hardcoding the path (§12).
+
+**Optional: committed wrappers.** `otacon install --project` writes the same skill
+wrappers into the **current git repo** instead of the user home, so they can be
+committed and shared with the team: `<root>/.claude/skills/otacon/SKILL.md`,
+`<root>/.codex/skills/otacon/SKILL.md`, `<root>/.opencode/skills/otacon/SKILL.md`
+(`--agent`/`--all` select agents exactly as at user scope). The base resolves to the
+git repo root via `findRepoRoot(cwd)`; run outside any git repo it exits with a usage
+error (exit 2). `--hooks` is user-only — it registers a Claude Code Stop hook in the
+user's `~/.claude/settings.json`, so `--hooks --project` is rejected; a project install
+ships only the inert skill wrappers (no hook script), and reports neither offers nor
+checks the user Stop hook. When `otacon doctor` runs inside a repo, each per-agent
+wrapper check accepts the wrapper at **either** the user path or the project path and
+reports the scope that satisfied it (`<path> (project)` / `<path> (user)`) — so a
+committed project install never reads as "not installed". A miss names the missing
+piece as the otacon protocol skill (not the opaque word "wrapper"), lists the paths it
+looked in, and — when in a repo — mentions `--project` as an install option.
 
 ### Daily flow
 
