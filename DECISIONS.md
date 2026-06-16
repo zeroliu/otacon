@@ -2018,3 +2018,29 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Claude Code gains a portable, fail-safe project hook mechanism
   (e.g. a `$CLAUDE_PROJECT_DIR`-relative command that no-ops when the script is
   absent), at which point a committed project hook could be reconsidered.
+
+## `otacon doctor` checks project wrappers when in a repo; "otacon protocol skill" wording
+
+- **Decision:** Each per-agent wrapper check in `otacon doctor` now passes against a
+  list of candidate paths and is `ok` if the managed `SKILL.md` (file present AND
+  containing `MANAGED_MARKER`) exists at any of them. The candidates are the user path
+  always, plus — when `findRepoRoot(process.cwd())` resolves — the project path
+  (`<root>/.claude/...`, `<root>/.codex/skills/...`, `<root>/.opencode/...`). The
+  satisfying scope is named in `detail` (`<path> (project)` / `<path> (user)`); the user
+  candidate is listed first, so when both exist user wins the report. A miss stays a
+  `warn` (never a failure — wrappers are optional), reworded from "wrapper not installed
+  at <path>" to "otacon protocol skill not found for <agent> (looked in <paths>); run
+  `otacon install --agent <agent>`" plus ", or add --project to install it into this
+  repo" only when a project candidate was in play. The node/daemon/Stop-hook/Tailscale
+  checks are unchanged — they are user-machine concerns with no project scope.
+- **Why:** After `otacon install --project` (Phase 2), doctor checking only `~/` would
+  cry wolf — warn "not installed" while a perfectly good committed wrapper sits in the
+  repo. Accepting either scope and naming which one matched makes doctor honest about a
+  project install and tells the user where the live wrapper actually is. The wording
+  change answers the reviewer's literal question — "what does 'wrapper not installed'
+  mean" (q4): "wrapper" is otacon jargon, so the message now names the concrete artifact
+  (the otacon protocol skill, the `SKILL.md` that `otacon install` writes), shows the
+  exact paths it probed, and surfaces `--project` as the in-repo fix. Keeping the miss a
+  warning preserves today's contract that wrappers for unused agents never fail the run.
+- **Revisit when:** Agents gain more wrapper search locations doctor should accept, or a
+  per-agent "expected scope" makes listing every candidate path too noisy.
