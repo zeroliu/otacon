@@ -14,11 +14,13 @@ import {
   claudeSettingsPath,
   claudeSkillPath,
   codexSkillPath,
+  type InstallScope,
   mergeStopHook,
   opencodeSkillPath,
   settingsRegisterStopHook,
 } from "../install/locations.js";
 import { fail, notice, printJson, usageError } from "../output.js";
+import { findRepoRoot } from "../session.js";
 
 const AGENTS = ["claude", "codex", "opencode"] as const;
 type Agent = (typeof AGENTS)[number];
@@ -28,21 +30,29 @@ function writeManaged(path: string, content: string): void {
   writeFileSync(path, content);
 }
 
-function installAgent(agent: Agent): { agent: Agent; files: string[] } {
+function installAgent(agent: Agent, scope: InstallScope): { agent: Agent; files: string[] } {
   switch (agent) {
     case "claude": {
-      writeManaged(claudeSkillPath(), skillMd());
-      writeManaged(claudeHookScriptPath(), STOP_HOOK_SCRIPT);
-      chmodSync(claudeHookScriptPath(), 0o755);
-      return { agent, files: [claudeSkillPath(), claudeHookScriptPath()] };
+      const skill = claudeSkillPath(scope);
+      writeManaged(skill, skillMd());
+      // The Stop hook script lives in the user home only — it is never written at
+      // project scope (DECISIONS.md "Stop hook deferred at project scope"), so a
+      // committed `.claude/` ships an inert skill wrapper, never a hook pointing at
+      // a script teammates may not have. `--hooks --project` is rejected upstream.
+      if (scope.kind === "user") {
+        writeManaged(claudeHookScriptPath(), STOP_HOOK_SCRIPT);
+        chmodSync(claudeHookScriptPath(), 0o755);
+        return { agent, files: [skill, claudeHookScriptPath()] };
+      }
+      return { agent, files: [skill] };
     }
     case "codex": {
-      writeManaged(codexSkillPath({ kind: "user" }), skillMd());
-      return { agent, files: [codexSkillPath({ kind: "user" })] };
+      writeManaged(codexSkillPath(scope), skillMd());
+      return { agent, files: [codexSkillPath(scope)] };
     }
     case "opencode": {
-      writeManaged(opencodeSkillPath(), skillMd());
-      return { agent, files: [opencodeSkillPath()] };
+      writeManaged(opencodeSkillPath(scope), skillMd());
+      return { agent, files: [opencodeSkillPath(scope)] };
     }
   }
 }
@@ -106,6 +116,7 @@ export async function installCommand(argv: string[]): Promise<number> {
       agent: { type: "string", multiple: true },
       all: { type: "boolean", default: false },
       hooks: { type: "boolean", default: false },
+      project: { type: "boolean", default: false },
     },
   });
   const picked = values.all ? [...AGENTS] : ((values.agent ?? []) as string[]);
@@ -120,13 +131,38 @@ export async function installCommand(argv: string[]): Promise<number> {
   if (values.hooks && !agents.includes("claude")) {
     usageError("--hooks registers the Claude Code Stop hook; include --agent claude (or --all)");
   }
+  // The Stop hook is a user-level Claude Code registration; it is never installed at
+  // project scope (DECISIONS.md "Stop hook deferred at project scope"), so the two
+  // flags are mutually exclusive rather than silently picking one.
+  if (values.hooks && values.project) {
+    usageError(
+      "--hooks installs a user-level Stop hook and cannot be combined with --project; run --hooks without --project",
+    );
+  }
 
-  const installed = agents.map(installAgent);
-  const hooks = agents.includes("claude")
-    ? values.hooks
-      ? applyStopHook()
-      : offerStopHook()
-    : undefined;
-  printJson({ ok: true, installed, ...(hooks ? { hooks } : {}) });
+  // --project resolves the install base to the current git repo root so the
+  // wrappers can be committed and shared; outside any repo it is a hard error
+  // (DECISIONS.md "`--project` resolves to the git repo root").
+  let scope: InstallScope = { kind: "user" };
+  if (values.project) {
+    const cwd = process.cwd();
+    const root = findRepoRoot(cwd);
+    if (root === undefined) {
+      usageError(`otacon install --project must run inside a git repo; none found at ${cwd}`);
+    }
+    scope = { kind: "project", root };
+  }
+
+  const installed = agents.map((agent) => installAgent(agent, scope));
+  // The Stop hook report is user-only: at project scope --hooks is rejected, and
+  // offerStopHook() would read the user ~/.claude/settings.json — misleading for a
+  // project install — so the entire hooks branch is gated on user scope.
+  const hooks =
+    scope.kind === "user" && agents.includes("claude")
+      ? values.hooks
+        ? applyStopHook()
+        : offerStopHook()
+      : undefined;
+  printJson({ ok: true, scope: scope.kind, installed, ...(hooks ? { hooks } : {}) });
   return 0;
 }

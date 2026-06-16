@@ -1980,3 +1980,41 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   project base is `<root>/.opencode` (each then `/skills/otacon/SKILL.md`).
 - **Revisit when:** Codex's skills path convention changes, or project scope needs a
   destination layout the two-branch `InstallScope` can't express (e.g. a third scope).
+
+## `--project` resolves to the git repo root, erroring outside a repo
+
+- **Decision:** `otacon install --project` resolves its install base to the current
+  git repo root via `findRepoRoot(process.cwd())` (the same `git rev-parse
+  --show-toplevel` helper session resolution uses). Outside any git repo it is a hard
+  usage error (exit 2: "otacon install --project must run inside a git repo; none found
+  at <cwd>"), never a fallback to cwd or home. There is no `--dir <path>` escape hatch.
+- **Why:** "Install into the current project" means the repo a teammate clones and the
+  wrappers get committed to — the repo root is the only base where `<root>/.claude`,
+  `<root>/.codex/skills`, `<root>/.opencode` land where each agent looks per-repo.
+  Falling back to cwd on no-repo would silently scatter wrapper dirs into arbitrary
+  subdirectories or non-repos that can never be committed as intended; erroring makes
+  the misuse obvious immediately. Reusing `findRepoRoot` keeps repo-root resolution
+  defined once. `--dir` was declined (q1) as surface for a rarer case.
+- **Revisit when:** A real need appears to install wrappers into an explicit
+  non-repo-root directory (then add `--dir <path>` as a separate base, not a fallback).
+
+## Stop hook deferred at project scope; `--hooks --project` rejected
+
+- **Decision:** The Claude Code Stop hook is **not** installed at project scope. A
+  `--project` install writes only the inert skill wrappers — no `.claude/hooks/`
+  script, no `settings.json` registration — and `--hooks --project` is a usage error
+  (exit 2). The hooks report (`applyStopHook`/`offerStopHook`) is gated on user scope,
+  so a project install neither offers nor checks the user Stop hook; the wrapper write
+  itself drops the hook-script write/chmod when `scope.kind !== "user"`.
+- **Why:** A committed `.claude/` is inherited by every teammate who clones the repo,
+  including those without otacon installed. A skill wrapper is inert for them — the
+  agent acts on it only when they actually invoke otacon — but a registered Stop hook
+  is a turn-blocking command that would fire on every stop and fail (or hang) pointing
+  at `otacon-stop.sh` they don't have. Deferring the project hook is precisely what
+  keeps the committed `.claude/` a fail-safe rather than a footgun (q3); the hook stays
+  a user-machine opt-in via `--hooks` at user scope. `offerStopHook()` also reads the
+  user `~/.claude/settings.json`, which is meaningless for a project install — gating
+  it on user scope keeps the project JSON honest.
+- **Revisit when:** Claude Code gains a portable, fail-safe project hook mechanism
+  (e.g. a `$CLAUDE_PROJECT_DIR`-relative command that no-ops when the script is
+  absent), at which point a committed project hook could be reconsidered.

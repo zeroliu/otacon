@@ -1172,11 +1172,22 @@ stay equal, the same generated-file discipline as the protocol card.
 
 ### Per-repo setup
 
-**None.** Otacon works in any git repo with zero configuration. The first
+**None required.** Otacon works in any git repo with zero configuration. The first
 `otacon start` in a repo creates `.otacon/` and appends `.otacon/` to the repo's
 `.gitignore` if missing (with a notice). `docs/plans/` is created on first approve.
 Budgets/lint config is global (`~/.otacon/config.json`); a committed
 `otacon.config.json` at the repo root overrides it if present.
+
+**Optional: committed wrappers.** `otacon install --project` writes the same skill
+wrappers into the **current git repo** instead of the user home, so they can be
+committed and shared with the team: `<root>/.claude/skills/otacon/SKILL.md`,
+`<root>/.codex/skills/otacon/SKILL.md`, `<root>/.opencode/skills/otacon/SKILL.md`
+(`--agent`/`--all` select agents exactly as at user scope). The base resolves to the
+git repo root via `findRepoRoot(cwd)`; run outside any git repo it exits with a usage
+error (exit 2). `--hooks` is user-only — it registers a Claude Code Stop hook in the
+user's `~/.claude/settings.json`, so `--hooks --project` is rejected; a project install
+ships only the inert skill wrappers (no hook script), and reports neither offers nor
+checks the user Stop hook.
 
 ### Daily flow
 
