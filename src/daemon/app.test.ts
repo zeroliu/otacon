@@ -8,6 +8,7 @@ import type { Hono } from "hono";
 import {
   eventsPath,
   globalConfigPath,
+  homeSessionDir,
   otaconPort,
   repoConfigPath,
   repoLocalConfigPath,
@@ -1497,15 +1498,20 @@ describe("approve and the status machine (M4)", () => {
 
     const res = await approve(session.id);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { path: string; revision: number };
+    const body = (await res.json()) as { path: string; home: string; revision: number };
     expect(body.revision).toBe(1);
-    expect(body.path).toMatch(/^docs\/plans\/\d{4}-\d{2}-\d{2}-e2e-plan\.md$/);
+    // Save (plain approve) writes the project copy under the default plans.dir.
+    expect(body.path).toMatch(/^\.otacon\/plans\/\d{4}-\d{2}-\d{2}-e2e-plan\.md$/);
+    // The canonical home copy lands under ~/.otacon/sessions/<id>/, always.
+    expect(body.home).toBe(join(homeSessionDir(session.id), body.path.split("/").pop() as string));
 
     const artifact = readFileSync(join(repo, body.path), "utf8");
     expect(artifact).toContain("status: approved");
     expect(artifact).toContain("## Interview");
     expect(artifact).toContain("### q1 — algo?");
     expect(artifact).toContain("- Answer: RS256");
+    // Both copies exist and are identical (no git ran — otacon never commits).
+    expect(readFileSync(body.home, "utf8")).toBe(artifact);
     expect(store.getSession(session.id)?.status).toBe("approved");
 
     const event = await app.request(`/api/sessions/${session.id}/events`);
@@ -1513,16 +1519,18 @@ describe("approve and the status machine (M4)", () => {
       event: "approved",
       session: session.id,
       path: body.path,
+      home: body.home,
     });
   });
 
-  test("a same-title re-approve suffixes the artifact name instead of overwriting", async () => {
+  test("a same-title re-approve suffixes the project copy instead of overwriting", async () => {
     const first = mintSession();
     await submitValid(first.id);
     const a = (await (await approve(first.id)).json()) as { path: string };
     const second = mintSession(); // same "e2e plan" title
     await submitValid(second.id);
     const b = (await (await approve(second.id)).json()) as { path: string };
+    // Same title + date → the project copy under plans.dir gets a -2 suffix.
     expect(b.path).not.toBe(a.path);
     expect(b.path).toMatch(/-e2e-plan-2\.md$/);
     expect(readFileSync(join(repo, a.path), "utf8")).toContain(first.id);
@@ -1642,21 +1650,25 @@ describe("Approve & Implement and the implement lifecycle (implement-approved-pl
 
     const res = await approve(session.id, { implement: true });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { implement: boolean; path: string };
+    const body = (await res.json()) as { implement: boolean; path: string; home: string };
     expect(body.implement).toBe(true);
     // Non-terminal: the session is now building, not over.
     expect(await statusOf(session.id)).toBe("implementing");
     expect(store.getSession(session.id)?.status).toBe("implementing");
-    // The artifact is still written exactly as plain Approve.
-    expect(body.path).toMatch(/^docs\/plans\/\d{4}-\d{2}-\d{2}-e2e-plan\.md$/);
-    expect(existsSync(join(repo, body.path))).toBeTrue();
+    // Implement writes the home copy ONLY; path equals home (absolute), and
+    // nothing is written into the project — the agent builds from the home copy.
+    expect(body.home).toBe(join(homeSessionDir(session.id), body.home.split("/").pop() as string));
+    expect(body.path).toBe(body.home);
+    expect(existsSync(body.home)).toBeTrue();
+    expect(existsSync(join(repo, ".otacon", "plans"))).toBeFalse();
 
-    // The wake-up carries the implement flag plus the same commit path.
+    // The wake-up carries the implement flag plus path=home.
     const event = await app.request(`/api/sessions/${session.id}/events`);
     expect(await event.json()).toEqual({
       event: "approved",
       session: session.id,
       path: body.path,
+      home: body.home,
       implement: true,
     });
   });
@@ -1665,13 +1677,15 @@ describe("Approve & Implement and the implement lifecycle (implement-approved-pl
     const noFlag = mintSession();
     await submitValid(noFlag.id);
     const a = await approve(noFlag.id);
-    expect(((await a.json()) as { implement: boolean }).implement).toBe(false);
+    const aBody = (await a.json()) as { implement: boolean; path: string; home: string };
+    expect(aBody.implement).toBe(false);
     expect(await statusOf(noFlag.id)).toBe("approved");
     const aEvent = await app.request(`/api/sessions/${noFlag.id}/events`);
     expect(await aEvent.json()).toEqual({
       event: "approved",
       session: noFlag.id,
-      path: expect.stringMatching(/^docs\/plans\//),
+      path: expect.stringMatching(/^\.otacon\/plans\//),
+      home: aBody.home,
     });
 
     const falseFlag = mintSession();
@@ -1916,11 +1930,19 @@ describe("comment & approve: send-to-agent deferred finalize (comment-and-approv
 
     const res = await foldInSubmit(session.id);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { finalized: boolean; status: string; path: string };
+    const body = (await res.json()) as {
+      finalized: boolean;
+      status: string;
+      path: string;
+      home: string;
+    };
     expect(body.finalized).toBe(true);
     expect(body.status).toBe("approved");
     expect(await statusOf(session.id)).toBe("approved");
     expect(store.readState(session.id).pendingApproval).toBeUndefined();
+    // Save writes the project copy under plans.dir and the canonical home copy.
+    expect(body.path).toMatch(/^\.otacon\/plans\//);
+    expect(body.home).toBe(join(homeSessionDir(session.id), body.path.split("/").pop() as string));
 
     const artifact = readFileSync(join(repo, body.path), "utf8");
     expect(artifact).toContain("status: approved");
@@ -1929,9 +1951,14 @@ describe("comment & approve: send-to-agent deferred finalize (comment-and-approv
     expect(artifact).toContain("> why not ES256?");
     expect(artifact).toContain("Kept RS256 — verifiers only need the public key.");
 
-    // The agent then drains the approved wake-up to commit — a plain approve.
+    // The agent then drains the approved wake-up — a plain Save (otacon never commits).
     const event = await app.request(`/api/sessions/${session.id}/events`);
-    expect(await event.json()).toEqual({ event: "approved", session: session.id, path: body.path });
+    expect(await event.json()).toEqual({
+      event: "approved",
+      session: session.id,
+      path: body.path,
+      home: body.home,
+    });
   });
 
   test("send + Commit & Implement carries the implement choice through the finalize", async () => {
@@ -1943,9 +1970,11 @@ describe("comment & approve: send-to-agent deferred finalize (comment-and-approv
     await app.request(`/api/sessions/${session.id}/events`); // drain the final batch
 
     const res = await foldInSubmit(session.id);
-    const body = (await res.json()) as { status: string; path: string };
+    const body = (await res.json()) as { status: string; path: string; home: string };
     expect(body.status).toBe("implementing");
     expect(await statusOf(session.id)).toBe("implementing");
+    // Implement: path equals the home copy; no project copy is written.
+    expect(body.path).toBe(body.home);
 
     // The wake-up flows straight into the build loop (implement:true).
     const event = await app.request(`/api/sessions/${session.id}/events`);
@@ -1953,6 +1982,7 @@ describe("comment & approve: send-to-agent deferred finalize (comment-and-approv
       event: "approved",
       session: session.id,
       path: body.path,
+      home: body.home,
       implement: true,
     });
   });

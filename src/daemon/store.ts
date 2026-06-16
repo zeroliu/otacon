@@ -287,8 +287,9 @@ export class Store {
    * Archive a session's working dir `.otacon/<id>/` → `.otacon/archive/<id>/`
    * in its repo (numeric suffix on name collision); returns the destination, or
    * null when there was no dir. The recoverable counterpart to removeSessionDir,
-   * for a session whose plan is committed (approved): `otacon clean` and the
-   * UI's delete of an approved session both archive through here. `repo` is
+   * for a session whose plan is already preserved in the home archive (approved):
+   * `otacon clean` and the UI's delete of an approved session both archive
+   * through here. `repo` is
    * passed explicitly because the caller deregisters first (require() throws).
    */
   archiveSessionDir(repo: string, id: string): string | null {

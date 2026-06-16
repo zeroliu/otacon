@@ -2309,3 +2309,74 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   warning preserves today's contract that wrappers for unused agents never fail the run.
 - **Revisit when:** Agents gain more wrapper search locations doctor should accept, or a
   per-agent "expected scope" makes listing every candidate path too noisy.
+
+## Home-canonical plan store keyed by session id
+
+- **Decision:** Every approved plan is written to a **home archive** at
+  `~/.otacon/sessions/<id>/YYYY-MM-DD-<slug>.md` — always, on both Save and Implement.
+  The session id (a globally-unique hash) is the namespace, mirroring the repo-local
+  `.otacon/<id>/` layout, so plans from different repos never collide and need no
+  repo-basename/hash prefix. `homeSessionsDir()`/`homeSessionDir(id)` build the paths;
+  `otacon clean` and session deletion NEVER touch `~/.otacon/sessions/`.
+- **Why:** "Default zero footprint" (q1, q9) means the target repo gets nothing unless
+  the reviewer chooses Save — but otacon still needs one canonical, always-present copy a
+  downstream implementer (or a future you on another machine) can find. The home store is
+  that record. Keying by the existing session id reuses a unique namespace we already mint
+  (q11 leaned toward repo-basename+hash, but the id is simpler and already unique — t1),
+  and keeping it out of `otacon clean` makes it a permanent archive, not transient working
+  state that gets swept with the session dir.
+- **Revisit when:** The home store grows unbounded enough to want pruning/retention, or a
+  user wants the canonical location configurable (today it is fixed).
+
+## Approve = Save vs Implement; otacon never git-commits a plan
+
+- **Decision:** The approve action has two outcomes, both honoring the existing
+  `{implement?}` POST flag. **Save** (implement=false) writes the artifact to the home
+  archive AND a project copy under the repo's `plans.dir`; the session ends (`approved`).
+  **Implement** (implement=true) writes the home copy only and flips to `implementing`;
+  the agent builds from the home copy. The `approved` event carries `home` (absolute
+  archive path, always) and `path` (project copy on Save; home copy on Implement).
+  **otacon runs no git for the plan** — it only chooses where the file is written; the
+  user commits the project copy themselves if they want it tracked.
+- **Why:** The grill (q7, q8) collapsed the earlier two-knob model (`dir` + `commit`,
+  with `git check-ignore` footgun guards) into one question otacon actually owns: *where
+  is the plan written?* Whether it lands in git is the user's call, not otacon's — so
+  every `git add`/commit path and the ignore-check downgrade logic disappear. Save vs
+  Implement maps cleanly onto "I want the plan in my repo" vs "build it now from the
+  archive," and matches Claude Code's instinct that plans live in a home store, not the
+  project tree, by default (q6). Keeping `home` on the event lets the agent/UI always name
+  the canonical copy even on Save.
+- **Revisit when:** A workflow needs otacon to commit (e.g. an unattended `snake` that
+  must land a tracked plan), or Save/Implement need a third outcome.
+
+## `plans.dir` config leaf (project copy location)
+
+- **Decision:** One new `CONFIG_SCHEMA` path leaf `plans.dir` (default `.otacon/plans`,
+  repo-relative) governs where **Save** writes the project copy. It renders in the
+  Settings UI and resolves via `otacon config get plans.dir` for free, like
+  `worktree.dir`. The home archive location is NOT configurable. The default is gitignored
+  (zero footprint); a team that wants a tracked, shared plan sets `plans.dir=docs/plans`
+  in the committed `<repo>/.otacon/config.json`.
+- **Why:** Reusing the schema-driven config (single source of truth, guard test) means a
+  one-line leaf gets validation, the Settings third scope, and the CLI lookup with no
+  bespoke code (q6, q7). Making only the project-copy dir configurable — not the home
+  store — keeps the canonical archive predictable while letting each repo choose its
+  in-project convention. The default `.otacon/plans` keeps a fresh repo footprint-free;
+  `docs/plans` is the opt-in committed contract.
+- **Revisit when:** A repo wants per-session or templated plan paths, or the home archive
+  location itself needs to move.
+
+## Dropped the docs/plans archive step from the Implement loop
+
+- **Decision:** The Implement loop no longer commits the plan, branches off a "plan
+  commit," or `git mv`s the plan into `docs/plans/archive/`. It branches off the repo's
+  current **default-branch HEAD**, reads the phases from the home copy at the event
+  `path`, and the finishing PR carries no plan file. The skill card (`assets.ts`) and the
+  regenerated dogfood `SKILL.md` reflect this; DESIGN §6/§12 drop the archive narrative.
+- **Why:** With otacon never committing the plan (see Save vs Implement above) and the
+  plan living in the home archive on Implement, there is simply no committed plan in the
+  repo to archive — the `git mv → docs/plans/archive/` step (q2) became dead. Branching
+  off default-branch HEAD replaces "off the plan commit" because there is no plan commit;
+  the home copy is the agent's source of truth for phases.
+- **Revisit when:** A workflow wants the plan to ride in the implementation PR after all
+  (e.g. teams that require the plan as a reviewed artifact in the same PR).

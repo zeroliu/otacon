@@ -48,13 +48,13 @@ Every decision below was resolved deliberately; rationale follows in the relevan
 | 4   | Conciseness       | Deterministic linter at submit + 2-tier schema (budgeted read path / unbudgeted collapsible detail)                                                                               |
 | 5   | Re-review         | 3 layers: agent changelog, mandatory comment-resolution threads, diff vs last-reviewed revision                                                                                   |
 | 6   | Agent integration | Replace native plan modes with one CLI protocol; thin skill wrapper per agent                                                                                                     |
-| 7   | Approval          | Approve ends the session; output = approved plan file committed to the repo                                                                                                       |
+| 7   | Approval          | Approve = **Save** or **Implement**; otacon never git-commits. Save writes a project copy under `plans.dir` (you commit it); Implement builds from the home copy. The canonical copy always lands in the home archive                |
 | 8   | Phone access      | Tailscale Serve to the local daemon; plans never leave personal devices                                                                                                           |
 | 9   | State topology    | Local-first. Daemon on the Mac is the single source of truth (hosted relay considered and rejected for privacy/simplicity; protocol stays plain HTTP so it remains a future lift) |
 | 10  | Feedback grammar  | User comments (batched), user questions (instant, plan untouched), agent questions (`otacon ask`)                                                                                 |
 | 11  | Mixed batch       | Questions answered first, then all comments applied as one revision with one changelog                                                                                            |
 | 12  | Visuals v1        | Mermaid, code + before/after blocks, ASCII wireframes. Images deferred to v2                                                                                                      |
-| 13  | Storage           | Working state in gitignored `.otacon/`; approved plan committed to `docs/plans/`                                                                                                  |
+| 13  | Storage           | Working state in gitignored `.otacon/`; every approved plan archived to the home store `~/.otacon/sessions/<id>/` (permanent, never cleaned); on Save also copied into the repo under `plans.dir`                                  |
 | 14  | LLM cost          | Zero API spend invariant: daemon/CLI/UI never call a model; all intelligence runs in the user's interactive subscription-backed session. No Agent SDK anywhere                    |
 | 15  | Multi-session     | One daemon, many concurrent sessions; per-session event queues; UI session switcher                                                                                               |
 | 16  | Grilling          | grill-me discipline is a mandatory protocol phase before drafting; decisions must trace to grill answers (linted)                                                                 |
@@ -366,7 +366,7 @@ replies are refused 400 before linting.
   {"thread":"t12","anchor":{"section":"phase-2","exact":"…","prefix":"…","suffix":"…"},"body":"…"}]}
 {"event":"question","session":"otc_a1b2c3","id":"q12","anchor":{"section":"decisions"},"body":"…","replyTo":"q7"}
 {"event":"answer","session":"otc_a1b2c3","question":"q7","choice":"A","text":"…"}
-{"event":"approved","session":"otc_a1b2c3","path":"docs/plans/2026-06-12-auth-refactor.md","implement":true}
+{"event":"approved","session":"otc_a1b2c3","path":"/Users/me/.otacon/sessions/otc_a1b2c3/2026-06-12-auth-refactor.md","home":"/Users/me/.otacon/sessions/otc_a1b2c3/2026-06-12-auth-refactor.md","implement":true}
 {"event":"deleted","session":"otc_a1b2c3"}
 {"event":"timeout"}
 ```
@@ -383,15 +383,19 @@ carries `final:true` when it is the **comment & approve** fold-in batch (§12): 
 reviewer approved with comments still open and chose *Send to agent*, so the daemon
 re-delivers every still-open comment thread for one solo pass — the agent resolves them,
 and its next clean `submit` finalizes the plan (it then receives `approved`, which may
-carry `implement:true`) instead of returning to in-review. `approved.path` is
-repo-relative — the agent commits that file. `approved` carries an optional `implement`
-flag: a plain `approved` (no flag) is **terminal** — commit the plan and stop; an
-`approved` with `implement:true` is **not** terminal — the agent commits the plan, then
-walks the build loop (the **Implement loop**, §6 below; the session sits in
-`implementing` until `otacon implement-done`). `deleted` is terminal: the agent stops —
-it means the reviewer discarded a pending session in the UI (§12), so there is no
-artifact and nothing to commit; a parked `wait` is woken with it immediately rather than
-left to 404 on its next call.
+carry `implement:true`) instead of returning to in-review. **otacon never git-commits
+the plan** — it only chooses where the file is written, and the agent runs no git for it.
+`approved.home` is ALWAYS the absolute canonical copy in the home archive
+(`~/.otacon/sessions/<id>/`). `approved.path` is the copy the agent acts on, keyed by the
+optional `implement` flag: a plain `approved` (no flag, **Save**) is **terminal** —
+`path` is the repo-relative project copy under `plans.dir`; the agent prints where it
+landed and stops, and the user commits it themselves if they want. An `approved` with
+`implement:true` (**Implement**) is **not** terminal — `path` equals `home` (no project
+copy is written), and the agent reads the plan from there to walk the build loop (the
+**Implement loop**, §6 below; the session sits in `implementing` until
+`otacon implement-done`). `deleted` is terminal: the agent stops — it means the reviewer
+discarded a pending session in the UI (§12), so there is no artifact; a parked `wait` is
+woken with it immediately rather than left to 404 on its next call.
 
 ### HTTP API (daemon, 127.0.0.1 only)
 
@@ -470,12 +474,15 @@ POST /api/sessions/:id/answers              user's answer to an agent question:
                                             and multi-ness; an option question also
                                             takes a non-empty text-only custom answer
                                             (no chip); queues the answer event
-POST /api/sessions/:id/approve              approve: writes the final artifact, flips
-                                            the session approved, queues `approved`.
-                                            With {"implement":true} it instead flips
-                                            to `implementing` (non-terminal) and sets
-                                            `implement:true` on the `approved` event —
-                                            Approve & Implement (§12).
+POST /api/sessions/:id/approve              approve (otacon never git-commits): writes
+                                            the artifact to the home archive (always)
+                                            + the project copy under plans.dir, flips
+                                            the session approved, queues `approved`
+                                            with path=project copy, home=archive
+                                            (Save). With {"implement":true} it writes
+                                            the home copy ONLY, flips to `implementing`
+                                            (non-terminal), and queues `approved` with
+                                            path=home, implement:true (§12).
                                             Unresolved threads (comments without a
                                             resolution + questions without an answer)
                                             → 409 E_UNRESOLVED_THREADS carrying both
@@ -628,35 +635,39 @@ mirroring the budgets config. Off macOS the banner is a silent no-op.
    reply), resubmits. Daemon resolves the threads, re-anchors every quote in the new
    text (§4), computes diff vs the user's last-reviewed revision, pushes the
    changelog banner. Repeat 4–5.
-6. **Approve.** User taps Approve (warned if unresolved threads exist — the daemon
-   answers 409 with the count until the UI confirms). The **daemon**
-   writes `docs/plans/YYYY-MM-DD-<slug>.md` with `status: approved` + the grill
-   transcript appended, flips the session to `approved` (ending it — every further
-   mutation refuses), queues the `approved` event. The agent's
-   `wait` returns it; agent `git add` + commits the plan file, prints a one-line
-   summary, stops. Session over.
+6. **Approve = Save.** User taps **Save** (warned if unresolved threads exist — the
+   daemon answers 409 with the count until the UI confirms). The **daemon** composes
+   the artifact (`status: approved` + the grill transcript appended) and writes it to
+   two places: ALWAYS the canonical home archive
+   (`~/.otacon/sessions/<id>/YYYY-MM-DD-<slug>.md`), and ALSO a project copy under the
+   repo's configured `plans.dir` (default the gitignored `.otacon/plans`). It flips the
+   session to `approved` (ending it — every further mutation refuses) and queues the
+   `approved` event carrying both paths. **otacon never git-commits the plan.** The
+   agent's `wait` returns the event; it prints a one-line summary naming where the plan
+   was saved and stops — the user commits the project copy themselves if they want.
+   Session over.
    On the unresolved-threads warning the reviewer has a second choice — **comment &
    approve** (*Send to agent*): instead of dropping the open comments, the daemon
    defers the finalize (status `finalizing`) and hands the agent every open comment
    thread in one `final:true` comments batch; the agent folds them in and its next
-   clean `submit` finalizes — committing the same artifact, now with a `## Review
-   notes` section recording what it changed (§12). The reviewer is done the instant
-   they click; the chosen variant (plain vs Approve & Implement) carries through.
-7. **Approve & Implement** (optional, §12). A second review action — **Approve &
-   Implement** — finalizes the plan exactly as Approve does but flips the session to
-   `implementing` (non-terminal) and sets `implement:true` on the `approved` event.
-   The same agent, on receiving it, commits the plan and then **orchestrates the
-   build**: it opens a worktree off the plan commit and walks the phases in order —
-   a fresh implement+test subagent per phase, then a separate `/code-review --fix`
-   subagent that resolves findings, committing each clean+green phase. On the **first**
-   blocked phase it pauses with an `otacon ask` (retry / skip / abort / guidance) and
-   parks in `wait`. On success it also archives the source plan — `git mv docs/plans/<name>.md`
-   into `docs/plans/archive/` as a commit on the impl branch, so the move rides in the PR and
-   takes effect on the default branch only when it merges (an aborted build leaves the plan in
-   `docs/plans/`, active). It finishes by opening a PR against the default branch and reporting
-   it with `otacon implement-done --pr <url>` (or `--failed` on abort), which flips the
-   session to `implemented` / `implement_failed`. All build work runs in native
-   in-session subagents (subscription-covered, §13); the daemon never spawns a model.
+   clean `submit` finalizes — writing the same artifact, now with a `## Review notes`
+   section recording what it changed (§12). The reviewer is done the instant they
+   click; the chosen variant (Save vs Implement) carries through.
+7. **Approve = Implement** (optional, §12). The other approve action — **Implement** —
+   finalizes the plan but writes it to the home archive ONLY (nothing into the
+   project), flips the session to `implementing` (non-terminal), and sets
+   `implement:true` on the `approved` event with `path` equal to the home copy. The
+   same agent, on receiving it, reads the plan from that home path (no commit) and then
+   **orchestrates the build**: it opens a worktree off the repo's current default-branch
+   HEAD and walks the phases in order — a fresh implement+test subagent per phase, then
+   a separate `/code-review --fix` subagent that resolves findings, committing each
+   clean+green phase. On the **first** blocked phase it pauses with an `otacon ask`
+   (retry / skip / abort / guidance) and parks in `wait`. On success it opens a PR
+   against the default branch (PR body = plan summary + per-phase log; no plan file
+   rides in the PR — the plan lives only in the home archive) and reports it with
+   `otacon implement-done --pr <url>` (or `--failed` on abort), which flips the session
+   to `implemented` / `implement_failed`. All build work runs in native in-session
+   subagents (subscription-covered, §13); the daemon never spawns a model.
 
 ---
 
@@ -865,8 +876,9 @@ them. A session that finished a build carries its **PR link** on the card (from 
 Every session carries a small delete control on its card — and one in the review
 screen header — to remove it from the index without dropping to the CLI. It opens a
 confirm sheet (mirroring Approve), and the disposition (and the sheet's copy) follow
-status (§12): an **approved** session is archived (recoverable — its plan stays
-committed under `docs/plans/`), a **pending** one is permanently removed. The card
+status (§12): an **approved** session is archived (recoverable — its plan is preserved
+in the home archive `~/.otacon/sessions/<id>/`), a **pending** one is permanently
+removed. The card
 control stops its click from following the card link; deleting from the review screen
 returns to the index.
 
@@ -917,12 +929,12 @@ returns to the index.
   **Send all**; when nothing is pending it shrinks to the whole-plan comment
   affordance alone.
 - Unsent-drafts gate: drawer comments live only in the browser until **Send all**,
-  so picking a commit variant while N drafts are staged opens a drafts stage with
-  three moves. **Send & commit** flushes the batch into open threads and folds them
-  in through the comment & approve path in one click; **Discard & commit** drops the
+  so picking an approve variant while N drafts are staged opens a drafts stage with
+  three moves. **Send & approve** flushes the batch into open threads and folds them
+  in through the comment & approve path in one click; **Discard & approve** drops the
   local drafts (irreversible) and finalizes the chosen variant; **Cancel** backs out
   (the safe default). The gate fires after the variant pick, so Send/Discard inherit
-  Commit Plan vs Commit & Implement. The same staged drafts also arm a
+  Save vs Implement. The same staged drafts also arm a
   reload/close-tab guard (`beforeunload`) so a page unload warns before wiping them;
   the guard is scoped strictly to staged drafts (a clean drawer never prompts) and
   covers reload and close-tab only, with navigate-away and half-typed composer text
@@ -995,7 +1007,7 @@ returns to the index.
   toggle stays so diff review is still reachable on a phone.
 - Threads open as bottom sheets. Sticky bar = whole control surface: pending
   questions ❓ (tap → the question queue), drawer + Send, Approve (confirm sheet:
-  "Finalize r4 → docs/plans/2026-06-12-auth-refactor.md and end the session"). The
+  Save r4 to the project copy / Implement from the home archive — §6, §12). The
   bar is the desktop drawer augmented at the phone breakpoint — approve and the
   question tally fold into it and leave the header strip, never shown twice.
 - Agent question cards answerable with chips — designed for grilling on the move.
@@ -1046,37 +1058,39 @@ Operational requirement: the Mac stays awake while a plan is in review
 
 ## 12. Storage & lifecycle
 
-| Location                                 | Contents                                                                                                       | Git                                        |
-| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `<repo>/.otacon/`                        | Working state under `<id>/`: `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), threads (`threads.json`: comment + question threads with answers, resolutions, and anchor states inline), the grill transcript (`transcript.json`), the capped live-activity feed (`activity.json`: the newest ~N `otacon progress` notes), queues; plus `worktrees/<slug>/` — an Approve & Implement build's git worktree on branch `otacon/impl-<slug>` | **gitignored**                             |
-| `<repo>/docs/plans/YYYY-MM-DD-<slug>.md` | Final approved plan (`status: approved` frontmatter + grill transcript)                                        | **committed** (by the agent, post-approve) |
-| `~/.otacon/registry.json`                | Session registry: ID → repo, branch, title, status                                                             | n/a (global)                               |
+| Location                                          | Contents                                                                                                       | Git                                        |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `<repo>/.otacon/`                                 | Working state under `<id>/`: `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), threads (`threads.json`: comment + question threads with answers, resolutions, and anchor states inline), the grill transcript (`transcript.json`), the capped live-activity feed (`activity.json`: the newest ~N `otacon progress` notes), queues; plus `worktrees/<slug>/` — an Implement build's git worktree on branch `otacon/impl-<slug>` | **gitignored**                             |
+| `~/.otacon/sessions/<id>/YYYY-MM-DD-<slug>.md`    | Canonical approved plan, every session (`status: approved` frontmatter + grill transcript)                     | n/a (global, permanent archive)            |
+| `<repo>/<plans.dir>/YYYY-MM-DD-<slug>.md`         | Save-time project copy (default `.otacon/plans`, gitignored; set `plans.dir=docs/plans` to track it)           | the user's call — otacon never commits     |
+| `~/.otacon/registry.json`                         | Session registry: ID → repo, branch, title, status                                                             | n/a (global)                               |
 
-The committed plan is the contract a downstream implementer consumes — any fresh
-session, worktree, or machine can find it. Review exhaust stays out of git. `otacon
-clean` archives ended sessions' working state: for every **terminal** session
-(approved, plus implemented / implement_failed once a build finishes) in the
-current repo (`--all`: everywhere), it calls `DELETE /api/sessions/:id`; the daemon drops
-the registry entry and **archives** `.otacon/<id>/` to `.otacon/archive/<id>/` in the
-session's repo (name collisions get a numeric suffix), reporting the destination as
-`archivedTo`. Committed plans under `docs/plans/` are never touched by clean; events still
-queued on an ended session are archived with the directory rather than blocking the clean.
-The source plan is archived by the *implementing agent*, not clean: a successful Approve &
-Implement build `git mv`s `docs/plans/YYYY-MM-DD-<slug>.md` into `docs/plans/archive/` as a
-commit on the impl branch, so the move merges with the implementation PR (an aborted build
-leaves the plan in place) — distinct from clean, which only ever archives gitignored working
-state and keeps `docs/plans/` a live backlog of not-yet-implemented plans.
-Clean should also prune a finished or aborted build's impl artifacts — the
+Every approved plan lands in the **home archive** keyed by its session id — the
+canonical copy a downstream implementer (or a future you, on any machine) can always
+find, never touched by `otacon clean`. **otacon never git-commits the plan**; on **Save**
+it additionally writes a project copy under the repo's `plans.dir`, and the user commits
+that copy if they want it tracked. Review exhaust stays out of git. `otacon clean`
+archives ended sessions' working state: for every **terminal** session (approved, plus
+implemented / implement_failed once a build finishes) in the current repo (`--all`:
+everywhere), it calls `DELETE /api/sessions/:id`; the daemon drops the registry entry and
+**archives** `.otacon/<id>/` to `.otacon/archive/<id>/` in the session's repo (name
+collisions get a numeric suffix), reporting the destination as `archivedTo`. The home
+archive (`~/.otacon/sessions/`) is **never** touched by clean — it is the permanent
+record. Events still queued on an ended session are archived with the directory rather
+than blocking the clean. There is no plan-file archive step: the plan is not in the repo
+on Implement (it lives in the home archive), and on Save the project copy is the user's to
+manage. Clean should also prune a finished or aborted build's impl artifacts — the
 `.otacon/worktrees/<slug>/` worktree (via `git worktree remove`) and its
 `otacon/impl-<slug>` branch — which a per-phase-commit build otherwise litters on disk.
 
 **Deleting any session** from the review UI (§10) reuses that same route, and the
-disposition follows whether the session is terminal (its plan is committed). A
-**terminal** session (approved, or a finished build — implemented / implement_failed)
+disposition follows whether the session is terminal (its plan is in the home archive).
+A **terminal** session (approved, or a finished build — implemented / implement_failed)
 takes the clean path above: its dir is archived (recoverable) because its plan +
-transcript are already committed. A **non-terminal** session (draft / in_review /
-revising, or a live `implementing` build) has no committed-and-ended artifact to keep,
-so the daemon wakes any parked agent with a terminal `deleted` event (§6) — so its
+transcript are already preserved in the home archive (and, on Save, the project copy).
+A **non-terminal** session (draft / in_review / revising, or a live `implementing`
+build) has no ended-and-archived artifact to keep, so the daemon wakes any parked agent
+with a terminal `deleted` event (§6) — so its
 `wait` loop stops cleanly
 — drops the registry entry, and **hard-removes** `.otacon/<id>/` permanently. The wake
 fires before deregistration so the woken long-poll still resolves against a live session;
@@ -1095,14 +1109,15 @@ line (`choice`/comma-joined `choices`, ` — text` appended when both were given
 transcript appends no section. When the approval went through **comment & approve**
 (§6), a `## Review notes` section follows the Interview — one `### t<n> — <section>`
 per comment the agent folded in unreviewed, the reviewer's comment as a blockquote
-and the agent's resolution beneath it — so the trusted fold-in stays auditable in git
+and the agent's resolution beneath it — so the trusted fold-in stays auditable
 (a plain or *commit-anyway* approve folds nothing in, so the section is omitted).
 The reviewer reaches this same fold-in in one click even from browser-only drafts the
-daemon never received: picking a commit variant with unsent drawer comments opens the
-client-side drafts gate (§10), whose **Send & commit** flushes the batch into open
+daemon never received: picking an approve variant with unsent drawer comments opens the
+client-side drafts gate (§10), whose **Send & approve** flushes the batch into open
 threads and then approves with `{sendOpenComments}`, so staged-but-unsent comments
 count toward the plan instead of vanishing at approve.
-The filename is dated with the approve day and slugged
+The same artifact is written to the home archive (always) and the project copy (on
+Save). The filename is dated with the approve day and slugged
 from the session title; a taken name gets a `-2`, `-3`, … suffix — never overwritten.
 The artifact is post-lint output: the closed plan schema (§4-5) governs submits, not
 this file. Approve ends the session **logically** — `status: approved` excludes it
@@ -1111,7 +1126,7 @@ stays on disk (the parked `wait` still drains the `approved` event from it) unti
 `otacon clean` archives it. In the UI, the moment the session you're viewing flips to
 approved, the review screen navigates home (its switcher chip is gone, §7); this fires
 only on the live non-approved → approved transition, so opening an already-approved
-session from home does **not** redirect and the committed plan stays readable.
+session from home does **not** redirect and the approved plan stays readable.
 
 Session status machine:
 `draft → in_review ⇄ revising → approved` (terminal), with the **Approve & Implement**
@@ -1141,15 +1156,16 @@ draft ─► in_review ⇄ revising ──────────┤  (Send to 
                                         (terminal)                 (terminal)
 ```
 
-### Approve & Implement: worktree, per-phase commits, PR
+### Implement: worktree, per-phase commits, PR
 
-**Approve & Implement** finalizes the plan as Approve does, then flips the session to
-`implementing` and hands the same agent the build (§6). The agent commits the approved
-plan, then opens a git worktree at **`<worktree.dir>/<slug>`** — `worktree.dir` is
+The **Implement** approve action finalizes the plan (home archive only — nothing in the
+repo), then flips the session to `implementing` and hands the same agent the build (§6).
+otacon never git-commits the plan; the agent reads it from the home archive at the event
+`path` and opens a git worktree at **`<worktree.dir>/<slug>`** — `worktree.dir` is
 config (§16, default `.otacon/worktrees`, gitignored like the rest of `.otacon/`; the
 agent reads it with `otacon config get worktree.dir`) — on a new branch
-**`otacon/impl-<slug>`** rooted at the
-plan-doc commit, and walks the phases in order: per phase, a fresh implement+test
+**`otacon/impl-<slug>`** rooted at the repo's **default-branch HEAD**, and walks the
+phases in order: per phase, a fresh implement+test
 subagent (scoped to that phase's Goal/Files/Verification), then a separate
 `/code-review --fix` subagent that applies findings; a clean+green phase is committed
 (**one commit per green phase**) before the next begins. On the **first** blocked phase
@@ -1186,8 +1202,8 @@ the daemon never spawns a model.
   identical loop works on Claude Code, Codex, and OpenCode subscriptions.
 - **Forward constraint for `snake`:** same rule. Orchestration via instructions + this
   CLI + interactively-started sessions (or native in-session subagents, which are
-  subscription-covered). Never SDK-spawned workers. The committed plan file is the sole
-  handoff interface.
+  subscription-covered). Never SDK-spawned workers. The approved plan file in the home
+  archive is the sole handoff interface.
 
 ### Failure modes
 
@@ -1295,17 +1311,19 @@ appends a **selective** ignore to the repo's `.gitignore` (with a notice):
 working state while keeping the committed, team-shared project config tracked
 (`config.local.json` stays ignored by the glob). A repo that already carries any
 otacon ignore line (a legacy blanket `.otacon/` or this selective pair) is left
-untouched — there is no migration of pre-existing ignores. `docs/plans/` is created on
-first approve.
+untouched — there is no migration of pre-existing ignores. The Save-time project copy
+dir (`plans.dir`, default the gitignored `.otacon/plans`) is created on first Save.
 
 Config is layered, mirroring Claude Code's committed `settings.json` +
 gitignored `settings.local.json`: built-in defaults ← `~/.otacon/config.json`
 (user) ← `<repo>/.otacon/config.json` (project, **committed/team-shared**) ←
 `<repo>/.otacon/config.local.json` (project.local, **gitignored/personal**) —
 closest wins. Every override file is optional. Tunables include budgets/lint caps, the
-activity feed (`activity.cap`, `activity.noteMaxChars`), `notifications.desktop`, and
-`worktree.dir` (base dir for Approve & Implement build worktrees, default
-`.otacon/worktrees`).
+activity feed (`activity.cap`, `activity.noteMaxChars`), `notifications.desktop`,
+`worktree.dir` (base dir for Implement build worktrees, default `.otacon/worktrees`),
+and `plans.dir` (where **Save** writes the project copy of the approved plan, default
+the gitignored `.otacon/plans`; set it to `docs/plans` to land a tracked file a team
+shares). The home archive location is fixed (`~/.otacon/sessions/`), not configurable.
 
 Config is editable two ways over those override files: by hand, or through
 the **web Settings screen** (`/settings`, reached via `otacon config` or the masthead)
@@ -1313,7 +1331,7 @@ the **web Settings screen** (`/settings`, reached via `otacon config` or the mas
 `~/.otacon/config.json`, `<repo>/.otacon/config.json`, or
 `<repo>/.otacon/config.local.json` respectively (§6, §10). The CLI never writes config:
 `otacon config` only launches the Settings screen, and `otacon config get <key>` is a
-read-only merged lookup — the agent's Approve & Implement loop reads `worktree.dir`
+read-only merged lookup — the agent's Implement loop reads `worktree.dir`
 through it (`otacon config get worktree.dir`) instead of hardcoding the path (§12).
 
 **Optional: committed wrappers.** `otacon install --project` writes the same skill
@@ -1340,11 +1358,15 @@ looked in, and — when in a repo — mentions `--project` as an install option.
 3. The agent drafts, passes the linter, submits. You review: questions fire instantly,
    comments stack in the drawer, **Send all** when done.
 4. Agent revises; you re-review via changelog + threads + diff-vs-last-reviewed. Repeat
-   until **Approve** (or **Approve & Implement**).
-5. The approved plan lands in `docs/plans/YYYY-MM-DD-<slug>.md`, committed by the agent.
-   On plain Approve the session ends. On **Approve & Implement** the same agent carries
-   on building it — worktree, per-phase implement+review subagents, pause-on-first-blocker
-   — and opens a PR, surfaced on the home card (§6, §12).
+   until you **Save** or **Implement**.
+5. Every approved plan is archived to the home store `~/.otacon/sessions/<id>/` (always).
+   On **Save** otacon also writes a copy into the repo under `plans.dir` (default the
+   gitignored `.otacon/plans`; set it to `docs/plans` to track it) and the session ends —
+   otacon never commits, so you commit that copy yourself if you want it in git. On
+   **Implement** the same agent builds straight from the home copy — worktree off the
+   default branch, per-phase implement+review subagents, pause-on-first-blocker — and
+   opens a PR, surfaced on the home card (§6, §12). No plan file rides in the repo on
+   Implement.
 
 ### Updating
 

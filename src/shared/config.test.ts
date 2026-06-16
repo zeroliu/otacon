@@ -204,6 +204,31 @@ describe("loadConfig worktree", () => {
   });
 });
 
+describe("loadConfig plans", () => {
+  test("plans.dir defaults to .otacon/plans", () => {
+    expect(loadConfig(repo).plans.dir).toBe(".otacon/plans");
+  });
+
+  test("global config can override plans.dir", () => {
+    writeGlobal({ plans: { dir: "docs/plans" } });
+    expect(loadConfig(repo).plans.dir).toBe("docs/plans");
+  });
+
+  test("project < project.local precedence holds for plans.dir", () => {
+    writeGlobal({ plans: { dir: "user/plans" } });
+    writeRepo({ plans: { dir: "docs/plans" } });
+    writeProjectLocal({ plans: { dir: ".otacon/plans" } });
+    expect(loadConfig(repo).plans.dir).toBe(".otacon/plans");
+  });
+
+  test("an empty or non-string plans.dir is ignored, keeping the default", () => {
+    writeGlobal({ plans: { dir: "   " } });
+    expect(loadConfig(repo).plans.dir).toBe(".otacon/plans");
+    writeGlobal({ plans: { dir: 5 } });
+    expect(loadConfig(repo).plans.dir).toBe(".otacon/plans");
+  });
+});
+
 describe("CONFIG_SCHEMA guard", () => {
   test("enumerates exactly the leaf keys of DEFAULT_CONFIG", () => {
     const schemaLeaves = new Set(CONFIG_SCHEMA.map((f) => `${f.section}.${f.key}`));

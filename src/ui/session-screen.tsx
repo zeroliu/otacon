@@ -823,7 +823,7 @@ export function SessionScreen({ id }: { id: string }) {
           <p className="empty-title">session closed</p>
           <p className="empty-body">
             This session left the codec — approved and cleaned, or deleted from review. Any
-            approved plan stays committed under <code>docs/plans/</code>.
+            approved plan stays preserved in the home archive (<code>~/.otacon/sessions/</code>).
           </p>
         </main>
       </div>

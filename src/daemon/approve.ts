@@ -1,14 +1,16 @@
 // Approved-plan artifact composition (DESIGN.md §6 step 6, §12): the final
 // revision's markdown with daemon-rewritten frontmatter (status: approved,
 // revision corrected — the daemon owns both) plus the grill transcript
-// appended as an "## Interview" section. The artifact is post-lint output the
-// agent commits to docs/plans/; the closed plan schema governs submits, not
-// this file. Path picking never overwrites: name collisions get -2, -3, …
+// appended as an "## Interview" section. The artifact is post-lint output; the
+// closed plan schema governs submits, not this file. Otacon never git-commits
+// it — it only chooses where the file is written: always the canonical home
+// store (`~/.otacon/sessions/<id>/`), and on Save also a copy under the repo's
+// configured `plans.dir`. Path picking never overwrites: collisions get -2, -3, …
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { TranscriptEntry } from "../shared/types.js";
-import { plansDir } from "../shared/paths.js";
+import { homeSessionDir } from "../shared/paths.js";
 import { slugify } from "./linter/parse.js";
 
 /** The approve date in the user's local time — it names the artifact. */
@@ -18,14 +20,38 @@ export function localDate(now = new Date()): string {
 }
 
 /**
- * docs/plans/YYYY-MM-DD-<slug>.md, repo-relative; a taken name gets a numeric
- * suffix so a re-approved title (or a same-day twin) never overwrites history.
+ * The canonical home copy's absolute path:
+ * `~/.otacon/sessions/<id>/YYYY-MM-DD-<slug>.md`. The session id already makes
+ * the dir unique across repos, but the collision-suffix loop is kept so a
+ * re-approve in the same id dir never overwrites history.
  */
-export function pickArtifactRelPath(repo: string, title: string, date: string): string {
+export function pickHomePath(id: string, title: string, date: string): string {
+  const slug = slugify(title) || "plan";
+  const dir = homeSessionDir(id);
+  for (let n = 1; ; n++) {
+    const name = n === 1 ? `${date}-${slug}.md` : `${date}-${slug}-${n}.md`;
+    const abs = join(dir, name);
+    if (!existsSync(abs)) return abs;
+  }
+}
+
+/**
+ * The Save-time project copy, repo-relative under the configured `plansDir`
+ * (e.g. `.otacon/plans` or `docs/plans`). A taken name gets a numeric suffix so
+ * a re-approved title (or a same-day twin) never overwrites history. Returns a
+ * repo-relative path (the daemon joins it onto the repo root to write).
+ */
+export function pickProjectRelPath(
+  repo: string,
+  plansDir: string,
+  title: string,
+  date: string,
+): string {
   const slug = slugify(title) || "plan";
   for (let n = 1; ; n++) {
     const name = n === 1 ? `${date}-${slug}.md` : `${date}-${slug}-${n}.md`;
-    if (!existsSync(join(plansDir(repo), name))) return join("docs", "plans", name);
+    const rel = join(plansDir, name);
+    if (!existsSync(join(repo, rel))) return rel;
   }
 }
 
@@ -78,13 +104,13 @@ function renderEntry(entry: TranscriptEntry): string {
 }
 
 /**
- * The committed artifact: frontmatter `status`/`revision` rewritten to the
+ * The approved artifact: frontmatter `status`/`revision` rewritten to the
  * daemon's truth, then the grill transcript as "## Interview" (omitted when
  * the transcript is empty — a --quick session has no interview to ship), then —
  * only when the approval went through **comment & approve** — a "## Review notes"
  * section recording the comments the agent folded in unreviewed and how it
- * resolved them, so the trusted fold-in stays auditable in git (DESIGN.md §12).
- * A plain or force approve carries no `reviewNotes`, so the section is omitted.
+ * resolved them, so the trusted fold-in stays auditable (DESIGN.md §12). A plain
+ * or force approve carries no `reviewNotes`, so the section is omitted.
  */
 export function composeArtifact(
   markdown: string,

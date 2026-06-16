@@ -46,11 +46,23 @@ export interface WorktreeConfig {
   dir: string;
 }
 
+/**
+ * Where **Save** writes the approved plan's project copy (DESIGN.md §12). A
+ * repo-relative path; the default `.otacon/plans` is gitignored (zero git
+ * footprint), set it to e.g. `docs/plans` to land a tracked file you commit
+ * yourself. The canonical copy always lands in the home store
+ * (`~/.otacon/sessions/<id>/`); this only governs the in-project copy.
+ */
+export interface PlansConfig {
+  dir: string;
+}
+
 export interface OtaconConfig {
   budgets: Budgets;
   activity: ActivityConfig;
   notifications: Notifications;
   worktree: WorktreeConfig;
+  plans: PlansConfig;
 }
 
 export const DEFAULT_CONFIG: OtaconConfig = {
@@ -74,6 +86,7 @@ export const DEFAULT_CONFIG: OtaconConfig = {
   },
   notifications: { desktop: true },
   worktree: { dir: ".otacon/worktrees" },
+  plans: { dir: ".otacon/plans" },
 };
 
 export type ConfigFieldType = "int" | "bool" | "path";
@@ -244,6 +257,15 @@ export const CONFIG_SCHEMA: ConfigField[] = [
     type: "path",
     default: DEFAULT_CONFIG.worktree.dir,
   },
+  // plans — where Save writes the approved plan's project copy (DESIGN.md §12)
+  {
+    section: "plans",
+    key: "dir",
+    label: "Plans directory",
+    description: "Where Save writes the approved plan copy in the project (repo-relative).",
+    type: "path",
+    default: DEFAULT_CONFIG.plans.dir,
+  },
 ];
 
 type CoerceResult = { ok: true; value: number | boolean | string } | { ok: false };
@@ -328,6 +350,7 @@ function overlayConfig(base: OtaconConfig, raw: unknown, source: string): Otacon
     activity: { ...base.activity },
     notifications: { ...base.notifications },
     worktree: { ...base.worktree },
+    plans: { ...base.plans },
   };
   const mergedSections = merged as unknown as Record<string, Record<string, unknown>>;
   walkProvidedFields(raw, (section, field, result) => {
@@ -349,7 +372,8 @@ function overlayConfig(base: OtaconConfig, raw: unknown, source: string): Otacon
  * (`<repo>/.otacon/config.json`, committed) ← project.local
  * (`<repo>/.otacon/config.local.json`, gitignored). Closest wins. Loaded fresh
  * on every use so tuning takes effect immediately. Each file is overlaid field
- * by field against CONFIG_SCHEMA (budgets, activity, notifications, worktree).
+ * by field against CONFIG_SCHEMA (budgets, activity, notifications, worktree,
+ * plans).
  */
 export function loadConfig(repoRoot?: string): OtaconConfig {
   const overlay = (source: string, into: OtaconConfig): OtaconConfig =>

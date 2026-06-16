@@ -153,14 +153,19 @@ export type EventPayload =
       choices?: string[];
       text?: string;
     }
-  // `implement:true` is the Approve & Implement wake-up: the parked agent
-  // commits the plan at `path` exactly as plain Approve does, then proceeds to
-  // build it (DESIGN.md §12). Absent on a plain approve.
-  | { event: "approved"; session: string; path: string; implement?: true }
+  // The approval wake-up (DESIGN.md §6, §12). Otacon never git-commits the plan;
+  // it only chooses where the file is written. `home` is ALWAYS the absolute
+  // canonical copy under `~/.otacon/sessions/<id>/`. `path` is the copy the agent
+  // acts on: on **Save** (no `implement`) the repo-relative project copy under
+  // `plans.dir` — the agent prints where it landed and stops; the user commits it
+  // themselves. On **Implement** (`implement:true`) `path` equals `home` (no
+  // project copy is written) and the agent builds from it. Either way the agent
+  // runs no git for the plan.
+  | { event: "approved"; session: string; path: string; home: string; implement?: true }
   // Terminal: the reviewer deleted a pending (non-approved) session from the UI
   // (DESIGN.md §6, §12). The daemon wakes the parked agent with this so its
-  // `wait` loop stops cleanly instead of 404ing on a later call; nothing is
-  // committed, there is no artifact path.
+  // `wait` loop stops cleanly instead of 404ing on a later call; there is no
+  // artifact path.
   | { event: "deleted"; session: string };
 
 /**
@@ -280,9 +285,9 @@ export interface SessionStateFile {
    * reviewer approved with open comments and chose "Send to agent", so the
    * session sits in `finalizing` until the agent's next clean `submit`, which
    * then finalizes instead of returning to in_review. `implement` carries the
-   * Commit Plan vs Commit & Implement choice through that defer; `threads` is the
-   * swept comment-thread ids, replayed into the committed `## Review notes`
-   * section once the agent has resolved them. Absent on a session not finalizing.
+   * Save vs Implement choice through that defer; `threads` is the swept
+   * comment-thread ids, replayed into the `## Review notes` section once the
+   * agent has resolved them. Absent on a session not finalizing.
    */
   pendingApproval?: { implement: boolean; threads: string[] };
 }

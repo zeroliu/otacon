@@ -74,7 +74,8 @@ export function DeleteDialog({
         {approved ? (
           <p className="approve-sub">
             Archives its review history to <code>.otacon/archive/</code> (recoverable) and removes
-            it from the index. The approved plan stays committed in <code>docs/plans/</code>.
+            it from the index. The approved plan stays preserved in the home archive
+            (<code>~/.otacon/sessions/</code>).
           </p>
         ) : (
           <p className="approve-sub">

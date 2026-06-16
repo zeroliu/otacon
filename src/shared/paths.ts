@@ -27,6 +27,26 @@ export function globalConfigPath(): string {
 }
 
 /**
+ * The canonical home plan archive root (`<OTACON_HOME>/sessions`, DESIGN.md
+ * §12): every approved plan lands here keyed by its session id, regardless of
+ * the repo. This store is permanent — `otacon clean` never touches it — so a
+ * plan is always recoverable even after its repo working state is archived.
+ */
+export function homeSessionsDir(): string {
+  return join(otaconHome(), "sessions");
+}
+
+/**
+ * One session's home archive dir (`<OTACON_HOME>/sessions/<id>`). The session
+ * id is a globally-unique hash, so this never collides across repos — mirroring
+ * the repo-local `.otacon/<id>/` layout. The approved plan lands here as
+ * `<date>-<slug>.md`.
+ */
+export function homeSessionDir(id: string): string {
+  return join(homeSessionsDir(), id);
+}
+
+/**
  * The COMMITTED, team-shared project config (`<repo>/.otacon/config.json`).
  * The selective `.otacon/` gitignore (`.otacon/*` + `!.otacon/config.json`)
  * keeps this one file tracked, mirroring Claude Code's `settings.json`. It
@@ -80,11 +100,6 @@ export function transcriptPath(repoRoot: string, id: string): string {
 /** The append-only live-activity feed (DESIGN.md §6, §12) — `otacon progress` notes. */
 export function activityPath(repoRoot: string, id: string): string {
   return join(sessionDir(repoRoot, id), "activity.json");
-}
-
-/** Where approved plan artifacts land (DESIGN.md §12). */
-export function plansDir(repoRoot: string): string {
-  return join(repoRoot, "docs", "plans");
 }
 
 export function revisionPath(repoRoot: string, id: string, n: number): string {
