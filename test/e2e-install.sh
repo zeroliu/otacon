@@ -15,6 +15,7 @@ TMP="$(mktemp -d)"
 export HOME="$TMP/home"
 export OTACON_HOME="$TMP/otacon-home"
 export OTACON_TAILSCALE="/nonexistent-tailscale" # never touch a real tailnet
+export OTACON_NO_BROWSER=1 # open/config print the URL here instead of spawning a browser
 REPO="$TMP/repo"
 REPO2="$TMP/repo2"
 REPO3="$TMP/repo3"

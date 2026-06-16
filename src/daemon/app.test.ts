@@ -5,7 +5,14 @@ import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hono } from "hono";
-import { eventsPath, otaconPort, revisionPath, sessionDir } from "../shared/paths.js";
+import {
+  eventsPath,
+  globalConfigPath,
+  otaconPort,
+  repoLocalConfigPath,
+  revisionPath,
+  sessionDir,
+} from "../shared/paths.js";
 import type { RegistrySession } from "../shared/types.js";
 import { VERSION } from "../shared/version.js";
 import type { NodeBindings } from "./app.js";
@@ -2080,8 +2087,9 @@ describe("desktop attention notifications (M6)", () => {
   });
 
   test("silent when notifications.desktop is configured off in the repo", async () => {
+    mkdirSync(join(repo, ".otacon"), { recursive: true });
     writeFileSync(
-      join(repo, "otacon.config.json"),
+      repoLocalConfigPath(repo),
       JSON.stringify({ notifications: { desktop: false } }),
     );
     const session = mintSession();
@@ -2095,5 +2103,121 @@ describe("desktop attention notifications (M6)", () => {
     expect((await presencePost(session.id, "yes")).status).toBe(400);
     expect((await presencePost(session.id, undefined)).status).toBe(400);
     expect((await presencePost("otc_zzzzzz", true)).status).toBe(404);
+  });
+});
+
+describe("config API", () => {
+  type ScopeView = { path: string; values: Record<string, Record<string, unknown>>; repo?: string };
+  type ConfigGet = { schema: unknown[]; scopes: { user?: ScopeView; project?: ScopeView } };
+
+  test("GET with no repo returns only the user scope plus the schema", async () => {
+    const res = await app.request("/api/config");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as ConfigGet;
+    expect(Array.isArray(body.schema)).toBe(true);
+    expect(body.schema.length).toBeGreaterThan(0);
+    expect(body.scopes.user).toBeDefined();
+    expect(body.scopes.user?.path).toBe(globalConfigPath());
+    expect(body.scopes.project).toBeUndefined();
+  });
+
+  test("GET with a repo returns both scopes, project carrying its repo path and values", async () => {
+    mkdirSync(join(repo, ".otacon"), { recursive: true });
+    writeFileSync(
+      repoLocalConfigPath(repo),
+      JSON.stringify({ budgets: { summaryLines: 9 } }),
+    );
+    const res = await app.request(`/api/config?repo=${encodeURIComponent(repo)}`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as ConfigGet;
+    expect(body.scopes.user?.path).toBe(globalConfigPath());
+    expect(body.scopes.project?.path).toBe(repoLocalConfigPath(repo));
+    expect(body.scopes.project?.repo).toBe(repo);
+    expect(body.scopes.project?.values).toEqual({ budgets: { summaryLines: 9 } });
+  });
+
+  test("POST scope=user writes ONLY the provided field; a follow-up GET echoes it", async () => {
+    const res = await postJson("/api/config", { scope: "user", values: { budgets: { summaryLines: 8 } } });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ values: { budgets: { summaryLines: 8 } } });
+    // The file holds only summaryLines — nothing else leaked in.
+    const onDisk = JSON.parse(readFileSync(globalConfigPath(), "utf8")) as unknown;
+    expect(onDisk).toEqual({ budgets: { summaryLines: 8 } });
+    const get = (await (await app.request("/api/config")).json()) as ConfigGet;
+    expect(get.scopes.user?.values).toEqual({ budgets: { summaryLines: 8 } });
+  });
+
+  test("POST with an out-of-range int → 422 field error, file not written", async () => {
+    const res = await postJson("/api/config", { scope: "user", values: { budgets: { summaryLines: 0 } } });
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as {
+      fieldErrors: Array<{ section: string; key: string; message: string }>;
+    };
+    expect(body.fieldErrors).toEqual([
+      { section: "budgets", key: "summaryLines", message: expect.any(String) },
+    ]);
+    expect(existsSync(globalConfigPath())).toBe(false);
+  });
+
+  test("POST scope=project with no repo → 400, nothing written", async () => {
+    const res = await postJson("/api/config", { scope: "project", values: { budgets: { summaryLines: 8 } } });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("E_BAD_REQUEST");
+    expect(existsSync(repoLocalConfigPath(repo))).toBe(false);
+  });
+
+  test("POST scope=project with a relative repo → 400, nothing written", async () => {
+    const res = await postJson("/api/config", {
+      scope: "project",
+      repo: "not/absolute",
+      values: { budgets: { summaryLines: 8 } },
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("E_BAD_REQUEST");
+  });
+
+  test("POST with a missing/invalid scope → 400", async () => {
+    expect((await postJson("/api/config", { values: {} })).status).toBe(400);
+    expect((await postJson("/api/config", { scope: "global", values: {} })).status).toBe(400);
+  });
+
+  test("clearing a previously-set field (omitting it) removes it from the file", async () => {
+    await postJson("/api/config", {
+      scope: "user",
+      values: { budgets: { summaryLines: 8, contractLines: 20 } },
+    });
+    // Re-submit without contractLines: replace, not merge → it reverts to inherited.
+    const res = await postJson("/api/config", { scope: "user", values: { budgets: { summaryLines: 8 } } });
+    expect(res.status).toBe(200);
+    const onDisk = JSON.parse(readFileSync(globalConfigPath(), "utf8")) as {
+      budgets: Record<string, unknown>;
+    };
+    expect(onDisk).toEqual({ budgets: { summaryLines: 8 } });
+    expect("contractLines" in onDisk.budgets).toBe(false);
+  });
+
+  test("POST scope=project with a repo writes <repo>/.otacon/config.json", async () => {
+    const res = await postJson("/api/config", {
+      scope: "project",
+      repo,
+      values: { notifications: { desktop: false } },
+    });
+    expect(res.status).toBe(200);
+    const onDisk = JSON.parse(readFileSync(repoLocalConfigPath(repo), "utf8")) as unknown;
+    expect(onDisk).toEqual({ notifications: { desktop: false } });
+  });
+
+  test("a foreign-Origin POST /api/config is refused 403, file untouched", async () => {
+    const res = await app.request("/api/config", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://evil.example" },
+      body: JSON.stringify({ scope: "user", values: { budgets: { summaryLines: 8 } } }),
+    });
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("E_FORBIDDEN");
+    expect(existsSync(globalConfigPath())).toBe(false);
   });
 });

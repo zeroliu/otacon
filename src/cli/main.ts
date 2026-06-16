@@ -6,6 +6,7 @@
 import { answerCommand } from "./commands/answer.js";
 import { askCommand } from "./commands/ask.js";
 import { cleanCommand } from "./commands/clean.js";
+import { configCommand } from "./commands/config.js";
 import { doctorCommand } from "./commands/doctor.js";
 import { exposeCommand } from "./commands/expose.js";
 import { implementDoneCommand } from "./commands/implement-done.js";
@@ -19,7 +20,9 @@ import { waitCommand } from "./commands/wait.js";
 import { CliError, printJson } from "./output.js";
 
 const USAGE =
-  "usage: otacon <start|submit|wait|ask|answer|progress|implement-done|status|open|clean|install|doctor|expose> [options]";
+  "usage: otacon <start|submit|wait|ask|answer|progress|implement-done|status|open|config|clean|install|doctor|expose> [options]\n" +
+  "       otacon config [open]      open the Settings web UI in the browser\n" +
+  "       otacon config get <key>   print the merged value of one config key";
 
 async function dispatch(command: string | undefined, argv: string[]): Promise<number> {
   switch (command) {
@@ -41,6 +44,8 @@ async function dispatch(command: string | undefined, argv: string[]): Promise<nu
       return statusCommand(argv);
     case "open":
       return openCommand(argv);
+    case "config":
+      return configCommand(argv);
     case "clean":
       return cleanCommand(argv);
     case "install":

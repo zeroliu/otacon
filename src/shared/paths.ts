@@ -26,8 +26,13 @@ export function globalConfigPath(): string {
   return join(otaconHome(), "config.json");
 }
 
-export function repoConfigPath(repoRoot: string): string {
-  return join(repoRoot, "otacon.config.json");
+/**
+ * The gitignored, UI-written project config (`<repo>/.otacon/config.json`).
+ * Lives in the already-gitignored `.otacon/` dir, so the Settings UI never
+ * touches a tracked file. Overrides the global config for this repo.
+ */
+export function repoLocalConfigPath(repoRoot: string): string {
+  return join(otaconDir(repoRoot), "config.json");
 }
 
 export function otaconDir(repoRoot: string): string {

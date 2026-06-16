@@ -156,6 +156,120 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   and an escape hatch for port conflicts. Harmless otherwise.
 - **Revisit when:** Real config wants to subsume them.
 
+## Project config: gitignored `<repo>/.otacon/config.json`, no committed layer
+
+- **Decision:** The per-repo config override is `<repo>/.otacon/config.json` (in the
+  already-gitignored `.otacon/` dir). The old committed `<repo>/otacon.config.json`
+  layer is dropped — the read order is now defaults ← `~/.otacon/config.json` ←
+  `<repo>/.otacon/config.json`.
+- **Why:** The upcoming Settings UI writes project config; pointing it at the gitignored
+  dir means it never mutates a tracked, team-shared file (zero tracked edits, ever).
+  Config is per-developer tuning, not a shared contract, so a committed layer wasn't
+  earning its keep. No repos rely on the old path yet, so a hard drop beats migration
+  ceremony.
+- **Revisit when:** A genuinely shared, reviewed project config (committed, PR-edited)
+  becomes worth reintroducing as a distinct layer.
+
+## Single `CONFIG_SCHEMA` as the source of truth; `worktree.dir` tunable
+
+- **Decision:** One `CONFIG_SCHEMA` (field metadata: section/key/label/type/default/min)
+  enumerates every leaf config key; runtime merging, the API validator, and the future
+  UI all derive from it. A guard test asserts it matches `DEFAULT_CONFIG` exactly. Added
+  a `worktree.dir` field (`type:"path"`, default `.otacon/worktrees`).
+- **Why:** Two parallel code paths (file merge + API validation) drifting apart is the
+  obvious failure mode once a UI can write config; one schema with one `coerceFieldValue`
+  rule per type keeps them in lockstep, and the guard test makes "added a key but forgot
+  the schema/UI" a test failure. `worktree.dir` lets builds land outside `.otacon/` when
+  a developer prefers it, without a new bespoke knob.
+- **Revisit when:** A field needs validation richer than int/bool/path (enums, ranges,
+  cross-field constraints), or config grows nested structures the flat schema can't model.
+
+## `POST /api/config` replaces the scope file; project scope requires a repo
+
+- **Decision:** `POST /api/config` overwrites the target scope file with the sanitized
+  sparse `values` (only valid, provided keys) rather than merging into what's on disk. A
+  field the UI cleared is simply absent from `values`, so it's gone from the file and
+  reverts to inherited. `scope:"project"` with no `repo` is a 400 (writes nothing); a
+  value that fails its type rule is a 422 `{fieldErrors}` (writes nothing).
+- **Why:** Replace is the only semantics that lets the Settings UI express "reset this
+  field to inherited" — a merge could never delete a key, so a cleared field would stick
+  forever. The UI already holds the full intended scope state, so sending it whole is
+  natural and keeps the daemon stateless about prior values. Project config lives in a
+  repo-scoped file, so writing it without a repo has no well-defined target — refuse
+  rather than guess.
+- **Revisit when:** Concurrent editors of the same scope file need field-level merge, or
+  a partial-update (PATCH-style) verb proves worth the extra surface.
+
+## `otacon config` opens the Settings UI; `config get` is read-only; no CLI editing
+
+- **Decision:** Two CLI forms only: `otacon config` (open the `/settings` web UI in the
+  browser: `?repo=<cwd repo root>` inside a repo, bare `/settings` outside one; launches
+  like `otacon open`, `OTACON_NO_BROWSER` prints the URL instead) and `otacon config get
+  <key>` (read-only merged lookup of
+  one dotted key via `loadConfig`, validated against `CONFIG_SCHEMA`, no daemon). There
+  is deliberately **no** `config set` / write verb — editing config stays UI-only.
+- **Why:** q4 declined a get/set *editing* CLI; the Settings UI is the one writer, which
+  keeps the write surface (validation, scope/repo targeting, replace semantics) in one
+  place. But the agent's Approve & Implement loop needs to *read* `worktree.dir` to place
+  its build worktree (§12), so a strictly read-only `config get` is the minimum surface
+  that unblocks that without reopening CLI writes. Reading config never needs the daemon
+  (the files are the source of truth), so `config get` reads them directly and stays fast
+  and dependency-free.
+- **Revisit when:** Agents or scripts need to read whole config sections (not single
+  keys), or a non-interactive write path (CI seeding a project config) proves worth the
+  editing surface q4 declined.
+
+## Settings screen shows inherited defaults + cross-scope override flags
+
+- **Decision:** The Settings screen presents each field's *inherited* fallback, not just
+  the schema default: on the Project scope the placeholder/unchecked value is the user
+  profile's override when the profile set it (flagged "default from user profile"), else
+  the schema default; on the User scope a field the compared project overrides is flagged
+  "overridden by project". To compute those flags the screen fetches `GET /api/config`
+  with `?repo=` whenever a repo is selected — on *both* tabs, not only Project — so both
+  scopes are always in hand. The repo selector therefore stays visible on the User tab as
+  an optional "compare repo" (the user file it writes is global regardless). No API or
+  storage change: the GET already returns both scopes, and POST still replaces one file.
+- **Why:** The overlay order (defaults ← user ← project) is invisible if every field just
+  shows its hardcoded schema default — a Project value that "looks unset" is actually
+  inheriting a user override, and a user setting silently loses to a project one. Showing
+  the *effective* inherited value and the override direction makes the precedence legible
+  at the point of editing. Fetching the project scope on the User tab is the cheapest way
+  to know the override direction without a new endpoint; the cost is that picking a
+  compare repo re-fetches and re-seeds the form (mirroring the existing reload-reseed), so
+  an in-progress User edit is discarded on repo change — acceptable for a rare action.
+- **Revisit when:** A worktree config *scope* lands (today worktree is a section, not a
+  layer), adding a third precedence level the two-flag model can't express; or editing one
+  scope while comparing against several repos at once becomes a real need.
+
+## Settings auto-saves on blur; no Save button
+
+- **Decision:** The Settings screen has no Save button; edits auto-save. A text/number
+  field commits when it loses focus (only if it actually changed); a checkbox toggle and a
+  reset-to-inherit commit immediately. Each save posts the full sparse `buildPayload`
+  (POST still replaces the scope file). On success the screen advances a local `baseline`
+  to the saved form *instead of* refetching and reseeding, and saves are single-flighted (a
+  save fired while one is in flight is queued, and the latest queued one runs after the
+  current resolves). 422s still render inline per field. An ambient "changes save
+  automatically" note sits inline under the path banner (documenting the no-button
+  contract up top), and the transient lifecycle (saving / saved ✓ / error) reports through
+  a floating toast pinned to the viewport rather than an in-flow footer.
+- **Why:** A Save button is easy to forget: tweak a value, navigate away, silently lose
+  it; blur is the natural commit point. The save confirmation is the one piece of feedback
+  the user actively waits for, so it floats as a viewport-pinned toast: an in-flow footer
+  landed below the fold and an edit made up top would confirm off-screen, reading as "did
+  it save?". The autosave *documentation* has no such urgency, so it stays inline up top
+  where it is read once. The replace-file POST already carries the complete
+  desired override set, so committing per field is free. The earlier flow refetched and
+  reseeded the whole form after each save (fine for a once-at-the-end Save); under
+  auto-save that fires mid-editing and the reseed would clobber an in-progress edit in
+  another field, so the baseline is advanced locally and the refetch dropped (a scope/repo
+  switch still remounts and refetches, so cross-scope hints can't go stale). Single-flight
+  is required because the endpoint *replaces* the file: two overlapping saves landing out
+  of order would let a stale earlier payload overwrite a newer one.
+- **Revisit when:** A field wants debounced live-save while typing (not just on blur), or a
+  save failure needs a richer manual-retry affordance than the inline 422 errors.
+
 ## Per-worktree daemon isolation in the dogfood shim
 
 - **Decision:** `bin/otacon` detects a linked git worktree (`.git` is a *file*, not a
@@ -1122,20 +1236,27 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   expose needs serve-status introspection to detect an already-configured tailnet, or
   Tailscale exposes a reliable "HTTPS enabled" signal that could replace the live GET.
 
-## open prints, never launches; implicit failures degrade to the index URL
+## open and config launch the browser; OTACON_NO_BROWSER opts out
 
-- **Decision:** `otacon open` only prints `{url}` JSON — it never spawns a browser.
-  With `--session` it resolves strictly; implicit resolution failures (no session,
-  ambiguous, stale pointer, ended session) print the index URL with a stderr notice
-  instead of failing.
-- **Why:** Agents run this command too, and stdout is the contract — a CLI that pops
-  GUI windows out of an agent's Bash tool is a misfeature; the human pastes or taps
-  the URL (on the phone it was never going to be the Mac's browser anyway). Lenient
-  fallback because the never-guess rule (§7) guards *writes* — posting feedback to
-  the wrong session — while the index is a read that is never the wrong screen and
-  lists every session including the ones the refusals are about.
-- **Revisit when:** A desktop "open in browser" convenience is actually missed
-  (then: an explicit `--browser` flag, default off).
+- **Decision:** `otacon open` and `otacon config` launch the URL in the default browser
+  (best-effort, detached: `open`/`xdg-open`/`start`). `OTACON_NO_BROWSER` (any non-empty
+  value) suppresses the launch and prints the `{url}` JSON to stdout instead. `open
+  --session` still resolves strictly; implicit resolution failures (no session,
+  ambiguous, stale pointer, ended session) still degrade to the index URL with a stderr
+  notice rather than failing; they just launch the index. `config get` is unaffected:
+  it is data, always JSON on stdout.
+- **Why:** These two verbs are human convenience and the whole point is "show me the
+  page": printing a URL the human then has to copy was friction, and the desktop
+  open-in-browser convenience the original print-only decision deferred turned out to be
+  missed (its own "revisit when"). The launch is best-effort and detached so a missing
+  opener (ENOENT), a non-GUI host, or a slow browser never throws out of the JSON-on-
+  stdout contract, fails the command, or stalls an agent that ran it. OTACON_NO_BROWSER
+  keeps the stdout-is-the-contract path for headless hosts, CI, the e2e scripts, and any
+  agent that wants to parse the URL, so the old behavior is one env var away. Lenient
+  index fallback stays because the never-guess rule (§7) guards *writes*, not looks.
+- **Revisit when:** The daemon is reached over an exposed/remote URL where the CLI host's
+  browser is the wrong machine (then: gate the launch on locality, or add a `--print`
+  flag that wins regardless of env).
 
 ## Section ⋯ menus mint section-only anchors; clicks delegate like citations
 

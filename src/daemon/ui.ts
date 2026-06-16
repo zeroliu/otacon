@@ -175,6 +175,9 @@ export function registerUiRoutes(app: Hono<{ Bindings: NodeBindings }>, deps: Ui
   };
   app.get("/", shell);
   app.get("/s/:id", shell);
+  // The Settings screen (DESIGN.md §6 config surface) is a client route on the
+  // same SPA shell — served identically to /s/:id.
+  app.get("/settings", shell);
 
   app.get("/assets/*", (c) => {
     const name = c.req.path.slice("/assets/".length);

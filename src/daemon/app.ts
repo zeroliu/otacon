@@ -14,8 +14,14 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import type { ServerResponse } from "node:http";
 import { isAbsolute, join } from "node:path";
-import { loadConfig } from "../shared/config.js";
-import { otaconPort } from "../shared/paths.js";
+import {
+  CONFIG_SCHEMA,
+  loadConfig,
+  readScopeValues,
+  validateScopeInput,
+} from "../shared/config.js";
+import type { ScopeValues } from "../shared/config.js";
+import { globalConfigPath, otaconPort, repoLocalConfigPath } from "../shared/paths.js";
 import { parseQuestionSpec } from "../shared/question-spec.js";
 import { TERMINAL_STATUSES } from "../shared/types.js";
 import type {
@@ -333,6 +339,56 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.get("/api/health", (c) =>
     c.json({ app: "otacond", version: VERSION, pid: process.pid }),
   );
+
+  // The Settings UI's config surface (DESIGN.md §6). GET returns the full
+  // schema plus each scope's current sparse, coerced values. The `user` scope
+  // (~/.otacon/config.json) is always present; the `project` scope
+  // (<repo>/.otacon/config.json) only when an absolute `repo` is named — User
+  // config needs no repo, so an absent/empty/non-absolute `repo` omits it
+  // entirely (matching the isAbsolute guard POST applies to the write).
+  app.get("/api/config", (c) => {
+    const repo = c.req.query("repo");
+    const scopes: Record<string, { path: string; values: ScopeValues; repo?: string }> = {
+      user: { path: globalConfigPath(), values: readScopeValues(globalConfigPath()) },
+    };
+    if (repo !== undefined && repo !== "" && isAbsolute(repo)) {
+      const path = repoLocalConfigPath(repo);
+      scopes.project = { path, values: readScopeValues(path), repo };
+    }
+    return c.json({ schema: CONFIG_SCHEMA, scopes });
+  });
+
+  // POST replaces one scope file with the sanitized sparse values
+  // (DECISIONS.md "Config POST replaces"). A field the UI cleared is absent
+  // from `values` and so is dropped from the file — it reverts to inherited.
+  // `scope` must be "user" or "project"; project requires a `repo` (400
+  // otherwise). Validation failures return 422 with per-field errors and write
+  // nothing. The same-origin guard above (covering every non-GET /api/*)
+  // protects this mutating call.
+  app.post("/api/config", async (c) => {
+    const body = (await readJsonBody(c)) ?? {};
+    const { scope, repo } = body;
+    if (scope !== "user" && scope !== "project") {
+      return badRequest(c, 'scope must be "user" or "project"');
+    }
+    let path: string;
+    if (scope === "user") {
+      path = globalConfigPath();
+    } else {
+      if (typeof repo !== "string" || !isAbsolute(repo)) {
+        return badRequest(c, "project scope requires an absolute repo path");
+      }
+      path = repoLocalConfigPath(repo);
+    }
+    const result = validateScopeInput(body.values);
+    if (result.errors.length > 0) {
+      return c.json({ fieldErrors: result.errors }, 422);
+    }
+    // Replace, don't merge: writeFileAtomic mkdir -p's the parent, so the
+    // already-present .otacon/ (or a missing ~/.otacon/) is handled either way.
+    writeFileAtomic(path, JSON.stringify(result.values, null, 2));
+    return c.json({ values: result.values });
+  });
 
   app.post("/api/shutdown", (c) => {
     // Fire the hook only once the response is out (or the client is already
