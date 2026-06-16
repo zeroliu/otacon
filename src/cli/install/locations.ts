@@ -7,8 +7,16 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export function claudeSkillPath(): string {
-  return join(homedir(), ".claude", "skills", "otacon", "SKILL.md");
+/**
+ * Where a wrapper is installed: the user's home (today's default) or a specific
+ * git repo root (`otacon install --project`). The three skill-path helpers below
+ * branch on `kind`; hooks are user-only, so the hook/settings helpers ignore it.
+ */
+export type InstallScope = { kind: "user" } | { kind: "project"; root: string };
+
+export function claudeSkillPath(scope: InstallScope = { kind: "user" }): string {
+  const base = scope.kind === "project" ? scope.root : homedir();
+  return join(base, ".claude", "skills", "otacon", "SKILL.md");
 }
 
 /** The Stop hook script install writes; settings.json references it by this path. */
@@ -20,42 +28,22 @@ export function claudeSettingsPath(): string {
   return join(homedir(), ".claude", "settings.json");
 }
 
-/** Codex's global instructions file ($CODEX_HOME, default ~/.codex). */
-export function codexAgentsPath(): string {
-  return join(process.env.CODEX_HOME ?? join(homedir(), ".codex"), "AGENTS.md");
+/** Codex's skills dir — user: $CODEX_HOME (default ~/.codex); project: <root>/.codex. */
+export function codexSkillPath(scope: InstallScope = { kind: "user" }): string {
+  const base =
+    scope.kind === "project"
+      ? join(scope.root, ".codex")
+      : (process.env.CODEX_HOME ?? join(homedir(), ".codex"));
+  return join(base, "skills", "otacon", "SKILL.md");
 }
 
-/** OpenCode's global skills dir ($XDG_CONFIG_HOME, default ~/.config). */
-export function opencodeSkillPath(): string {
-  return join(
-    process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"),
-    "opencode",
-    "skills",
-    "otacon",
-    "SKILL.md",
-  );
-}
-
-/**
- * Replace the marker-delimited block in `existing` with `block` (which carries
- * its own begin/end lines), or append it when no markers are present. User
- * content outside the markers survives byte-for-byte; re-running with the same
- * block is a fixpoint (the idempotent-reinstall contract).
- */
-export function upsertMarkedBlock(
-  existing: string,
-  block: string,
-  begin: string,
-  end: string,
-): string {
-  const from = existing.indexOf(begin);
-  const to = existing.indexOf(end);
-  if (from !== -1 && to !== -1 && to > from) {
-    return existing.slice(0, from) + block + existing.slice(to + end.length);
-  }
-  if (existing.trim() === "") return `${block}\n`;
-  const separator = existing.endsWith("\n") ? "\n" : "\n\n";
-  return `${existing}${separator}${block}\n`;
+/** OpenCode's skills dir — user: $XDG_CONFIG_HOME/opencode (default ~/.config); project: <root>/.opencode. */
+export function opencodeSkillPath(scope: InstallScope = { kind: "user" }): string {
+  const base =
+    scope.kind === "project"
+      ? join(scope.root, ".opencode")
+      : join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "opencode");
+  return join(base, "skills", "otacon", "SKILL.md");
 }
 
 /**

@@ -1,17 +1,13 @@
 // The wrapper content `otacon install` writes (DESIGN.md §16) — this is the
 // product-critical text that teaches an agent the whole protocol: the §6 full
 // loop, §8 grill discipline, and §13 "never end your turn". One protocol card,
-// three destinations: Claude Code and OpenCode get it as a SKILL.md; Codex gets
-// it as a marker-delimited block inside its shared ~/.codex/AGENTS.md. Plus the
-// Stop hook shell script (§13). Wrappers are managed files: reinstall
-// overwrites them wholesale (DECISIONS.md "Wrappers are managed files").
+// three destinations — Claude Code, Codex, and OpenCode each get it as a
+// SKILL.md in their own skills dir. Plus the Stop hook shell script (§13).
+// Wrappers are managed files: reinstall overwrites them wholesale (DECISIONS.md
+// "Wrappers are managed files").
 
 /** Present in every wrapper this tool owns; doctor greps for it. */
 export const MANAGED_MARKER = 'managed by `otacon install`';
-
-export const CODEX_BEGIN =
-  '<!-- BEGIN OTACON — managed by `otacon install`; content inside these markers is overwritten on reinstall -->';
-export const CODEX_END = '<!-- END OTACON -->';
 
 /**
  * The protocol card — §6 full loop (start-first) + §8 grill discipline + §13
@@ -189,7 +185,7 @@ than a sentence — never as decoration.
 `;
 }
 
-/** ~/.claude/skills/otacon/SKILL.md and the OpenCode equivalent (same format). */
+/** The SKILL.md every agent's skills dir gets (Claude, Codex, OpenCode — same format). */
 export function skillMd(): string {
   return `---
 name: otacon
@@ -201,19 +197,6 @@ description: Plan a feature through an otacon review session — grill interview
 # Otacon plan session protocol
 
 ${protocolCard('otacon')}`;
-}
-
-/** The marker-delimited block upserted into ~/.codex/AGENTS.md. */
-export function codexBlock(): string {
-  return `${CODEX_BEGIN}
-
-# Otacon plan sessions
-
-When the user asks you to plan a feature "with otacon" (or to run a plan
-review), follow this protocol exactly.
-
-${protocolCard('otacon')}
-${CODEX_END}`;
 }
 
 /**

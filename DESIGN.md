@@ -1131,7 +1131,10 @@ otacon install --all         # write agent skill wrappers; or --agent claude|cod
 otacon doctor                # verify: node ≥ 20, daemon boots + port free-or-ours,
                              # wrappers present, Tailscale status (hard failures exit 1;
                              # optional pieces are warnings). The Stop hook is optional —
-                             # confirmed when present, never flagged when absent
+                             # confirmed when present, never flagged when absent. Run
+                             # inside a repo, each wrapper check also accepts a project
+                             # wrapper (otacon install --project), reporting the scope it
+                             # found; a miss names the otacon protocol skill, not "wrapper"
 otacon expose                # optional, phone access: checks the tailscale CLI exists
                              # and is logged in, runs `tailscale serve` against the
                              # daemon port, verifies the tailnet URL actually serves
@@ -1141,10 +1144,10 @@ otacon expose                # optional, phone access: checks the tailscale CLI 
 `otacon install` writes the thin protocol wrapper — one protocol card teaching the
 full loop (§6), grill discipline (§8), and the never-end-your-turn rule (§13) — into
 each agent's skill location: Claude Code `~/.claude/skills/otacon/SKILL.md` plus the
-Stop hook script `~/.claude/hooks/otacon-stop.sh`; Codex a marker-delimited block in
-`$CODEX_HOME/AGENTS.md` (default `~/.codex/`, user content outside the markers
-preserved); OpenCode `$XDG_CONFIG_HOME/opencode/skills/otacon/SKILL.md`. Wrappers are
-managed files — reinstall overwrites them. The Stop hook registration in
+Stop hook script `~/.claude/hooks/otacon-stop.sh`; Codex
+`$CODEX_HOME/skills/otacon/SKILL.md` (default `~/.codex/`); OpenCode
+`$XDG_CONFIG_HOME/opencode/skills/otacon/SKILL.md`. All three are the same SKILL.md
+skill folder. Wrappers are managed files — reinstall overwrites them. The Stop hook registration in
 `~/.claude/settings.json` is optional, applied only by `--hooks`: an additive,
 idempotent merge that preserves every existing key and backs the file up before the
 first change (unparseable settings are refused, never clobbered). The hook is a
@@ -1172,11 +1175,27 @@ stay equal, the same generated-file discipline as the protocol card.
 
 ### Per-repo setup
 
-**None.** Otacon works in any git repo with zero configuration. The first
+**None required.** Otacon works in any git repo with zero configuration. The first
 `otacon start` in a repo creates `.otacon/` and appends `.otacon/` to the repo's
 `.gitignore` if missing (with a notice). `docs/plans/` is created on first approve.
 Budgets/lint config is global (`~/.otacon/config.json`); a committed
 `otacon.config.json` at the repo root overrides it if present.
+
+**Optional: committed wrappers.** `otacon install --project` writes the same skill
+wrappers into the **current git repo** instead of the user home, so they can be
+committed and shared with the team: `<root>/.claude/skills/otacon/SKILL.md`,
+`<root>/.codex/skills/otacon/SKILL.md`, `<root>/.opencode/skills/otacon/SKILL.md`
+(`--agent`/`--all` select agents exactly as at user scope). The base resolves to the
+git repo root via `findRepoRoot(cwd)`; run outside any git repo it exits with a usage
+error (exit 2). `--hooks` is user-only — it registers a Claude Code Stop hook in the
+user's `~/.claude/settings.json`, so `--hooks --project` is rejected; a project install
+ships only the inert skill wrappers (no hook script), and reports neither offers nor
+checks the user Stop hook. When `otacon doctor` runs inside a repo, each per-agent
+wrapper check accepts the wrapper at **either** the user path or the project path and
+reports the scope that satisfied it (`<path> (project)` / `<path> (user)`) — so a
+committed project install never reads as "not installed". A miss names the missing
+piece as the otacon protocol skill (not the opaque word "wrapper"), lists the paths it
+looked in, and — when in a repo — mentions `--project` as an install option.
 
 ### Daily flow
 
