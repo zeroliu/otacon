@@ -158,6 +158,11 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 ## Project config: gitignored `<repo>/.otacon/config.json`, no committed layer
 
+> [!warning] Superseded by "Two-tier project config" below. This made
+> `<repo>/.otacon/config.json` gitignored with no committed layer; the two-tier
+> decision makes `config.json` the **committed** project layer and adds a
+> gitignored `config.local.json` override.
+
 - **Decision:** The per-repo config override is `<repo>/.otacon/config.json` (in the
   already-gitignored `.otacon/` dir). The old committed `<repo>/otacon.config.json`
   layer is dropped — the read order is now defaults ← `~/.otacon/config.json` ←
@@ -169,6 +174,31 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   ceremony.
 - **Revisit when:** A genuinely shared, reviewed project config (committed, PR-edited)
   becomes worth reintroducing as a distinct layer.
+
+## Two-tier project config: committed `config.json` + gitignored `config.local.json`
+
+- **Decision:** Project config goes two-tier, mirroring Claude Code's `settings.json`
+  (committed) + `settings.local.json` (gitignored): `<repo>/.otacon/config.json` is the
+  **committed, team-shared** project layer and `<repo>/.otacon/config.local.json` is a
+  **gitignored, personal** override. Precedence is defaults ← user
+  (`~/.otacon/config.json`) ← project (`config.json`) ← project.local
+  (`config.local.json`) — closest wins. `otacon start` writes a **selective** ignore to
+  a fresh repo's `.gitignore` (`.otacon/*` + `!.otacon/config.json`) so all working
+  state stays ignored while `config.json` is trackable; `config.local.json` is caught by
+  the `.otacon/*` glob. The daemon `/api/config` GET/POST gain a `project.local` scope.
+  This supersedes the "gitignored, no committed layer" decision above (#11).
+- **Why:** The genuinely shared, reviewed project config that #11 deferred is now needed
+  so a team can commit a shared save location (the configurable-plan-storage feature):
+  `plans.dir` is a contract a team wants to share, not per-developer tuning. Claude
+  Code's two-tier split is the proven pattern — committed defaults plus a `.local`
+  personal escape hatch — so we adopt it verbatim rather than invent. The selective
+  gitignore keeps the one tracked file precise: `.otacon/*` + a single negation, instead
+  of enumerating every working-state path. No migration of pre-existing blanket
+  `.otacon/` ignores: pre-release, no repos carry one (decision t2), and `start` simply
+  leaves any existing otacon ignore line untouched.
+- **Revisit when:** Two tiers stop being enough (e.g. a third committed-but-environment
+  scope), or the selective-ignore negation collides with a path users want ignored under
+  `.otacon/`.
 
 ## Single `CONFIG_SCHEMA` as the source of truth; `worktree.dir` tunable
 

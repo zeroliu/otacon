@@ -9,7 +9,7 @@ import {
   readScopeValues,
   validateScopeInput,
 } from "./config.js";
-import { otaconHome, otaconPort, repoLocalConfigPath } from "./paths.js";
+import { otaconHome, otaconPort, repoConfigPath, repoLocalConfigPath } from "./paths.js";
 
 let home: string;
 let repo: string;
@@ -36,10 +36,16 @@ function writeGlobal(config: unknown): void {
   writeFileSync(join(home, "config.json"), JSON.stringify(config));
 }
 
+/** The COMMITTED project config (`<repo>/.otacon/config.json`). */
 function writeRepo(config: unknown): void {
-  const path = repoLocalConfigPath(repo);
   mkdirSync(join(repo, ".otacon"), { recursive: true });
-  writeFileSync(path, JSON.stringify(config));
+  writeFileSync(repoConfigPath(repo), JSON.stringify(config));
+}
+
+/** The gitignored personal override (`<repo>/.otacon/config.local.json`). */
+function writeProjectLocal(config: unknown): void {
+  mkdirSync(join(repo, ".otacon"), { recursive: true });
+  writeFileSync(repoLocalConfigPath(repo), JSON.stringify(config));
 }
 
 describe("loadConfig", () => {
@@ -60,6 +66,34 @@ describe("loadConfig", () => {
     const config = loadConfig(repo);
     expect(config.budgets.summaryLines).toBe(10);
     expect(config.budgets.detailsSoftCapLines).toBe(100);
+  });
+
+  test("precedence: project.local wins over project, project over user, user over default", () => {
+    // All four layers set the SAME key; the closest layer must win.
+    writeGlobal({ worktree: { dir: "user/wt" } });
+    writeRepo({ worktree: { dir: "project/wt" } });
+    writeProjectLocal({ worktree: { dir: "local/wt" } });
+    expect(loadConfig(repo).worktree.dir).toBe("local/wt");
+
+    // Drop the closest layer → the next one down wins.
+    rmSync(repoLocalConfigPath(repo), { force: true });
+    expect(loadConfig(repo).worktree.dir).toBe("project/wt");
+
+    rmSync(repoConfigPath(repo), { force: true });
+    expect(loadConfig(repo).worktree.dir).toBe("user/wt");
+
+    rmSync(join(home, "config.json"), { force: true });
+    expect(loadConfig(repo).worktree.dir).toBe(DEFAULT_CONFIG.worktree.dir);
+  });
+
+  test("project.local overrides only the keys it sets; project and user fill the rest", () => {
+    writeGlobal({ budgets: { summaryLines: 8, contractLines: 20 } });
+    writeRepo({ budgets: { summaryLines: 9, impactLines: 15 } });
+    writeProjectLocal({ budgets: { summaryLines: 10 } });
+    const config = loadConfig(repo);
+    expect(config.budgets.summaryLines).toBe(10); // project.local
+    expect(config.budgets.impactLines).toBe(15); // project
+    expect(config.budgets.contractLines).toBe(20); // user
   });
 
   test("partial merge keeps untouched defaults", () => {
@@ -254,6 +288,16 @@ describe("readScopeValues", () => {
 
   test("missing file returns {}", () => {
     expect(readScopeValues(join(home, "does-not-exist.json"))).toEqual({});
+  });
+});
+
+describe("repo config paths", () => {
+  test("repoConfigPath is the committed <repo>/.otacon/config.json", () => {
+    expect(repoConfigPath(repo)).toBe(join(repo, ".otacon", "config.json"));
+  });
+
+  test("repoLocalConfigPath is the gitignored <repo>/.otacon/config.local.json", () => {
+    expect(repoLocalConfigPath(repo)).toBe(join(repo, ".otacon", "config.local.json"));
   });
 });
 

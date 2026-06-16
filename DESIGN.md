@@ -401,23 +401,29 @@ POST /api/shutdown                          clean daemon exit
 GET  /api/config?repo=<root>                config surface for the Settings UI:
                                             {schema: CONFIG_SCHEMA, scopes} where
                                             scopes.user is {path, values} for
-                                            ~/.otacon/config.json (always present)
-                                            and scopes.project is {path, values,
-                                            repo} for <repo>/.otacon/config.json —
+                                            ~/.otacon/config.json (always present);
+                                            scopes.project ({path, values, repo})
+                                            is the committed
+                                            <repo>/.otacon/config.json and
+                                            scopes["project.local"] the gitignored
+                                            <repo>/.otacon/config.local.json — both
                                             included only when ?repo= names an
                                             absolute path. `values` are sparse +
                                             coerced (known keys that pass their
                                             type rule)
-POST /api/config                            {scope:"user"|"project", repo?, values}
-                                            — replaces the scope file with the
+POST /api/config                            {scope:"user"|"project"|
+                                            "project.local", repo?, values} —
+                                            replaces the scope file with the
                                             sanitized sparse values (a cleared
                                             field is dropped → reverts to
                                             inherited). 400 on a bad/missing scope
-                                            or project without an absolute repo; 422
-                                            {fieldErrors} on a value that fails its
-                                            type rule (writes nothing); else 200
-                                            {values}. scope=user → ~/.otacon, project
-                                            → <repo>/.otacon
+                                            or a project scope without an absolute
+                                            repo; 422 {fieldErrors} on a value that
+                                            fails its type rule (writes nothing);
+                                            else 200 {values}. scope=user →
+                                            ~/.otacon/config.json, project →
+                                            <repo>/.otacon/config.json, project.local
+                                            → <repo>/.otacon/config.local.json
 GET  /api/sessions                          index (registry)
 POST /api/sessions                          mint + register a session (otacon start)
 GET  /api/sessions/:id                      session detail (+ revision, pending events)
@@ -603,7 +609,8 @@ is not attention). The agent's parked `otacon wait` hits `/events`, never
 `/presence`, so a waiting agent never suppresses your banners.
 
 On by default; toggle with a `notifications.desktop` boolean in
-`~/.otacon/config.json` (the gitignored `<repo>/.otacon/config.json` overrides it),
+`~/.otacon/config.json` (the committed `<repo>/.otacon/config.json` and the
+gitignored `<repo>/.otacon/config.local.json` override it in turn, §16),
 mirroring the budgets config. Off macOS the banner is a silent no-op.
 
 ### The full loop
@@ -775,16 +782,20 @@ older baselines stay reachable through the diff endpoint's `?from=`.
 ## 10. UI/UX
 
 Two primary screens — the index and the open session — plus a `/settings` config
-screen (User/Project scopes; reached from the masthead or `otacon config`). Config is
+screen (User / Project / Project · local scopes; reached from the masthead or `otacon
+config`). Config is
 still file-backed (§16); the Settings screen is a web editor over those files. Sections
 render worktree → notifications → budgets → activity (the build-time and attention
 knobs lead; the line budgets are the long tail). Each field surfaces what it inherits
-when left unset, mirroring the file overlay order (defaults ← user ← project): the
+when left unset, mirroring the file overlay order
+(defaults ← user ← project ← project.local, §16): the
 Project scope shows the user profile's value as the field's default and flags it
 "default from user profile" when the profile set it; the User scope flags a field a
 project overrides as "overridden by project". A repo selector names the Project scope
-file; on the User scope it's an optional "compare repo" that only chooses which
-project's overrides to surface (the user file it edits is global either way). Edits
+file (the committed `<repo>/.otacon/config.json`; the Project · local scope edits the
+gitignored `<repo>/.otacon/config.local.json` sibling that wins over it); on the User
+scope it's an optional "compare repo" that only chooses which project's overrides to
+surface (the user file it edits is global either way). Edits
 auto-save: a text field commits when it loses focus, and a checkbox or a
 reset-to-inherit commits on the spot, so there is no Save button to forget. The save
 confirmation surfaces as a toast pinned to the viewport, so it is seen the instant it
@@ -1273,19 +1284,29 @@ stay equal, the same generated-file discipline as the protocol card.
 ### Per-repo setup
 
 **None required.** Otacon works in any git repo with zero configuration. The first
-`otacon start` in a repo creates `.otacon/` and appends `.otacon/` to the repo's
-`.gitignore` if missing (with a notice). `docs/plans/` is created on first approve.
-Config is layered built-in defaults ← `~/.otacon/config.json` (user) ←
-`<repo>/.otacon/config.json` (project, gitignored) — closest wins. Both override
-files are optional and untracked. Tunables include budgets/lint caps, the activity
-feed (`activity.cap`, `activity.noteMaxChars`), `notifications.desktop`, and
+`otacon start` in a repo creates `.otacon/` and, if no otacon ignore line is present,
+appends a **selective** ignore to the repo's `.gitignore` (with a notice):
+`.otacon/*` followed by `!.otacon/config.json`. This ignores all of `.otacon/`'s
+working state while keeping the committed, team-shared project config tracked
+(`config.local.json` stays ignored by the glob). A repo that already carries any
+otacon ignore line (a legacy blanket `.otacon/` or this selective pair) is left
+untouched — there is no migration of pre-existing ignores. `docs/plans/` is created on
+first approve.
+
+Config is layered, mirroring Claude Code's committed `settings.json` +
+gitignored `settings.local.json`: built-in defaults ← `~/.otacon/config.json`
+(user) ← `<repo>/.otacon/config.json` (project, **committed/team-shared**) ←
+`<repo>/.otacon/config.local.json` (project.local, **gitignored/personal**) —
+closest wins. Every override file is optional. Tunables include budgets/lint caps, the
+activity feed (`activity.cap`, `activity.noteMaxChars`), `notifications.desktop`, and
 `worktree.dir` (base dir for Approve & Implement build worktrees, default
 `.otacon/worktrees`).
 
-Config is editable two ways over those same two untracked files: by hand, or through
+Config is editable two ways over those override files: by hand, or through
 the **web Settings screen** (`/settings`, reached via `otacon config` or the masthead)
-— a User/Project scope toggle that writes `~/.otacon/config.json` or
-`<repo>/.otacon/config.json` respectively (§6, §10). The CLI never writes config:
+— a scope toggle (User / Project / Project · local) that writes
+`~/.otacon/config.json`, `<repo>/.otacon/config.json`, or
+`<repo>/.otacon/config.local.json` respectively (§6, §10). The CLI never writes config:
 `otacon config` only launches the Settings screen, and `otacon config get <key>` is a
 read-only merged lookup — the agent's Approve & Implement loop reads `worktree.dir`
 through it (`otacon config get worktree.dir`) instead of hardcoding the path (§12).

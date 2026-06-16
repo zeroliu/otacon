@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { globalConfigPath, repoLocalConfigPath } from "./paths.js";
+import { globalConfigPath, repoConfigPath, repoLocalConfigPath } from "./paths.js";
 
 export interface Budgets {
   summaryLines: number;
@@ -345,16 +345,20 @@ function overlayConfig(base: OtaconConfig, raw: unknown, source: string): Otacon
 }
 
 /**
- * defaults ← $OTACON_HOME/config.json ← <repo>/.otacon/config.json.
- * Loaded fresh on every use so tuning takes effect immediately. Each file is
- * overlaid field by field against CONFIG_SCHEMA (budgets, activity,
- * notifications, worktree).
+ * defaults ← user (`$OTACON_HOME/config.json`) ← project
+ * (`<repo>/.otacon/config.json`, committed) ← project.local
+ * (`<repo>/.otacon/config.local.json`, gitignored). Closest wins. Loaded fresh
+ * on every use so tuning takes effect immediately. Each file is overlaid field
+ * by field against CONFIG_SCHEMA (budgets, activity, notifications, worktree).
  */
 export function loadConfig(repoRoot?: string): OtaconConfig {
   const overlay = (source: string, into: OtaconConfig): OtaconConfig =>
     overlayConfig(into, readJsonFile(source), source);
   let config = overlay(globalConfigPath(), DEFAULT_CONFIG);
-  if (repoRoot) config = overlay(repoLocalConfigPath(repoRoot), config);
+  if (repoRoot) {
+    config = overlay(repoConfigPath(repoRoot), config);
+    config = overlay(repoLocalConfigPath(repoRoot), config);
+  }
   return config;
 }
 

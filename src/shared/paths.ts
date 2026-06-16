@@ -27,12 +27,24 @@ export function globalConfigPath(): string {
 }
 
 /**
- * The gitignored, UI-written project config (`<repo>/.otacon/config.json`).
- * Lives in the already-gitignored `.otacon/` dir, so the Settings UI never
- * touches a tracked file. Overrides the global config for this repo.
+ * The COMMITTED, team-shared project config (`<repo>/.otacon/config.json`).
+ * The selective `.otacon/` gitignore (`.otacon/*` + `!.otacon/config.json`)
+ * keeps this one file tracked, mirroring Claude Code's `settings.json`. It
+ * overrides the global (user) config for this repo and is in turn overridden by
+ * the local override below.
+ */
+export function repoConfigPath(repoRoot: string): string {
+  return join(otaconDir(repoRoot), "config.json");
+}
+
+/**
+ * The gitignored, personal project override (`<repo>/.otacon/config.local.json`),
+ * mirroring Claude Code's `settings.local.json`. Ignored by the `.otacon/*`
+ * glob, so the Settings UI can write a per-developer override without touching a
+ * tracked file. Wins over both the user and the committed project config.
  */
 export function repoLocalConfigPath(repoRoot: string): string {
-  return join(otaconDir(repoRoot), "config.json");
+  return join(otaconDir(repoRoot), "config.local.json");
 }
 
 export function otaconDir(repoRoot: string): string {

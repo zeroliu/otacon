@@ -54,18 +54,27 @@ export async function startCommand(argv: string[]): Promise<number> {
   return 0;
 }
 
-/** First start in a repo appends .otacon/ to .gitignore, with a notice (DESIGN.md §16). */
+/**
+ * First start in a repo appends a SELECTIVE .otacon/ ignore to .gitignore, with
+ * a notice (DESIGN.md §16): `.otacon/*` ignores all working state while
+ * `!.otacon/config.json` keeps the committed, team-shared project config tracked
+ * (config.local.json stays ignored by the glob). A repo that already has any
+ * otacon ignore line (blanket `.otacon/` from before, or this selective pair) is
+ * left untouched — no migration of pre-existing ignores (plan decision t2).
+ */
 export function ensureGitignore(repo: string): void {
   const path = join(repo, ".gitignore");
   const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
   const covered = existing
     .split("\n")
-    .some((line) => /^\/?\.otacon\/?$/.test(line.trim()));
+    .some((line) => /^!?\/?\.otacon(\/\*?|\/config\.json)?\/?$/.test(line.trim()));
   if (covered) return;
   // Match the file's own line endings — appending LF to a CRLF file would
   // leave it with mixed endings.
   const eol = existing.includes("\r\n") ? "\r\n" : "\n";
   const separator = existing === "" || existing.endsWith("\n") ? "" : eol;
-  appendFileSync(path, `${separator}.otacon/${eol}`);
-  notice(`appended .otacon/ to ${path} (working state stays out of git, DESIGN.md §12)`);
+  appendFileSync(path, `${separator}.otacon/*${eol}!.otacon/config.json${eol}`);
+  notice(
+    `appended .otacon/ ignore to ${path} (working state stays out of git; config.json stays tracked, DESIGN.md §12, §16)`,
+  );
 }

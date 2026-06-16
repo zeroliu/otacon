@@ -21,7 +21,12 @@ import {
   validateScopeInput,
 } from "../shared/config.js";
 import type { ScopeValues } from "../shared/config.js";
-import { globalConfigPath, otaconPort, repoLocalConfigPath } from "../shared/paths.js";
+import {
+  globalConfigPath,
+  otaconPort,
+  repoConfigPath,
+  repoLocalConfigPath,
+} from "../shared/paths.js";
 import { parseQuestionSpec } from "../shared/question-spec.js";
 import { TERMINAL_STATUSES } from "../shared/types.js";
 import type {
@@ -402,18 +407,21 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
 
   // The Settings UI's config surface (DESIGN.md §6). GET returns the full
   // schema plus each scope's current sparse, coerced values. The `user` scope
-  // (~/.otacon/config.json) is always present; the `project` scope
-  // (<repo>/.otacon/config.json) only when an absolute `repo` is named — User
-  // config needs no repo, so an absent/empty/non-absolute `repo` omits it
-  // entirely (matching the isAbsolute guard POST applies to the write).
+  // (~/.otacon/config.json) is always present; the project scopes only when an
+  // absolute `repo` is named — User config needs no repo, so an absent/empty/
+  // non-absolute `repo` omits them (matching the isAbsolute guard POST applies
+  // to the write). `project` is the committed <repo>/.otacon/config.json;
+  // `project.local` is the gitignored <repo>/.otacon/config.local.json override.
   app.get("/api/config", (c) => {
     const repo = c.req.query("repo");
     const scopes: Record<string, { path: string; values: ScopeValues; repo?: string }> = {
       user: { path: globalConfigPath(), values: readScopeValues(globalConfigPath()) },
     };
     if (repo !== undefined && repo !== "" && isAbsolute(repo)) {
-      const path = repoLocalConfigPath(repo);
-      scopes.project = { path, values: readScopeValues(path), repo };
+      const projectPath = repoConfigPath(repo);
+      const localPath = repoLocalConfigPath(repo);
+      scopes.project = { path: projectPath, values: readScopeValues(projectPath), repo };
+      scopes["project.local"] = { path: localPath, values: readScopeValues(localPath), repo };
     }
     return c.json({ schema: CONFIG_SCHEMA, scopes });
   });
@@ -421,15 +429,15 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   // POST replaces one scope file with the sanitized sparse values
   // (DECISIONS.md "Config POST replaces"). A field the UI cleared is absent
   // from `values` and so is dropped from the file — it reverts to inherited.
-  // `scope` must be "user" or "project"; project requires a `repo` (400
-  // otherwise). Validation failures return 422 with per-field errors and write
-  // nothing. The same-origin guard above (covering every non-GET /api/*)
-  // protects this mutating call.
+  // `scope` must be "user", "project", or "project.local"; both project scopes
+  // require a `repo` (400 otherwise). Validation failures return 422 with
+  // per-field errors and write nothing. The same-origin guard above (covering
+  // every non-GET /api/*) protects this mutating call.
   app.post("/api/config", async (c) => {
     const body = (await readJsonBody(c)) ?? {};
     const { scope, repo } = body;
-    if (scope !== "user" && scope !== "project") {
-      return badRequest(c, 'scope must be "user" or "project"');
+    if (scope !== "user" && scope !== "project" && scope !== "project.local") {
+      return badRequest(c, 'scope must be "user", "project", or "project.local"');
     }
     let path: string;
     if (scope === "user") {
@@ -438,7 +446,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       if (typeof repo !== "string" || !isAbsolute(repo)) {
         return badRequest(c, "project scope requires an absolute repo path");
       }
-      path = repoLocalConfigPath(repo);
+      path = scope === "project" ? repoConfigPath(repo) : repoLocalConfigPath(repo);
     }
     const result = validateScopeInput(body.values);
     if (result.errors.length > 0) {

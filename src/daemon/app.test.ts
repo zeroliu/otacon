@@ -9,6 +9,7 @@ import {
   eventsPath,
   globalConfigPath,
   otaconPort,
+  repoConfigPath,
   repoLocalConfigPath,
   revisionPath,
   sessionDir,
@@ -2347,7 +2348,10 @@ describe("desktop attention notifications (M6)", () => {
 
 describe("config API", () => {
   type ScopeView = { path: string; values: Record<string, Record<string, unknown>>; repo?: string };
-  type ConfigGet = { schema: unknown[]; scopes: { user?: ScopeView; project?: ScopeView } };
+  type ConfigGet = {
+    schema: unknown[];
+    scopes: { user?: ScopeView; project?: ScopeView; "project.local"?: ScopeView };
+  };
 
   test("GET with no repo returns only the user scope plus the schema", async () => {
     const res = await app.request("/api/config");
@@ -2358,21 +2362,28 @@ describe("config API", () => {
     expect(body.scopes.user).toBeDefined();
     expect(body.scopes.user?.path).toBe(globalConfigPath());
     expect(body.scopes.project).toBeUndefined();
+    expect(body.scopes["project.local"]).toBeUndefined();
   });
 
-  test("GET with a repo returns both scopes, project carrying its repo path and values", async () => {
+  test("GET with a repo returns user + project + project.local scopes with their paths and values", async () => {
     mkdirSync(join(repo, ".otacon"), { recursive: true });
+    writeFileSync(repoConfigPath(repo), JSON.stringify({ budgets: { summaryLines: 9 } }));
     writeFileSync(
       repoLocalConfigPath(repo),
-      JSON.stringify({ budgets: { summaryLines: 9 } }),
+      JSON.stringify({ budgets: { summaryLines: 11 } }),
     );
     const res = await app.request(`/api/config?repo=${encodeURIComponent(repo)}`);
     expect(res.status).toBe(200);
     const body = (await res.json()) as ConfigGet;
     expect(body.scopes.user?.path).toBe(globalConfigPath());
-    expect(body.scopes.project?.path).toBe(repoLocalConfigPath(repo));
+    // Committed project config → config.json.
+    expect(body.scopes.project?.path).toBe(repoConfigPath(repo));
     expect(body.scopes.project?.repo).toBe(repo);
     expect(body.scopes.project?.values).toEqual({ budgets: { summaryLines: 9 } });
+    // Gitignored personal override → config.local.json.
+    expect(body.scopes["project.local"]?.path).toBe(repoLocalConfigPath(repo));
+    expect(body.scopes["project.local"]?.repo).toBe(repo);
+    expect(body.scopes["project.local"]?.values).toEqual({ budgets: { summaryLines: 11 } });
   });
 
   test("POST scope=user writes ONLY the provided field; a follow-up GET echoes it", async () => {
@@ -2403,7 +2414,7 @@ describe("config API", () => {
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string } };
     expect(body.error.code).toBe("E_BAD_REQUEST");
-    expect(existsSync(repoLocalConfigPath(repo))).toBe(false);
+    expect(existsSync(repoConfigPath(repo))).toBe(false);
   });
 
   test("POST scope=project with a relative repo → 400, nothing written", async () => {
@@ -2437,15 +2448,40 @@ describe("config API", () => {
     expect("contractLines" in onDisk.budgets).toBe(false);
   });
 
-  test("POST scope=project with a repo writes <repo>/.otacon/config.json", async () => {
+  test("POST scope=project with a repo writes the committed <repo>/.otacon/config.json", async () => {
     const res = await postJson("/api/config", {
       scope: "project",
       repo,
       values: { notifications: { desktop: false } },
     });
     expect(res.status).toBe(200);
-    const onDisk = JSON.parse(readFileSync(repoLocalConfigPath(repo), "utf8")) as unknown;
+    const onDisk = JSON.parse(readFileSync(repoConfigPath(repo), "utf8")) as unknown;
     expect(onDisk).toEqual({ notifications: { desktop: false } });
+  });
+
+  test("POST scope=project.local writes the gitignored <repo>/.otacon/config.local.json", async () => {
+    const res = await postJson("/api/config", {
+      scope: "project.local",
+      repo,
+      values: { worktree: { dir: "local/wt" } },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ values: { worktree: { dir: "local/wt" } } });
+    const onDisk = JSON.parse(readFileSync(repoLocalConfigPath(repo), "utf8")) as unknown;
+    expect(onDisk).toEqual({ worktree: { dir: "local/wt" } });
+    // The committed project config is untouched by a project.local write.
+    expect(existsSync(repoConfigPath(repo))).toBe(false);
+  });
+
+  test("POST scope=project.local with no repo → 400, nothing written", async () => {
+    const res = await postJson("/api/config", {
+      scope: "project.local",
+      values: { worktree: { dir: "local/wt" } },
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("E_BAD_REQUEST");
+    expect(existsSync(repoLocalConfigPath(repo))).toBe(false);
   });
 
   test("a foreign-Origin POST /api/config is refused 403, file untouched", async () => {
