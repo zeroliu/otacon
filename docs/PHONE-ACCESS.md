@@ -32,23 +32,6 @@ it can't.
    A sleeping Mac drops the daemon and the Tailscale serve, so the phone can't
    reach it. `caffeinate -i` keeps it awake; stop it (Ctrl-C) when you're done.
 
-## If the URL won't verify
-
-If you skip step 2 (enabling HTTPS Certificates), `tailscale serve` still
-*succeeds* — but the URL resets on every TLS handshake, so it's effectively dead.
-otacon detects this: `otacon expose` reports `verified: false` and links you to the
-admin DNS page instead of handing you a URL that won't work.
-
-> **Just enabled HTTPS?** The certificate can take a minute to provision. Wait a
-> moment and re-run `otacon expose`.
-
-## Mac App Store Tailscale: PATH note
-
-If you installed Tailscale from the Mac App Store, putting `tailscale` on your
-`PATH` needs a **manual launcher** — a small wrapper script that runs the
-app-bundle binary. A bare symlink to the app-bundle binary crashes, so don't create
-one.
-
 You don't strictly need `tailscale` on your `PATH` for otacon, though: otacon finds
 the app-bundle binary on its own either way. The PATH launcher only matters if you
 want to call `tailscale` yourself from the terminal.
