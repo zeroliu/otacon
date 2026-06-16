@@ -24,7 +24,7 @@ Otacon replaces your coding agent's native plan mode with a review surface you'l
 ## Installation
 
 ```sh
-npm install -g otacon   # one package: the CLI and its daemon
+npm install -g otacon
 ```
 
 ## Get started
