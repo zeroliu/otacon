@@ -19,8 +19,7 @@
 
 <br/>
 
-Otacon makes plan-review thorough and effective for coding agents like Claude Code, Codex, and OpenCode. It replaces native plan mode with a sophisticated process: your agent interviews you ensuring you are aligned, drafts a
-concise plan with design doc best practices, and hands you a real review surface where you comment, ask, review diffs, and sign off.
+Otacon replaces your coding agent's native plan mode with a review surface you'll actually use. Your agent (Claude Code, Codex, or OpenCode) interviews you until it understands the goal, drafts a concise plan with the discipline of an engineering design doc, and hands you a real place to comment, ask, and diff revisions, then sign off before a line of code is written.
 
 ## Installation
 
