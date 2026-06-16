@@ -109,6 +109,14 @@ files under `.otacon/`. System fonts, light/dark via media query. ~720px max-wid
 reading column on desktop. Dev tooling is bun (installs, tests); the shipped artifact
 builds with `tsc` and runs on plain Node.
 
+Brand identity is the **OTACON wordmark** (`src/ui/otacon.svg`, the gear-as-O mark) — a
+flat single-color silhouette shown in the index masthead, painted in the brand accent via
+CSS mask so it tracks light/dark and per-session hue rather than baking a color. The brand
+accent is a **lime green** (hue ~82°, the wordmark's own green) — the default for
+`var(--hue, 82)`; per-session accents still vary by hash (§7). Semantic state colors
+(approved/added green, await amber, revise blue, fail red) are a separate palette and keep
+their own hues.
+
 ---
 
 ## 4. Plan artifact schema
@@ -329,7 +337,9 @@ the model is suspended — no inference, no token spend.
 | `otacon progress "<note>" [--session <id>]`                                 | Append a narration note to the live activity feed (UI-only; non-blocking, never parks, never an event) |
 | `otacon implement-done [--pr <url>] [--failed]`                             | End an `implementing` session: record the PR link and flip to `implemented`, or `--failed` → `implement_failed` (§12) |
 | `otacon status [--all]`                                                     | Session state + undelivered event count (crash/resume entry point)            |
-| `otacon open [--session <id>]`                                              | Print the review URL — the index URL when no session resolves; never launches a browser |
+| `otacon open [--session <id>]`                                              | Open the review URL in the browser, or the index URL when no session resolves; `OTACON_NO_BROWSER` prints it instead of launching |
+| `otacon config [open]`                                                      | Open the Settings web UI in the browser: `/settings?repo=<cwd repo root>` inside a repo (Project scope), bare `/settings` outside one (User scope); `OTACON_NO_BROWSER` prints the URL instead |
+| `otacon config get <key>`                                                   | Read-only: print the merged effective value of one dotted key (`worktree.dir`, `budgets.summaryLines`, …) from the config files; no daemon. Unknown key → exit 1 |
 | `otacon clean [--all]`                                                      | Archive ended sessions' working state to `.otacon/archive/` and prune the registry (§12) |
 
 The `--resolutions` file is the revision-accompaniment document:
@@ -388,6 +398,26 @@ left to 404 on its next call.
 ```
 GET  /api/health                            daemon identity + version (CLI handshake)
 POST /api/shutdown                          clean daemon exit
+GET  /api/config?repo=<root>                config surface for the Settings UI:
+                                            {schema: CONFIG_SCHEMA, scopes} where
+                                            scopes.user is {path, values} for
+                                            ~/.otacon/config.json (always present)
+                                            and scopes.project is {path, values,
+                                            repo} for <repo>/.otacon/config.json —
+                                            included only when ?repo= names an
+                                            absolute path. `values` are sparse +
+                                            coerced (known keys that pass their
+                                            type rule)
+POST /api/config                            {scope:"user"|"project", repo?, values}
+                                            — replaces the scope file with the
+                                            sanitized sparse values (a cleared
+                                            field is dropped → reverts to
+                                            inherited). 400 on a bad/missing scope
+                                            or project without an absolute repo; 422
+                                            {fieldErrors} on a value that fails its
+                                            type rule (writes nothing); else 200
+                                            {values}. scope=user → ~/.otacon, project
+                                            → <repo>/.otacon
 GET  /api/sessions                          index (registry)
 POST /api/sessions                          mint + register a session (otacon start)
 GET  /api/sessions/:id                      session detail (+ revision, pending events)
@@ -573,8 +603,8 @@ is not attention). The agent's parked `otacon wait` hits `/events`, never
 `/presence`, so a waiting agent never suppresses your banners.
 
 On by default; toggle with a `notifications.desktop` boolean in
-`~/.otacon/config.json` (repo `otacon.config.json` override allowed), mirroring the
-budgets config. Off macOS the banner is a silent no-op.
+`~/.otacon/config.json` (the gitignored `<repo>/.otacon/config.json` overrides it),
+mirroring the budgets config. Off macOS the banner is a silent no-op.
 
 ### The full loop
 
@@ -744,7 +774,21 @@ older baselines stay reachable through the diff endpoint's `?from=`.
 
 ## 10. UI/UX
 
-Two screens only. No settings UI in v1 — config is a file.
+Two primary screens — the index and the open session — plus a `/settings` config
+screen (User/Project scopes; reached from the masthead or `otacon config`). Config is
+still file-backed (§16); the Settings screen is a web editor over those files. Sections
+render worktree → notifications → budgets → activity (the build-time and attention
+knobs lead; the line budgets are the long tail). Each field surfaces what it inherits
+when left unset, mirroring the file overlay order (defaults ← user ← project): the
+Project scope shows the user profile's value as the field's default and flags it
+"default from user profile" when the profile set it; the User scope flags a field a
+project overrides as "overridden by project". A repo selector names the Project scope
+file; on the User scope it's an optional "compare repo" that only chooses which
+project's overrides to surface (the user file it edits is global either way). Edits
+auto-save: a text field commits when it loses focus, and a checkbox or a
+reset-to-inherit commits on the spot, so there is no Save button to forget. The save
+confirmation surfaces as a toast pinned to the viewport, so it is seen the instant it
+fires no matter how far the form is scrolled.
 
 **Visual language: hairline telemetry.** The codec identity — mono operational type,
 the masthead, the faint scanlines, the per-session accent hue — stays, but surfaces
@@ -774,7 +818,9 @@ gracefully rather than misattaching.
 
 ### Index (the phone bookmark)
 
-Card per session: title, repo + branch, status chip, agent-presence dot,
+The masthead carries the graphic OTACON wordmark (§3), with the browser↔daemon link
+state opposite. Below it, a card per session: title, repo + branch, status chip,
+agent-presence dot,
 unread-change badge, last activity, accent color. Tap → review screen. The status
 chip is `awaiting your review` / `agent revising` / `questions pending` /
 `approved` / `implementing` / `implemented` / `implement failed`, plus an
@@ -1083,8 +1129,10 @@ draft ─► in_review ⇄ revising ──────────┤  (Send to 
 
 **Approve & Implement** finalizes the plan as Approve does, then flips the session to
 `implementing` and hands the same agent the build (§6). The agent commits the approved
-plan, then opens a git worktree at **`.otacon/worktrees/<slug>`** (gitignored, same as
-the rest of `.otacon/`) on a new branch **`otacon/impl-<slug>`** rooted at the
+plan, then opens a git worktree at **`<worktree.dir>/<slug>`** — `worktree.dir` is
+config (§16, default `.otacon/worktrees`, gitignored like the rest of `.otacon/`; the
+agent reads it with `otacon config get worktree.dir`) — on a new branch
+**`otacon/impl-<slug>`** rooted at the
 plan-doc commit, and walks the phases in order: per phase, a fresh implement+test
 subagent (scoped to that phase's Goal/Files/Verification), then a separate
 `/code-review --fix` subagent that applies findings; a clean+green phase is committed
@@ -1174,13 +1222,16 @@ the daemon never spawns a model.
 ### One-time machine setup
 
 ```sh
-npm install -g otacon        # one package: CLI + daemon (npm name verified free)
-                             # until published: npm i -g github:zeroliu/otacon
+npm install -g otacon        # one package: CLI + daemon (Node ≥ 20)
 otacon install --all         # write agent skill wrappers; or --agent claude|codex|opencode
                              # --hooks also registers the Claude Code Stop hook
 otacon doctor                # verify: node ≥ 20, daemon boots + port free-or-ours,
-                             # wrappers present, Stop hook registered, Tailscale status
-                             # (hard failures exit 1; optional pieces are warnings)
+                             # wrappers present, Tailscale status (hard failures exit 1;
+                             # optional pieces are warnings). The Stop hook is optional —
+                             # confirmed when present, never flagged when absent. Run
+                             # inside a repo, each wrapper check also accepts a project
+                             # wrapper (otacon install --project), reporting the scope it
+                             # found; a miss names the otacon protocol skill, not "wrapper"
 otacon expose                # optional, phone access: checks the tailscale CLI exists
                              # and is logged in, runs `tailscale serve` against the
                              # daemon port, verifies the tailnet URL actually serves
@@ -1190,13 +1241,16 @@ otacon expose                # optional, phone access: checks the tailscale CLI 
 `otacon install` writes the thin protocol wrapper — one protocol card teaching the
 full loop (§6), grill discipline (§8), and the never-end-your-turn rule (§13) — into
 each agent's skill location: Claude Code `~/.claude/skills/otacon/SKILL.md` plus the
-Stop hook script `~/.claude/hooks/otacon-stop.sh`; Codex a marker-delimited block in
-`$CODEX_HOME/AGENTS.md` (default `~/.codex/`, user content outside the markers
-preserved); OpenCode `$XDG_CONFIG_HOME/opencode/skills/otacon/SKILL.md`. Wrappers are
-managed files — reinstall overwrites them. The Stop hook registration in
-`~/.claude/settings.json` is offered, applied only by `--hooks`: an additive,
+Stop hook script `~/.claude/hooks/otacon-stop.sh`; Codex
+`$CODEX_HOME/skills/otacon/SKILL.md` (default `~/.codex/`); OpenCode
+`$XDG_CONFIG_HOME/opencode/skills/otacon/SKILL.md`. All three are the same SKILL.md
+skill folder. Wrappers are managed files — reinstall overwrites them. The Stop hook registration in
+`~/.claude/settings.json` is optional, applied only by `--hooks`: an additive,
 idempotent merge that preserves every existing key and backs the file up before the
-first change (unparseable settings are refused, never clobbered). `otacond` is never
+first change (unparseable settings are refused, never clobbered). The hook is a
+belt-and-suspenders guard on top of the skill's never-end-your-turn rule (§13), not a
+required piece — so without `--hooks` install neither registers nor nags about it, and
+`otacon doctor` confirms it when present but never flags its absence. `otacond` is never
 installed or started by hand — any `otacon` command auto-spawns it if it isn't
 running, and the CLI restarts a stale daemon on version mismatch (version handshake
 on every call).
@@ -1210,13 +1264,47 @@ not hand-edited, and a test (`assets.test.ts`) asserts the committed file equals
 output — so a protocol change can never silently drift between what `otacon install`
 writes elsewhere and what this repo runs.
 
+**Single source for the version.** `package.json`'s `version` is authoritative;
+`src/shared/version.ts` (the `VERSION` the version handshake compares, §13) is
+**generated** from it by `scripts/gen-version.ts`, run automatically by the `npm
+version` lifecycle hook on every bump — never hand-edited. A test guards that the two
+stay equal, the same generated-file discipline as the protocol card.
+
 ### Per-repo setup
 
-**None.** Otacon works in any git repo with zero configuration. The first
+**None required.** Otacon works in any git repo with zero configuration. The first
 `otacon start` in a repo creates `.otacon/` and appends `.otacon/` to the repo's
 `.gitignore` if missing (with a notice). `docs/plans/` is created on first approve.
-Budgets/lint config is global (`~/.otacon/config.json`); a committed
-`otacon.config.json` at the repo root overrides it if present.
+Config is layered built-in defaults ← `~/.otacon/config.json` (user) ←
+`<repo>/.otacon/config.json` (project, gitignored) — closest wins. Both override
+files are optional and untracked. Tunables include budgets/lint caps, the activity
+feed (`activity.cap`, `activity.noteMaxChars`), `notifications.desktop`, and
+`worktree.dir` (base dir for Approve & Implement build worktrees, default
+`.otacon/worktrees`).
+
+Config is editable two ways over those same two untracked files: by hand, or through
+the **web Settings screen** (`/settings`, reached via `otacon config` or the masthead)
+— a User/Project scope toggle that writes `~/.otacon/config.json` or
+`<repo>/.otacon/config.json` respectively (§6, §10). The CLI never writes config:
+`otacon config` only launches the Settings screen, and `otacon config get <key>` is a
+read-only merged lookup — the agent's Approve & Implement loop reads `worktree.dir`
+through it (`otacon config get worktree.dir`) instead of hardcoding the path (§12).
+
+**Optional: committed wrappers.** `otacon install --project` writes the same skill
+wrappers into the **current git repo** instead of the user home, so they can be
+committed and shared with the team: `<root>/.claude/skills/otacon/SKILL.md`,
+`<root>/.codex/skills/otacon/SKILL.md`, `<root>/.opencode/skills/otacon/SKILL.md`
+(`--agent`/`--all` select agents exactly as at user scope). The base resolves to the
+git repo root via `findRepoRoot(cwd)`; run outside any git repo it exits with a usage
+error (exit 2). `--hooks` is user-only — it registers a Claude Code Stop hook in the
+user's `~/.claude/settings.json`, so `--hooks --project` is rejected; a project install
+ships only the inert skill wrappers (no hook script), and reports neither offers nor
+checks the user Stop hook. When `otacon doctor` runs inside a repo, each per-agent
+wrapper check accepts the wrapper at **either** the user path or the project path and
+reports the scope that satisfied it (`<path> (project)` / `<path> (user)`) — so a
+committed project install never reads as "not installed". A miss names the missing
+piece as the otacon protocol skill (not the opaque word "wrapper"), lists the paths it
+looked in, and — when in a repo — mentions `--project` as an install option.
 
 ### Daily flow
 

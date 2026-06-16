@@ -156,6 +156,120 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   and an escape hatch for port conflicts. Harmless otherwise.
 - **Revisit when:** Real config wants to subsume them.
 
+## Project config: gitignored `<repo>/.otacon/config.json`, no committed layer
+
+- **Decision:** The per-repo config override is `<repo>/.otacon/config.json` (in the
+  already-gitignored `.otacon/` dir). The old committed `<repo>/otacon.config.json`
+  layer is dropped — the read order is now defaults ← `~/.otacon/config.json` ←
+  `<repo>/.otacon/config.json`.
+- **Why:** The upcoming Settings UI writes project config; pointing it at the gitignored
+  dir means it never mutates a tracked, team-shared file (zero tracked edits, ever).
+  Config is per-developer tuning, not a shared contract, so a committed layer wasn't
+  earning its keep. No repos rely on the old path yet, so a hard drop beats migration
+  ceremony.
+- **Revisit when:** A genuinely shared, reviewed project config (committed, PR-edited)
+  becomes worth reintroducing as a distinct layer.
+
+## Single `CONFIG_SCHEMA` as the source of truth; `worktree.dir` tunable
+
+- **Decision:** One `CONFIG_SCHEMA` (field metadata: section/key/label/type/default/min)
+  enumerates every leaf config key; runtime merging, the API validator, and the future
+  UI all derive from it. A guard test asserts it matches `DEFAULT_CONFIG` exactly. Added
+  a `worktree.dir` field (`type:"path"`, default `.otacon/worktrees`).
+- **Why:** Two parallel code paths (file merge + API validation) drifting apart is the
+  obvious failure mode once a UI can write config; one schema with one `coerceFieldValue`
+  rule per type keeps them in lockstep, and the guard test makes "added a key but forgot
+  the schema/UI" a test failure. `worktree.dir` lets builds land outside `.otacon/` when
+  a developer prefers it, without a new bespoke knob.
+- **Revisit when:** A field needs validation richer than int/bool/path (enums, ranges,
+  cross-field constraints), or config grows nested structures the flat schema can't model.
+
+## `POST /api/config` replaces the scope file; project scope requires a repo
+
+- **Decision:** `POST /api/config` overwrites the target scope file with the sanitized
+  sparse `values` (only valid, provided keys) rather than merging into what's on disk. A
+  field the UI cleared is simply absent from `values`, so it's gone from the file and
+  reverts to inherited. `scope:"project"` with no `repo` is a 400 (writes nothing); a
+  value that fails its type rule is a 422 `{fieldErrors}` (writes nothing).
+- **Why:** Replace is the only semantics that lets the Settings UI express "reset this
+  field to inherited" — a merge could never delete a key, so a cleared field would stick
+  forever. The UI already holds the full intended scope state, so sending it whole is
+  natural and keeps the daemon stateless about prior values. Project config lives in a
+  repo-scoped file, so writing it without a repo has no well-defined target — refuse
+  rather than guess.
+- **Revisit when:** Concurrent editors of the same scope file need field-level merge, or
+  a partial-update (PATCH-style) verb proves worth the extra surface.
+
+## `otacon config` opens the Settings UI; `config get` is read-only; no CLI editing
+
+- **Decision:** Two CLI forms only: `otacon config` (open the `/settings` web UI in the
+  browser: `?repo=<cwd repo root>` inside a repo, bare `/settings` outside one; launches
+  like `otacon open`, `OTACON_NO_BROWSER` prints the URL instead) and `otacon config get
+  <key>` (read-only merged lookup of
+  one dotted key via `loadConfig`, validated against `CONFIG_SCHEMA`, no daemon). There
+  is deliberately **no** `config set` / write verb — editing config stays UI-only.
+- **Why:** q4 declined a get/set *editing* CLI; the Settings UI is the one writer, which
+  keeps the write surface (validation, scope/repo targeting, replace semantics) in one
+  place. But the agent's Approve & Implement loop needs to *read* `worktree.dir` to place
+  its build worktree (§12), so a strictly read-only `config get` is the minimum surface
+  that unblocks that without reopening CLI writes. Reading config never needs the daemon
+  (the files are the source of truth), so `config get` reads them directly and stays fast
+  and dependency-free.
+- **Revisit when:** Agents or scripts need to read whole config sections (not single
+  keys), or a non-interactive write path (CI seeding a project config) proves worth the
+  editing surface q4 declined.
+
+## Settings screen shows inherited defaults + cross-scope override flags
+
+- **Decision:** The Settings screen presents each field's *inherited* fallback, not just
+  the schema default: on the Project scope the placeholder/unchecked value is the user
+  profile's override when the profile set it (flagged "default from user profile"), else
+  the schema default; on the User scope a field the compared project overrides is flagged
+  "overridden by project". To compute those flags the screen fetches `GET /api/config`
+  with `?repo=` whenever a repo is selected — on *both* tabs, not only Project — so both
+  scopes are always in hand. The repo selector therefore stays visible on the User tab as
+  an optional "compare repo" (the user file it writes is global regardless). No API or
+  storage change: the GET already returns both scopes, and POST still replaces one file.
+- **Why:** The overlay order (defaults ← user ← project) is invisible if every field just
+  shows its hardcoded schema default — a Project value that "looks unset" is actually
+  inheriting a user override, and a user setting silently loses to a project one. Showing
+  the *effective* inherited value and the override direction makes the precedence legible
+  at the point of editing. Fetching the project scope on the User tab is the cheapest way
+  to know the override direction without a new endpoint; the cost is that picking a
+  compare repo re-fetches and re-seeds the form (mirroring the existing reload-reseed), so
+  an in-progress User edit is discarded on repo change — acceptable for a rare action.
+- **Revisit when:** A worktree config *scope* lands (today worktree is a section, not a
+  layer), adding a third precedence level the two-flag model can't express; or editing one
+  scope while comparing against several repos at once becomes a real need.
+
+## Settings auto-saves on blur; no Save button
+
+- **Decision:** The Settings screen has no Save button; edits auto-save. A text/number
+  field commits when it loses focus (only if it actually changed); a checkbox toggle and a
+  reset-to-inherit commit immediately. Each save posts the full sparse `buildPayload`
+  (POST still replaces the scope file). On success the screen advances a local `baseline`
+  to the saved form *instead of* refetching and reseeding, and saves are single-flighted (a
+  save fired while one is in flight is queued, and the latest queued one runs after the
+  current resolves). 422s still render inline per field. An ambient "changes save
+  automatically" note sits inline under the path banner (documenting the no-button
+  contract up top), and the transient lifecycle (saving / saved ✓ / error) reports through
+  a floating toast pinned to the viewport rather than an in-flow footer.
+- **Why:** A Save button is easy to forget: tweak a value, navigate away, silently lose
+  it; blur is the natural commit point. The save confirmation is the one piece of feedback
+  the user actively waits for, so it floats as a viewport-pinned toast: an in-flow footer
+  landed below the fold and an edit made up top would confirm off-screen, reading as "did
+  it save?". The autosave *documentation* has no such urgency, so it stays inline up top
+  where it is read once. The replace-file POST already carries the complete
+  desired override set, so committing per field is free. The earlier flow refetched and
+  reseeded the whole form after each save (fine for a once-at-the-end Save); under
+  auto-save that fires mid-editing and the reseed would clobber an in-progress edit in
+  another field, so the baseline is advanced locally and the refetch dropped (a scope/repo
+  switch still remounts and refetches, so cross-scope hints can't go stale). Single-flight
+  is required because the endpoint *replaces* the file: two overlapping saves landing out
+  of order would let a stale earlier payload overwrite a newer one.
+- **Revisit when:** A field wants debounced live-save while typing (not just on blur), or a
+  save failure needs a richer manual-retry affordance than the inline 422 errors.
+
 ## Per-worktree daemon isolation in the dogfood shim
 
 - **Decision:** `bin/otacon` detects a linked git worktree (`.git` is a *file*, not a
@@ -1008,35 +1122,33 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 - **Decision:** `otacon install` owns wrapper content. SKILL.md files are rewritten
   byte-for-byte on every install and carry a visible ``managed by `otacon install` ``
-  marker; Codex's shared `AGENTS.md` gets a BEGIN/END-marked block that is replaced in
-  place (user content outside the markers survives verbatim). User edits inside
-  managed content are not preserved.
+  marker (Codex's SKILL.md included — see "Codex moves to a `.codex/skills/` SKILL.md
+  folder"). User edits inside managed content are not preserved.
 - **Why:** The wrapper is product behavior — it must track the CLI version exactly
   (`npm update -g` then reinstall, §16), and a three-way merge with user edits would
   fork the protocol invisibly: an agent following last month's card against this
   month's linter is a support nightmare. The marker makes the policy legible at the
-  point of temptation. Codex is block-scoped (not whole-file) only because its file is
-  a shared instructions surface other tools and humans also write to.
+  point of temptation.
 - **Revisit when:** Wrapper customization becomes a real need (then: a user-content
   slot outside the managed region, never merge).
 
-## Wrapper destinations: claude skills dir, codex AGENTS.md block, opencode config skills dir
+## Wrapper destinations: a SKILL.md skill folder per agent
 
 - **Decision:** Claude Code `~/.claude/skills/otacon/SKILL.md` + the hook script
-  `~/.claude/hooks/otacon-stop.sh`; Codex a marked block in `$CODEX_HOME/AGENTS.md`
+  `~/.claude/hooks/otacon-stop.sh`; Codex `$CODEX_HOME/skills/otacon/SKILL.md`
   (default `~/.codex/`); OpenCode `$XDG_CONFIG_HOME/opencode/skills/otacon/SKILL.md`.
-  All three are fully implemented; one protocol card is the single source for all of
-  them.
-- **Why:** Verified conventions (June 2026): Codex reads global instructions from
-  `~/.codex/AGENTS.md` and has no stable global skills contract, so the shared
-  instructions file with a managed block is the honest integration; OpenCode reads
-  Claude-compatible SKILL.md skills from `~/.config/opencode/skills/` (it also reads
-  `~/.claude/skills/`, so the Claude install alone would work — the dedicated copy
-  exists so installing/uninstalling one agent never silently depends on another's
-  files). One card for all three because the protocol is agent-agnostic by
-  construction (§13: "can run shell commands + can edit files").
-- **Revisit when:** Codex ships a real global skills dir, or the agents' conventions
-  drift apart enough that one card stops fitting all.
+  All three are the same SKILL.md skill folder, fully implemented; one protocol card is
+  the single source for all of them.
+- **Why:** Verified conventions (June 2026): all three agents now read the
+  cross-agent SKILL.md skill convention from their own skills dir, so a uniform skill
+  folder is the honest integration for each (Codex's move off `~/.codex/AGENTS.md` is
+  recorded separately below). OpenCode also reads `~/.claude/skills/`, so the Claude
+  install alone would work — the dedicated copy exists so installing/uninstalling one
+  agent never silently depends on another's files. One card for all three because the
+  protocol is agent-agnostic by construction (§13: "can run shell commands + can edit
+  files").
+- **Revisit when:** The agents' skill conventions drift apart enough that one card
+  stops fitting all.
 
 ## Stop hook: plain sh, block-decision JSON, fail-open, stop_hook_active ignored
 
@@ -1065,6 +1177,28 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   extract — a title containing `},{` mis-splits, or nested objects appear (then: a node
   one-liner — node is guaranteed by the package's own engines) — or false blocks show
   up in real use.
+
+## Stop hook is optional: doctor confirms-when-present, install never nags
+
+- **Decision:** The Stop hook is treated as an optional extra, not a required piece of
+  setup. `otacon doctor` reports a `stop-hook` check **only when the hook is registered**
+  (status `ok`); when absent it omits the check entirely — no `warn`. `otacon install`
+  without `--hooks` no longer prints the "Stop hook not registered — run … --hooks"
+  notice or the `hint` field; it just carries the factual `registered` boolean in its
+  JSON. The functionality is unchanged: `--hooks` still writes and registers the script,
+  and the script still blocks turn-end while a session is open.
+- **Why:** Nothing establishes the Stop hook as must-have. The skill's
+  never-end-your-turn instruction (§13) already covers the same ground; the hook is a
+  belt-and-suspenders backstop. Flagging its absence as a warning (doctor) or nagging on
+  every hookless install framed an optional convenience as a setup defect, pushing users
+  toward editing `~/.claude/settings.json` they may not want touched. Confirm-when-present
+  keeps the signal for those who opted in (and keeps the e2e/acceptance `stop-hook: ok`
+  assertions valid, since they install `--hooks` first) without manufacturing a problem
+  for those who didn't.
+- **Revisit when:** Real use shows agents routinely ending their turn mid-review on
+  Claude Code despite the skill instruction — i.e. the hook proves load-bearing rather
+  than belt-and-suspenders — at which point promote it back to a warned/recommended part
+  of setup.
 
 ## clean: daemon deregisters AND archives; undrained events leave with the dir
 
@@ -1150,20 +1284,27 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   expose needs serve-status introspection to detect an already-configured tailnet, or
   Tailscale exposes a reliable "HTTPS enabled" signal that could replace the live GET.
 
-## open prints, never launches; implicit failures degrade to the index URL
+## open and config launch the browser; OTACON_NO_BROWSER opts out
 
-- **Decision:** `otacon open` only prints `{url}` JSON — it never spawns a browser.
-  With `--session` it resolves strictly; implicit resolution failures (no session,
-  ambiguous, stale pointer, ended session) print the index URL with a stderr notice
-  instead of failing.
-- **Why:** Agents run this command too, and stdout is the contract — a CLI that pops
-  GUI windows out of an agent's Bash tool is a misfeature; the human pastes or taps
-  the URL (on the phone it was never going to be the Mac's browser anyway). Lenient
-  fallback because the never-guess rule (§7) guards *writes* — posting feedback to
-  the wrong session — while the index is a read that is never the wrong screen and
-  lists every session including the ones the refusals are about.
-- **Revisit when:** A desktop "open in browser" convenience is actually missed
-  (then: an explicit `--browser` flag, default off).
+- **Decision:** `otacon open` and `otacon config` launch the URL in the default browser
+  (best-effort, detached: `open`/`xdg-open`/`start`). `OTACON_NO_BROWSER` (any non-empty
+  value) suppresses the launch and prints the `{url}` JSON to stdout instead. `open
+  --session` still resolves strictly; implicit resolution failures (no session,
+  ambiguous, stale pointer, ended session) still degrade to the index URL with a stderr
+  notice rather than failing; they just launch the index. `config get` is unaffected:
+  it is data, always JSON on stdout.
+- **Why:** These two verbs are human convenience and the whole point is "show me the
+  page": printing a URL the human then has to copy was friction, and the desktop
+  open-in-browser convenience the original print-only decision deferred turned out to be
+  missed (its own "revisit when"). The launch is best-effort and detached so a missing
+  opener (ENOENT), a non-GUI host, or a slow browser never throws out of the JSON-on-
+  stdout contract, fails the command, or stalls an agent that ran it. OTACON_NO_BROWSER
+  keeps the stdout-is-the-contract path for headless hosts, CI, the e2e scripts, and any
+  agent that wants to parse the URL, so the old behavior is one env var away. Lenient
+  index fallback stays because the never-guess rule (§7) guards *writes*, not looks.
+- **Revisit when:** The daemon is reached over an exposed/remote URL where the CLI host's
+  browser is the wrong machine (then: gate the launch on locality, or add a `--print`
+  flag that wins regardless of env).
 
 ## Section ⋯ menus mint section-only anchors; clicks delegate like citations
 
@@ -1416,8 +1557,8 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 - **Decision:** The canonical loop runs `otacon start` *before* research (not after),
   so the review UI exists from the first second. The protocol card is built once by
-  `protocolCard(cmd)`, parametrized only by command prefix: installed wrappers
-  (`skillMd`/`codexBlock`) use `otacon`; this repo's committed dogfood wrapper
+  `protocolCard(cmd)`, parametrized only by command prefix: the installed wrapper
+  (`skillMd`, shared by all three agents) uses `otacon`; this repo's committed dogfood wrapper
   (`dogfoodSkillMd`, written to `.claude/skills/otacon/SKILL.md`) uses `./bin/otacon`
   and prepends a repo preamble. The dogfood file is generated, never hand-edited, and
   `assets.test.ts` asserts the committed file equals `dogfoodSkillMd()`.
@@ -1915,3 +2056,217 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Drafts ever grow long-lived enough that a reload warning feels too weak
   (consider `localStorage` draft-persistence), or navigate-away / composer text join the
   silent-loss set the gate must cover.
+
+## Distribution: public npm `otacon`; GitHub is contributor build-from-source only
+
+- **Decision:** otacon ships as the unscoped public npm package `otacon`
+  (`npm install -g otacon`); `files: ["dist"]` publishes the prebuilt artifact.
+  `npm i -g github:zeroliu/otacon` is **not** a supported user path — GitHub install is
+  documented (README "Build from source") only as a contributor flow: clone, `bun
+  install`, run `./bin/otacon` from source, or `bun run build && npm link`.
+- **Why:** The published tarball is prebuilt static `dist/` bytes, so `npm install -g`
+  pulls no native or UI build deps and `npm update -g otacon` is the whole upgrade
+  story (the version handshake restarts the daemon). A GitHub install would have to
+  build on the user's machine — pulling the full vite/react/mermaid devtree through a
+  `prepare`/postinstall step we deliberately did not wire — to turn `src/` into a
+  runnable `dist/`. Reserving GitHub for contributors keeps the user path trivial and
+  dep-light. (← grill q1, q7.)
+- **Revisit when:** The npm name is squatted before first publish (fall back to scoped
+  `@zeroliu/otacon`), or a build-on-install GitHub path becomes worth wiring.
+
+## Release flow: local bump+tag+push, CI publishes on the tag
+
+- **Decision:** `bun run release [patch|minor|major]` (`scripts/release.sh`) runs
+  preflight gates (clean tree, default branch, test/typecheck/build), `npm version` to
+  bump+commit+tag, then `git push --follow-tags` — it **never** publishes. The pushed
+  `v[0-9]*` tag triggers `.github/workflows/release.yml`, which re-runs the gates and
+  `npm publish`es from a clean CI checkout. `--dry-run` rehearses without mutating.
+- **Why:** Splitting "decide to release" (local, no credentials) from "publish" (CI,
+  OIDC trusted publishing) means no npm secret lives anywhere — not on a maintainer's
+  machine, not in repo secrets — and every publish is a clean-room, reproducible build.
+  Re-running the gates in CI before the
+  publish step makes a red gate stop the publish; the tag-vs-`package.json` guard stops
+  a mismatched version; npm rejecting a duplicate version makes a re-pushed tag a no-op.
+  (← grill q2.)
+- **Revisit when:** Prerelease/`next` dist-tag publishing is needed (not wired today),
+  or the release wants a non-default base branch.
+
+## `package.json` is the single version source; `version.ts` is generated
+
+- **Decision:** `package.json`'s `version` is authoritative; `src/shared/version.ts`
+  (the `VERSION` the daemon version handshake reads) is generated from it by
+  `scripts/gen-version.ts`, run by the `npm version` lifecycle hook (which also
+  `git add`s the regenerated file). `version.test.ts` asserts the two stay equal.
+- **Why:** A hand-maintained second copy of the version is a dual-write footgun — the
+  mirror would silently drift from `package.json` and break the handshake's meaning. A
+  generated mirror makes `npm version` the entire bump (one command, both files), and
+  the equality test backstops the generator. Same generated-file discipline as the
+  dogfood SKILL.md / protocol card. (← grill q3.)
+- **Revisit when:** Another consumer needs the version in a form a flat constant can't
+  provide.
+
+## npm trusted publishing (OIDC), no stored token; provenance + SHA-pinned actions
+
+- **Decision:** The release workflow publishes with `npm publish --access public` and
+  **no npm token** — authentication is npm **trusted publishing** via the job's
+  `permissions: id-token: write` OIDC token, against a Trusted Publisher (repo + the
+  `release.yml` workflow file) configured once on npmjs.com. This needs npm CLI
+  ≥ 11.5.1 / Node ≥ 22.14, so the workflow runs on Node 22 and `npm i -g npm@latest`.
+  Provenance is attached automatically (still requires `package.json`'s `repository`
+  field); every third-party action is pinned to a commit SHA. Because a Trusted
+  Publisher can only attach to an existing package, the very first publish is a manual
+  `npm publish` from a maintainer's `npm login` session (see RELEASING.md).
+- **Why:** A long-lived `NPM_TOKEN` automation secret is the highest-value thing in the
+  repo — it can publish at any time and must be rotated and guarded. OIDC removes it
+  entirely: the credential is minted per-run, scoped to this repo+workflow, and expires
+  immediately, so there is nothing to leak or rotate. The job still wields publish
+  rights via `id-token: write`, so SHA-pinning every action stays essential — a moved
+  tag could otherwise inject code into a run that can publish. Provenance gives
+  installers a verifiable link from the tarball back to the exact repo + workflow run —
+  supply-chain integrity for a package run with `-g`.
+- **Revisit when:** npm supports configuring a Trusted Publisher for a not-yet-published
+  package (removes the manual first-publish bootstrap), npm changes its OIDC/provenance
+  contract, or a pinned action needs a SHA bump (update the SHA + its version comment).
+
+## Maintainer release steps live in RELEASING.md; README stays user-facing
+
+- **Decision:** README documents only the install/update/use surface; the release
+  runbook (npm token setup, `bun run release`, what CI does, verify, rollback) lives in
+  RELEASING.md. DESIGN.md stays product behavior; this file records the why.
+- **Why:** The README's audience is people installing and using otacon — release
+  mechanics are noise to them and a maintenance liability mixed into onboarding prose.
+  A dedicated runbook keeps the maintainer steps in one skimmable place without
+  diluting the user-facing entry point. (← grill q4.)
+- **Revisit when:** Releasing gets automated enough that the runbook shrinks to a single
+  command worth folding back into a CONTRIBUTING doc.
+
+## Graphic OTACON wordmark + brand accent shifted to the logo's lime
+
+- **Decision:** The index masthead's mono text wordmark (`otacon`) is replaced by a graphic
+  **OTACON wordmark** (`src/ui/otacon.svg`, the gear-as-O mark). The source export was a 3-D
+  extruded mark with a dark-green halo over a full-bleed dark background and outline strokes;
+  we ship only the flat light-green face silhouette (the dark halo/background + strokes
+  stripped), transparent. It renders in the masthead via a CSS `mask` painted in `--accent`,
+  so it inherits light/dark and per-session hue instead of baking a fixed color. The UI brand
+  accent (`--accent`, `--accent-on-ink`, `--live`, and the `var(--hue, …)` default) moves from
+  the old true-green (hue ~131–152°) to the wordmark's **lime** (hue ~82°). Semantic state
+  colors (approved/added green, await amber, revise blue, fail red) are deliberately left on
+  their own hues. The inline favicon's green is recolored to the wordmark lime to match.
+- **Why:** The export's gradient halo and 3-D depth are visual noise that fight the flat
+  hairline-telemetry aesthetic, and its lime green clashed with the UI's true-green accent.
+  Stripping to the flat silhouette keeps the codec-instrument identity sharp; unifying the
+  brand accent on the wordmark's own green makes the logo *be* the brand color rather than a
+  foreign mark sitting on a different green. Painting the masthead instance through a mask
+  (rather than an `<img>` of the baked `#d9fb9e`) keeps it legible on the light "warm paper"
+  background, where the raw light-green would be too low-contrast. Keeping semantic colors
+  separate preserves the meaning system (green = approved/success is distinct from brand).
+- **Revisit when:** The lime accent fails WCAG contrast on any surface, the brand mark
+  changes, or semantic green and brand lime are judged too close on a live screen.
+
+## Doc audience split: README + docs/ are user-facing; DESIGN/DECISIONS/AGENTS are internal
+
+- **Decision:** README and the `docs/` directory are otacon's user-facing documentation
+  surface; `DESIGN.md` / `DECISIONS.md` / `AGENTS.md` are internal-facing. Installation is
+  lean enough to live inline in the README (prerequisites + `npm install`, then the
+  `otacon install` skill step in Get started); there is **no** `docs/INSTALL.md`. Only the
+  phone how-to keeps a focused user doc, `docs/PHONE-ACCESS.md`.
+- **Why:** A value-prop-forward ("revolutionize agentic coding review") README should not
+  route users into an internal product spec — DESIGN.md is a timeless behavior spec for
+  contributors, not an onboarding guide. But a dedicated install guide turned out to be the
+  wrong cut: it filled up with implementation detail (managed-file write locations, marker
+  semantics, the Stop hook merge) that no installing user needs, while the install a user
+  *does* need is two commands. So install collapses back into the README happy path and the
+  detail-heavy `docs/INSTALL.md` is dropped; phone access stays split out because it is a
+  genuinely optional, multi-step setup. (← q3, q4.)
+- **Revisit when:** Install grows enough genuinely user-facing steps (new platforms, auth,
+  multiple runtimes) that the README happy path can no longer hold it, or a generated docs
+  site replaces the hand-written `docs/`.
+
+## Codex moves to a `.codex/skills/` SKILL.md folder; `InstallScope` seams in project install
+
+- **Decision:** Codex's wrapper is the same managed `SKILL.md` as Claude/OpenCode,
+  written to `$CODEX_HOME/skills/otacon/SKILL.md` at user scope and
+  `<root>/.codex/skills/otacon/SKILL.md` at project scope. The old `~/.codex/AGENTS.md`
+  marker-delimited block is fully deleted — `codexBlock()`, the `CODEX_BEGIN`/`CODEX_END`
+  markers, `codexAgentsPath()`, and the generic `upsertMarkedBlock()` are all removed
+  (no other caller). The three skill-path helpers (`claudeSkillPath`, `codexSkillPath`,
+  `opencodeSkillPath`) now take an `InstallScope = { kind: "user" } | { kind: "project";
+  root }`; `claudeHookScriptPath`/`claudeSettingsPath` stay user-only. Call sites pass
+  `{ kind: "user" }` for now.
+- **Why:** Codex now natively supports the cross-agent SKILL.md skill convention at
+  `~/.codex/skills/` (and `.codex/skills/` per repo), verified against OpenAI's docs
+  (June 2026) — so a uniform skill folder replaces the AGENTS.md special case, dropping
+  the only marker-block machinery in the tree. No migration or cleanup of installed
+  files is needed: the marker-block install was never shipped or used. `InstallScope` is
+  the seam the subsequent `--project` flag turns on without re-plumbing every helper;
+  introducing it now (with only the user branch wired) keeps that later change tiny and
+  keeps each helper's user/project split in one place. Note the base asymmetry the type
+  encodes: codex's user base is `$CODEX_HOME` (default `~/.codex`) while its project
+  base is `<root>/.codex`; opencode's user base is `$XDG_CONFIG_HOME/opencode` while its
+  project base is `<root>/.opencode` (each then `/skills/otacon/SKILL.md`).
+- **Revisit when:** Codex's skills path convention changes, or project scope needs a
+  destination layout the two-branch `InstallScope` can't express (e.g. a third scope).
+
+## `--project` resolves to the git repo root, erroring outside a repo
+
+- **Decision:** `otacon install --project` resolves its install base to the current
+  git repo root via `findRepoRoot(process.cwd())` (the same `git rev-parse
+  --show-toplevel` helper session resolution uses). Outside any git repo it is a hard
+  usage error (exit 2: "otacon install --project must run inside a git repo; none found
+  at <cwd>"), never a fallback to cwd or home. There is no `--dir <path>` escape hatch.
+- **Why:** "Install into the current project" means the repo a teammate clones and the
+  wrappers get committed to — the repo root is the only base where `<root>/.claude`,
+  `<root>/.codex/skills`, `<root>/.opencode` land where each agent looks per-repo.
+  Falling back to cwd on no-repo would silently scatter wrapper dirs into arbitrary
+  subdirectories or non-repos that can never be committed as intended; erroring makes
+  the misuse obvious immediately. Reusing `findRepoRoot` keeps repo-root resolution
+  defined once. `--dir` was declined (q1) as surface for a rarer case.
+- **Revisit when:** A real need appears to install wrappers into an explicit
+  non-repo-root directory (then add `--dir <path>` as a separate base, not a fallback).
+
+## Stop hook deferred at project scope; `--hooks --project` rejected
+
+- **Decision:** The Claude Code Stop hook is **not** installed at project scope. A
+  `--project` install writes only the inert skill wrappers — no `.claude/hooks/`
+  script, no `settings.json` registration — and `--hooks --project` is a usage error
+  (exit 2). The hooks report (`applyStopHook`/`offerStopHook`) is gated on user scope,
+  so a project install neither offers nor checks the user Stop hook; the wrapper write
+  itself drops the hook-script write/chmod when `scope.kind !== "user"`.
+- **Why:** A committed `.claude/` is inherited by every teammate who clones the repo,
+  including those without otacon installed. A skill wrapper is inert for them — the
+  agent acts on it only when they actually invoke otacon — but a registered Stop hook
+  is a turn-blocking command that would fire on every stop and fail (or hang) pointing
+  at `otacon-stop.sh` they don't have. Deferring the project hook is precisely what
+  keeps the committed `.claude/` a fail-safe rather than a footgun (q3); the hook stays
+  a user-machine opt-in via `--hooks` at user scope. `offerStopHook()` also reads the
+  user `~/.claude/settings.json`, which is meaningless for a project install — gating
+  it on user scope keeps the project JSON honest.
+- **Revisit when:** Claude Code gains a portable, fail-safe project hook mechanism
+  (e.g. a `$CLAUDE_PROJECT_DIR`-relative command that no-ops when the script is
+  absent), at which point a committed project hook could be reconsidered.
+
+## `otacon doctor` checks project wrappers when in a repo; "otacon protocol skill" wording
+
+- **Decision:** Each per-agent wrapper check in `otacon doctor` now passes against a
+  list of candidate paths and is `ok` if the managed `SKILL.md` (file present AND
+  containing `MANAGED_MARKER`) exists at any of them. The candidates are the user path
+  always, plus — when `findRepoRoot(process.cwd())` resolves — the project path
+  (`<root>/.claude/...`, `<root>/.codex/skills/...`, `<root>/.opencode/...`). The
+  satisfying scope is named in `detail` (`<path> (project)` / `<path> (user)`); the user
+  candidate is listed first, so when both exist user wins the report. A miss stays a
+  `warn` (never a failure — wrappers are optional), reworded from "wrapper not installed
+  at <path>" to "otacon protocol skill not found for <agent> (looked in <paths>); run
+  `otacon install --agent <agent>`" plus ", or add --project to install it into this
+  repo" only when a project candidate was in play. The node/daemon/Stop-hook/Tailscale
+  checks are unchanged — they are user-machine concerns with no project scope.
+- **Why:** After `otacon install --project` (Phase 2), doctor checking only `~/` would
+  cry wolf — warn "not installed" while a perfectly good committed wrapper sits in the
+  repo. Accepting either scope and naming which one matched makes doctor honest about a
+  project install and tells the user where the live wrapper actually is. The wording
+  change answers the reviewer's literal question — "what does 'wrapper not installed'
+  mean" (q4): "wrapper" is otacon jargon, so the message now names the concrete artifact
+  (the otacon protocol skill, the `SKILL.md` that `otacon install` writes), shows the
+  exact paths it probed, and surfaces `--project` as the in-repo fix. Keeping the miss a
+  warning preserves today's contract that wrappers for unused agents never fail the run.
+- **Revisit when:** Agents gain more wrapper search locations doctor should accept, or a
+  per-agent "expected scope" makes listing every candidate path too noisy.

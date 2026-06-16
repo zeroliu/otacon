@@ -13,5 +13,5 @@
     "noUncheckedIndexedAccess": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src/cli", "src/daemon", "src/shared", "test", "playwright.config.ts"]
+  "include": ["src/cli", "src/daemon", "src/shared", "scripts", "test", "playwright.config.ts"]
 }

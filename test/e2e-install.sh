@@ -15,6 +15,7 @@ TMP="$(mktemp -d)"
 export HOME="$TMP/home"
 export OTACON_HOME="$TMP/otacon-home"
 export OTACON_TAILSCALE="/nonexistent-tailscale" # never touch a real tailnet
+export OTACON_NO_BROWSER=1 # open/config print the URL here instead of spawning a browser
 REPO="$TMP/repo"
 REPO2="$TMP/repo2"
 REPO3="$TMP/repo3"
@@ -99,16 +100,16 @@ BACKUPS=$(ls "$HOME/.claude/"settings.json.otacon-backup-* 2>/dev/null | wc -l |
 [ "$BACKUPS" = "1" ] || fail "idempotent --hooks rerun should not write another backup"
 ok "--hooks merged additively (keys survive, backup once) and reruns are no-ops"
 
-# --- 4. codex: marked block inside the shared AGENTS.md ------------------------
-mkdir -p "$HOME/.codex"
-printf '# My codex rules\n\nBe terse.\n' > "$HOME/.codex/AGENTS.md"
+# --- 4. codex: SKILL.md in its own skills dir ----------------------------------
+CODEX_SKILL="$HOME/.codex/skills/otacon/SKILL.md"
 otacon install --agent codex > /dev/null 2>&1
-grep -q '^# My codex rules$' "$HOME/.codex/AGENTS.md" || fail "codex install lost user content"
-grep -q 'BEGIN OTACON' "$HOME/.codex/AGENTS.md" || fail "codex AGENTS.md missing the otacon block"
-grep -q 'otacon wait --timeout 540' "$HOME/.codex/AGENTS.md" || fail "codex block missing the protocol"
+[ -f "$CODEX_SKILL" ] || fail "codex SKILL.md missing at $CODEX_SKILL"
+grep -q 'managed by `otacon install`' "$CODEX_SKILL" || fail "codex SKILL.md missing the managed marker"
+grep -q 'otacon wait --timeout 540' "$CODEX_SKILL" || fail "codex SKILL.md missing the protocol"
+cp "$CODEX_SKILL" "$TMP/codex.before"
 otacon install --agent codex > /dev/null 2>&1
-[ "$(grep -c 'BEGIN OTACON' "$HOME/.codex/AGENTS.md")" = "1" ] || fail "codex reinstall duplicated the block"
-ok "codex install upserts one marked block in ~/.codex/AGENTS.md, preserving user content"
+cmp -s "$CODEX_SKILL" "$TMP/codex.before" || fail "codex reinstall changed SKILL.md"
+ok "codex install wrote SKILL.md at ~/.codex/skills/otacon/SKILL.md (reinstall is a fixpoint)"
 
 # --- 5. --all covers opencode too ----------------------------------------------
 otacon install --all > /dev/null 2>&1
