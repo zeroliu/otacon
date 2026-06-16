@@ -1018,6 +1018,28 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   one-liner — node is guaranteed by the package's own engines) — or false blocks show
   up in real use.
 
+## Stop hook is optional: doctor confirms-when-present, install never nags
+
+- **Decision:** The Stop hook is treated as an optional extra, not a required piece of
+  setup. `otacon doctor` reports a `stop-hook` check **only when the hook is registered**
+  (status `ok`); when absent it omits the check entirely — no `warn`. `otacon install`
+  without `--hooks` no longer prints the "Stop hook not registered — run … --hooks"
+  notice or the `hint` field; it just carries the factual `registered` boolean in its
+  JSON. The functionality is unchanged: `--hooks` still writes and registers the script,
+  and the script still blocks turn-end while a session is open.
+- **Why:** Nothing establishes the Stop hook as must-have. The skill's
+  never-end-your-turn instruction (§13) already covers the same ground; the hook is a
+  belt-and-suspenders backstop. Flagging its absence as a warning (doctor) or nagging on
+  every hookless install framed an optional convenience as a setup defect, pushing users
+  toward editing `~/.claude/settings.json` they may not want touched. Confirm-when-present
+  keeps the signal for those who opted in (and keeps the e2e/acceptance `stop-hook: ok`
+  assertions valid, since they install `--hooks` first) without manufacturing a problem
+  for those who didn't.
+- **Revisit when:** Real use shows agents routinely ending their turn mid-review on
+  Claude Code despite the skill instruction — i.e. the hook proves load-bearing rather
+  than belt-and-suspenders — at which point promote it back to a warned/recommended part
+  of setup.
+
 ## clean: daemon deregisters AND archives; undrained events leave with the dir
 
 - **Decision:** `DELETE /api/sessions/:id` is **status-branched**; its **approved**

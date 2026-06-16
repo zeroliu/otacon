@@ -36,16 +36,12 @@ function wrapperCheck(name: string, path: string, marker: string): Check {
       };
 }
 
-function stopHookCheck(): Check {
-  const name = "stop-hook";
-  if (settingsRegisterStopHook()) {
-    return { name, status: "ok", detail: claudeHookScriptPath() };
-  }
-  return {
-    name,
-    status: "warn",
-    detail: "Stop hook not registered; run otacon install --agent claude --hooks",
-  };
+// The Stop hook is optional — a belt-and-suspenders guard on top of the skill's
+// never-end-your-turn rule, not a required piece. Confirm it when wired up, but
+// never flag its absence (return undefined → omitted from the report, no warning).
+function stopHookCheck(): Check | undefined {
+  if (!settingsRegisterStopHook()) return undefined;
+  return { name: "stop-hook", status: "ok", detail: claudeHookScriptPath() };
 }
 
 function tailscaleCheck(): Check {
@@ -98,7 +94,8 @@ export async function doctorCommand(argv: string[]): Promise<number> {
   checks.push(wrapperCheck("wrapper-claude", claudeSkillPath(), MANAGED_MARKER));
   checks.push(wrapperCheck("wrapper-codex", codexAgentsPath(), CODEX_BEGIN));
   checks.push(wrapperCheck("wrapper-opencode", opencodeSkillPath(), MANAGED_MARKER));
-  checks.push(stopHookCheck());
+  const stopHook = stopHookCheck();
+  if (stopHook) checks.push(stopHook);
   checks.push(tailscaleCheck());
 
   const ok = checks.every((c) => c.status !== "fail");

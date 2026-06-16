@@ -56,7 +56,6 @@ interface HooksReport {
   command: string;
   settings: string;
   backup?: string;
-  hint?: string;
 }
 
 /** Register the Stop hook in ~/.claude/settings.json (additive, idempotent, backed up). */
@@ -93,21 +92,14 @@ function applyStopHook(): HooksReport {
   return { registered: true, command, settings: path, ...(backup ? { backup } : {}) };
 }
 
-/** Without --hooks: report the current state and offer the flag (DESIGN.md §16). */
+// Without --hooks: report registration state without nagging (DESIGN.md §16). The
+// Stop hook is optional, so its absence is neither warned about nor "offered" — the
+// JSON still factually carries `registered` for anyone who wants to wire it up.
 function offerStopHook(): HooksReport {
-  const path = claudeSettingsPath();
-  const registered = settingsRegisterStopHook();
-  if (!registered) {
-    notice(
-      "Stop hook not registered — run `otacon install --agent claude --hooks` to add it to " +
-        `${path} (merged additively, existing settings preserved, backup written first)`,
-    );
-  }
   return {
-    registered,
+    registered: settingsRegisterStopHook(),
     command: claudeHookScriptPath(),
-    settings: path,
-    ...(registered ? {} : { hint: "re-run with --hooks to register the Stop hook" }),
+    settings: claudeSettingsPath(),
   };
 }
 

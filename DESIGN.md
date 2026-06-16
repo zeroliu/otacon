@@ -1129,8 +1129,9 @@ npm install -g otacon        # one package: CLI + daemon (Node ≥ 20)
 otacon install --all         # write agent skill wrappers; or --agent claude|codex|opencode
                              # --hooks also registers the Claude Code Stop hook
 otacon doctor                # verify: node ≥ 20, daemon boots + port free-or-ours,
-                             # wrappers present, Stop hook registered, Tailscale status
-                             # (hard failures exit 1; optional pieces are warnings)
+                             # wrappers present, Tailscale status (hard failures exit 1;
+                             # optional pieces are warnings). The Stop hook is optional —
+                             # confirmed when present, never flagged when absent
 otacon expose                # optional, phone access: checks the tailscale CLI exists
                              # and is logged in, runs `tailscale serve` against the
                              # daemon port, verifies the tailnet URL actually serves
@@ -1144,9 +1145,12 @@ Stop hook script `~/.claude/hooks/otacon-stop.sh`; Codex a marker-delimited bloc
 `$CODEX_HOME/AGENTS.md` (default `~/.codex/`, user content outside the markers
 preserved); OpenCode `$XDG_CONFIG_HOME/opencode/skills/otacon/SKILL.md`. Wrappers are
 managed files — reinstall overwrites them. The Stop hook registration in
-`~/.claude/settings.json` is offered, applied only by `--hooks`: an additive,
+`~/.claude/settings.json` is optional, applied only by `--hooks`: an additive,
 idempotent merge that preserves every existing key and backs the file up before the
-first change (unparseable settings are refused, never clobbered). `otacond` is never
+first change (unparseable settings are refused, never clobbered). The hook is a
+belt-and-suspenders guard on top of the skill's never-end-your-turn rule (§13), not a
+required piece — so without `--hooks` install neither registers nor nags about it, and
+`otacon doctor` confirms it when present but never flags its absence. `otacond` is never
 installed or started by hand — any `otacon` command auto-spawns it if it isn't
 running, and the CLI restarts a stale daemon on version mismatch (version handshake
 on every call).
