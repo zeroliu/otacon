@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { ConfigField, ScopeValues } from "../shared/config.js";
-import { currentValue, distinctRepos, fieldsBySection, isSet } from "./settings.js";
+import { currentValue, distinctRepos, fieldsBySection, inheritedValue, isSet } from "./settings.js";
 
 const summaryLines: ConfigField = {
   section: "budgets",
@@ -59,9 +59,21 @@ describe("fieldsBySection", () => {
   test("groups in fixed section order, omitting empty sections", () => {
     // Intentionally out of order + missing the worktree section.
     const groups = fieldsBySection([cap, summaryLines, desktop]);
-    expect(groups.map((g) => g.section)).toEqual(["budgets", "activity", "notifications"]);
-    expect(groups[0]?.fields).toEqual([summaryLines]);
-    expect(groups[1]?.fields).toEqual([cap]);
+    // worktree leads the order but is absent here, so notifications comes first.
+    expect(groups.map((g) => g.section)).toEqual(["notifications", "budgets", "activity"]);
+    expect(groups[0]?.fields).toEqual([desktop]);
+    expect(groups[1]?.fields).toEqual([summaryLines]);
+    expect(groups[2]?.fields).toEqual([cap]);
+  });
+
+  test("orders worktree first and notifications second", () => {
+    const groups = fieldsBySection([summaryLines, cap, desktop, worktreeDir]);
+    expect(groups.map((g) => g.section)).toEqual([
+      "worktree",
+      "notifications",
+      "budgets",
+      "activity",
+    ]);
   });
 
   test("preserves field order within a section", () => {
@@ -108,5 +120,23 @@ describe("currentValue / isSet", () => {
     expect(currentValue(explicit, desktop)).toBe(false);
     expect(isSet(explicit, summaryLines)).toBe(true);
     expect(currentValue(explicit, summaryLines)).toBe(0);
+  });
+});
+
+describe("inheritedValue", () => {
+  test("falls back to the schema default when the parent doesn't set it", () => {
+    expect(inheritedValue(summaryLines, undefined)).toEqual({ value: 5, from: "default" });
+    expect(inheritedValue(summaryLines, {})).toEqual({ value: 5, from: "default" });
+    expect(inheritedValue(desktop, { budgets: { summaryLines: 8 } })).toEqual({
+      value: true,
+      from: "default",
+    });
+  });
+
+  test("takes the parent's value (the user profile's override) when present", () => {
+    const userValues: ScopeValues = { budgets: { summaryLines: 8 }, notifications: { desktop: false } };
+    expect(inheritedValue(summaryLines, userValues)).toEqual({ value: 8, from: "user" });
+    // A parent override of `false` is still the inherited value, not "unset".
+    expect(inheritedValue(desktop, userValues)).toEqual({ value: false, from: "user" });
   });
 });

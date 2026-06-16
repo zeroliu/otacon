@@ -337,8 +337,8 @@ the model is suspended — no inference, no token spend.
 | `otacon progress "<note>" [--session <id>]`                                 | Append a narration note to the live activity feed (UI-only; non-blocking, never parks, never an event) |
 | `otacon implement-done [--pr <url>] [--failed]`                             | End an `implementing` session: record the PR link and flip to `implemented`, or `--failed` → `implement_failed` (§12) |
 | `otacon status [--all]`                                                     | Session state + undelivered event count (crash/resume entry point)            |
-| `otacon open [--session <id>]`                                              | Print the review URL — the index URL when no session resolves; never launches a browser |
-| `otacon config [open]`                                                      | Print the Settings web UI URL — `/settings?repo=<cwd repo root>` inside a repo (Project scope), bare `/settings` outside one (User scope); never launches a browser |
+| `otacon open [--session <id>]`                                              | Open the review URL in the browser, or the index URL when no session resolves; `OTACON_NO_BROWSER` prints it instead of launching |
+| `otacon config [open]`                                                      | Open the Settings web UI in the browser: `/settings?repo=<cwd repo root>` inside a repo (Project scope), bare `/settings` outside one (User scope); `OTACON_NO_BROWSER` prints the URL instead |
 | `otacon config get <key>`                                                   | Read-only: print the merged effective value of one dotted key (`worktree.dir`, `budgets.summaryLines`, …) from the config files; no daemon. Unknown key → exit 1 |
 | `otacon clean [--all]`                                                      | Archive ended sessions' working state to `.otacon/archive/` and prune the registry (§12) |
 
@@ -745,7 +745,19 @@ older baselines stay reachable through the diff endpoint's `?from=`.
 
 Two primary screens — the index and the open session — plus a `/settings` config
 screen (User/Project scopes; reached from the masthead or `otacon config`). Config is
-still file-backed (§16); the Settings screen is a web editor over those files.
+still file-backed (§16); the Settings screen is a web editor over those files. Sections
+render worktree → notifications → budgets → activity (the build-time and attention
+knobs lead; the line budgets are the long tail). Each field surfaces what it inherits
+when left unset, mirroring the file overlay order (defaults ← user ← project): the
+Project scope shows the user profile's value as the field's default and flags it
+"default from user profile" when the profile set it; the User scope flags a field a
+project overrides as "overridden by project". A repo selector names the Project scope
+file; on the User scope it's an optional "compare repo" that only chooses which
+project's overrides to surface (the user file it edits is global either way). Edits
+auto-save: a text field commits when it loses focus, and a checkbox or a
+reset-to-inherit commits on the spot, so there is no Save button to forget. The save
+confirmation surfaces as a toast pinned to the viewport, so it is seen the instant it
+fires no matter how far the form is scrolled.
 
 **Visual language: hairline telemetry.** The codec identity — mono operational type,
 the masthead, the faint scanlines, the per-session accent hue — stays, but surfaces
@@ -1203,7 +1215,7 @@ Config is editable two ways over those same two untracked files: by hand, or thr
 the **web Settings screen** (`/settings`, reached via `otacon config` or the masthead)
 — a User/Project scope toggle that writes `~/.otacon/config.json` or
 `<repo>/.otacon/config.json` respectively (§6, §10). The CLI never writes config:
-`otacon config` only opens the Settings URL, and `otacon config get <key>` is a
+`otacon config` only launches the Settings screen, and `otacon config get <key>` is a
 read-only merged lookup — the agent's Approve & Implement loop reads `worktree.dir`
 through it (`otacon config get worktree.dir`) instead of hardcoding the path (§12).
 

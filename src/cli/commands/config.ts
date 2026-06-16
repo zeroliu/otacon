@@ -1,17 +1,18 @@
 // otacon config [open] | config get <key> (DESIGN.md §6, §16).
 //
-//   otacon config            — print the Settings web UI URL. Inside a git repo
-//     it carries `?repo=<repo root>` so the screen defaults to Project scope for
-//     this repo; outside any repo it is the bare `/settings` (User scope). Like
-//     `otacon open`, it prints the URL and never launches a browser (DECISIONS.md
-//     "open prints, never launches a browser") — the user opens it.
-//   otacon config get <key>  — read-only: resolve the merged effective value of
+//   otacon config            open the Settings web UI in the browser. Inside a
+//     git repo the URL carries `?repo=<repo root>` so the screen defaults to
+//     Project scope for this repo; outside any repo it is the bare `/settings`
+//     (User scope). Like `otacon open`, it launches the browser; OTACON_NO_BROWSER
+//     prints the URL instead (DECISIONS.md "open and config launch the browser").
+//   otacon config get <key>  read-only: resolve the merged effective value of
 //     one dotted key (`worktree.dir`, `budgets.summaryLines`, …) from the config
 //     files via loadConfig and print it. No daemon: it reads config directly so
 //     the agent implement loop can consume `worktree.dir` (DECISIONS.md
 //     "read-only `config get`"). Editing config stays UI-only.
 
 import { CONFIG_SCHEMA, loadConfig, type OtaconConfig } from "../../shared/config.js";
+import { openOrPrint } from "../browser.js";
 import { baseUrl, ensureDaemon } from "../client.js";
 import { fail, printJson, usageError } from "../output.js";
 import { findRepoRoot, realpathOr } from "../session.js";
@@ -27,7 +28,7 @@ export async function configCommand(argv: string[]): Promise<number> {
   usageError("usage: otacon config [open] | otacon config get <key>");
 }
 
-/** Print the Settings web UI URL (mirrors `otacon open`: print, never launch). */
+/** Launch the Settings web UI in the browser (mirrors `otacon open`). */
 async function configOpen(): Promise<number> {
   await ensureDaemon();
   // Inside a git repo, default the Settings screen to this repo's Project scope
@@ -37,7 +38,7 @@ async function configOpen(): Promise<number> {
     repoRoot === undefined
       ? `${baseUrl()}/settings`
       : `${baseUrl()}/settings?repo=${encodeURIComponent(repoRoot)}`;
-  printJson({ ok: true, url, ...(repoRoot === undefined ? {} : { repo: repoRoot }) });
+  openOrPrint(url, { ok: true, url, ...(repoRoot === undefined ? {} : { repo: repoRoot }) });
   return 0;
 }
 

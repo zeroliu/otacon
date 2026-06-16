@@ -36,7 +36,7 @@ machine-readable error you can fix (read the JSON); exit 2 = you invoked it wron
 
 1. `./bin/otacon start --title <kebab-title>` **first, before you research** — it mints
    the session and prints the review URL. Tell the user to open it (`./bin/otacon open`
-   prints it again) so they can watch the whole thing from the first second.
+   launches it in their browser) so they can watch the whole thing from the first second.
    `--quick` skips the interview — only when the user explicitly asks.
 2. **Research the codebase**, narrating as you go with
    `./bin/otacon progress "<what you're doing>"` — call it whenever you start a chunk of

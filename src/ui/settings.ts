@@ -6,12 +6,16 @@
 
 import type { ConfigField, OtaconConfig, ScopeValues } from "../shared/config.js";
 
-/** Section render order for the Settings screen — matches CONFIG_SCHEMA. */
+/**
+ * Section render order for the Settings screen. Worktree leads (it's the field
+ * an Approve & Implement build reads first), notifications second; the line
+ * budgets follow as the long tail. Independent of CONFIG_SCHEMA's own order.
+ */
 const SECTION_ORDER: Array<keyof OtaconConfig> = [
+  "worktree",
+  "notifications",
   "budgets",
   "activity",
-  "notifications",
-  "worktree",
 ];
 
 /**
@@ -65,4 +69,26 @@ export function currentValue(
 export function isSet(values: ScopeValues | undefined, field: ConfigField): boolean {
   const section = values?.[field.section] as Record<string, unknown> | undefined;
   return section !== undefined && field.key in section;
+}
+
+/**
+ * The value a field falls back to when the active scope doesn't override it,
+ * plus where that fallback comes from. `parent` is the scope the active one
+ * inherits from — the User profile when editing Project; `undefined` when
+ * editing User (which has no parent, so it always falls back to the schema
+ * default). When the parent overrides the field, *its* value is the effective
+ * default the Project view shows; otherwise the schema default applies.
+ */
+export interface InheritedValue {
+  value: number | boolean | string;
+  from: "user" | "default";
+}
+
+export function inheritedValue(
+  field: ConfigField,
+  parent: ScopeValues | undefined,
+): InheritedValue {
+  const fromParent = currentValue(parent, field);
+  if (fromParent !== undefined) return { value: fromParent, from: "user" };
+  return { value: field.default, from: "default" };
 }

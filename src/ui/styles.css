@@ -4237,6 +4237,27 @@ code {
   color: var(--ink-soft);
 }
 
+/* Inherit/override provenance, sat under the description in the §10 hairline
+ * vocabulary — a quiet mono tag, not a painted badge. `field-inherit` (Project
+ * view) notes the default came from the user profile, not the schema; it's
+ * informational, so it stays in the soft ink. `field-override` (User view) is
+ * the louder of the two — the project layer *wins* over what you're editing —
+ * so it carries the accent ink to draw the eye. */
+.field-inherit,
+.field-override {
+  font: 600 10px/1.3 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.field-inherit {
+  color: var(--ink-soft);
+}
+
+.field-override {
+  color: var(--accent);
+}
+
 /* The 422 message for this field — the del-red the palette reserves for true
  * faults, sat right under the label so the offending input is unambiguous. */
 .field-error {
@@ -4321,26 +4342,62 @@ code {
   margin-top: 0;
 }
 
-/* The save footer: the primary action with its transient saved/error states. */
-.settings-save {
+/* The ambient autosave caption, up top under the path banner so the "no Save
+ * button" contract is visible before the fold. Quieter than the in-flight tick
+ * (lowercase, no weight, dimmed) so it reads as documentation, not feedback. */
+.settings-autosave-note {
+  margin: 9px 2px 0;
+  font: 11px/1 var(--mono);
+  letter-spacing: 0.06em;
+  color: color-mix(in srgb, var(--ink-soft) 70%, var(--surface));
+}
+
+/* The save lifecycle toast: pinned to the viewport (bottom-center, matching the
+ * selection bar) so "saving…/saved ✓/error" is seen the instant it fires, even
+ * when the edited field sits far above the fold. A floating overlay, so it keeps
+ * a shadow to lift off the page; it sits out of the layout (opacity, not display)
+ * at rest so the persistent aria-live region still announces each change. */
+.save-toast {
+  position: fixed;
+  z-index: 42;
+  left: 50%;
+  bottom: calc(28px + env(safe-area-inset-bottom));
+  transform: translateX(-50%) translateY(10px);
   display: flex;
   align-items: center;
-  gap: 14px;
-  margin-top: 26px;
-  padding-top: 4px;
+  gap: 10px;
+  max-width: calc(100vw - 24px);
+  padding: 10px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  box-shadow: var(--shadow), 0 14px 36px rgb(0 0 0 / 16%);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s cubic-bezier(0.22, 0.7, 0.3, 1);
 }
 
-.settings-save-btn {
-  padding: 10px 22px;
+.save-toast-shown {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
 }
 
-/* "saved ✓" — the approved green, fading in then dropping back to idle. */
+/* The in-flight tick while a save is on the wire. */
+.settings-saving {
+  font: 600 11px/1 var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+/* "saved ✓" — the approved green; the toast wrapper owns the entrance motion. */
 .settings-saved {
   font: 600 11px/1 var(--mono);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--chip-approved-ink);
-  animation: card-in 0.3s cubic-bezier(0.22, 0.7, 0.3, 1) both;
 }
 
 /* A top-level save failure (400/network, or "fix the fields below" for a 422). */

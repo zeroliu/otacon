@@ -31,7 +31,7 @@ machine-readable error you can fix (read the JSON); exit 2 = you invoked it wron
 
 1. \`${cmd} start --title <kebab-title>\` **first, before you research** — it mints
    the session and prints the review URL. Tell the user to open it (\`${cmd} open\`
-   prints it again) so they can watch the whole thing from the first second.
+   launches it in their browser) so they can watch the whole thing from the first second.
    \`--quick\` skips the interview — only when the user explicitly asks.
 2. **Research the codebase**, narrating as you go with
    \`${cmd} progress "<what you're doing>"\` — call it whenever you start a chunk of
