@@ -1,6 +1,14 @@
-import { describe, expect, test } from "bun:test";
-import { CODEX_BEGIN, CODEX_END, codexBlock, skillMd, STOP_HOOK_SCRIPT } from "./assets.js";
-import { mergeStopHook, stopHookRegistered, upsertMarkedBlock } from "./locations.js";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { skillMd, STOP_HOOK_SCRIPT } from "./assets.js";
+import {
+  claudeSkillPath,
+  codexSkillPath,
+  mergeStopHook,
+  opencodeSkillPath,
+  stopHookRegistered,
+} from "./locations.js";
 
 const HOOK = "/home/zero/.claude/hooks/otacon-stop.sh";
 
@@ -49,53 +57,77 @@ describe("mergeStopHook", () => {
   });
 });
 
-describe("upsertMarkedBlock", () => {
-  const block = codexBlock();
+describe("scope-aware skill paths", () => {
+  // Each helper has a user branch (homedir/$CODEX_HOME/$XDG_CONFIG_HOME) and a
+  // project branch (<root>/...). Pin the env so the user-branch assertions are
+  // deterministic regardless of the host's environment.
+  let savedCodexHome: string | undefined;
+  let savedXdg: string | undefined;
 
-  test("appends to existing user content, preserving it", () => {
-    const out = upsertMarkedBlock("# My rules\n\nBe terse.\n", block, CODEX_BEGIN, CODEX_END);
-    expect(out.startsWith("# My rules\n\nBe terse.\n")).toBe(true);
-    expect(out).toContain(CODEX_BEGIN);
-    expect(out).toContain(CODEX_END);
+  beforeEach(() => {
+    savedCodexHome = process.env.CODEX_HOME;
+    savedXdg = process.env.XDG_CONFIG_HOME;
+    delete process.env.CODEX_HOME;
+    delete process.env.XDG_CONFIG_HOME;
+  });
+  afterEach(() => {
+    if (savedCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = savedCodexHome;
+    if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = savedXdg;
   });
 
-  test("replaces an existing block in place; reinstall is a fixpoint", () => {
-    const seeded = upsertMarkedBlock("before\n", block, CODEX_BEGIN, CODEX_END) + "after\n";
-    const again = upsertMarkedBlock(seeded, block, CODEX_BEGIN, CODEX_END);
-    expect(again).toBe(seeded);
-    expect(again.split(CODEX_BEGIN)).toHaveLength(2); // exactly one block
-    const stale = seeded.replace("otacon wait", "otacon OLD-VERB");
-    expect(upsertMarkedBlock(stale, block, CODEX_BEGIN, CODEX_END)).toBe(seeded);
+  const REL = join("skills", "otacon", "SKILL.md");
+
+  test("user scope is the default and roots under homedir / env bases", () => {
+    expect(claudeSkillPath()).toBe(join(homedir(), ".claude", REL));
+    expect(claudeSkillPath({ kind: "user" })).toBe(join(homedir(), ".claude", REL));
+    // Codex user base is $CODEX_HOME (default ~/.codex), opencode user base is
+    // $XDG_CONFIG_HOME/opencode (default ~/.config/opencode) — both then /skills/.
+    expect(codexSkillPath()).toBe(join(homedir(), ".codex", REL));
+    expect(opencodeSkillPath()).toBe(join(homedir(), ".config", "opencode", REL));
   });
 
-  test("an empty file becomes just the block", () => {
-    expect(upsertMarkedBlock("", block, CODEX_BEGIN, CODEX_END)).toBe(`${block}\n`);
+  test("user scope honors $CODEX_HOME and $XDG_CONFIG_HOME", () => {
+    process.env.CODEX_HOME = "/custom/codex";
+    process.env.XDG_CONFIG_HOME = "/custom/xdg";
+    expect(codexSkillPath({ kind: "user" })).toBe(join("/custom/codex", REL));
+    expect(opencodeSkillPath({ kind: "user" })).toBe(join("/custom/xdg", "opencode", REL));
+  });
+
+  test("project scope roots every agent under the repo root (env-independent)", () => {
+    process.env.CODEX_HOME = "/custom/codex"; // must be ignored at project scope
+    process.env.XDG_CONFIG_HOME = "/custom/xdg";
+    const root = "/repo";
+    const scope = { kind: "project", root } as const;
+    expect(claudeSkillPath(scope)).toBe(join(root, ".claude", REL));
+    expect(codexSkillPath(scope)).toBe(join(root, ".codex", REL));
+    expect(opencodeSkillPath(scope)).toBe(join(root, ".opencode", REL));
   });
 });
 
 describe("wrapper assets", () => {
   test("the protocol card carries every load-bearing command", () => {
-    for (const text of [skillMd(), codexBlock()]) {
-      for (const needle of [
-        "otacon start --title",
-        "otacon ask --question",
-        "otacon wait --timeout 540",
-        "otacon submit --resolutions resolutions.json",
-        "otacon answer",
-        "otacon status",
-        "Never end your turn",
-        "caffeinate -i",
-        "600000 ms",
-        // Visuals guidance (DESIGN.md §4): the three primitives + soft SHOULDs.
-        "## Visuals",
-        "[!risk]",
-        "SHOULD use a matrix",
-        "[new]",
-      ]) {
-        expect(text).toContain(needle);
-      }
+    const text = skillMd();
+    for (const needle of [
+      "otacon start --title",
+      "otacon ask --question",
+      "otacon wait --timeout 540",
+      "otacon submit --resolutions resolutions.json",
+      "otacon answer",
+      "otacon status",
+      "Never end your turn",
+      "caffeinate -i",
+      "600000 ms",
+      // Visuals guidance (DESIGN.md §4): the three primitives + soft SHOULDs.
+      "## Visuals",
+      "[!risk]",
+      "SHOULD use a matrix",
+      "[new]",
+    ]) {
+      expect(text).toContain(needle);
     }
-    expect(skillMd().startsWith("---\nname: otacon\n")).toBe(true);
+    expect(text.startsWith("---\nname: otacon\n")).toBe(true);
   });
 
   test("the Stop hook script is plain sh, fail-open, and emits the block decision", () => {

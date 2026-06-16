@@ -1,24 +1,22 @@
 // otacon install --agent claude|codex|opencode [--agent …] | --all [--hooks] —
 // write the protocol wrapper into each agent's skill location (DESIGN.md §16).
 // Pure file writes — no daemon needed. Wrappers are managed files: reinstall
-// overwrites them (Codex: only the marked block inside its shared AGENTS.md).
-// --hooks additionally registers the Claude Code Stop hook in
-// ~/.claude/settings.json — merged additively and idempotently, with a backup
-// before the first change, never clobbering what cannot be parsed.
+// overwrites them wholesale. --hooks additionally registers the Claude Code Stop
+// hook in ~/.claude/settings.json — merged additively and idempotently, with a
+// backup before the first change, never clobbering what cannot be parsed.
 
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { parseArgs } from "node:util";
-import { CODEX_BEGIN, CODEX_END, codexBlock, skillMd, STOP_HOOK_SCRIPT } from "../install/assets.js";
+import { skillMd, STOP_HOOK_SCRIPT } from "../install/assets.js";
 import {
   claudeHookScriptPath,
   claudeSettingsPath,
   claudeSkillPath,
-  codexAgentsPath,
+  codexSkillPath,
   mergeStopHook,
   opencodeSkillPath,
   settingsRegisterStopHook,
-  upsertMarkedBlock,
 } from "../install/locations.js";
 import { fail, notice, printJson, usageError } from "../output.js";
 
@@ -39,10 +37,8 @@ function installAgent(agent: Agent): { agent: Agent; files: string[] } {
       return { agent, files: [claudeSkillPath(), claudeHookScriptPath()] };
     }
     case "codex": {
-      const path = codexAgentsPath();
-      const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
-      writeManaged(path, upsertMarkedBlock(existing, codexBlock(), CODEX_BEGIN, CODEX_END));
-      return { agent, files: [path] };
+      writeManaged(codexSkillPath({ kind: "user" }), skillMd());
+      return { agent, files: [codexSkillPath({ kind: "user" })] };
     }
     case "opencode": {
       writeManaged(opencodeSkillPath(), skillMd());

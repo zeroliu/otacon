@@ -1141,10 +1141,10 @@ otacon expose                # optional, phone access: checks the tailscale CLI 
 `otacon install` writes the thin protocol wrapper — one protocol card teaching the
 full loop (§6), grill discipline (§8), and the never-end-your-turn rule (§13) — into
 each agent's skill location: Claude Code `~/.claude/skills/otacon/SKILL.md` plus the
-Stop hook script `~/.claude/hooks/otacon-stop.sh`; Codex a marker-delimited block in
-`$CODEX_HOME/AGENTS.md` (default `~/.codex/`, user content outside the markers
-preserved); OpenCode `$XDG_CONFIG_HOME/opencode/skills/otacon/SKILL.md`. Wrappers are
-managed files — reinstall overwrites them. The Stop hook registration in
+Stop hook script `~/.claude/hooks/otacon-stop.sh`; Codex
+`$CODEX_HOME/skills/otacon/SKILL.md` (default `~/.codex/`); OpenCode
+`$XDG_CONFIG_HOME/opencode/skills/otacon/SKILL.md`. All three are the same SKILL.md
+skill folder. Wrappers are managed files — reinstall overwrites them. The Stop hook registration in
 `~/.claude/settings.json` is optional, applied only by `--hooks`: an additive,
 idempotent merge that preserves every existing key and backs the file up before the
 first change (unparseable settings are refused, never clobbered). The hook is a

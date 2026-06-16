@@ -8,11 +8,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { otaconPort } from "../../shared/paths.js";
 import { ensureDaemon } from "../client.js";
-import { CODEX_BEGIN, MANAGED_MARKER } from "../install/assets.js";
+import { MANAGED_MARKER } from "../install/assets.js";
 import {
   claudeHookScriptPath,
   claudeSkillPath,
-  codexAgentsPath,
+  codexSkillPath,
   opencodeSkillPath,
   settingsRegisterStopHook,
 } from "../install/locations.js";
@@ -92,7 +92,7 @@ export async function doctorCommand(argv: string[]): Promise<number> {
   }
 
   checks.push(wrapperCheck("wrapper-claude", claudeSkillPath(), MANAGED_MARKER));
-  checks.push(wrapperCheck("wrapper-codex", codexAgentsPath(), CODEX_BEGIN));
+  checks.push(wrapperCheck("wrapper-codex", codexSkillPath(), MANAGED_MARKER));
   checks.push(wrapperCheck("wrapper-opencode", opencodeSkillPath(), MANAGED_MARKER));
   const stopHook = stopHookCheck();
   if (stopHook) checks.push(stopHook);

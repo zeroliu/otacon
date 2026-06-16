@@ -960,35 +960,33 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 - **Decision:** `otacon install` owns wrapper content. SKILL.md files are rewritten
   byte-for-byte on every install and carry a visible ``managed by `otacon install` ``
-  marker; Codex's shared `AGENTS.md` gets a BEGIN/END-marked block that is replaced in
-  place (user content outside the markers survives verbatim). User edits inside
-  managed content are not preserved.
+  marker (Codex's SKILL.md included — see "Codex moves to a `.codex/skills/` SKILL.md
+  folder"). User edits inside managed content are not preserved.
 - **Why:** The wrapper is product behavior — it must track the CLI version exactly
   (`npm update -g` then reinstall, §16), and a three-way merge with user edits would
   fork the protocol invisibly: an agent following last month's card against this
   month's linter is a support nightmare. The marker makes the policy legible at the
-  point of temptation. Codex is block-scoped (not whole-file) only because its file is
-  a shared instructions surface other tools and humans also write to.
+  point of temptation.
 - **Revisit when:** Wrapper customization becomes a real need (then: a user-content
   slot outside the managed region, never merge).
 
-## Wrapper destinations: claude skills dir, codex AGENTS.md block, opencode config skills dir
+## Wrapper destinations: a SKILL.md skill folder per agent
 
 - **Decision:** Claude Code `~/.claude/skills/otacon/SKILL.md` + the hook script
-  `~/.claude/hooks/otacon-stop.sh`; Codex a marked block in `$CODEX_HOME/AGENTS.md`
+  `~/.claude/hooks/otacon-stop.sh`; Codex `$CODEX_HOME/skills/otacon/SKILL.md`
   (default `~/.codex/`); OpenCode `$XDG_CONFIG_HOME/opencode/skills/otacon/SKILL.md`.
-  All three are fully implemented; one protocol card is the single source for all of
-  them.
-- **Why:** Verified conventions (June 2026): Codex reads global instructions from
-  `~/.codex/AGENTS.md` and has no stable global skills contract, so the shared
-  instructions file with a managed block is the honest integration; OpenCode reads
-  Claude-compatible SKILL.md skills from `~/.config/opencode/skills/` (it also reads
-  `~/.claude/skills/`, so the Claude install alone would work — the dedicated copy
-  exists so installing/uninstalling one agent never silently depends on another's
-  files). One card for all three because the protocol is agent-agnostic by
-  construction (§13: "can run shell commands + can edit files").
-- **Revisit when:** Codex ships a real global skills dir, or the agents' conventions
-  drift apart enough that one card stops fitting all.
+  All three are the same SKILL.md skill folder, fully implemented; one protocol card is
+  the single source for all of them.
+- **Why:** Verified conventions (June 2026): all three agents now read the
+  cross-agent SKILL.md skill convention from their own skills dir, so a uniform skill
+  folder is the honest integration for each (Codex's move off `~/.codex/AGENTS.md` is
+  recorded separately below). OpenCode also reads `~/.claude/skills/`, so the Claude
+  install alone would work — the dedicated copy exists so installing/uninstalling one
+  agent never silently depends on another's files. One card for all three because the
+  protocol is agent-agnostic by construction (§13: "can run shell commands + can edit
+  files").
+- **Revisit when:** The agents' skill conventions drift apart enough that one card
+  stops fitting all.
 
 ## Stop hook: plain sh, block-decision JSON, fail-open, stop_hook_active ignored
 
@@ -1390,8 +1388,8 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 - **Decision:** The canonical loop runs `otacon start` *before* research (not after),
   so the review UI exists from the first second. The protocol card is built once by
-  `protocolCard(cmd)`, parametrized only by command prefix: installed wrappers
-  (`skillMd`/`codexBlock`) use `otacon`; this repo's committed dogfood wrapper
+  `protocolCard(cmd)`, parametrized only by command prefix: the installed wrapper
+  (`skillMd`, shared by all three agents) uses `otacon`; this repo's committed dogfood wrapper
   (`dogfoodSkillMd`, written to `.claude/skills/otacon/SKILL.md`) uses `./bin/otacon`
   and prepends a repo preamble. The dogfood file is generated, never hand-edited, and
   `assets.test.ts` asserts the committed file equals `dogfoodSkillMd()`.
@@ -1957,3 +1955,28 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   separate preserves the meaning system (green = approved/success is distinct from brand).
 - **Revisit when:** The lime accent fails WCAG contrast on any surface, the brand mark
   changes, or semantic green and brand lime are judged too close on a live screen.
+
+## Codex moves to a `.codex/skills/` SKILL.md folder; `InstallScope` seams in project install
+
+- **Decision:** Codex's wrapper is the same managed `SKILL.md` as Claude/OpenCode,
+  written to `$CODEX_HOME/skills/otacon/SKILL.md` at user scope and
+  `<root>/.codex/skills/otacon/SKILL.md` at project scope. The old `~/.codex/AGENTS.md`
+  marker-delimited block is fully deleted — `codexBlock()`, the `CODEX_BEGIN`/`CODEX_END`
+  markers, `codexAgentsPath()`, and the generic `upsertMarkedBlock()` are all removed
+  (no other caller). The three skill-path helpers (`claudeSkillPath`, `codexSkillPath`,
+  `opencodeSkillPath`) now take an `InstallScope = { kind: "user" } | { kind: "project";
+  root }`; `claudeHookScriptPath`/`claudeSettingsPath` stay user-only. Call sites pass
+  `{ kind: "user" }` for now.
+- **Why:** Codex now natively supports the cross-agent SKILL.md skill convention at
+  `~/.codex/skills/` (and `.codex/skills/` per repo), verified against OpenAI's docs
+  (June 2026) — so a uniform skill folder replaces the AGENTS.md special case, dropping
+  the only marker-block machinery in the tree. No migration or cleanup of installed
+  files is needed: the marker-block install was never shipped or used. `InstallScope` is
+  the seam the subsequent `--project` flag turns on without re-plumbing every helper;
+  introducing it now (with only the user branch wired) keeps that later change tiny and
+  keeps each helper's user/project split in one place. Note the base asymmetry the type
+  encodes: codex's user base is `$CODEX_HOME` (default `~/.codex`) while its project
+  base is `<root>/.codex`; opencode's user base is `$XDG_CONFIG_HOME/opencode` while its
+  project base is `<root>/.opencode` (each then `/skills/otacon/SKILL.md`).
+- **Revisit when:** Codex's skills path convention changes, or project scope needs a
+  destination layout the two-branch `InstallScope` can't express (e.g. a third scope).
