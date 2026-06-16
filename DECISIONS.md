@@ -1957,3 +1957,16 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   separate preserves the meaning system (green = approved/success is distinct from brand).
 - **Revisit when:** The lime accent fails WCAG contrast on any surface, the brand mark
   changes, or semantic green and brand lime are judged too close on a live screen.
+
+## Doc audience split: README + docs/ are user-facing; DESIGN/DECISIONS/AGENTS are internal
+
+- **Decision:** README and the `docs/` directory are otacon's user-facing documentation
+  surface; `DESIGN.md` / `DECISIONS.md` / `AGENTS.md` are internal-facing. Deep
+  install/phone how-tos live in `docs/INSTALL.md` and `docs/PHONE-ACCESS.md`, not in the
+  README's happy path and not in DESIGN.md.
+- **Why:** A value-prop-forward ("revolutionize agentic coding review") README should not
+  route users into an internal product spec — DESIGN.md is a timeless behavior spec for
+  contributors, not an onboarding guide. The deep how-tos still need a user-facing home,
+  and the README must stay scannable, so they move out into focused user docs rather than
+  bloating the README or leaking into the internal spec. (← q3, q4.)
+- **Revisit when:** A generated docs site or reference replaces the hand-written `docs/`.
