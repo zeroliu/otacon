@@ -10,6 +10,10 @@ import { isOver } from "./session-filter";
 const CHIPS: Record<Exclude<SessionStatus, "draft">, { label: string; tone: string }> = {
   in_review: { label: "awaiting your review", tone: "await" },
   revising: { label: "agent revising", tone: "revise" },
+  // comment & approve (§12): the reviewer approved with open comments and sent
+  // them to the agent; it is folding them in before the commit. Active work —
+  // the breathing dot, like implementing.
+  finalizing: { label: "finalizing", tone: "finalizing" },
   approved: { label: "approved", tone: "approved" },
   // The implement lifecycle (DESIGN.md §12): `implementing` is an active,
   // in-progress state (working tone, the only one of the three with a breathing

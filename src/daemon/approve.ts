@@ -29,6 +29,32 @@ export function pickArtifactRelPath(repo: string, title: string, date: string): 
   }
 }
 
+/**
+ * One swept comment thread rendered for the Review notes section: the reviewer's
+ * comment as a blockquote (anchored to its section, or whole-plan), then the
+ * agent's resolution. Multi-line bodies keep their breaks — the blockquote
+ * prefixes each line, the resolution flows as paragraph text.
+ */
+export interface ReviewNote {
+  /** Thread id (t<n>) — the audit handle that matches threads.json. */
+  thread: string;
+  /** The anchor's section slug, or null for a whole-plan comment. */
+  section: string | null;
+  /** The reviewer's comment body. */
+  body: string;
+  /** The agent's resolution reply (L5-required before the finalize submit). */
+  resolution: string;
+}
+
+function renderReviewNote(note: ReviewNote): string {
+  const where = note.section ?? "whole plan";
+  const quoted = note.body
+    .split("\n")
+    .map((line) => (line === "" ? ">" : `> ${line}`))
+    .join("\n");
+  return [`### ${note.thread} — ${where}`, "", quoted, "", note.resolution.trim()].join("\n");
+}
+
 /** One transcript entry rendered for the Interview section. */
 function renderEntry(entry: TranscriptEntry): string {
   const lines = [`### ${entry.id} — ${entry.question.replace(/\s+/g, " ").trim()}`, ""];
@@ -54,11 +80,15 @@ function renderEntry(entry: TranscriptEntry): string {
 /**
  * The committed artifact: frontmatter `status`/`revision` rewritten to the
  * daemon's truth, then the grill transcript as "## Interview" (omitted when
- * the transcript is empty — a --quick session has no interview to ship).
+ * the transcript is empty — a --quick session has no interview to ship), then —
+ * only when the approval went through **comment & approve** — a "## Review notes"
+ * section recording the comments the agent folded in unreviewed and how it
+ * resolved them, so the trusted fold-in stays auditable in git (DESIGN.md §12).
+ * A plain or force approve carries no `reviewNotes`, so the section is omitted.
  */
 export function composeArtifact(
   markdown: string,
-  opts: { revision: number; entries: TranscriptEntry[] },
+  opts: { revision: number; entries: TranscriptEntry[]; reviewNotes?: ReviewNote[] },
 ): string {
   const lines = markdown.split("\n");
   // Every stored revision passed L1, so the frontmatter block and both keys
@@ -72,6 +102,12 @@ export function composeArtifact(
   if (opts.entries.length > 0) {
     const interview = opts.entries.map(renderEntry).join("\n\n");
     out = `${out.replace(/\n*$/, "\n")}\n## Interview\n\n${interview}\n`;
+  }
+  if (opts.reviewNotes && opts.reviewNotes.length > 0) {
+    const notes = opts.reviewNotes.map(renderReviewNote).join("\n\n");
+    const intro =
+      "_The reviewer approved with these comments open and sent them to the agent; it folded them in on a final solo pass — recorded here for the trail._";
+    out = `${out.replace(/\n*$/, "\n")}\n## Review notes\n\n${intro}\n\n${notes}\n`;
   }
   return out;
 }

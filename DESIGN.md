@@ -378,7 +378,12 @@ as extra context). An option question also accepts a **free-form custom answer**
 non-empty `text` with no `choice`/`choices` (native-AskUserQuestion "Other" parity), so
 the user is never trapped by the offered chips. A `question` event carries `replyTo`
 when it is a **follow-up** on an earlier question (§9) — the agent skims that thread's
-prior turns for context and answers the new `q<n>` the usual way. `approved.path` is
+prior turns for context and answers the new `q<n>` the usual way. A `comments` event
+carries `final:true` when it is the **comment & approve** fold-in batch (§12): the
+reviewer approved with comments still open and chose *Send to agent*, so the daemon
+re-delivers every still-open comment thread for one solo pass — the agent resolves them,
+and its next clean `submit` finalizes the plan (it then receives `approved`, which may
+carry `implement:true`) instead of returning to in-review. `approved.path` is
 repo-relative — the agent commits that file. `approved` carries an optional `implement`
 flag: a plain `approved` (no flag) is **terminal** — commit the plan and stop; an
 `approved` with `implement:true` is **not** terminal — the agent commits the plan, then
@@ -467,10 +472,21 @@ POST /api/sessions/:id/approve              approve: writes the final artifact, 
                                             Approve & Implement (§12).
                                             Unresolved threads (comments without a
                                             resolution + questions without an answer)
-                                            → 409 E_UNRESOLVED_THREADS carrying the
-                                            count, unless the body is {"force":true}
-                                            (the UI warns, then forces on confirm);
-                                            no revisions yet → 409 E_NO_REVISION
+                                            → 409 E_UNRESOLVED_THREADS carrying both
+                                            `unresolved` (the total) and `openComments`
+                                            (the foldable count). The UI's warn stage
+                                            offers two ways past it: {"force":true}
+                                            finalizes now and drops the open threads, or
+                                            {"sendOpenComments":true} — comment & approve
+                                            (§12) — defers the finalize, flipping to the
+                                            non-terminal `finalizing`, queuing a
+                                            `final:true` comments batch of the open
+                                            threads, and finalizing on the agent's next
+                                            clean submit (carrying the implement choice).
+                                            A second {"sendOpenComments"} while finalizing
+                                            → 409 E_ALREADY_FINALIZING; {"force":true}
+                                            stays open as the manual escape.
+                                            No revisions yet → 409 E_NO_REVISION
 POST /api/sessions/:id/implement-done       end an `implementing` build (otacon
                                             implement-done): {pr?, failed?} → flips
                                             `implemented` (default) or
@@ -521,7 +537,15 @@ ask, answers, progress, approve) refuses a **terminal** session (approved /
 implemented / implement_failed) with 409 `E_SESSION_OVER` — the status machine's
 terminal *set* is enforced on the daemon, not just by the CLI's session-resolution
 rules. An `implementing` session is **not** terminal: progress / ask / wait / answer
-stay open so the orchestrating agent can narrate and pause-and-ask while it builds.
+stay open so the orchestrating agent can narrate and pause-and-ask while it builds
+(but `submit` is refused there with 409 `E_ALREADY_IMPLEMENTING` — a revision cannot
+land on a plan already being built). A `finalizing` session (comment & approve, §12)
+is likewise non-terminal: the agent's fold-in `submit` must still land — it is what
+finalizes — so only that pass mutates it; a fresh `approve {sendOpenComments}` there
+is refused 409 `E_ALREADY_FINALIZING`, and a new `comment` there is refused the same
+way (a comment would otherwise flip the session back to `revising` with the
+`pendingApproval` flag still armed — a later clean submit would then silently
+finalize — and hand the agent an un-swept thread that wedges its L5 fold-in).
 `/` and `/s/:id` serve the SPA shell (static assets under `/assets/`); an unknown
 session id renders as a client-side not-found state. Each SSE stream opens with a
 `snapshot` frame (the per-session stream's snapshot carries the thread list, the
@@ -598,12 +622,19 @@ mirroring the budgets config. Off macOS the banner is a silent no-op.
    text (§4), computes diff vs the user's last-reviewed revision, pushes the
    changelog banner. Repeat 4–5.
 6. **Approve.** User taps Approve (warned if unresolved threads exist — the daemon
-   answers 409 with the count until the UI confirms with `force`). The **daemon**
+   answers 409 with the count until the UI confirms). The **daemon**
    writes `docs/plans/YYYY-MM-DD-<slug>.md` with `status: approved` + the grill
    transcript appended, flips the session to `approved` (ending it — every further
    mutation refuses), queues the `approved` event. The agent's
    `wait` returns it; agent `git add` + commits the plan file, prints a one-line
    summary, stops. Session over.
+   On the unresolved-threads warning the reviewer has a second choice — **comment &
+   approve** (*Send to agent*): instead of dropping the open comments, the daemon
+   defers the finalize (status `finalizing`) and hands the agent every open comment
+   thread in one `final:true` comments batch; the agent folds them in and its next
+   clean `submit` finalizes — committing the same artifact, now with a `## Review
+   notes` section recording what it changed (§12). The reviewer is done the instant
+   they click; the chosen variant (plain vs Approve & Implement) carries through.
 7. **Approve & Implement** (optional, §12). A second review action — **Approve &
    Implement** — finalizes the plan exactly as Approve does but flips the session to
    `implementing` (non-terminal) and sets `implement:true` on the `approved` event.
@@ -869,6 +900,18 @@ returns to the index.
 - Drawer = bottom bar: review/edit/delete pending comments, per-comment **send now**,
   **Send all**; when nothing is pending it shrinks to the whole-plan comment
   affordance alone.
+- Unsent-drafts gate: drawer comments live only in the browser until **Send all**,
+  so picking a commit variant while N drafts are staged opens a drafts stage with
+  three moves. **Send & commit** flushes the batch into open threads and folds them
+  in through the comment & approve path in one click; **Discard & commit** drops the
+  local drafts (irreversible) and finalizes the chosen variant; **Cancel** backs out
+  (the safe default). The gate fires after the variant pick, so Send/Discard inherit
+  Commit Plan vs Commit & Implement. The same staged drafts also arm a
+  reload/close-tab guard (`beforeunload`) so a page unload warns before wiping them;
+  the guard is scoped strictly to staged drafts (a clean drawer never prompts) and
+  covers reload and close-tab only, with navigate-away and half-typed composer text
+  out of scope. Everything here is browser-only: the daemon never sees these drafts,
+  so nothing in this gate touches the protocol.
 - Threads rail: clicking an anchored thread scrolls to its section and flashes the
   quoted text in the plan. A question and its follow-ups render as one **conversation
   card** — each turn with its answer (or the blinking "answering…" cursor) — with a
@@ -1033,7 +1076,17 @@ one `### q<n> — <question>` per entry with an `- Options:` line (recommended o
 tagged `(recommended)`, `(multi)` on the label for multi-choice) and an `- Answer:`
 line (`choice`/comma-joined `choices`, ` — text` appended when both were given,
 `_unanswered_` when the question was never answered). A `--quick` session's empty
-transcript appends no section. The filename is dated with the approve day and slugged
+transcript appends no section. When the approval went through **comment & approve**
+(§6), a `## Review notes` section follows the Interview — one `### t<n> — <section>`
+per comment the agent folded in unreviewed, the reviewer's comment as a blockquote
+and the agent's resolution beneath it — so the trusted fold-in stays auditable in git
+(a plain or *commit-anyway* approve folds nothing in, so the section is omitted).
+The reviewer reaches this same fold-in in one click even from browser-only drafts the
+daemon never received: picking a commit variant with unsent drawer comments opens the
+client-side drafts gate (§10), whose **Send & commit** flushes the batch into open
+threads and then approves with `{sendOpenComments}`, so staged-but-unsent comments
+count toward the plan instead of vanishing at approve.
+The filename is dated with the approve day and slugged
 from the session title; a taken name gets a `-2`, `-3`, … suffix — never overwritten.
 The artifact is post-lint output: the closed plan schema (§4-5) governs submits, not
 this file. Approve ends the session **logically** — `status: approved` excludes it
@@ -1046,17 +1099,23 @@ session from home does **not** redirect and the committed plan stays readable.
 
 Session status machine:
 `draft → in_review ⇄ revising → approved` (terminal), with the **Approve & Implement**
-branch `approved → implementing → implemented | implement_failed`. The terminal *set* is
-`{approved, implemented, implement_failed}` — the open-verb guard (§6 `E_SESSION_OVER`)
-and the CLI's implicit-session resolver both gate on it, so they can never disagree about
-what "over" means. `implementing` is deliberately **not** terminal: it re-opens
-progress / ask / wait / answer for the orchestrating agent and resolves as the repo's
-active session (so the agent can't bail mid-build and `resume` re-adopts it), and the
-Stop hook (§13) treats it as live.
+branch `approved → implementing → implemented | implement_failed`. **Comment & approve**
+inserts a deferred-finalize hop: `revising → finalizing → approved | implementing`
+(the agent's fold-in submit finalizes, carrying the variant the reviewer chose). The
+terminal *set* is `{approved, implemented, implement_failed}` — the open-verb guard
+(§6 `E_SESSION_OVER`) and the CLI's implicit-session resolver both gate on it, so they
+can never disagree about what "over" means. `implementing` is deliberately **not**
+terminal: it re-opens progress / ask / wait / answer for the orchestrating agent and
+resolves as the repo's active session (so the agent can't bail mid-build and `resume`
+re-adopts it), and the Stop hook (§13) treats it as live. `finalizing` is likewise
+non-terminal — the agent's clean `submit` is what finalizes it — and a hung fold-in
+is escapable: an `approve {force:true}` there commits the current revision and drops
+the still-open threads.
 
 ```
                                          ┌─ Approve ──────────────► approved (terminal)
-draft ─► in_review ⇄ revising ──────────┤
+draft ─► in_review ⇄ revising ──────────┤  (Send to agent ─► finalizing ─► submit ─┘
+                                         │   or ─► implementing, per the variant)
                                          └─ Approve & Implement ──► implementing
                                                                        │
                                                   implement-done       │

@@ -1846,6 +1846,245 @@ describe("Approve & Implement and the implement lifecycle (implement-approved-pl
   });
 });
 
+describe("comment & approve: send-to-agent deferred finalize (comment-and-approve)", () => {
+  const submitValid = async (id: string) => {
+    const res = await app.request(`/api/sessions/${id}/submit`, { method: "POST", body: validPlanFor(id) });
+    expect(res.status).toBe(200);
+  };
+  const approve = (id: string, body: unknown = {}) => postJson(`/api/sessions/${id}/approve`, body);
+  const statusOf = async (id: string): Promise<string> =>
+    ((await (await app.request(`/api/sessions/${id}`)).json()) as { status: string }).status;
+  // r1 plus one open comment thread t1, anchored in phase-1; the wake-up drained.
+  const r1WithOpenComment = async (id: string) => {
+    await submitValid(id);
+    const res = await postJson(`/api/sessions/${id}/comments`, {
+      items: [
+        { anchor: { section: "phase-1", exact: "RS256 JWTs from the auth service" }, body: "why not ES256?" },
+      ],
+    });
+    expect(res.status).toBe(202);
+    await app.request(`/api/sessions/${id}/events`); // drain the comment wake-up
+  };
+  // The agent's fold-in pass: resolve t1 with a changelog (a clean r2 submit).
+  const foldInSubmit = (id: string) =>
+    postJson(`/api/sessions/${id}/submit`, {
+      plan: validPlanFor(id),
+      resolutions: {
+        changelog: "Addressed the open comment.",
+        threads: { t1: "Kept RS256 — verifiers only need the public key." },
+      },
+    });
+
+  test("send-to-agent defers: flips to finalizing and queues a final:true comments batch", async () => {
+    const session = mintSession();
+    await r1WithOpenComment(session.id);
+
+    const res = await approve(session.id, { sendOpenComments: true });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { finalizing: boolean; sent: string[]; implement: boolean };
+    expect(body.finalizing).toBe(true);
+    expect(body.sent).toEqual(["t1"]);
+    expect(body.implement).toBe(false);
+    // Non-terminal: the agent's submit must still mutate.
+    expect(await statusOf(session.id)).toBe("finalizing");
+    expect(store.readState(session.id).pendingApproval).toEqual({ implement: false, threads: ["t1"] });
+
+    // The wake-up is a comments batch carrying the open thread, marked final.
+    const event = await app.request(`/api/sessions/${session.id}/events`);
+    const payload = (await event.json()) as {
+      event: string;
+      final?: boolean;
+      items: { thread: string; anchor: unknown; body: string }[];
+    };
+    expect(payload.event).toBe("comments");
+    expect(payload.final).toBe(true);
+    expect(payload.items).toEqual([
+      {
+        thread: "t1",
+        anchor: { section: "phase-1", exact: "RS256 JWTs from the auth service" },
+        body: "why not ES256?",
+      },
+    ]);
+  });
+
+  test("the agent's clean fold-in submit finalizes to approved with ## Review notes", async () => {
+    const session = mintSession();
+    await r1WithOpenComment(session.id);
+    await approve(session.id, { sendOpenComments: true });
+    await app.request(`/api/sessions/${session.id}/events`); // drain the final batch
+
+    const res = await foldInSubmit(session.id);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { finalized: boolean; status: string; path: string };
+    expect(body.finalized).toBe(true);
+    expect(body.status).toBe("approved");
+    expect(await statusOf(session.id)).toBe("approved");
+    expect(store.readState(session.id).pendingApproval).toBeUndefined();
+
+    const artifact = readFileSync(join(repo, body.path), "utf8");
+    expect(artifact).toContain("status: approved");
+    expect(artifact).toContain("## Review notes");
+    expect(artifact).toContain("### t1 — phase-1");
+    expect(artifact).toContain("> why not ES256?");
+    expect(artifact).toContain("Kept RS256 — verifiers only need the public key.");
+
+    // The agent then drains the approved wake-up to commit — a plain approve.
+    const event = await app.request(`/api/sessions/${session.id}/events`);
+    expect(await event.json()).toEqual({ event: "approved", session: session.id, path: body.path });
+  });
+
+  test("send + Commit & Implement carries the implement choice through the finalize", async () => {
+    const session = mintSession();
+    await r1WithOpenComment(session.id);
+    const sent = await approve(session.id, { sendOpenComments: true, implement: true });
+    expect(((await sent.json()) as { implement: boolean }).implement).toBe(true);
+    expect(store.readState(session.id).pendingApproval).toEqual({ implement: true, threads: ["t1"] });
+    await app.request(`/api/sessions/${session.id}/events`); // drain the final batch
+
+    const res = await foldInSubmit(session.id);
+    const body = (await res.json()) as { status: string; path: string };
+    expect(body.status).toBe("implementing");
+    expect(await statusOf(session.id)).toBe("implementing");
+
+    // The wake-up flows straight into the build loop (implement:true).
+    const event = await app.request(`/api/sessions/${session.id}/events`);
+    expect(await event.json()).toEqual({
+      event: "approved",
+      session: session.id,
+      path: body.path,
+      implement: true,
+    });
+  });
+
+  test("E_UNRESOLVED_THREADS carries the open-comment count for the warn stage", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ body: "open comment" }] });
+    await postJson(`/api/sessions/${session.id}/questions`, { body: "open question" });
+    const res = await approve(session.id);
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as {
+      error: { code: string };
+      unresolved: number;
+      openComments: number;
+    };
+    expect(body.error.code).toBe("E_UNRESOLVED_THREADS");
+    expect(body.unresolved).toBe(2); // comment + question
+    expect(body.openComments).toBe(1); // only the comment is foldable
+  });
+
+  test('"commit anyway" finalizes now and drops threads — no Review notes', async () => {
+    const session = mintSession();
+    await r1WithOpenComment(session.id);
+    const res = await approve(session.id, { force: true });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { path: string };
+    expect(await statusOf(session.id)).toBe("approved");
+    const artifact = readFileSync(join(repo, body.path), "utf8");
+    expect(artifact).not.toContain("## Review notes"); // a force drop addresses nothing
+  });
+
+  test("sendOpenComments with only open questions falls through to the warning", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await postJson(`/api/sessions/${session.id}/questions`, { body: "open question" });
+    const res = await approve(session.id, { sendOpenComments: true });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: { code: string }; openComments: number };
+    expect(body.error.code).toBe("E_UNRESOLVED_THREADS");
+    expect(body.openComments).toBe(0); // nothing to fold in
+    expect(await statusOf(session.id)).not.toBe("finalizing"); // unchanged
+  });
+
+  test("a hung finalize is escapable: commit anyway mid-finalize force-drops", async () => {
+    const session = mintSession();
+    await r1WithOpenComment(session.id);
+    await approve(session.id, { sendOpenComments: true });
+    expect(await statusOf(session.id)).toBe("finalizing");
+    await app.request(`/api/sessions/${session.id}/events`); // drain the final batch
+
+    // "Commit anyway" (force) while finalizing commits the current revision now.
+    const res = await approve(session.id, { force: true });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { path: string };
+    expect(await statusOf(session.id)).toBe("approved");
+    expect(store.readState(session.id).pendingApproval).toBeUndefined();
+    const artifact = readFileSync(join(repo, body.path), "utf8");
+    expect(artifact).not.toContain("## Review notes"); // force-dropped, never folded in
+  });
+
+  test("the force escape mid-finalize honors the original Commit & Implement choice", async () => {
+    const session = mintSession();
+    await r1WithOpenComment(session.id);
+    await approve(session.id, { sendOpenComments: true, implement: true });
+    await app.request(`/api/sessions/${session.id}/events`);
+    // Force with no implement flag — the pendingApproval choice wins.
+    const res = await approve(session.id, { force: true });
+    expect(((await res.json()) as { implement: boolean }).implement).toBe(true);
+    expect(await statusOf(session.id)).toBe("implementing");
+  });
+
+  test("a second send-to-agent while finalizing is refused E_ALREADY_FINALIZING", async () => {
+    const session = mintSession();
+    await r1WithOpenComment(session.id);
+    await approve(session.id, { sendOpenComments: true });
+    await app.request(`/api/sessions/${session.id}/events`);
+    const again = await approve(session.id, { sendOpenComments: true });
+    expect(again.status).toBe(409);
+    expect(((await again.json()) as { error: { code: string } }).error.code).toBe(
+      "E_ALREADY_FINALIZING",
+    );
+    // A plain approve (no force) is refused the same way.
+    const plain = await approve(session.id);
+    expect(((await plain.json()) as { error: { code: string } }).error.code).toBe(
+      "E_ALREADY_FINALIZING",
+    );
+    expect(await statusOf(session.id)).toBe("finalizing"); // unchanged
+  });
+
+  test("a comment while finalizing is refused E_ALREADY_FINALIZING (status and pendingApproval intact)", async () => {
+    const session = mintSession();
+    await r1WithOpenComment(session.id);
+    await approve(session.id, { sendOpenComments: true });
+    await app.request(`/api/sessions/${session.id}/events`); // drain the final batch
+
+    // A new comment landing mid-finalize must not flip status back to revising
+    // (which would leave pendingApproval armed and silently finalize a later
+    // clean submit) nor hand the agent an un-swept thread that wedges L5.
+    const res = await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [{ anchor: null, body: "one more thought" }],
+    });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+      "E_ALREADY_FINALIZING",
+    );
+    expect(await statusOf(session.id)).toBe("finalizing"); // unchanged
+    expect(store.readState(session.id).pendingApproval).toEqual({ implement: false, threads: ["t1"] });
+  });
+
+  test("approve validates sendOpenComments is a boolean", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    const res = await approve(session.id, { sendOpenComments: "yes" });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("E_BAD_REQUEST");
+  });
+
+  test("a submit cannot land while implementing (double-finalize race guard)", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await approve(session.id, { implement: true });
+    const res = await app.request(`/api/sessions/${session.id}/submit`, {
+      method: "POST",
+      body: validPlanFor(session.id),
+    });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+      "E_ALREADY_IMPLEMENTING",
+    );
+  });
+});
+
 describe("DELETE /api/sessions/:id (otacon clean, M5)", () => {
   test("404 on an unknown session", async () => {
     const res = await app.request("/api/sessions/otc_nope", { method: "DELETE" });

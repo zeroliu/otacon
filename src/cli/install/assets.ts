@@ -59,7 +59,11 @@ machine-readable error you can fix (read the JSON); exit 2 = you invoked it wron
    - \`comments\` → revise plan.md; write \`resolutions.json\` as
      \`{"changelog":"what changed","threads":{"t1":"how you resolved it"}}\` with
      one reply per comment thread; \`${cmd} submit --resolutions resolutions.json\`
-     (loop on lint errors); park again.
+     (loop on lint errors); park again. A \`comments\` batch with \`"final":true\` is
+     the reviewer's **comment & approve**: resolve every thread the usual way, but
+     your next clean submit **finalizes** — you'll get \`approved\` (which may carry
+     \`implement:true\`), not another review round. So fold them all in, submit, then
+     park and handle the \`approved\` that follows (do NOT expect more comments).
    - \`question\` → \`${cmd} answer <q-id> --body "..."\` (or \`--file\`); park again. A
      \`question\` may carry \`replyTo\` (a follow-up on an earlier question) — skim that
      thread's prior turns for context, but still answer the new \`q<n>\`.

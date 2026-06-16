@@ -995,6 +995,54 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** A "withdraw question" verb appears (open-question deadlock
   stops being theoretical), or approve wants per-thread acknowledgment.
 
+## Comment & approve: a deferred-finalize hop, not a relabeled approve button
+
+- **Decision:** When the reviewer approves with open comments, the warn stage
+  offers a third path beside *commit anyway* (force-drop): **Send to agent**
+  (`approve {sendOpenComments:true}`). It does NOT finalize — it flips the session
+  to a new non-terminal status `finalizing`, arms a `pendingApproval` flag on
+  session.json (carrying the Commit-Plan-vs-Implement choice and the swept comment
+  thread ids), and queues a `comments` event marked `final:true` carrying every
+  still-open comment thread. The agent folds them in; the daemon detects
+  `pendingApproval` on its next clean `submit` and finalizes then — composing the
+  artifact (with a `## Review notes` section built from the swept threads' now-
+  landed resolutions), flipping to `approved`/`implementing`, and queuing the
+  `approved` event — instead of returning to `in_review`. The mechanism **reuses
+  the comments→revise→submit loop**: no new agent verb, and L5 already forces every
+  swept comment to carry a resolution before the finalize submit can pass. Only
+  open **comment** threads are swept (the foldable kind); open questions are not
+  (answered via `otacon answer`, never resolved — they still drop on approve as
+  before). The E_UNRESOLVED_THREADS 409 gains an `openComments` count so the UI
+  offers *Send to agent* only when there is something to fold in.
+- **Why:** Leaving a final nit shouldn't cost a full comment→revise→re-review→
+  approve round trip — the reviewer is done the instant they click. A deferred hop
+  reuses the entire revise loop (linter, resolutions, re-anchoring, SSE) rather
+  than inventing a parallel finalize path, so the fold-in is schema-linted (the
+  agent cannot smuggle new scope into a plan the reviewer already left) and
+  auditable (the `## Review notes` git trail is the only check on an unreviewed
+  fold-in). Storing `pendingApproval` on session.json (not the registry) keeps it
+  daemon-owned detail like the counters, and persists the choice across a daemon
+  restart. `finalizing` is non-terminal for the same reason `implementing` is: the
+  agent's submit must still mutate. A hung fold-in is escapable — `approve
+  {force:true}` mid-finalize commits the current revision and force-drops the
+  open threads (honoring the variant the reviewer originally chose). The
+  double-finalize race serializes on the same guards as double-approve: an
+  `approved` finalize is terminal (the loser hits `E_SESSION_OVER`), and an
+  `implementing` finalize is caught by a new `submit`-during-`implementing` refusal
+  (`E_ALREADY_IMPLEMENTING` — submit was never in the implementing verb set).
+  A `finalizing` session also refuses new **comments** (`E_ALREADY_FINALIZING`):
+  the comments route otherwise flips status back to `revising` while leaving
+  `pendingApproval` armed (so a later clean submit silently finalizes the plan the
+  reviewer thought they had reopened) and mints a thread outside `pendingApproval.
+  threads` that L5 then demands the agent resolve though it was never handed it —
+  wedging the fold-in. Locking the window to the agent's solo pass is simpler and
+  truer to "the reviewer is done the instant they click" than queuing the comment
+  for after the finalize or re-disarming on every reopen.
+- **Revisit when:** Open questions need folding in too (a "send questions to agent"
+  needs the agent to answer-then-finalize, which the current submit hop doesn't
+  model), or a hung-finalize timeout should auto-fall-back to drop without the
+  manual escape.
+
 ## Approve archives logically; the artifact appends an "## Interview" section
 
 - **Decision:** Approve writes `docs/plans/YYYY-MM-DD-<slug>.md` (local approve
@@ -1970,6 +2018,44 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   agent, which already holds the git worktree, is the natural owner of a committed-file move).
 - **Revisit when:** A flat `archive/` grows unwieldy (consider per-month subdirs), or plain
   Approve should archive too (right now an un-built approved plan stays in `docs/plans/`).
+
+## Unsent drawer drafts gate Approve client-side; Send & commit reuses the fold-in
+
+- **Decision:** Drawer comments are browser-only until **Send all** flushes them, so a
+  server-side approve cannot see them. Rather than block Approve or change a protocol the
+  daemon never knew about, the gate is **client-side** (D5): when a commit variant is picked
+  with `pendingCount > 0` unsent drafts, `ApproveDialog` enters a new `drafts` stage before
+  any `postApprove` fires (D1). `pendingCount` counts only non-blank drafts, so a half-typed
+  blank neither arms the gate nor poisons the flush. It offers **Send & commit** /
+  **Discard & commit** / **Cancel**. **Send & commit** flushes the non-blank batch through a
+  gate-local `flushDrafts` (`POST /comments`) that shares the drawer's "remove exactly what was
+  sent" set but keeps its OWN busy/error channel: the dimmed drawer behind the approve scrim
+  must not flash "sending…"/"send failed" for a batch its own Send never started, and blank
+  drafts are skipped because the daemon 400s a whole batch with any empty body. On the 202 it
+  approves with `{sendOpenComments, implement}`, folding the now-open threads in through the
+  existing comment & approve hop in one click (D2), no redundant second warn. **Discard & commit** clears the local drafts then
+  fires the plain variant. The gate fires *after* the variant pick and carries the same
+  `pendingImplement` the warn stage uses, so Send/Discard inherit Commit Plan vs Commit &
+  Implement (D3). A `beforeunload` guard, registered in `ReviewLoop` only while
+  `pending.length > 0`, covers reload/close-tab; navigate-away and half-typed composer text
+  stay out of scope (D4). The pure `approveMove(result, force)` translation is shared by the
+  direct fire and the Send & commit path (and unit-tested) so both read a 409/finalizing/error
+  the same way.
+- **Why:** The silent drop was a real loss: staged comments the reviewer believed counted
+  vanished when the session ended. A client-side gate keeps the fix where the state lives (the
+  daemon has no browser drafts to reason about) and leans on two unchanged daemon paths, so the
+  blast radius is the approve sheet plus the unload listener: no server, CLI, or schema move.
+  Routing Send & commit straight into `{sendOpenComments}` (the q4 choice: one click, agent
+  always addresses them) matches "these should count" without a double warn, and reuses the
+  audited `## Review notes` fold-in rather than a parallel path. Once the flush lands the drafts
+  are real OPEN threads (not lost), so a later approve *error* drops back to confirm with the
+  reason shown (retry the commit, nothing to re-send); a residual 409, the rare case where the
+  open comments were resolved out from under the flush before approve read them, re-asks on the
+  warn stage instead. Scoping the unload guard strictly to staged drafts is what keeps
+  `beforeunload` (browser-controlled copy, fires on every unload) from nagging a clean session.
+- **Revisit when:** Drafts ever grow long-lived enough that a reload warning feels too weak
+  (consider `localStorage` draft-persistence), or navigate-away / composer text join the
+  silent-loss set the gate must cover.
 
 ## Distribution: public npm `otacon`; GitHub is contributor build-from-source only
 

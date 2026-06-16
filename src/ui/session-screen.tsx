@@ -35,7 +35,7 @@ import {
   threadAtPoint,
 } from "./review/anchor";
 import type { CapturedSelection, LitThread } from "./review/anchor";
-import { ApproveDialog, ApprovedNote } from "./review/approve";
+import { ApproveDialog, ApprovedNote, ApprovingNote } from "./review/approve";
 import { DeleteDialog } from "./review/delete";
 import type { ReviewView } from "./review/banner";
 import { ReviewControls, RevisionBanner } from "./review/banner";
@@ -164,18 +164,27 @@ function ReviewLoop({
   // interactive (the SSE frame drives the status; an Approve & Implement leaves
   // this view live as `implementing` rather than ending it).
   const over = isOver(session.status);
+  // `finalizing` (comment & approve, §12) is not over — the agent is folding the
+  // open comments in and will commit — but the plan is locked while it does, so
+  // the whole editing surface goes read-only just like `over`. The redirect-home
+  // and approved-notice logic stays keyed on `over` (finalizing has no committed
+  // artifact yet and is still an active session), so `readOnly` is the editing
+  // gate while `over` stays the terminal gate.
+  const finalizing = session.status === "finalizing";
+  const readOnly = over || finalizing;
   // Approve is offered only while the plan still awaits a decision — not once
-  // over, and not while `implementing` (the daemon already rejects a re-approve
-  // there; the agent is mid-build). The rest of the screen stays live during
-  // `implementing` (comments, asks, the drawer) — only this terminal control is
-  // withdrawn.
-  const canApprove = !over && session.status !== "implementing";
+  // over, not while `finalizing` (a fold-in is in flight; the escape lives in the
+  // ApprovingNote), and not while `implementing` (the daemon already rejects a
+  // re-approve there; the agent is mid-build). The rest of the screen stays live
+  // during `implementing` (comments, asks, the drawer) — only this terminal
+  // control is withdrawn.
+  const canApprove = !readOnly && session.status !== "implementing";
   // Selections only anchor in the clean view: diff lines are change telemetry,
   // not plan text the agent could re-locate (same honesty rule as the
   // chrome-selector guard in anchor.ts).
   const selection = useSelection(
     planRef,
-    composer === null && menu === null && view === "clean" && !over,
+    composer === null && menu === null && view === "clean" && !readOnly,
   );
 
   // Keyboard-aware bottom sheets (DESIGN.md §10). The keyboard inset publishes
@@ -208,7 +217,7 @@ function ReviewLoop({
   // Tracking bare `approveOpen` would strand the lock on with no sheet visible
   // when an SSE status flip (Approve & Implement → `implementing`, or a plain
   // approve → `over`) clears `canApprove` while `approveOpen` still lingers.
-  const composerOrMenuOpen = hasPlan && !over && (composer !== null || menu !== null);
+  const composerOrMenuOpen = hasPlan && !readOnly && (composer !== null || menu !== null);
   const approveSheetOpen = approveOpen && canApprove;
   useScrollLock(phone && (composerOrMenuOpen || approveSheetOpen));
 
@@ -311,9 +320,27 @@ function ReviewLoop({
   // teardown, not on mount.
   useEffect(() => clearThreadHighlights, []);
 
-  // No re-review prompt on an approved session: the review is over.
+  // Reload / close-tab guard (DESIGN.md §10): drawer drafts live only in this
+  // browser until Send, so a reload or tab-close would wipe them with no warning.
+  // Register beforeunload only while drafts are actually staged and tear it down
+  // the moment the drawer empties (sent or deleted), so a clean session never
+  // prompts. Scope is reload/close-tab only (navigate-away and half-typed
+  // composer text stay out of scope, plan q2); the daemon never sees them (D5).
+  useEffect(() => {
+    if (pending.length === 0) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = ""; // some browsers gate the prompt on a set returnValue
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [pending.length]);
+
+  // No re-review prompt while the editing surface is locked: not on an approved
+  // session (the review is over), and not while `finalizing` (the agent's fold-in
+  // bumps the revision, but the screen is read-only awaiting the commit).
   const fresh =
-    !over && hasPlan && session.revision >= 2 && session.lastReviewedRevision < session.revision;
+    !readOnly && hasPlan && session.revision >= 2 && session.lastReviewedRevision < session.revision;
   // The banner must quote the *landed* revision's changelog; while the
   // payload refetch is in flight the previous revision stays rendered, so
   // gate on the revision number instead of showing the stale changelog.
@@ -366,7 +393,7 @@ function ReviewLoop({
         return;
       }
       if (event.key !== "c" && event.key !== "q") return;
-      if (view !== "clean" || over) return; // diff lines / ended sessions are not anchorable
+      if (view !== "clean" || readOnly) return; // diff lines / locked sessions are not anchorable
       const plan = planRef.current;
       const sel = plan ? captureSelection(plan) : null;
       if (!sel) return;
@@ -375,7 +402,7 @@ function ReviewLoop({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [openComposer, jumpChanged, view, over]);
+  }, [openComposer, jumpChanged, view, readOnly]);
 
   const stack = (body: string) => {
     if (!composer) return;
@@ -418,23 +445,41 @@ function ReviewLoop({
       ? submitComposer(() => postQuestion(session.id, composer.anchor, body))
       : Promise.resolve(false);
 
+  // Drop exactly the sent drafts from pending: a draft stacked from the composer
+  // while the POST was in flight stays pending instead of being silently wiped.
+  const dropSent = (batch: PendingComment[]) =>
+    setPending((prev) => {
+      const sent = new Set(batch.map((item) => item.key));
+      return prev.filter((entry) => !sent.has(entry.key));
+    });
+
   const sendAll = async () => {
     if (pending.length === 0) return;
     const batch = pending;
-    const ok = await sendItems(batch.map(({ anchor, body }) => ({ anchor, body })));
-    // Remove exactly what was sent: a draft stacked from the composer while
-    // the POST was in flight stays pending instead of being silently wiped.
-    if (ok) {
-      const sent = new Set(batch.map((item) => item.key));
-      setPending((prev) => prev.filter((entry) => !sent.has(entry.key)));
-    }
+    if (await sendItems(batch.map(({ anchor, body }) => ({ anchor, body })))) dropSent(batch);
+  };
+
+  // The approve drafts gate's flush (DESIGN.md §10): POST the non-blank drafts and
+  // drop exactly those, WITHOUT lighting the drawer's busy/failed. The dialog owns
+  // its own busy/error, and the drawer dimmed behind the approve scrim must not
+  // flash state for a batch its own Send never started. Blank drafts are skipped,
+  // mirroring the drawer's send-all `blocked` guard: the daemon 400s a whole batch
+  // that carries any empty body, which would otherwise strand every draft.
+  const flushDrafts = async (): Promise<boolean> => {
+    const batch = pending.filter((item) => item.body.trim() !== "");
+    if (batch.length === 0) return true;
+    const ok = await postComments(
+      session.id,
+      batch.map(({ anchor, body }) => ({ anchor, body })),
+    );
+    if (ok) dropSent(batch);
+    return ok;
   };
 
   const sendOne = async (key: number) => {
     const item = pending.find((entry) => entry.key === key);
     if (!item) return;
-    const ok = await sendItems([{ anchor: item.anchor, body: item.body }]);
-    if (ok) setPending((prev) => prev.filter((entry) => entry.key !== key));
+    if (await sendItems([{ anchor: item.anchor, body: item.body }])) dropSent([item]);
   };
 
   const edit = (key: number, body: string) =>
@@ -462,7 +507,7 @@ function ReviewLoop({
       const target = event.target as Element | null;
       const menuBtn = target?.closest?.("button.sec-menu");
       if (menuBtn) {
-        if (over) return; // read-only: the buttons are hidden, but belt and braces
+        if (readOnly) return; // read-only: the buttons are hidden, but belt and braces
         const id = (menuBtn as HTMLElement).dataset.menu;
         if (id === undefined) return;
         const rect = menuBtn.getBoundingClientRect();
@@ -485,8 +530,8 @@ function ReviewLoop({
       }
       // A tap (collapsed selection) inside a lit span focuses its rail thread; a
       // drag is select-to-comment, so a real selection is never hijacked. Clean
-      // view only — diff lines aren't anchored, an ended session paints nothing.
-      if (over || view !== "clean") return;
+      // view only — diff lines aren't anchored, a locked session paints nothing.
+      if (readOnly || view !== "clean") return;
       const sel = document.getSelection();
       if (sel && !sel.isCollapsed) return;
       const plan = planRef.current;
@@ -494,7 +539,7 @@ function ReviewLoop({
       const hit = threadAtPoint(plan, litRef.current, event.clientX, event.clientY);
       if (hit !== null) setFocusThread({ id: hit, nonce: (focusNonce.current += 1) });
     },
-    [transcript, over, view],
+    [transcript, readOnly, view],
   );
 
   // The ⋯ menu's verbs ride the existing composer with a section-only anchor
@@ -535,6 +580,7 @@ function ReviewLoop({
       <div className="review-layout">
         <div className="review-main">
           {over && <ApprovedNote path={approvedPath} />}
+          {finalizing && <ApprovingNote sessionId={session.id} />}
           {hasPlan && (
             <ReviewControls
               view={view}
@@ -572,7 +618,7 @@ function ReviewLoop({
               onClose={() => setChangelogOpen(false)}
             />
           )}
-          {!over && <GrillQueue sessionId={session.id} transcript={transcript} />}
+          {!readOnly && <GrillQueue sessionId={session.id} transcript={transcript} />}
           <InterviewPanel
             transcript={transcript}
             open={interviewOpen}
@@ -584,7 +630,7 @@ function ReviewLoop({
           {hasPlan && <ActivityLog activity={activity} now={now} />}
           {hasPlan ? (
             <main
-              className={over ? "review review-over" : "review"}
+              className={readOnly ? "review review-over" : "review"}
               ref={planRef}
               onClick={onPlanClick}
             >
@@ -628,7 +674,7 @@ function ReviewLoop({
             threads={threads}
             onJump={jump}
             focus={focusThread}
-            onFollowup={over ? undefined : followup}
+            onFollowup={readOnly ? undefined : followup}
           />
         )}
       </div>
@@ -636,6 +682,15 @@ function ReviewLoop({
         <ApproveDialog
           sessionId={session.id}
           revision={session.revision}
+          // The drawer holds browser-only drafts the daemon never saw; the gate
+          // catches them before finalize (Send & commit flushes + folds in,
+          // Discard & commit drops them) rather than letting Approve silently
+          // skip them (DESIGN.md §10, §12). Count only sendable (non-blank)
+          // drafts: a half-typed blank isn't a comment to protect, and flushing
+          // it would 400 the whole batch.
+          pendingCount={pending.filter((item) => item.body.trim() !== "").length}
+          onFlushDrafts={flushDrafts}
+          onDiscardDrafts={() => setPending([])}
           onClose={() => setApproveOpen(false)}
           onApproved={(path, implement) => {
             // Plain approve: the session SSE frame flips the status (and this
@@ -658,7 +713,7 @@ function ReviewLoop({
           onDeleted={() => navigate("/")}
         />
       )}
-      {hasPlan && !over && (
+      {hasPlan && !readOnly && (
         <>
           {selection !== null && composer === null && (
             <SelectionBar

@@ -70,6 +70,43 @@ describe("composeArtifact", () => {
     });
     expect(out).toContain("### q1 — line one line two?");
   });
+
+  test("comment & approve appends a ## Review notes section with comment + resolution", () => {
+    const out = composeArtifact(PLAN, {
+      revision: 2,
+      entries: [],
+      reviewNotes: [
+        { thread: "t3", section: "phase-2", body: "rename this helper", resolution: "renamed to parseAnchor" },
+        { thread: "t5", section: null, body: "whole-plan nit\nsecond line", resolution: "fixed throughout" },
+      ],
+    });
+    expect(out).toContain("## Review notes");
+    expect(out).toContain("### t3 — phase-2");
+    expect(out).toContain("> rename this helper");
+    expect(out).toContain("renamed to parseAnchor");
+    // A whole-plan comment (null anchor) labels its section "whole plan", and a
+    // multi-line body keeps its break inside the blockquote.
+    expect(out).toContain("### t5 — whole plan");
+    expect(out).toContain("> whole-plan nit\n> second line");
+    expect(out).toContain("fixed throughout");
+  });
+
+  test("the Review notes section is omitted when the approve carried no fold-in", () => {
+    expect(composeArtifact(PLAN, { revision: 1, entries: [] })).not.toContain("## Review notes");
+    expect(composeArtifact(PLAN, { revision: 1, entries: [], reviewNotes: [] })).not.toContain(
+      "## Review notes",
+    );
+  });
+
+  test("Review notes ride after the Interview when both are present", () => {
+    const out = composeArtifact(PLAN, {
+      revision: 2,
+      entries: [q("q1", { answer: { text: "yes", answeredAt: "t" } })],
+      reviewNotes: [{ thread: "t1", section: "summary", body: "tighten", resolution: "done" }],
+    });
+    expect(out.indexOf("## Interview")).toBeGreaterThan(-1);
+    expect(out.indexOf("## Review notes")).toBeGreaterThan(out.indexOf("## Interview"));
+  });
 });
 
 describe("pickArtifactRelPath", () => {

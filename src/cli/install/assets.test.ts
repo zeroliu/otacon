@@ -51,4 +51,14 @@ describe("single-source wrappers (D7)", () => {
       expect(text).toContain("deleted this session in the review UI");
     }
   });
+
+  test("every wrapper teaches the comment & approve fold-in batch (final:true)", () => {
+    for (const text of [skillMd(), dogfoodSkillMd()]) {
+      // A `final:true` comments batch ends the review: the next clean submit
+      // finalizes (the agent gets `approved`, maybe implement:true), not another
+      // review round (DESIGN.md §6, §12).
+      expect(text).toContain('`"final":true`');
+      expect(text).toContain("next clean submit **finalizes**");
+    }
+  });
 });

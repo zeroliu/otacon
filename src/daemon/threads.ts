@@ -163,3 +163,15 @@ export function commentThreadStates(path: string): { id: string; resolved: boole
     .filter((t): t is CommentThread => t.kind === "comment")
     .map((t) => ({ id: t.id, resolved: t.resolution !== undefined }));
 }
+
+/**
+ * The still-open comment threads (no resolution) — what a **comment & approve**
+ * fold-in sweeps (DESIGN.md §6, §12): each is re-delivered to the agent in the
+ * `final:true` comments batch and replayed into the committed `## Review notes`.
+ * Pure over an already-read thread list so the approve handler reads disk once.
+ * Open *questions* are not swept — they are answered via `otacon answer`, never
+ * folded into the plan, and an open one at approve still drops as today.
+ */
+export function openCommentThreads(threads: Thread[]): CommentThread[] {
+  return threads.filter((t): t is CommentThread => t.kind === "comment" && t.resolution === undefined);
+}

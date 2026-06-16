@@ -100,6 +100,22 @@ function parseState(raw: unknown): SessionStateFile | undefined {
     typeof reviewed === "number" && Number.isInteger(reviewed) && reviewed > 0
       ? Math.min(reviewed, file.revision)
       : 0;
+  // The deferred-approval flag (comment & approve) is optional — pre-feature and
+  // most live files lack it. A malformed value would otherwise flow a bad
+  // implement flag / thread list into the finalize path; drop anything that
+  // isn't the exact shape rather than quarantine the whole (recoverable) file.
+  const pending = file.pendingApproval as unknown;
+  if (
+    typeof pending === "object" &&
+    pending !== null &&
+    typeof (pending as { implement?: unknown }).implement === "boolean" &&
+    Array.isArray((pending as { threads?: unknown }).threads) &&
+    (pending as { threads: unknown[] }).threads.every((t) => typeof t === "string")
+  ) {
+    file.pendingApproval = pending as SessionStateFile["pendingApproval"];
+  } else {
+    delete file.pendingApproval;
+  }
   return file;
 }
 
@@ -323,6 +339,28 @@ export class Store {
       writeFileAtomic(paths.sessionStatePath(session.repo, id), stringify(state));
     }
     return state.lastReviewedRevision;
+  }
+
+  /**
+   * Arm a deferred approval (comment & approve, DESIGN.md §6, §12): the session
+   * has flipped to `finalizing`, and the agent's next clean `submit` finalizes,
+   * carrying the `implement` choice and the swept comment-thread ids. Persisted
+   * on session.json (not the registry) — daemon-owned detail, like the counters.
+   */
+  setPendingApproval(id: string, pendingApproval: { implement: boolean; threads: string[] }): void {
+    const session = this.require(id);
+    const state = this.readState(id);
+    state.pendingApproval = pendingApproval;
+    writeFileAtomic(paths.sessionStatePath(session.repo, id), stringify(state));
+  }
+
+  /** Disarm the deferred approval once it has finalized (or been force-escaped). */
+  clearPendingApproval(id: string): void {
+    const session = this.require(id);
+    const state = this.readState(id);
+    if (state.pendingApproval === undefined) return;
+    delete state.pendingApproval;
+    writeFileAtomic(paths.sessionStatePath(session.repo, id), stringify(state));
   }
 
   /** Increment one daemon-owned counter (DESIGN.md §6 stable ids) and persist it. */

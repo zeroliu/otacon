@@ -334,31 +334,43 @@ export function postAnswer(id: string, draft: AnswerDraft): Promise<boolean> {
 }
 
 /**
- * The approve outcome (DESIGN.md §6 step 6): success carries the artifact's
- * repo-relative path; E_UNRESOLVED_THREADS carries the count the confirm
- * sheet warns with before retrying with force.
+ * The approve outcome (DESIGN.md §6 step 6, §12): a finalize-now success carries
+ * the artifact's repo-relative path; a **comment & approve** success carries
+ * `finalizing:true` instead (no artifact yet — the agent's fold-in submit writes
+ * it, and the SSE `finalizing` frame drives the screen). E_UNRESOLVED_THREADS
+ * carries `unresolved` (the warn count) and `openComments` (whether *Send to
+ * agent* has anything to fold in).
  */
 export type ApproveResult =
   | { ok: true; path: string; revision: number }
-  | { ok: false; code: string; message?: string; unresolved?: number };
+  | { ok: true; finalizing: true }
+  | { ok: false; code: string; message?: string; unresolved?: number; openComments?: number };
+
+/** The three approve modes, folded into the POST body (DESIGN.md §6, §12). */
+export interface ApproveOptions {
+  /** Carry past the unresolved-threads warning, force-dropping the open threads. */
+  force?: boolean;
+  /** Approve & Implement: finalize, then keep the agent building. */
+  implement?: boolean;
+  /** Comment & approve: defer the finalize, handing open comments to the agent. */
+  sendOpenComments?: boolean;
+}
 
 /**
  * Approve the plan (DESIGN.md §6 step 6, §12). `implement:true` is the Approve &
  * Implement variant: the daemon finalizes the artifact exactly as a plain
  * approve, then flips the session to `implementing` (not over) and wakes the
- * agent with `implement:true` to build it. On that branch the SSE `implementing`
- * frame drives the UI; the success shape is unchanged ({ok,path,revision}).
- * `force` carries past the unresolved-threads warning; both fold into the body.
+ * agent with `implement:true` to build it. `sendOpenComments:true` is comment &
+ * approve: the daemon defers the finalize (status `finalizing`) and hands the
+ * agent the open comments to fold in — its next clean submit finalizes, carrying
+ * the implement choice. `force` carries past the unresolved-threads warning.
  */
-export async function postApprove(
-  id: string,
-  force: boolean,
-  implement = false,
-): Promise<ApproveResult> {
+export async function postApprove(id: string, opts: ApproveOptions = {}): Promise<ApproveResult> {
   try {
-    const request: { force?: true; implement?: true } = {};
-    if (force) request.force = true;
-    if (implement) request.implement = true;
+    const request: { force?: true; implement?: true; sendOpenComments?: true } = {};
+    if (opts.force) request.force = true;
+    if (opts.implement) request.implement = true;
+    if (opts.sendOpenComments) request.sendOpenComments = true;
     const res = await fetch(`/api/sessions/${id}/approve`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -367,9 +379,14 @@ export async function postApprove(
     const body = (await res.json()) as {
       path?: string;
       revision?: number;
+      finalizing?: boolean;
       unresolved?: number;
+      openComments?: number;
       error?: { code?: string; message?: string };
     };
+    if (res.ok && body.finalizing === true) {
+      return { ok: true, finalizing: true };
+    }
     if (res.ok && typeof body.path === "string") {
       return { ok: true, path: body.path, revision: body.revision ?? 0 };
     }
@@ -378,6 +395,7 @@ export async function postApprove(
       code: body.error?.code ?? "E_INTERNAL",
       message: body.error?.message,
       unresolved: body.unresolved,
+      openComments: body.openComments,
     };
   } catch {
     return { ok: false, code: "E_UNREACHABLE" };
