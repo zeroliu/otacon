@@ -2,11 +2,7 @@
   <img src="https://github.com/user-attachments/assets/18796111-63d7-4df6-a2ba-b95f132eabd3" alt="otacon" width="720">
 </p>
 
-<h3 align="center">Revolutionize agentic coding review — give your agent's plans the design-doc review they deserve.</h3>
-
-<p align="center">
-  Concise, reviewable plans&nbsp; ·&nbsp; anchored inline comments&nbsp; ·&nbsp; review from your phone&nbsp; ·&nbsp; zero API spend
-</p>
+<h3 align="center">Stop rubber-stamping your agent's plans</h3>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/otacon"><img src="https://img.shields.io/npm/v/otacon.svg" alt="npm version"></a>
@@ -15,58 +11,54 @@
 </p>
 
 <p align="center">
+  <a href="#installation"><b>Installation</b></a>&nbsp; ·&nbsp;
   <a href="#get-started"><b>Get started</b></a>&nbsp; ·&nbsp;
-  <a href="#why-otacon"><b>Why otacon</b></a>&nbsp; ·&nbsp;
-  <a href="docs/INSTALL.md"><b>Install guide</b></a>&nbsp; ·&nbsp;
+  <a href="#why-otacon"><b>Why Otacon</b></a>&nbsp; ·&nbsp;
   <a href="docs/PHONE-ACCESS.md"><b>Phone access</b></a>
 </p>
 
 <br/>
 
-otacon is the plan-review surface for coding agents — Claude Code, Codex, OpenCode. It
-replaces native plan mode with one CLI protocol: your agent interviews you, drafts a
-concise schema'd plan, and hands you a real review surface where you comment, ask, diff,
-and sign off before a single line gets written. It's mission support over codec — Snake's
-in the field, otacon's on the line.
+Otacon makes plan-review thorough and effective for coding agents like Claude Code, Codex, and OpenCode. It replaces native plan mode with a sophisticated process: your agent interviews you ensuring you are aligned, drafts a
+concise plan with design doc best practices, and hands you a real review surface where you comment, ask, review diffs, and sign off.
+
+## Installation
+
+**Prerequisites:** Node ≥ 20, plus a coding agent you already use, such as Claude Code,
+Codex, or OpenCode. Otacon runs every model call inside that agent's session, so there's no
+separate API key or bill.
+
+```sh
+npm install -g otacon   # one package: the CLI and its daemon
+```
 
 ## Get started
 
-### Install
+**Install the skill into your agent.** This drops the Otacon skill into the agent's skill
+folder so it knows how to run a review:
 
 ```sh
-npm install -g otacon   # one package: CLI + daemon (Node ≥ 20)
-otacon install --all    # register every agent — Claude Code / Codex / OpenCode
-otacon doctor           # verify: node, daemon boots, wrappers, Tailscale
+otacon install --all              # all three agents
+otacon install --agent claude     # or just one: claude, codex, or opencode
 ```
 
-Agent flags, the Claude Code Stop hook, building from source → [docs/INSTALL.md](docs/INSTALL.md).
+**Plan a feature.** In your agent, run `/otacon` (or just ask it to plan something with
+Otacon). It interviews you to lock down intent, drafts the plan, and hands you a local
+review URL.
 
-No per-repo setup — the first `otacon start` creates `.otacon/` (and gitignores it), and
-approved plans land committed in `docs/plans/`.
+**Review and sign off.** Open the URL: answer the interview, leave inline comments, ask
+questions, and diff revisions in the browser, or [from your phone](docs/PHONE-ACCESS.md).
 
-### Use it in your repo
+When the plan is ready, choose how it ships:
 
-1. **Ask your coding agent to plan something.** It runs `otacon start` and prints a
-   review URL — open it. (You can review from your phone, too — see below.)
-2. **It grills you.** A short interview, one question at a time — answer with chips or
-   free text right in the browser.
-3. **It drafts a concise, schema'd plan.** You review: select any text to leave an inline
-   comment, fire a quick question without touching the plan, and diff revisions to see
-   only what changed since you last looked.
-4. **Approve** and the plan is committed to `docs/plans/`. Or **Approve & Implement** and
-   the same agent builds it phase-by-phase and opens a PR.
+- **Approve**: the plan lands committed in `docs/plans/`, ready for any implementer.
+- **Approve & Implement**: the same agent builds it in an isolated git worktree, phase by phase, and opens a PR.
 
-## Why otacon
+## Why Otacon
 
-Native plan mode hands you a wall of terminal text and asks you to bless it. So you
-rubber-stamp it. Your feedback is unanchored — no line to point at, no diff — so
-re-reviewing the next revision costs as much as the first read. Plans are text-only, with
-nowhere to put a diagram or a decision table. And one long session degrades: by the time
-the agent is deep in the build, it has half-forgotten the plan it pitched you.
+Native plan mode hands you a wall of terminal text without fully clarifying your intent, and asks you to bless it. When you share your feedback, the agent sends back the full plan again. Re-reviewing the next revision costs as much as the first read.
 
-Serious engineering orgs don't ship from a wall of terminal text. They review a **design
-doc**: inline comments, a real review pass, sign-off before anyone builds. otacon brings
-that discipline to coding agents.
+The native plan also mixes low-level implementation detail with high-level design. Serious engineering orgs don't work that way. They sign off on the interface, the blast radius, and the behavior, dig into the implementation only where it matters, and treat review as a back-and-forth rather than a one-shot blessing. Otacon brings that discipline to coding agents.
 
 <table>
 <tr>
@@ -74,22 +66,22 @@ that discipline to coding agents.
 
 #### 📄 Plans you actually read
 
-A wall of prose is easy to skim and impossible to vet. otacon plans are schema'd and
-concise — a lead diagram up top, then visuals where they carry weight: callouts for the
-sharp edges, decision matrices for the tradeoffs, and Given/When/Then assertions that
-double as your approve checklist. A deterministic linter runs on every submit, so each
-plan stays tight and honest before it reaches you.
+A wall of prose is easy to skim and impossible to vet. Otacon plans are modeled on the
+design docs strong eng orgs actually review. They lead with the high-level interface and
+the impact, fold the code-level detail into collapsible sections, and put visuals where
+they carry weight.
 
 </td>
 <td width="50%" valign="top">
 
 #### 💬 Comment, don't rubber-stamp
 
-Select any passage and leave an inline comment anchored to that exact text — comments
-batch into **one** clean revision with a changelog instead of a scattered back-and-forth.
-Need a clarification, not a change? **Quick Ask** gets you an instant answer without
-touching the plan. And every revision's diff shows only what changed since you last
-reviewed, so re-review stays cheap.
+Select any passage and leave an inline comment. Your note is
+captured and routed to the agent without breaking your reading flow. Comments batch into
+**one** clean revision with a changelog. Need a
+clarification, not a change? **Quick Ask** gets you an instant answer without touching the
+plan. And each revision lands as a diff that shows only what changed since you last looked,
+so you never dig through a wall of terminal text to find it.
 
 </td>
 </tr>
@@ -98,11 +90,10 @@ reviewed, so re-review stays cheap.
 
 #### 🎙️ It interviews you first
 
-Plans that skip the hard questions look great and fall apart on contact. So otacon runs a
-mandatory grill before any plan reaches review: one question at a time, recommended answer
-first, all answerable from your phone. Every decision traces back to the answer that
-produced it (enforced) — and the interview ships with the approved plan, so the *why* is
-never lost.
+Otacon grills
+you before it writes a word of the plan. It interviews until you're aligned, then drafts. Every
+decision traces back to the answer that produced it, and the interview ships
+with the approved plan, so the _why_ is never lost.
 
 </td>
 <td width="50%" valign="top">
@@ -110,8 +101,8 @@ never lost.
 #### 📱 Review from your phone
 
 The five minutes before you hit the road shouldn't block your agent. Reviews run over
-Tailscale — one thumb, anywhere — and because it's your own tailnet, your plans never
-leave your own devices. [Phone setup →](docs/PHONE-ACCESS.md)
+Tailscale, so you can continue the review, comment, and sign off from your phone. Because it's your own tailnet, your plans never leave your own devices.
+[Phone setup →](docs/PHONE-ACCESS.md)
 
 </td>
 </tr>
@@ -121,22 +112,19 @@ leave your own devices. [Phone setup →](docs/PHONE-ACCESS.md)
 #### 🚀 From approved plan to shipped PR
 
 Approval shouldn't be where the rigor ends. **Approve & Implement** carries the plan
-straight into the build: the same agent walks the phases with a fresh subagent per phase
-(implement and test, then an independent review pass), then opens a PR.
+straight into the build inside an isolated git worktree: the same agent walks the phases
+with a fresh subagent per phase,
+then opens a PR.
 
 </td>
 <td width="50%" valign="top">
 
 #### 🔒 Private & free by construction
 
-The daemon, CLI, and UI never call an LLM — all the intelligence runs in your existing
-subscription-backed agent session, so otacon adds **zero API spend**. It's local-first:
-your plans stay on your machines.
+The daemon, CLI, and UI never call an LLM. All the intelligence runs in your existing
+subscription-backed agent session, so Otacon adds **zero API spend** of its own. It's
+local-first, so your plans stay on your machines.
 
 </td>
 </tr>
 </table>
-
----
-
-<sub>For contributors: [DESIGN.md](DESIGN.md) (behavior spec) · [DECISIONS.md](DECISIONS.md) (rationale) · [AGENTS.md](AGENTS.md) (conventions). Maintainers cutting a release: see [RELEASING.md](RELEASING.md). These are internal docs — the user-facing guides live in `docs/`.</sub>
