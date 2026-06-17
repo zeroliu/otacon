@@ -46,7 +46,7 @@ questions, and diff revisions in the browser, or [from your phone](docs/PHONE-AC
 
 When the plan is ready, choose how it ships:
 
-- **Save**: the approved plan lands in your home archive (`~/.otacon/sessions/`) plus a copy in the project (`.otacon/plans/` by default; point `plans.dir` at `docs/plans` to track it). otacon never commits it — you commit if you want.
+- **Save**: the approved plan lands in your home archive (`~/.otacon/sessions/`) plus a copy in the project (`.otacon/plans/` by default; set `plans.dir` to `docs/plans` to group it with your tracked plans). Commit the project copy if you want it in git.
 - **Implement**: the same agent builds it in an isolated git worktree, phase by phase, and opens a PR.
 
 ## Why Otacon

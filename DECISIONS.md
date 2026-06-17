@@ -2377,9 +2377,9 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Decision:** One new `CONFIG_SCHEMA` path leaf `plans.dir` (default `.otacon/plans`,
   repo-relative) governs where **Save** writes the project copy. It renders in the
   Settings UI and resolves via `otacon config get plans.dir` for free, like
-  `worktree.dir`. The home archive location is NOT configurable. otacon never commits the
-  copy and (since "otacon manages no `.gitignore`" below) no longer ignores it either, so
-  the default lands an untracked file under `.otacon/plans` the user owns; a team that
+  `worktree.dir`. The home archive location is NOT configurable. otacon writes the copy
+  and leaves tracking to the user (it manages no `.gitignore`, see below), so the default
+  lands a file under `.otacon/plans` the user can commit or leave alone; a team that
   wants it grouped with tracked plans sets `plans.dir=docs/plans` in the committed
   `<repo>/.otacon/config.json`.
 - **Why:** Reusing the schema-driven config (single source of truth, guard test) means a

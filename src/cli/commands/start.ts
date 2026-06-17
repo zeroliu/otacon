@@ -1,8 +1,6 @@
 // otacon start --title <t> [--quick] — mint and register a session (DESIGN.md
-// §6, §16): POST /api/sessions, print the session id and review URL. otacon
-// never touches the repo's .gitignore (DECISIONS.md "otacon manages no
-// .gitignore"). No local session pointer — the daemon registry is the single
-// source of truth (§7).
+// §6, §16): POST /api/sessions, print the session id and review URL. No local
+// session pointer — the daemon registry is the single source of truth (§7).
 
 import { parseArgs } from "node:util";
 import type { RegistrySession } from "../../shared/types.js";

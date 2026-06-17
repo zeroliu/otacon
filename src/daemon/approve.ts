@@ -2,10 +2,10 @@
 // revision's markdown with daemon-rewritten frontmatter (status: approved,
 // revision corrected — the daemon owns both) plus the grill transcript
 // appended as an "## Interview" section. The artifact is post-lint output; the
-// closed plan schema governs submits, not this file. Otacon never git-commits
-// it — it only chooses where the file is written: always the canonical home
-// store (`~/.otacon/sessions/<id>/`), and on Save also a copy under the repo's
-// configured `plans.dir`. Path picking never overwrites: collisions get -2, -3, …
+// closed plan schema governs submits, not this file. It is written to the
+// canonical home store (`~/.otacon/sessions/<id>/`), and on Save also to a copy
+// under the repo's configured `plans.dir`. Path picking never overwrites:
+// collisions get -2, -3, …
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";

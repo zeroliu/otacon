@@ -339,10 +339,10 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   }
 
   /**
-   * Finalize an approval (DESIGN.md §6 step 6/7, §12). Otacon never git-commits
-   * the plan; it only writes the composed artifact (with the comment-&-approve
-   * `## Review notes` when `reviewNotes` are present). It ALWAYS writes the
-   * canonical home copy (`~/.otacon/sessions/<id>/`, the permanent archive).
+   * Finalize an approval (DESIGN.md §6 step 6/7, §12). Writes the composed
+   * artifact (with the comment-&-approve `## Review notes` when `reviewNotes` are
+   * present). It ALWAYS writes the canonical home copy
+   * (`~/.otacon/sessions/<id>/`, the permanent archive).
    * On **Save** (implement=false) it ALSO writes a project copy under the repo's
    * configured `plans.dir`, and the event `path` points there. On **Implement**
    * (implement=true) it writes home only, and `path` equals `home`. The home
@@ -1205,13 +1205,13 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     return c.json({ ok: true, session: session.id, note: text });
   });
 
-  // Approve ends the planning session (DESIGN.md §6 step 6/7, §12). Otacon never
-  // git-commits the plan — it only writes the composed artifact (final revision,
-  // status: approved, grill transcript appended). The canonical copy ALWAYS lands
-  // in the home store (~/.otacon/sessions/<id>/). **Save** (plain Approve,
-  // implement=false) ALSO writes a project copy under the repo's `plans.dir` and
-  // sets the event `path` there; the session flips to `approved` (terminal) and
-  // the agent prints where it landed and stops — the user commits it themselves.
+  // Approve ends the planning session (DESIGN.md §6 step 6/7, §12). Writes the
+  // composed artifact (final revision, status: approved, grill transcript
+  // appended). The canonical copy ALWAYS lands in the home store
+  // (~/.otacon/sessions/<id>/). **Save** (plain Approve, implement=false) ALSO
+  // writes a project copy under the repo's `plans.dir` and sets the event `path`
+  // there; the session flips to `approved` (terminal) and the agent reports where
+  // the plan landed before it stops.
   // **Implement** ({implement:true}) writes the home copy only, sets `path`=home,
   // flips to the non-terminal `implementing`, and the agent builds from the home
   // copy. The event always carries `home` (the absolute canonical path).

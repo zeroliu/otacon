@@ -153,14 +153,11 @@ export type EventPayload =
       choices?: string[];
       text?: string;
     }
-  // The approval wake-up (DESIGN.md §6, §12). Otacon never git-commits the plan;
-  // it only chooses where the file is written. `home` is ALWAYS the absolute
-  // canonical copy under `~/.otacon/sessions/<id>/`. `path` is the copy the agent
-  // acts on: on **Save** (no `implement`) the repo-relative project copy under
-  // `plans.dir` — the agent prints where it landed and stops; the user commits it
-  // themselves. On **Implement** (`implement:true`) `path` equals `home` (no
-  // project copy is written) and the agent builds from it. Either way the agent
-  // runs no git for the plan.
+  // The approval wake-up (DESIGN.md §6, §12). `home` is the absolute canonical
+  // copy under `~/.otacon/sessions/<id>/`. `path` is the copy the agent acts on:
+  // on **Save** (no `implement`) the repo-relative project copy under `plans.dir`,
+  // which the agent reports before it stops; on **Implement** (`implement:true`)
+  // `path` equals `home` and the agent builds from it.
   | { event: "approved"; session: string; path: string; home: string; implement?: true }
   // Terminal: the reviewer deleted a pending (non-approved) session from the UI
   // (DESIGN.md §6, §12). The daemon wakes the parked agent with this so its

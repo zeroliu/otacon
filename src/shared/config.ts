@@ -49,10 +49,10 @@ export interface WorktreeConfig {
 
 /**
  * Where **Save** writes the approved plan's project copy (DESIGN.md §12). A
- * repo-relative path; the default `.otacon/plans` lands an in-repo copy that
- * otacon never commits (you commit it or not), set it to e.g. `docs/plans` to
- * group it with other tracked plans. The canonical copy always lands in the
- * home store (`~/.otacon/sessions/<id>/`); this only governs the in-project copy.
+ * repo-relative path; the default `.otacon/plans` keeps the copy beside otacon's
+ * other working state, set it to e.g. `docs/plans` to group it with other tracked
+ * plans. The canonical copy always lands in the home store
+ * (`~/.otacon/sessions/<id>/`); this only governs the in-project copy.
  */
 export interface PlansConfig {
   dir: string;

@@ -69,13 +69,11 @@ machine-readable error you can fix (read the JSON); exit 2 = you invoked it wron
      thread's prior turns for context, but still answer the new \`q<n>\`.
    - \`answer\` → use it and continue; park again whenever you are waiting.
    - \`timeout\` → park again immediately. A timeout is NEVER completion.
-   - \`approved\` → the plan is saved at \`path\` (its canonical archive is at
-     \`home\`). otacon does NOT manage git for plans — never \`git add\`/commit it
-     here. Plain \`approved\` (Save, no \`implement\`) → print a one-line summary
-     naming where it was saved (\`path\`), then STOP; commit it yourself if you
-     want. \`approved\` **with \`implement:true\`** → read the plan at \`path\` (the
-     home copy) to guide the build and enter the **Implement loop** (below) — do
-     NOT stop, do NOT commit the plan; the session is now \`implementing\`.
+   - \`approved\` → the plan is saved at \`path\`. Plain \`approved\` (Save, no
+     \`implement\`) → print a one-line summary naming where it was saved (\`path\`),
+     then STOP. \`approved\` **with \`implement:true\`** → read the plan at \`path\` to
+     guide the build and enter the **Implement loop** (below) — do NOT stop; the
+     session is now \`implementing\`.
    - \`deleted\` → the user deleted this session in the review UI. It is over:
      STOP. There is no approved plan.
 6. **Never end your turn while the session is open.** Nothing to do = park in
@@ -95,9 +93,9 @@ You are the **orchestrator**: you only coordinate and narrate
 (\`${cmd} progress\` at each checkpoint) — every phase's real work runs in a fresh
 native subagent (Task tool) so your own context stays lean.
 
-1. **Setup.** Do NOT commit the plan — otacon doesn't manage git for plans, and on
-   Implement the plan lives only in the home archive at the event \`path\` (read the
-   phases from there). Branch off the repo's current default branch HEAD: create the
+1. **Setup.** On Implement the plan lives only in the home archive at the event
+   \`path\` (read the phases from there). Branch off the repo's current default branch
+   HEAD: create the
    worktree under the configured \`worktree.dir\`
    (\`${cmd} config get worktree.dir\` — default \`~/.otacon/worktrees\`, outside the repo):
    \`git worktree add <worktree.dir>/<slug> -b otacon/impl-<slug>\` (off the default
@@ -115,10 +113,8 @@ native subagent (Task tool) so your own context stays lean.
      and act on the answer. No auto-retry.
 3. **Finish.** On success, open a PR against the default branch with \`gh pr create\`
    (PR body = the plan summary + the per-phase log; fall back to the local branch +
-   path when there is no remote), then \`${cmd} implement-done --pr <url>\`. There is
-   no plan file to commit or archive — the plan lives in the home archive at the
-   event \`path\`; otacon never puts it in the repo on Implement. On abort, run
-   \`${cmd} implement-done --failed\`.
+   path when there is no remote), then \`${cmd} implement-done --pr <url>\`. On abort,
+   run \`${cmd} implement-done --failed\`.
 
 While \`implementing\` the Stop hook still keeps you on the line — never end the turn
 until \`implement-done\`.
@@ -233,11 +229,9 @@ This repo **is** otacon. You plan features for it by running otacon's own CLI fr
 source via the \`./bin/otacon\` shim, so every command below exercises the code in
 this checkout. That shim runs the CLI from \`src/\` via bun — no build needed; it
 always reflects current source. The daemon auto-spawns from source on the first
-command. Working state lives in \`.otacon/\` (otacon manages no .gitignore — track
-or ignore it as you like); the approved plan is archived in the home store
-(\`~/.otacon/sessions/<id>/\`) and, on Save, copied into the repo under \`plans.dir\`
-(default \`.otacon/plans\`). otacon never git-commits the plan — you commit it
-yourself if you want.
+command. Working state lives in \`.otacon/\`; the approved plan is archived in the
+home store (\`~/.otacon/sessions/<id>/\`) and, on Save, copied into the repo under
+\`plans.dir\` (default \`.otacon/plans\`).
 
 After editing **daemon** source (\`src/daemon/**\`) mid-session, restart the running
 daemon so your change loads: \`./bin/otacon restart\` (the next command respawns it
