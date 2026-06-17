@@ -11,7 +11,7 @@
 //   • a resolved thread collapses, and a thread whose quote a later revision
 //     deletes lands in the orphan tray;
 //   • Approve from the UI flips the screen to its approved read-only state and
-//     surfaces the docs/plans path.
+//     surfaces the saved project copy under .otacon/plans (plus the home archive).
 // Three screenshots (desktop review, phone review, index) are captured to a
 // temp dir whose path the run prints, for the orchestrator to surface.
 //
@@ -208,10 +208,10 @@ test("UI acceptance: the whole §6 loop renders and round-trips in the browser",
   await expect(orphan.locator(".thread-quote")).toContainText("RS256 over HS256");
   await expect(orphan.locator(".orphan-where")).toHaveText("#decisions");
 
-  // ── 7. Approve from the UI → approved read-only state + docs/plans path ───
+  // ── 7. Approve from the UI → approved read-only state + project-copy path ──
   await page.locator(".ctrl-approve").click();
   const sheet = page.locator(".approve-sheet");
-  await expect(sheet).toContainText("docs/plans/");
+  await expect(sheet).toContainText(".otacon/plans");
   await sheet.locator(".btn-approve").click();
   // The lone orphaned (resolved) thread is not an open thread, but the orphan
   // tray keeps it; if approve warns, force through it — the human's path.
@@ -222,9 +222,9 @@ test("UI acceptance: the whole §6 loop renders and round-trips in the browser",
   await expect(note).toBeVisible();
   await expect(page.locator(".chip")).toHaveText("approved");
   const noted = await note.locator(".approved-path").textContent();
-  const relPath = /docs\/plans\/\S+\.md/.exec(noted ?? "")?.[0];
-  expect(relPath, "approved note surfaces the docs/plans path").toBeTruthy();
-  // The artifact is on disk in the session's repo with the rewritten frontmatter.
+  const relPath = /\.otacon\/plans\/\S+\.md/.exec(noted ?? "")?.[0];
+  expect(relPath, "approved note surfaces the project-copy path").toBeTruthy();
+  // The project copy is on disk in the session's repo with the rewritten frontmatter.
   const artifact = readFileSync(join(session.repo, relPath!), "utf8");
   expect(artifact).toContain("status: approved");
   expect(artifact).toContain("## Interview");

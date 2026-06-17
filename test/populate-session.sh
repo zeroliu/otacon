@@ -187,8 +187,9 @@ fi
 # So the hide-approved work is demoable: it is gone from the switcher (§7) and
 # grouped under home's collapsed `approved` section (§10). The redirect (§12) is
 # a manual approve of the MAIN (active) session in the UI. Force-approve here is
-# what the UI does after its unresolved-thread warning; the artifact lands in the
-# scratch repo's docs/plans/ (never committed — the agent commits in the real flow).
+# what the UI does after its unresolved-thread warning; this is a plain Save, so
+# the project copy lands in the scratch repo's .otacon/plans/ (gitignored) and a
+# canonical copy in the home archive (~/.otacon/sessions/) — otacon never commits.
 APPROVED_SID="$("$OTACON" start --title "demo: $FLAVOR (approved)" 2>/dev/null | jf .session)"
 if [[ "$APPROVED_SID" == otc_* ]]; then
   mkdir -p ".otacon/$APPROVED_SID"

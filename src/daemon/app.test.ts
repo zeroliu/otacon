@@ -1961,7 +1961,7 @@ describe("comment & approve: send-to-agent deferred finalize (comment-and-approv
     });
   });
 
-  test("send + Commit & Implement carries the implement choice through the finalize", async () => {
+  test("send + Implement carries the implement choice through the finalize", async () => {
     const session = mintSession();
     await r1WithOpenComment(session.id);
     const sent = await approve(session.id, { sendOpenComments: true, implement: true });
@@ -2034,7 +2034,7 @@ describe("comment & approve: send-to-agent deferred finalize (comment-and-approv
     expect(await statusOf(session.id)).toBe("finalizing");
     await app.request(`/api/sessions/${session.id}/events`); // drain the final batch
 
-    // "Commit anyway" (force) while finalizing commits the current revision now.
+    // "Finalize anyway" (force) while finalizing writes the current revision now.
     const res = await approve(session.id, { force: true });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { path: string };
@@ -2044,7 +2044,7 @@ describe("comment & approve: send-to-agent deferred finalize (comment-and-approv
     expect(artifact).not.toContain("## Review notes"); // force-dropped, never folded in
   });
 
-  test("the force escape mid-finalize honors the original Commit & Implement choice", async () => {
+  test("the force escape mid-finalize honors the original Implement choice", async () => {
     const session = mintSession();
     await r1WithOpenComment(session.id);
     await approve(session.id, { sendOpenComments: true, implement: true });

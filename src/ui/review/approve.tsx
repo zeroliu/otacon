@@ -1,12 +1,15 @@
 // The approve flow (DESIGN.md §6 step 6, §9, §10, §12): a deliberate control —
 // no keyboard shortcut exists, on purpose — opening a confirm sheet whose
-// copy is honest about what happens. Two primary actions:
-//   • commit plan — the daemon writes rN into docs/plans/ (the exact filename
-//     is picked at approve time, so only the folder is promised), the agent
-//     commits it, and the session is over.
-//   • commit & implement — same finalize+commit, but the agent then keeps
-//     building (worktree → per-phase implement+review loop → PR); the session
-//     stays live as `implementing` rather than ending.
+// copy is honest about what happens. otacon NEVER git-commits the plan; it only
+// chooses where the file is written. Two primary actions:
+//   • save plan — the daemon writes the approved plan to your home archive
+//     (~/.otacon/sessions/) AND a copy into this project's plans dir (default
+//     the gitignored .otacon/plans). otacon does not commit it — you commit it
+//     yourself if you want. The session is over.
+//   • implement — same finalize, but the plan stays in the home archive only
+//     (nothing into the project) and the same agent builds it (worktree →
+//     per-phase implement+review loop → PR); the session stays live as
+//     `implementing` rather than ending, and asks you on the first blocker.
 // Unresolved threads answer 409 with the count; the sheet flips to its amber
 // warning state with two ways past it (re-firing the SAME variant the user
 // picked — the warn stage remembers it):
@@ -14,10 +17,11 @@
 //     to the agent for one fold-in pass; the daemon defers the finalize
 //     (`finalizing`) and the SSE frame drives the screen, so the dialog just
 //     closes. The reviewer is done the instant they click.
-//   • commit anyway — force-drop the open threads and finalize now.
-// A plain approve ends read-only behind the quiet approved notice; an implement
-// approve hands off to the live `implementing` frame; a send-to-agent approve
-// shows the read-only finalizing notice (ApprovingNote) until the agent commits.
+//   • save anyway / implement anyway — force-drop the open threads and finalize.
+// A Save ends read-only behind the quiet approved notice (naming the saved
+// location); an Implement hands off to the live `implementing` frame; a
+// send-to-agent approve shows the read-only finalizing notice (ApprovingNote)
+// until the agent finalizes.
 
 import { useEffect, useState } from "react";
 import type { ApproveOptions, ApproveResult } from "../api";
@@ -25,28 +29,33 @@ import { postApprove } from "../api";
 
 type Stage =
   | { kind: "confirm" }
-  // The drafts gate (DESIGN.md §10, D1/D3): a commit variant was picked while
-  // unsent drawer drafts are staged. Interjects before finalize so they're
+  // The drafts gate (DESIGN.md §10, D1/D3): a Save/Implement variant was picked
+  // while unsent drawer drafts are staged. Interjects before finalize so they're
   // never silently dropped; carries the variant on `pendingImplement`.
   | { kind: "drafts" }
   | { kind: "warn"; unresolved: number; openComments: number };
 
 /**
  * The next UI move from an approve POST result, factored out so the direct
- * "fire" path and the drafts "Send & commit" flush-then-fold path share one
+ * "fire" path and the drafts "Send & approve" flush-then-fold path share one
  * honest translation (and it stays unit-testable without a live daemon). A
- * `force` caller never bounces to the warn stage: a forced commit drops the
+ * `force` caller never bounces to the warn stage: a forced approve drops the
  * open threads on purpose, so its 409 surfaces as an error, not a second warn.
+ * `approved` carries both the reported `path` (Save = the project copy, Implement
+ * = the home copy) and the absolute `home` archive path, so the note is honest
+ * about every place the plan landed.
  */
 export type ApproveMove =
-  | { kind: "approved"; path: string }
+  | { kind: "approved"; path: string; home: string }
   | { kind: "finalizing" }
   | { kind: "warn"; unresolved: number; openComments: number }
   | { kind: "error"; message: string };
 
 export function approveMove(result: ApproveResult, force: boolean): ApproveMove {
   if (result.ok) {
-    return "finalizing" in result ? { kind: "finalizing" } : { kind: "approved", path: result.path };
+    return "finalizing" in result
+      ? { kind: "finalizing" }
+      : { kind: "approved", path: result.path, home: result.home };
   }
   if (!force && result.code === "E_UNRESOLVED_THREADS" && result.unresolved !== undefined) {
     return { kind: "warn", unresolved: result.unresolved, openComments: result.openComments ?? 0 };
@@ -79,19 +88,21 @@ export function ApproveDialog({
   onDiscardDrafts: () => void;
   onClose: () => void;
   /**
-   * Receives the artifact's repo-relative path; the session frame flips the UI.
-   * `implement` is the chosen variant — the caller leaves the screen interactive
-   * for it (the `implementing` frame drives the UI), read-only for a plain end.
+   * Receives the saved plan's reported path (Save = the project copy, Implement
+   * = the home copy) plus the absolute `home` archive path, so the approved note
+   * can name both. The session frame flips the UI; `implement` is the chosen
+   * variant — the caller leaves the screen interactive for it (the `implementing`
+   * frame drives the UI), read-only for a plain Save end.
    */
-  onApproved: (path: string, implement: boolean) => void;
+  onApproved: (path: string, home: string, implement: boolean) => void;
 }) {
   const [stage, setStage] = useState<Stage>({ kind: "confirm" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // The variant a warn-stage action must re-fire. Set when the unresolved-threads
-  // warning bounces the first attempt, so both "Send to agent" and "Commit
+  // warning bounces the first attempt, so both "Send to agent" and "Save/Implement
   // anyway" carry the same implement flag the user chose at the confirm stage
-  // (rather than silently downgrading an Approve & Implement to a plain approve).
+  // (rather than silently downgrading an Implement to a plain Save).
   const [pendingImplement, setPendingImplement] = useState(false);
 
   useEffect(() => {
@@ -111,7 +122,7 @@ export function ApproveDialog({
   const apply = (move: ApproveMove, implement: boolean) => {
     switch (move.kind) {
       case "approved":
-        onApproved(move.path, implement);
+        onApproved(move.path, move.home, implement);
         return;
       case "finalizing":
         onClose();
@@ -136,12 +147,12 @@ export function ApproveDialog({
     });
   };
 
-  // A commit variant was chosen (Commit Plan / Commit & Implement). With unsent
-  // drawer drafts staged, interject the drafts gate carrying the variant (D1/D3);
-  // a clean drawer finalizes straight away.
+  // An approve variant was chosen (Save Plan / Implement). With unsent drawer
+  // drafts staged, interject the drafts gate carrying the variant (D1/D3); a
+  // clean drawer finalizes straight away.
   const pickVariant = (implement: boolean) => {
     if (busy) return;
-    setError(null); // a prior sendAndCommit error bounced us here; don't carry it in
+    setError(null); // a prior sendAndApprove error bounced us here; don't carry it in
     if (pendingCount > 0) {
       setPendingImplement(implement);
       setStage({ kind: "drafts" });
@@ -150,15 +161,15 @@ export function ApproveDialog({
     fire({ implement });
   };
 
-  // Send & commit (D2): flush the staged drafts into real OPEN threads, then fold
+  // Send & approve (D2): flush the staged drafts into real OPEN threads, then fold
   // them in through the existing comment & approve path in one click. Busy stays
   // lit across both legs (the `finally` is the single release, so even a thrown
   // post can't strand it). A failed flush keeps the drafts (never sent) and shows
   // the reason. Once the flush lands the drafts are real threads (not lost), so a
   // later approve *error* drops back to confirm with the reason shown (retry the
-  // commit, nothing to re-send); a residual 409 (the open comments were resolved
+  // approve, nothing to re-send); a residual 409 (the open comments were resolved
   // out from under the flush) re-asks on the warn stage through `apply`.
-  const sendAndCommit = () => {
+  const sendAndApprove = () => {
     if (busy) return;
     setBusy(true);
     setError(null);
@@ -184,10 +195,10 @@ export function ApproveDialog({
     })();
   };
 
-  // Discard & commit: drop the browser-only drafts (irreversible) and finalize the
+  // Discard & approve: drop the browser-only drafts (irreversible) and finalize the
   // chosen variant. Server-side open threads, if any, still route through the
   // normal warn on the fire below; only the local drafts are dropped here.
-  const discardAndCommit = () => {
+  const discardAndApprove = () => {
     if (busy) return;
     onDiscardDrafts();
     fire({ implement: pendingImplement });
@@ -229,15 +240,17 @@ export function ApproveDialog({
         {stage.kind === "confirm" ? (
           <>
             <p className="approve-copy">
-              Finalize <strong>r{revision}</strong> → <code>docs/plans/</code>; the agent commits
-              it. Then either end here, or keep the agent building.
+              Finalize <strong>r{revision}</strong>. otacon never commits it — you commit it
+              yourself if you want. Either save the plan, or hand the same agent the build.
             </p>
             <p className="approve-sub">
-              <strong>Commit Plan</strong> stops after the commit — no revisions after this, the
-              session is over. <strong>Commit &amp; Implement</strong> hands the same agent the
-              build: it opens a worktree and walks the phases (implement → review → fix → commit),
-              opening a PR when every phase is green. The session stays live as{" "}
-              <em>implementing</em> and asks you on the first blocker.
+              <strong>Save Plan</strong> writes the plan to your home archive (
+              <code>~/.otacon/sessions/</code>) and a copy into this project&apos;s plans dir
+              (default <code>.otacon/plans</code>); the session is over.{" "}
+              <strong>Implement</strong> keeps the plan in the home archive (nothing into the
+              project) and hands the same agent the build: it opens a worktree and walks the phases
+              (implement → review → fix), opening a PR when every phase is green. The session stays
+              live as <em>implementing</em> and asks you on the first blocker.
             </p>
           </>
         ) : stage.kind === "drafts" ? (
@@ -246,15 +259,15 @@ export function ApproveDialog({
               <strong>{pendingCount}</strong> staged{" "}
               {pendingCount === 1 ? "comment" : "comments"} in the drawer{" "}
               {pendingCount === 1 ? "hasn't" : "haven't"} been sent yet. Send{" "}
-              {pendingCount === 1 ? "it" : "them"} to the agent with this commit, or discard{" "}
+              {pendingCount === 1 ? "it" : "them"} to the agent with this approve, or discard{" "}
               {pendingCount === 1 ? "it" : "them"}.
             </p>
             <p className="approve-sub">
-              <strong>Send &amp; commit</strong> flushes{" "}
+              <strong>Send &amp; approve</strong> flushes{" "}
               {pendingCount === 1 ? "the comment" : `the ${pendingCount} comments`} as open
               threads and hands {pendingCount === 1 ? "it" : "them"} to the agent to fold in, then{" "}
-              {pendingImplement ? "commits and starts the build" : "commits"}.{" "}
-              <strong>Discard &amp; commit</strong> drops {pendingCount === 1 ? "it" : "them"} from
+              {pendingImplement ? "saves the plan and starts the build" : "saves the plan"}.{" "}
+              <strong>Discard &amp; approve</strong> drops {pendingCount === 1 ? "it" : "them"} from
               your browser (this can't be undone) and finalizes the plan as it stands.
             </p>
           </>
@@ -273,13 +286,13 @@ export function ApproveDialog({
                     ? "the open comment"
                     : `the ${stage.openComments} open comments`}{" "}
                   back for one fold-in pass, then{" "}
-                  {pendingImplement ? "commits and starts the build" : "commits"} — you're done the
+                  {pendingImplement ? "saves and starts the build" : "saves the plan"} — you're done the
                   moment you click, and the agent's resolutions land in the plan's Review notes.{" "}
                 </>
               )}
               {pendingImplement
-                ? "Commit & Implement anyway finalizes the plan as it stands and starts the build; the open threads close unaddressed."
-                : "Commit anyway finalizes the plan as it stands; the open threads end with the session."}
+                ? "Implement anyway finalizes the plan as it stands and starts the build; the open threads close unaddressed."
+                : "Save anyway finalizes the plan as it stands; the open threads end with the session."}
             </p>
           </>
         )}
@@ -298,7 +311,7 @@ export function ApproveDialog({
                 disabled={busy}
                 onClick={() => pickVariant(false)}
               >
-                {busy ? "committing…" : "Commit Plan"}
+                {busy ? "saving…" : "Save Plan"}
               </button>
               <button
                 type="button"
@@ -306,7 +319,7 @@ export function ApproveDialog({
                 disabled={busy}
                 onClick={() => pickVariant(true)}
               >
-                {busy ? "starting…" : "Commit & Implement"}
+                {busy ? "starting…" : "Implement"}
               </button>
             </>
           ) : stage.kind === "drafts" ? (
@@ -318,17 +331,17 @@ export function ApproveDialog({
                 type="button"
                 className="btn btn-force"
                 disabled={busy}
-                onClick={discardAndCommit}
+                onClick={discardAndApprove}
               >
-                {busy ? (pendingImplement ? "starting…" : "committing…") : "Discard & commit"}
+                {busy ? (pendingImplement ? "starting…" : "saving…") : "Discard & approve"}
               </button>
               <button
                 type="button"
                 className="btn btn-send"
                 disabled={busy}
-                onClick={sendAndCommit}
+                onClick={sendAndApprove}
               >
-                {busy ? "sending…" : "Send & commit"}
+                {busy ? "sending…" : "Send & approve"}
               </button>
             </>
           ) : (
@@ -347,17 +360,17 @@ export function ApproveDialog({
                 type="button"
                 className="btn btn-force"
                 disabled={busy}
-                // Re-fire the SAME variant the user chose: a Commit & Implement
-                // that hit unresolved threads must still implement on retry.
+                // Re-fire the SAME variant the user chose: an Implement that hit
+                // unresolved threads must still implement on retry.
                 onClick={() => fire({ force: true, implement: pendingImplement })}
               >
                 {busy
                   ? pendingImplement
                     ? "starting…"
-                    : "committing…"
+                    : "saving…"
                   : pendingImplement
-                    ? "Commit & Implement anyway"
-                    : "Commit anyway"}
+                    ? "Implement anyway"
+                    : "Save anyway"}
               </button>
             </>
           )}
@@ -368,11 +381,12 @@ export function ApproveDialog({
 }
 
 /**
- * The quiet post-approve notice (§10): the exact artifact path right after
- * approving (this tab heard the response); after a reload the path lives in
- * the committed repo, so the notice falls back to the destination folder.
+ * The quiet post-approve notice (§10): the saved plan's location right after
+ * approving (this tab heard the response) — the project copy under the plans
+ * dir, plus the home archive. otacon never commits it; after a reload the live
+ * path is gone, so the notice falls back to naming the home archive folder.
  */
-export function ApprovedNote({ path }: { path: string | null }) {
+export function ApprovedNote({ path, home }: { path: string | null; home?: string | null }) {
   return (
     <aside className="approved-note" role="status">
       <span className="approved-check" aria-hidden="true">
@@ -380,7 +394,8 @@ export function ApprovedNote({ path }: { path: string | null }) {
       </span>
       <span className="approved-word">approved</span>
       <span className="approved-path">
-        → {path ?? "docs/plans/ (committed by the agent)"}
+        → {path ?? "~/.otacon/sessions/ (home archive)"}
+        {path !== null && home ? ` · archived in ${home}` : ""}
       </span>
       <span className="approved-over">session over · read-only</span>
     </aside>
@@ -392,14 +407,14 @@ export function ApprovedNote({ path }: { path: string | null }) {
  * reviewer sees the instant they hit "Send to agent" — the agent is folding the
  * open comments in and will commit on its next pass, after which the SSE frame
  * flips the screen to the approved notice (or stays live as `implementing`). A
- * hung fold-in is escapable: "Commit anyway" force-drops the still-open threads
+ * hung fold-in is escapable: "Finalize anyway" force-drops the still-open threads
  * and finalizes the current revision now (D7).
  */
 export function ApprovingNote({ sessionId }: { sessionId: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const commitAnyway = () => {
+  const finalizeAnyway = () => {
     if (busy) return;
     setBusy(true);
     setError(null);
@@ -426,8 +441,8 @@ export function ApprovingNote({ sessionId }: { sessionId: string }) {
       </span>
       <span className="approved-word">approving</span>
       <span className="approving-detail">agent finalizing — folding open comments in…</span>
-      <button type="button" className="approving-escape" disabled={busy} onClick={commitAnyway}>
-        {busy ? "committing…" : "Commit anyway"}
+      <button type="button" className="approving-escape" disabled={busy} onClick={finalizeAnyway}>
+        {busy ? "finalizing…" : "Finalize anyway"}
       </button>
       {error !== null && <span className="approving-error">{error}</span>}
     </aside>

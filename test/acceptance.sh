@@ -12,8 +12,8 @@
 #   LOOP      the full DESIGN.md §6 loop on the real auto-spawned daemon:
 #             start → grill (ask/answer) → draft (lint reject, then accept) →
 #             review (comment batch) → revise (L5 reject, then resolve) →
-#             approve (artifact write-out, git commit) → post-approve refusal
-#             → clean (archive + registry prune).
+#             approve (home archive + gitignored project copy, otacon never
+#             commits) → post-approve refusal → clean (archive + registry prune).
 #   INVARIANT structural grep of dist/ for any model/LLM network call (§13).
 #
 # Hermetic: temp HOME, temp OTACON_HOME, temp OTACON_PORT, a fresh `git init`
@@ -114,7 +114,10 @@ SID="$(json_field session "$TMP/start.json")"
 [[ "$SID" == otc_* ]] || fail "start printed no otc_ session id"
 DAEMON_PID="$(curl -sf "$BASE/api/health" | node -pe "JSON.parse(require('fs').readFileSync(0,'utf8')).pid")"
 [ -d "$REPO/.otacon/$SID" ] || fail ".otacon/<session> dir not created"
-grep -qx '\.otacon/' .gitignore || fail ".otacon/ was not appended to .gitignore"
+# Phase 1: a SELECTIVE ignore — .otacon/* hides working state while
+# !.otacon/config.json keeps the committed, team-shared project config tracked.
+grep -qx '\.otacon/\*' .gitignore || fail ".otacon/* was not appended to .gitignore"
+grep -qx '!\.otacon/config\.json' .gitignore || fail "!.otacon/config.json was not appended to .gitignore"
 grep -qx 'node_modules/' .gitignore || fail "existing .gitignore content was clobbered"
 grep -q 'appended .otacon/' "$TMP/start.err" || fail "no .gitignore notice on stderr"
 grep -q "$SID" "$OTACON_HOME/registry.json" || fail "session missing from the registry"
@@ -257,7 +260,7 @@ if (byId["summary"]?.status !== "unchanged" || byId["summary"].hunks.length) pro
 ' "$TMP/diff.json" || fail "diff vs last-reviewed did not flag phase-1 changed (summary unchanged)"
 ok "revise: r2 stored with resolutions+changelog; t1 resolved; diff flags phase-1 vs reviewed r1"
 
-# --- 10. approve: unresolved-thread path is covered; resolved → write + commit -
+# --- 10. approve: unresolved-thread path is covered; resolved → Save write-out -
 # Sanity: an extra open comment makes approve refuse 409 (the warned path). The
 # UI hits this, warns, then forces — so we exercise both the refusal and the
 # forced write. We drain the queued comment with its own wait first, so the
@@ -272,7 +275,8 @@ HTTP=$(curl -s -o "$TMP/approve409.json" -w '%{http_code}' \
 [ "$(json_field error.code "$TMP/approve409.json")" = "E_UNRESOLVED_THREADS" ] || fail "wrong 409 code"
 [ "$(json_field unresolved "$TMP/approve409.json")" = "1" ] || fail "409 should count 1 unresolved thread"
 # Now approve (force, as the UI does after the warning) with a parked wait — the
-# agent's side that turns the approval into a committed plan. Park, then force.
+# agent's side that hears the approval (a plain Save: home archive + project
+# copy, otacon never commits). Park, then force.
 otacon wait --timeout 30 > "$TMP/approve-wait.json" &
 WAIT_PID=$!
 sleep 0.5 # let the wait park on the (now-empty) queue before approve enqueues
@@ -280,7 +284,10 @@ HTTP=$(curl -s -o "$TMP/approved.json" -w '%{http_code}' \
   -X POST "$BASE/api/sessions/$SID/approve" -H 'content-type: application/json' -d '{"force":true}')
 [ "$HTTP" = "200" ] || fail "forced approve answered $HTTP"
 ART_PATH="$(json_field path "$TMP/approved.json")"
-[[ "$ART_PATH" == docs/plans/*-acceptance-demo.md ]] || fail "unexpected artifact path $ART_PATH"
+[[ "$ART_PATH" == .otacon/plans/*-acceptance-demo.md ]] || fail "unexpected artifact path $ART_PATH"
+HOME_ART="$(json_field home "$TMP/approved.json")"
+[[ "$HOME_ART" == "$OTACON_HOME/sessions/$SID/"*-acceptance-demo.md ]] \
+  || fail "unexpected home archive path $HOME_ART"
 wait "$WAIT_PID" || fail "parked approve wait exited nonzero"
 WAIT_PID=""
 # Drain forward until the approved event surfaces (any stray queued event first).
@@ -290,43 +297,44 @@ for _ in $(seq 1 5); do
 done
 [ "$(json_field event "$TMP/approve-wait.json")" = "approved" ] || fail "wait did not deliver approved"
 [ "$(json_field path "$TMP/approve-wait.json")" = "$ART_PATH" ] || fail "approved event path mismatch"
-[ -f "$REPO/$ART_PATH" ] || fail "artifact file missing at $ART_PATH"
+[ "$(json_field home "$TMP/approve-wait.json")" = "$HOME_ART" ] || fail "approved event home mismatch"
+[ -f "$REPO/$ART_PATH" ] || fail "project copy missing at $ART_PATH"
 grep -q '^status: approved$' "$REPO/$ART_PATH" || fail "artifact frontmatter is not approved"
 grep -q '^revision: 2$' "$REPO/$ART_PATH" || fail "artifact revision not corrected to 2"
 grep -q '^## Interview$' "$REPO/$ART_PATH" || fail "artifact has no Interview section"
 grep -q '^### q1 — RS256 or HS256 for token signing?$' "$REPO/$ART_PATH" || fail "Interview missing q1"
 grep -q '^- Answer: RS256 — verifiers only need the public key$' "$REPO/$ART_PATH" \
   || fail "Interview missing q1's answer transcript line"
-ok "approve: 409 on the open thread, then force wrote $ART_PATH (approved, r2, Interview); wait got it"
+# The canonical home archive carries the same approved artifact (the permanent store).
+[ -f "$HOME_ART" ] || fail "home archive copy missing at $HOME_ART"
+grep -q '^status: approved$' "$HOME_ART" || fail "home archive frontmatter is not approved"
+grep -q '^## Interview$' "$HOME_ART" || fail "home archive has no Interview section"
+ok "approve: 409 on the open thread, then force wrote $ART_PATH + home archive (approved, r2, Interview); wait got it"
 
-# --- 11. the agent commits the plan; .otacon working state is NOT committed ----
-# Before the commit, the only changes otacon introduced in the working tree are
-# the approved plan (new, untracked) and the `.otacon/` ignore rule `start`
-# appended to .gitignore — nothing from .otacon/ itself is ever visible to git
-# (it is ignored). A real agent commits both: the plan IS the deliverable, and
-# the ignore rule belongs in the repo.
-git status --porcelain -uall > "$TMP/pre-commit-status.txt" # -uall: no dir collapse
+# --- 11. otacon never commits; the project copy is zero-footprint (gitignored) -
+# The new model (D2/D3): otacon writes the Save-time project copy under the
+# default `.otacon/plans` and NEVER git-commits it — the user controls git. With
+# the default plans.dir under the gitignored `.otacon/*`, the project copy is
+# invisible to git: the ONLY working-tree change otacon left is the `.otacon/`
+# ignore rule `start` appended to .gitignore (committing that is the user's call,
+# but the plan copy itself never enters git).
+git status --porcelain -uall > "$TMP/post-approve-status.txt" # -uall: no dir collapse
 node -e '
 // NB: never .trim() the whole blob — porcelain XY status is two columns + a
 // space (" M .gitignore"), so a leading trim would eat the first path’s dot.
 const lines = require("fs").readFileSync(process.argv[1], "utf8").split("\n").filter(Boolean);
-const art = process.argv[2];
-// Exactly two entries: the new artifact (??) and the modified .gitignore ( M).
 const paths = lines.map((l) => l.slice(3));
-if (lines.length !== 2) { console.error("unexpected dirty entries:\n" + lines.join("\n")); process.exit(1); }
-if (!paths.includes(art)) { console.error("artifact not in working tree as a change"); process.exit(2); }
-if (!paths.includes(".gitignore")) { console.error(".gitignore change missing"); process.exit(3); }
+// Exactly one entry: the modified .gitignore ( M). The project copy lives under
+// the gitignored .otacon/, so it is NEVER a git-visible change.
+if (lines.length !== 1) { console.error("unexpected dirty entries:\n" + lines.join("\n")); process.exit(1); }
+if (!paths.includes(".gitignore")) { console.error(".gitignore change missing"); process.exit(2); }
 // The decisive invariant: nothing under .otacon/ is ever a git-visible change.
-if (paths.some((p) => p.startsWith(".otacon/"))) { console.error(".otacon/ leaked into git!"); process.exit(4); }
-' "$TMP/pre-commit-status.txt" "$ART_PATH" || fail "working tree before commit was not {plan, .gitignore} only"
-git add "$ART_PATH" .gitignore
-git commit -q -m "plan: acceptance-demo"
-git status --porcelain > "$TMP/git-status.txt"
-[ ! -s "$TMP/git-status.txt" ] || fail "working tree not clean after committing the plan: $(cat "$TMP/git-status.txt")"
-git ls-files > "$TMP/tracked.txt"
-grep -q "^$ART_PATH$" "$TMP/tracked.txt" || fail "the approved plan was not committed"
-grep -q '^\.otacon/' "$TMP/tracked.txt" && fail ".otacon working state was committed (must be gitignored)"
-ok "agent committed the plan clean; .otacon/ working state stayed out of git"
+if (paths.some((p) => p.startsWith(".otacon/"))) { console.error(".otacon/ leaked into git!"); process.exit(3); }
+' "$TMP/post-approve-status.txt" || fail "working tree after approve was not {.gitignore} only"
+# The project copy is genuinely on disk, just gitignored (zero footprint).
+[ -f "$REPO/$ART_PATH" ] || fail "project copy missing on disk at $ART_PATH"
+git check-ignore -q "$ART_PATH" || fail "the project copy under .otacon/plans is not gitignored"
+ok "otacon never committed; the .otacon/plans project copy stayed out of git (zero footprint)"
 
 # --- 12. post-approve: status shows approved; further submit refused -----------
 otacon status > "$TMP/status.json"
@@ -358,9 +366,13 @@ otacon clean > "$TMP/clean.json" 2> /dev/null
 [ -d "$REPO/.otacon/archive/$SID" ] || fail "session dir was not archived"
 [ -f "$REPO/.otacon/archive/$SID/session.json" ] || fail "archived dir lost its state files"
 [ ! -d "$REPO/.otacon/$SID" ] || fail "live session dir still exists after clean"
-[ -f "$REPO/$ART_PATH" ] || fail "clean must never touch docs/plans artifacts"
+# clean archives .otacon/<id>/ session dirs but must never touch the project plan
+# copy (.otacon/plans) nor the permanent home archive (~/.otacon/sessions/).
+[ -f "$REPO/$ART_PATH" ] || fail "clean must never touch the .otacon/plans project copy"
+[ -d "$REPO/.otacon/plans" ] || fail "clean archived the .otacon/plans dir (must stay)"
+[ -f "$HOME_ART" ] || fail "clean must never touch the home archive (~/.otacon/sessions/)"
 curl -s "$BASE/api/sessions" | grep -q "$SID" && fail "registry still lists the cleaned session"
-ok "clean: archived .otacon/$SID → .otacon/archive/, pruned the registry, kept docs/plans"
+ok "clean: archived .otacon/$SID → .otacon/archive/, pruned the registry, kept the .otacon/plans copy + home archive"
 
 echo "# ── ACT 3: ZERO-API-SPEND INVARIANT (structural) ─────────────────────"
 

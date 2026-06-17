@@ -1084,6 +1084,11 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 ## Approve archives logically; the artifact appends an "## Interview" section
 
+> **Superseded** by "Home plan store + Save vs Implement; otacon never commits" —
+> the artifact now lands in `~/.otacon/sessions/<id>/` (canonical) plus, on Save, a
+> project copy under `plans.dir`; otacon no longer writes `docs/plans/` or commits.
+> The "## Interview" append and the collision-suffix naming still hold.
+
 - **Decision:** Approve writes `docs/plans/YYYY-MM-DD-<slug>.md` (local approve
   date; slug from the session title, `plan` fallback; name collisions suffix
   `-2`, `-3`, … rather than overwrite) containing the final revision with
@@ -2043,6 +2048,11 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   own tooling.
 
 ## A successful build archives its plan via a PR commit; the agent owns the move
+
+> **Superseded** by "Dropped the docs/plans archive step from the Implement loop" —
+> the plan is no longer committed to `docs/plans/`, so there is nothing to `git mv`
+> into `docs/plans/archive/`. The build branches off the default-branch HEAD and
+> reads the plan from the home copy; no archive commit rides in the PR.
 
 - **Decision:** On a successful Approve & Implement build, the implementing agent
   `git mv`s the committed plan `docs/plans/YYYY-MM-DD-<slug>.md` into `docs/plans/archive/`

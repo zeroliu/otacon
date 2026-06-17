@@ -3463,8 +3463,8 @@ code {
   filter: brightness(1.08);
 }
 
-/* Approve & Implement (§12): the second primary action — the implementing tone
- * so it reads as a sibling of "Commit Plan", visually the move that keeps the
+/* Implement (§12): the second primary action — the implementing tone
+ * so it reads as a sibling of "Save Plan", visually the move that keeps the
  * agent building rather than the one that stops. */
 .btn-implement {
   border: 1px solid transparent;
@@ -3488,7 +3488,7 @@ code {
 
 /* Send to agent (comment & approve, §12): the recommended way past the warning —
  * fold the open comments in rather than drop them — so it carries the primary
- * approved ink, leaving "Commit anyway" the quieter amber escape beside it. */
+ * approved ink, leaving "Save/Implement anyway" the quieter amber escape beside it. */
 .btn-send {
   border: 1px solid transparent;
   background: var(--chip-approved-ink);
@@ -3615,9 +3615,9 @@ code {
 }
 
 /* The read-only finalizing notice (comment & approve, §12, D2): the agent is
- * folding the open comments in before the commit — the implementing palette
- * (active work) plus a breathing spinner, with the "Commit anyway" escape (D7)
- * docked at the end. Flips to the approved notice once the agent commits. */
+ * folding the open comments in before the finalize — the implementing palette
+ * (active work) plus a breathing spinner, with the "Finalize anyway" escape (D7)
+ * docked at the end. Flips to the approved notice once the agent finalizes. */
 .approving-note {
   display: flex;
   align-items: baseline;

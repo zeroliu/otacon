@@ -15,7 +15,7 @@ const fixturesDir = join(dirname(fileURLToPath(import.meta.url)), "..", "fixture
 export interface Session {
   id: string;
   title: string;
-  /** The throwaway repo root — approve's docs/plans/ artifact lands here. */
+  /** The throwaway repo root — a Save's .otacon/plans project copy lands here. */
   repo: string;
 }
 

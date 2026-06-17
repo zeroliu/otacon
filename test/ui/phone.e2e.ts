@@ -171,7 +171,7 @@ test("375px: approve from the sticky bar walks the confirm sheet and ends the se
   const sheetBox = await page.locator(".approve-sheet").boundingBox();
   expect(sheetBox).not.toBeNull();
   expect(sheetBox!.y + sheetBox!.height).toBeGreaterThan(PHONE.height * 0.8); // thumb range
-  await page.locator(".btn-approve", { hasText: "finalize & end" }).click();
+  await page.locator(".btn-approve", { hasText: "Save Plan" }).click();
 
   // The session frame flips the screen read-only: note up, controls gone.
   await expect(page.locator(".approved-note")).toBeVisible();
