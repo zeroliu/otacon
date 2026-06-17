@@ -522,7 +522,7 @@ export type ConfigScopeName = "user" | "project" | "project.local";
 /**
  * GET /api/config payload (DESIGN.md §6 config surface): the full field schema
  * plus each scope's target path and current values. `user` is always present;
- * `project` (committed) and `project.local` (gitignored) only when an absolute
+ * `project` (team-shared) and `project.local` (personal) only when an absolute
  * `repo` was supplied.
  */
 export interface ConfigPayload {

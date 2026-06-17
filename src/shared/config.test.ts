@@ -42,7 +42,7 @@ function writeRepo(config: unknown): void {
   writeFileSync(repoConfigPath(repo), JSON.stringify(config));
 }
 
-/** The gitignored personal override (`<repo>/.otacon/config.local.json`). */
+/** The personal override (`<repo>/.otacon/config.local.json`). */
 function writeProjectLocal(config: unknown): void {
   mkdirSync(join(repo, ".otacon"), { recursive: true });
   writeFileSync(repoLocalConfigPath(repo), JSON.stringify(config));
@@ -321,7 +321,7 @@ describe("repo config paths", () => {
     expect(repoConfigPath(repo)).toBe(join(repo, ".otacon", "config.json"));
   });
 
-  test("repoLocalConfigPath is the gitignored <repo>/.otacon/config.local.json", () => {
+  test("repoLocalConfigPath is the personal <repo>/.otacon/config.local.json", () => {
     expect(repoLocalConfigPath(repo)).toBe(join(repo, ".otacon", "config.local.json"));
   });
 });

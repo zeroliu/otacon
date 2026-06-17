@@ -370,8 +370,8 @@ function overlayConfig(base: OtaconConfig, raw: unknown, source: string): Otacon
 
 /**
  * defaults ← user (`$OTACON_HOME/config.json`) ← project
- * (`<repo>/.otacon/config.json`, committed) ← project.local
- * (`<repo>/.otacon/config.local.json`, gitignored). Closest wins. Loaded fresh
+ * (`<repo>/.otacon/config.json`, team-shared) ← project.local
+ * (`<repo>/.otacon/config.local.json`, personal). Closest wins. Loaded fresh
  * on every use so tuning takes effect immediately. Each file is overlaid field
  * by field against CONFIG_SCHEMA (budgets, activity, notifications, worktree,
  * plans).

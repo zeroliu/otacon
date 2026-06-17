@@ -1,11 +1,10 @@
 // The approve flow (DESIGN.md §6 step 6, §9, §10, §12): a deliberate control —
 // no keyboard shortcut exists, on purpose — opening a confirm sheet whose
-// copy is honest about what happens. otacon NEVER git-commits the plan; it only
-// chooses where the file is written. Two primary actions:
+// copy is honest about what happens. Two primary actions:
 //   • save plan — the daemon writes the approved plan to your home archive
 //     (~/.otacon/sessions/) AND a copy into this project's plans dir (default
-//     the gitignored .otacon/plans). otacon does not commit it — you commit it
-//     yourself if you want. The session is over.
+//     .otacon/plans). You commit the project copy if you want it in git. The
+//     session is over.
 //   • implement — same finalize, but the plan stays in the home archive only
 //     (nothing into the project) and the same agent builds it (worktree →
 //     per-phase implement+review loop → PR); the session stays live as

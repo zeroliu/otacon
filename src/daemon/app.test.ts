@@ -2410,7 +2410,7 @@ describe("config API", () => {
     expect(body.scopes.project?.path).toBe(repoConfigPath(repo));
     expect(body.scopes.project?.repo).toBe(repo);
     expect(body.scopes.project?.values).toEqual({ budgets: { summaryLines: 9 } });
-    // Gitignored personal override → config.local.json.
+    // Personal override → config.local.json.
     expect(body.scopes["project.local"]?.path).toBe(repoLocalConfigPath(repo));
     expect(body.scopes["project.local"]?.repo).toBe(repo);
     expect(body.scopes["project.local"]?.values).toEqual({ budgets: { summaryLines: 11 } });
@@ -2489,7 +2489,7 @@ describe("config API", () => {
     expect(onDisk).toEqual({ notifications: { desktop: false } });
   });
 
-  test("POST scope=project.local writes the gitignored <repo>/.otacon/config.local.json", async () => {
+  test("POST scope=project.local writes the personal <repo>/.otacon/config.local.json", async () => {
     const res = await postJson("/api/config", {
       scope: "project.local",
       repo,

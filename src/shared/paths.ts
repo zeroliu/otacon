@@ -47,21 +47,19 @@ export function homeSessionDir(id: string): string {
 }
 
 /**
- * The COMMITTED, team-shared project config (`<repo>/.otacon/config.json`).
- * The selective `.otacon/` gitignore (`.otacon/*` + `!.otacon/config.json`)
- * keeps this one file tracked, mirroring Claude Code's `settings.json`. It
- * overrides the global (user) config for this repo and is in turn overridden by
- * the local override below.
+ * The team-shared project config (`<repo>/.otacon/config.json`), mirroring
+ * Claude Code's `settings.json`. It overrides the global (user) config for this
+ * repo and is in turn overridden by the local override below.
  */
 export function repoConfigPath(repoRoot: string): string {
   return join(otaconDir(repoRoot), "config.json");
 }
 
 /**
- * The gitignored, personal project override (`<repo>/.otacon/config.local.json`),
- * mirroring Claude Code's `settings.local.json`. Ignored by the `.otacon/*`
- * glob, so the Settings UI can write a per-developer override without touching a
- * tracked file. Wins over both the user and the committed project config.
+ * The personal, per-developer project override
+ * (`<repo>/.otacon/config.local.json`), mirroring Claude Code's
+ * `settings.local.json`. The Settings UI writes it for a one-off override that
+ * wins over both the user and the team project config.
  */
 export function repoLocalConfigPath(repoRoot: string): string {
   return join(otaconDir(repoRoot), "config.local.json");

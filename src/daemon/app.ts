@@ -425,8 +425,8 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   // (~/.otacon/config.json) is always present; the project scopes only when an
   // absolute `repo` is named — User config needs no repo, so an absent/empty/
   // non-absolute `repo` omits them (matching the isAbsolute guard POST applies
-  // to the write). `project` is the committed <repo>/.otacon/config.json;
-  // `project.local` is the gitignored <repo>/.otacon/config.local.json override.
+  // to the write). `project` is the team-shared <repo>/.otacon/config.json;
+  // `project.local` is the personal <repo>/.otacon/config.local.json override.
   app.get("/api/config", (c) => {
     const repo = c.req.query("repo");
     const scopes: Record<string, { path: string; values: ScopeValues; repo?: string }> = {
