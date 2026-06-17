@@ -113,7 +113,8 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 - **Decision:** `otacon start` resolves `git rev-parse --show-toplevel` and puts
   `.otacon/` there (the daemon writes session state under `.otacon/<id>/`); in non-git
-  directories it warns and uses the cwd, skipping the `.gitignore` append.
+  directories it warns and uses the cwd. (otacon touches no `.gitignore` either way — see
+  "otacon manages no `.gitignore`" below.)
 - **Why:** Subdirectory invocations must resolve to the same repo root the registry
   records, so the cwd's single active session is found from anywhere under it; separate
   worktrees have distinct roots, which preserves worktree-parallel planning for free.
@@ -199,18 +200,25 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Two tiers stop being enough (e.g. a third committed-but-environment
   scope), or the selective-ignore negation collides with a path users want ignored under
   `.otacon/`.
+- **Superseded in part** by "otacon manages no `.gitignore`; build worktrees live in
+  `~/.otacon`" below: the `.otacon/*` + `!.otacon/config.json` ignore `start` used to
+  write is gone. The two-tier *layering* survives unchanged (user ← project ←
+  project.local, closest wins); only the auto-ignore did — `config.local.json` is no
+  longer special-cased out of git, so a developer who wants it private now ignores it
+  themselves.
 
 ## Single `CONFIG_SCHEMA` as the source of truth; `worktree.dir` tunable
 
 - **Decision:** One `CONFIG_SCHEMA` (field metadata: section/key/label/type/default/min)
   enumerates every leaf config key; runtime merging, the API validator, and the future
   UI all derive from it. A guard test asserts it matches `DEFAULT_CONFIG` exactly. Added
-  a `worktree.dir` field (`type:"path"`, default `.otacon/worktrees`).
+  a `worktree.dir` field (`type:"path"`, default `~/.otacon/worktrees` — see the
+  worktree-location decision below; was `.otacon/worktrees` when first added).
 - **Why:** Two parallel code paths (file merge + API validation) drifting apart is the
   obvious failure mode once a UI can write config; one schema with one `coerceFieldValue`
   rule per type keeps them in lockstep, and the guard test makes "added a key but forgot
-  the schema/UI" a test failure. `worktree.dir` lets builds land outside `.otacon/` when
-  a developer prefers it, without a new bespoke knob.
+  the schema/UI" a test failure. `worktree.dir` lets a developer relocate the build tree
+  without a new bespoke knob.
 - **Revisit when:** A field needs validation richer than int/bool/path (enums, ranges,
   cross-field constraints), or config grows nested structures the flat schema can't model.
 
@@ -2029,6 +2037,11 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 ## Build layout: worktree under .otacon, one commit per green phase, PR vs default branch
 
+> **Superseded in part** by "otacon manages no `.gitignore`; build worktrees live in
+> `~/.otacon`" below: the build worktree now defaults to `<worktree.dir>/<slug>` with
+> `worktree.dir = ~/.otacon/worktrees` (outside the repo), not `.otacon/worktrees`. The
+> per-phase-commit + PR-vs-default-branch parts are unchanged.
+
 - **Decision:** The build runs in a git worktree at `.otacon/worktrees/<slug>`
   (gitignored, like the rest of `.otacon/`) on branch `otacon/impl-<slug>` rooted at the
   plan-doc commit; each clean+green phase is its own commit; the finish is a `gh pr
@@ -2364,15 +2377,17 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Decision:** One new `CONFIG_SCHEMA` path leaf `plans.dir` (default `.otacon/plans`,
   repo-relative) governs where **Save** writes the project copy. It renders in the
   Settings UI and resolves via `otacon config get plans.dir` for free, like
-  `worktree.dir`. The home archive location is NOT configurable. The default is gitignored
-  (zero footprint); a team that wants a tracked, shared plan sets `plans.dir=docs/plans`
-  in the committed `<repo>/.otacon/config.json`.
+  `worktree.dir`. The home archive location is NOT configurable. otacon never commits the
+  copy and (since "otacon manages no `.gitignore`" below) no longer ignores it either, so
+  the default lands an untracked file under `.otacon/plans` the user owns; a team that
+  wants it grouped with tracked plans sets `plans.dir=docs/plans` in the committed
+  `<repo>/.otacon/config.json`.
 - **Why:** Reusing the schema-driven config (single source of truth, guard test) means a
   one-line leaf gets validation, the Settings third scope, and the CLI lookup with no
   bespoke code (q6, q7). Making only the project-copy dir configurable — not the home
   store — keeps the canonical archive predictable while letting each repo choose its
-  in-project convention. The default `.otacon/plans` keeps a fresh repo footprint-free;
-  `docs/plans` is the opt-in committed contract.
+  in-project convention. The default `.otacon/plans` keeps the copy beside the rest of
+  otacon's working state; `docs/plans` is the opt-in committed contract.
 - **Revisit when:** A repo wants per-session or templated plan paths, or the home archive
   location itself needs to move.
 
@@ -2390,3 +2405,30 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   the home copy is the agent's source of truth for phases.
 - **Revisit when:** A workflow wants the plan to ride in the implementation PR after all
   (e.g. teams that require the plan as a reviewed artifact in the same PR).
+
+## otacon manages no `.gitignore`; build worktrees live in `~/.otacon`
+
+- **Decision:** `otacon start` no longer reads, writes, or migrates the repo's
+  `.gitignore` — the `ensureGitignore` step (and its `.otacon/*` + `!.otacon/config.json`
+  append) is gone. Whether `.otacon/` is tracked or ignored is entirely the user's call;
+  otacon special-cases nothing on git's behalf, so `config.local.json` and the Save-time
+  `.otacon/plans` copy are committable unless the user ignores them. To keep throwaway
+  build trees out of the project regardless, `worktree.dir` now defaults to
+  `~/.otacon/worktrees` (a `~`/absolute path **outside** the repo, alongside the home
+  sessions store) instead of the repo-relative `.otacon/worktrees`. This supersedes the
+  selective-ignore mechanism of "Two-tier project config" (#178) and the
+  worktree-under-`.otacon` location of "Build layout" above; the config *layering* and
+  the per-phase-commit build are unchanged.
+- **Why:** Editing a user's `.gitignore` is a surprising side effect for a planning tool,
+  and the selective `.otacon/* / !config.json` pair was subtle, easy to get wrong across
+  CRLF/blank-line/pre-existing-line cases, and coupled otacon to the user's VCS policy.
+  Not touching the file at all is the least-astonishing default and lets each team decide
+  what to track. The one thing that genuinely must not land in the repo is a build
+  worktree (a full second checkout); moving its default out to `~/.otacon/worktrees`
+  removes the only hard reason `.otacon/` had to be ignored, so dropping the ignore
+  becomes safe. A literal `~` is fine: the value is only ever interpolated into a shell
+  `git worktree add` the agent runs, where the shell expands it; nothing in otacon
+  resolves it as a path internally.
+- **Revisit when:** Users ask otacon to scaffold `.gitignore` again (e.g. an opt-in
+  `otacon install` flag), or `worktree.dir`'s `~` needs expanding somewhere otacon
+  consumes it directly rather than handing it to a shell.

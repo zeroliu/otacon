@@ -12,7 +12,7 @@
 #   LOOP      the full DESIGN.md §6 loop on the real auto-spawned daemon:
 #             start → grill (ask/answer) → draft (lint reject, then accept) →
 #             review (comment batch) → revise (L5 reject, then resolve) →
-#             approve (home archive + gitignored project copy, otacon never
+#             approve (home archive + untracked project copy, otacon never
 #             commits) → post-approve refusal → clean (archive + registry prune).
 #   INVARIANT structural grep of dist/ for any model/LLM network call (§13).
 #
@@ -102,7 +102,7 @@ ok "doctor green: node/daemon/wrapper/stop-hook ok; absent tailscale a warning (
 
 echo "# ── ACT 2: THE FULL PLAN LOOP (agent + human) ─────────────────────────"
 
-# --- 3. start in the user's repo: .otacon, pointer, .gitignore, registry, URL --
+# --- 3. start in the user's repo: .otacon dir, registry, URL, no .gitignore touch
 cd "$REPO"
 git init -q -b main .
 git config user.email accept@otacon.test
@@ -114,15 +114,13 @@ SID="$(json_field session "$TMP/start.json")"
 [[ "$SID" == otc_* ]] || fail "start printed no otc_ session id"
 DAEMON_PID="$(curl -sf "$BASE/api/health" | node -pe "JSON.parse(require('fs').readFileSync(0,'utf8')).pid")"
 [ -d "$REPO/.otacon/$SID" ] || fail ".otacon/<session> dir not created"
-# Phase 1: a SELECTIVE ignore — .otacon/* hides working state while
-# !.otacon/config.json keeps the committed, team-shared project config tracked.
-grep -qx '\.otacon/\*' .gitignore || fail ".otacon/* was not appended to .gitignore"
-grep -qx '!\.otacon/config\.json' .gitignore || fail "!.otacon/config.json was not appended to .gitignore"
-grep -qx 'node_modules/' .gitignore || fail "existing .gitignore content was clobbered"
-grep -q 'appended .otacon/' "$TMP/start.err" || fail "no .gitignore notice on stderr"
+# otacon manages no .gitignore: the user's file is left exactly as written and
+# no notice is emitted (DECISIONS.md "otacon manages no .gitignore").
+[ "$(cat .gitignore)" = "node_modules/" ] || fail "start modified .gitignore"
+if grep -q 'appended' "$TMP/start.err"; then fail "start emitted a .gitignore notice"; fi
 grep -q "$SID" "$OTACON_HOME/registry.json" || fail "session missing from the registry"
 json_field url "$TMP/start.json" | grep -q "/s/$SID" || fail "start printed no review URL"
-ok "start: .otacon created, .gitignore appended, registered, review URL printed"
+ok "start: .otacon created, .gitignore left untouched, registered, review URL printed"
 
 # --- 4. grill: ask a chip question; a parked wait is fed the phone's answer ----
 otacon ask --question "RS256 or HS256 for token signing?" \
@@ -311,30 +309,22 @@ grep -q '^status: approved$' "$HOME_ART" || fail "home archive frontmatter is no
 grep -q '^## Interview$' "$HOME_ART" || fail "home archive has no Interview section"
 ok "approve: 409 on the open thread, then force wrote $ART_PATH + home archive (approved, r2, Interview); wait got it"
 
-# --- 11. otacon never commits; the project copy is zero-footprint (gitignored) -
-# The new model (D2/D3): otacon writes the Save-time project copy under the
-# default `.otacon/plans` and NEVER git-commits it — the user controls git. With
-# the default plans.dir under the gitignored `.otacon/*`, the project copy is
-# invisible to git: the ONLY working-tree change otacon left is the `.otacon/`
-# ignore rule `start` appended to .gitignore (committing that is the user's call,
-# but the plan copy itself never enters git).
-git status --porcelain -uall > "$TMP/post-approve-status.txt" # -uall: no dir collapse
-node -e '
-// NB: never .trim() the whole blob — porcelain XY status is two columns + a
-// space (" M .gitignore"), so a leading trim would eat the first path’s dot.
-const lines = require("fs").readFileSync(process.argv[1], "utf8").split("\n").filter(Boolean);
-const paths = lines.map((l) => l.slice(3));
-// Exactly one entry: the modified .gitignore ( M). The project copy lives under
-// the gitignored .otacon/, so it is NEVER a git-visible change.
-if (lines.length !== 1) { console.error("unexpected dirty entries:\n" + lines.join("\n")); process.exit(1); }
-if (!paths.includes(".gitignore")) { console.error(".gitignore change missing"); process.exit(2); }
-// The decisive invariant: nothing under .otacon/ is ever a git-visible change.
-if (paths.some((p) => p.startsWith(".otacon/"))) { console.error(".otacon/ leaked into git!"); process.exit(3); }
-' "$TMP/post-approve-status.txt" || fail "working tree after approve was not {.gitignore} only"
-# The project copy is genuinely on disk, just gitignored (zero footprint).
+# --- 11. otacon never commits; the project copy lands on disk, uncommitted -----
+# The model: otacon writes the Save-time project copy under the default
+# `.otacon/plans` and NEVER git-commits it — the user controls git. otacon no
+# longer ignores `.otacon/` (DECISIONS.md "otacon manages no .gitignore"), so the
+# copy is now a git-VISIBLE untracked file; the invariant is only that otacon
+# adds no commits and tracks nothing on the user's behalf.
 [ -f "$REPO/$ART_PATH" ] || fail "project copy missing on disk at $ART_PATH"
-git check-ignore -q "$ART_PATH" || fail "the project copy under .otacon/plans is not gitignored"
-ok "otacon never committed; the .otacon/plans project copy stayed out of git (zero footprint)"
+# It was never committed (and never staged): git sees it as untracked.
+if git ls-files --error-unmatch "$ART_PATH" > /dev/null 2>&1; then fail "the project copy was committed/tracked by otacon"; fi
+[ "$(git status --porcelain -- "$ART_PATH")" = "?? $ART_PATH" ] \
+  || fail "project copy is not an untracked working-tree file"
+# otacon added no commits: HEAD is still the single 'initial' commit the user made.
+[ "$(git rev-list --count HEAD)" = "1" ] || fail "otacon created a commit"
+# And it left .gitignore exactly as the user wrote it.
+[ "$(cat .gitignore)" = "node_modules/" ] || fail "otacon modified .gitignore"
+ok "otacon never committed; the .otacon/plans project copy is on disk, untracked, user-owned"
 
 # --- 12. post-approve: status shows approved; further submit refused -----------
 otacon status > "$TMP/status.json"

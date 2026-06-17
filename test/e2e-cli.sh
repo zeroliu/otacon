@@ -58,21 +58,22 @@ otacon status > "$TMP/status2.json"
   || fail "second status respawned instead of reusing the daemon"
 ok "status auto-spawned otacond (pid $DAEMON_PID), reported empty state, exited 0"
 
-# --- 2. start in a git repo: .gitignore append, registry ---------------------
+# --- 2. start in a git repo: leaves .gitignore alone, registers --------------
 cd "$REPO"
 git init -q -b main .
 printf 'node_modules/\n' > .gitignore
 otacon start --title "e2e plan" > "$TMP/start.json" 2> "$TMP/start.err"
 SID="$(json_field session "$TMP/start.json")"
 [[ "$SID" == otc_* ]] || fail "start printed no otc_ session id"
-grep -qx '\.otacon/' .gitignore || fail ".otacon/ was not appended to .gitignore"
-grep -qx 'node_modules/' .gitignore || fail "existing .gitignore content was clobbered"
-grep -q 'appended .otacon/' "$TMP/start.err" || fail "no .gitignore notice on stderr"
+# otacon manages no .gitignore: the file is left exactly as the user wrote it
+# (DECISIONS.md "otacon manages no .gitignore").
+[ "$(cat .gitignore)" = "node_modules/" ] || fail "start modified .gitignore"
+if grep -q 'appended' "$TMP/start.err"; then fail "start emitted a .gitignore notice"; fi
 grep -q "$SID" "$OTACON_HOME/registry.json" || fail "session missing from the registry"
 json_field url "$TMP/start.json" | grep -q "/s/$SID" || fail "start printed no review URL"
 otacon status > "$TMP/status3.json"
 [ "$(json_field 'sessions[0].id' "$TMP/status3.json")" = "$SID" ] || fail "status does not list the session"
-ok "start minted $SID, appended .gitignore, registered it"
+ok "start minted $SID, left .gitignore untouched, registered it"
 
 # --- 3. failing submit, then passing submit ----------------------------------
 mkdir -p ".otacon/$SID"

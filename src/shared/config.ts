@@ -39,8 +39,9 @@ export interface Notifications {
 
 /**
  * Where Approve & Implement builds open their git worktrees. Consumed by the
- * agent implement loop; a repo-relative path is recommended so worktrees land
- * under the gitignored `.otacon/` tree.
+ * agent implement loop. Defaults to `~/.otacon/worktrees` (a `~`/absolute path
+ * outside the repo) so throwaway build trees never land in the project; a
+ * repo-relative path still works if you'd rather keep them under the repo.
  */
 export interface WorktreeConfig {
   dir: string;
@@ -48,10 +49,10 @@ export interface WorktreeConfig {
 
 /**
  * Where **Save** writes the approved plan's project copy (DESIGN.md §12). A
- * repo-relative path; the default `.otacon/plans` is gitignored (zero git
- * footprint), set it to e.g. `docs/plans` to land a tracked file you commit
- * yourself. The canonical copy always lands in the home store
- * (`~/.otacon/sessions/<id>/`); this only governs the in-project copy.
+ * repo-relative path; the default `.otacon/plans` lands an in-repo copy that
+ * otacon never commits (you commit it or not), set it to e.g. `docs/plans` to
+ * group it with other tracked plans. The canonical copy always lands in the
+ * home store (`~/.otacon/sessions/<id>/`); this only governs the in-project copy.
  */
 export interface PlansConfig {
   dir: string;
@@ -85,7 +86,7 @@ export const DEFAULT_CONFIG: OtaconConfig = {
     noteMaxChars: 200,
   },
   notifications: { desktop: true },
-  worktree: { dir: ".otacon/worktrees" },
+  worktree: { dir: "~/.otacon/worktrees" },
   plans: { dir: ".otacon/plans" },
 };
 
@@ -253,7 +254,7 @@ export const CONFIG_SCHEMA: ConfigField[] = [
     section: "worktree",
     key: "dir",
     label: "Worktree directory",
-    description: "Base dir for Approve & Implement build worktrees (repo-relative recommended).",
+    description: "Base dir for Approve & Implement build worktrees (default ~/.otacon/worktrees, outside the repo).",
     type: "path",
     default: DEFAULT_CONFIG.worktree.dir,
   },

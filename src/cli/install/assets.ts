@@ -99,10 +99,9 @@ native subagent (Task tool) so your own context stays lean.
    Implement the plan lives only in the home archive at the event \`path\` (read the
    phases from there). Branch off the repo's current default branch HEAD: create the
    worktree under the configured \`worktree.dir\`
-   (\`${cmd} config get worktree.dir\` — default \`.otacon/worktrees\`):
+   (\`${cmd} config get worktree.dir\` — default \`~/.otacon/worktrees\`, outside the repo):
    \`git worktree add <worktree.dir>/<slug> -b otacon/impl-<slug>\` (off the default
-   branch; the default \`.otacon/\` is gitignored). \`${cmd} progress\` each checkpoint
-   throughout.
+   branch). \`${cmd} progress\` each checkpoint throughout.
 2. **Per phase, in order** (read the phases from the home plan at the event \`path\`):
    - \`${cmd} progress "phase N — implementing"\`; spawn an **implement+test**
      subagent (Task tool) scoped to that phase's Goal/Files/Verification — it
@@ -234,10 +233,11 @@ This repo **is** otacon. You plan features for it by running otacon's own CLI fr
 source via the \`./bin/otacon\` shim, so every command below exercises the code in
 this checkout. That shim runs the CLI from \`src/\` via bun — no build needed; it
 always reflects current source. The daemon auto-spawns from source on the first
-command. Working state lives in the gitignored \`.otacon/\`; the approved plan is
-archived in the home store (\`~/.otacon/sessions/<id>/\`) and, on Save, copied into
-the repo under \`plans.dir\` (default the gitignored \`.otacon/plans\`). otacon never
-git-commits the plan — you commit it yourself if you want.
+command. Working state lives in \`.otacon/\` (otacon manages no .gitignore — track
+or ignore it as you like); the approved plan is archived in the home store
+(\`~/.otacon/sessions/<id>/\`) and, on Save, copied into the repo under \`plans.dir\`
+(default \`.otacon/plans\`). otacon never git-commits the plan — you commit it
+yourself if you want.
 
 After editing **daemon** source (\`src/daemon/**\`) mid-session, restart the running
 daemon so your change loads: \`./bin/otacon restart\` (the next command respawns it

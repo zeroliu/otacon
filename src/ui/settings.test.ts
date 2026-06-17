@@ -42,7 +42,7 @@ const worktreeDir: ConfigField = {
   key: "dir",
   label: "Worktree directory",
   type: "path",
-  default: ".otacon/worktrees",
+  default: "~/.otacon/worktrees",
 };
 
 describe("distinctRepos", () => {

@@ -54,7 +54,7 @@ Every decision below was resolved deliberately; rationale follows in the relevan
 | 10  | Feedback grammar  | User comments (batched), user questions (instant, plan untouched), agent questions (`otacon ask`)                                                                                 |
 | 11  | Mixed batch       | Questions answered first, then all comments applied as one revision with one changelog                                                                                            |
 | 12  | Visuals v1        | Mermaid, code + before/after blocks, ASCII wireframes. Images deferred to v2                                                                                                      |
-| 13  | Storage           | Working state in gitignored `.otacon/`; every approved plan archived to the home store `~/.otacon/sessions/<id>/` (permanent, never cleaned); on Save also copied into the repo under `plans.dir`                                  |
+| 13  | Storage           | Working state in `<repo>/.otacon/` (otacon manages no `.gitignore` — track or ignore it as you like); every approved plan archived to the home store `~/.otacon/sessions/<id>/` (permanent, never cleaned); on Save also copied into the repo under `plans.dir`                                  |
 | 14  | LLM cost          | Zero API spend invariant: daemon/CLI/UI never call a model; all intelligence runs in the user's interactive subscription-backed session. No Agent SDK anywhere                    |
 | 15  | Multi-session     | One daemon, many concurrent sessions; per-session event queues; UI session switcher                                                                                               |
 | 16  | Grilling          | grill-me discipline is a mandatory protocol phase before drafting; decisions must trace to grill answers (linted)                                                                 |
@@ -409,7 +409,7 @@ GET  /api/config?repo=<root>                config surface for the Settings UI:
                                             scopes.project ({path, values, repo})
                                             is the committed
                                             <repo>/.otacon/config.json and
-                                            scopes["project.local"] the gitignored
+                                            scopes["project.local"] the personal
                                             <repo>/.otacon/config.local.json — both
                                             included only when ?repo= names an
                                             absolute path. `values` are sparse +
@@ -617,7 +617,7 @@ is not attention). The agent's parked `otacon wait` hits `/events`, never
 
 On by default; toggle with a `notifications.desktop` boolean in
 `~/.otacon/config.json` (the committed `<repo>/.otacon/config.json` and the
-gitignored `<repo>/.otacon/config.local.json` override it in turn, §16),
+personal `<repo>/.otacon/config.local.json` override it in turn, §16),
 mirroring the budgets config. Off macOS the banner is a silent no-op.
 
 ### The full loop
@@ -640,7 +640,7 @@ mirroring the budgets config. Off macOS the banner is a silent no-op.
    the artifact (`status: approved` + the grill transcript appended) and writes it to
    two places: ALWAYS the canonical home archive
    (`~/.otacon/sessions/<id>/YYYY-MM-DD-<slug>.md`), and ALSO a project copy under the
-   repo's configured `plans.dir` (default the gitignored `.otacon/plans`). It flips the
+   repo's configured `plans.dir` (default `.otacon/plans`). It flips the
    session to `approved` (ending it — every further mutation refuses) and queues the
    `approved` event carrying both paths. **otacon never git-commits the plan.** The
    agent's `wait` returns the event; it prints a one-line summary naming where the plan
@@ -809,7 +809,7 @@ project · local overrides ("overridden by project" / "overridden by project · 
 the Project scope flags a project · local override; an override hint wins the slot over
 an inherit hint. A repo selector names the Project scope
 file (the committed `<repo>/.otacon/config.json`; the Project · local scope edits the
-gitignored `<repo>/.otacon/config.local.json` sibling that wins over it); on the User
+personal `<repo>/.otacon/config.local.json` sibling that wins over it); on the User
 scope it's an optional "compare repo" that only chooses which project's overrides to
 surface (the user file it edits is global either way). Edits
 auto-save: a text field commits when it loses focus, and a checkbox or a
@@ -1060,16 +1060,18 @@ Operational requirement: the Mac stays awake while a plan is in review
 
 | Location                                          | Contents                                                                                                       | Git                                        |
 | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `<repo>/.otacon/`                                 | Working state under `<id>/`: `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), threads (`threads.json`: comment + question threads with answers, resolutions, and anchor states inline), the grill transcript (`transcript.json`), the capped live-activity feed (`activity.json`: the newest ~N `otacon progress` notes), queues; plus `worktrees/<slug>/` — an Implement build's git worktree on branch `otacon/impl-<slug>` | **gitignored**                             |
+| `<repo>/.otacon/`                                 | Working state under `<id>/`: `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), threads (`threads.json`: comment + question threads with answers, resolutions, and anchor states inline), the grill transcript (`transcript.json`), the capped live-activity feed (`activity.json`: the newest ~N `otacon progress` notes), queues | the user's call — otacon manages no `.gitignore` |
+| `~/.otacon/worktrees/<slug>/`                     | Implement build's git worktree on branch `otacon/impl-<slug>` (base dir is `worktree.dir`, default `~/.otacon/worktrees` — outside the repo)                    | n/a (global, outside the repo)             |
 | `~/.otacon/sessions/<id>/YYYY-MM-DD-<slug>.md`    | Canonical approved plan, every session (`status: approved` frontmatter + grill transcript)                     | n/a (global, permanent archive)            |
-| `<repo>/<plans.dir>/YYYY-MM-DD-<slug>.md`         | Save-time project copy (default `.otacon/plans`, gitignored; set `plans.dir=docs/plans` to track it)           | the user's call — otacon never commits     |
+| `<repo>/<plans.dir>/YYYY-MM-DD-<slug>.md`         | Save-time project copy (default `.otacon/plans`; set `plans.dir=docs/plans` to group with tracked plans)       | the user's call — otacon never commits     |
 | `~/.otacon/registry.json`                         | Session registry: ID → repo, branch, title, status                                                             | n/a (global)                               |
 
 Every approved plan lands in the **home archive** keyed by its session id — the
 canonical copy a downstream implementer (or a future you, on any machine) can always
-find, never touched by `otacon clean`. **otacon never git-commits the plan**; on **Save**
+find, never touched by `otacon clean`. **otacon never git-commits anything**; on **Save**
 it additionally writes a project copy under the repo's `plans.dir`, and the user commits
-that copy if they want it tracked. Review exhaust stays out of git. `otacon clean`
+that copy if they want it tracked. otacon manages no `.gitignore`, so whether `.otacon/`
+working state is tracked or ignored is the user's call. `otacon clean`
 archives ended sessions' working state: for every **terminal** session (approved, plus
 implemented / implement_failed once a build finishes) in the current repo (`--all`:
 everywhere), it calls `DELETE /api/sessions/:id`; the daemon drops the registry entry and
@@ -1080,8 +1082,9 @@ record. Events still queued on an ended session are archived with the directory 
 than blocking the clean. There is no plan-file archive step: the plan is not in the repo
 on Implement (it lives in the home archive), and on Save the project copy is the user's to
 manage. Clean should also prune a finished or aborted build's impl artifacts — the
-`.otacon/worktrees/<slug>/` worktree (via `git worktree remove`) and its
-`otacon/impl-<slug>` branch — which a per-phase-commit build otherwise litters on disk.
+`<worktree.dir>/<slug>/` worktree (via `git worktree remove`, default base
+`~/.otacon/worktrees`) and its `otacon/impl-<slug>` branch — which a per-phase-commit
+build otherwise litters on disk.
 
 **Deleting any session** from the review UI (§10) reuses that same route, and the
 disposition follows whether the session is terminal (its plan is in the home archive).
@@ -1162,8 +1165,9 @@ The **Implement** approve action finalizes the plan (home archive only — nothi
 repo), then flips the session to `implementing` and hands the same agent the build (§6).
 otacon never git-commits the plan; the agent reads it from the home archive at the event
 `path` and opens a git worktree at **`<worktree.dir>/<slug>`** — `worktree.dir` is
-config (§16, default `.otacon/worktrees`, gitignored like the rest of `.otacon/`; the
-agent reads it with `otacon config get worktree.dir`) — on a new branch
+config (§16, default `~/.otacon/worktrees`, outside the repo so the build tree never
+lands in the project; the agent reads it with `otacon config get worktree.dir`) — on a
+new branch
 **`otacon/impl-<slug>`** rooted at the repo's **default-branch HEAD**, and walks the
 phases in order: per phase, a fresh implement+test
 subagent (scoped to that phase's Goal/Files/Verification), then a separate
@@ -1305,25 +1309,26 @@ stay equal, the same generated-file discipline as the protocol card.
 ### Per-repo setup
 
 **None required.** Otacon works in any git repo with zero configuration. The first
-`otacon start` in a repo creates `.otacon/` and, if no otacon ignore line is present,
-appends a **selective** ignore to the repo's `.gitignore` (with a notice):
-`.otacon/*` followed by `!.otacon/config.json`. This ignores all of `.otacon/`'s
-working state while keeping the committed, team-shared project config tracked
-(`config.local.json` stays ignored by the glob). A repo that already carries any
-otacon ignore line (a legacy blanket `.otacon/` or this selective pair) is left
-untouched — there is no migration of pre-existing ignores. The Save-time project copy
-dir (`plans.dir`, default the gitignored `.otacon/plans`) is created on first Save.
+`otacon start` in a repo creates `.otacon/` for its working state. otacon **manages no
+`.gitignore`** — it never reads, writes, or migrates the repo's ignore file. Whether
+`.otacon/` is tracked or ignored is entirely the user's call; nothing under it is
+special-cased by git on otacon's behalf, so the personal `config.local.json` override
+is committable too unless the user ignores it themselves. The Save-time project copy
+dir (`plans.dir`, default `.otacon/plans`) is created on first Save. Build worktrees
+default **outside** the repo (`~/.otacon/worktrees`, §12), so a fresh `.otacon/` never
+fills with throwaway build trees.
 
-Config is layered, mirroring Claude Code's committed `settings.json` +
-gitignored `settings.local.json`: built-in defaults ← `~/.otacon/config.json`
-(user) ← `<repo>/.otacon/config.json` (project, **committed/team-shared**) ←
-`<repo>/.otacon/config.local.json` (project.local, **gitignored/personal**) —
-closest wins. Every override file is optional. Tunables include budgets/lint caps, the
-activity feed (`activity.cap`, `activity.noteMaxChars`), `notifications.desktop`,
-`worktree.dir` (base dir for Implement build worktrees, default `.otacon/worktrees`),
-and `plans.dir` (where **Save** writes the project copy of the approved plan, default
-the gitignored `.otacon/plans`; set it to `docs/plans` to land a tracked file a team
-shares). The home archive location is fixed (`~/.otacon/sessions/`), not configurable.
+Config is layered, mirroring Claude Code's `settings.json` + `settings.local.json`
+(otacon just doesn't auto-ignore the `.local` file): built-in defaults ←
+`~/.otacon/config.json` (user) ← `<repo>/.otacon/config.json` (project,
+**committed/team-shared**) ← `<repo>/.otacon/config.local.json` (project.local,
+**personal**) — closest wins. Every override file is optional. Tunables include
+budgets/lint caps, the activity feed (`activity.cap`, `activity.noteMaxChars`),
+`notifications.desktop`, `worktree.dir` (base dir for Implement build worktrees, default
+`~/.otacon/worktrees`, outside the repo), and `plans.dir` (where **Save** writes the
+project copy of the approved plan, default `.otacon/plans`; set it to `docs/plans` to
+group it with other tracked plans). The home archive location is fixed
+(`~/.otacon/sessions/`), not configurable.
 
 Config is editable two ways over those override files: by hand, or through
 the **web Settings screen** (`/settings`, reached via `otacon config` or the masthead)
@@ -1360,9 +1365,9 @@ looked in, and — when in a repo — mentions `--project` as an install option.
 4. Agent revises; you re-review via changelog + threads + diff-vs-last-reviewed. Repeat
    until you **Save** or **Implement**.
 5. Every approved plan is archived to the home store `~/.otacon/sessions/<id>/` (always).
-   On **Save** otacon also writes a copy into the repo under `plans.dir` (default the
-   gitignored `.otacon/plans`; set it to `docs/plans` to track it) and the session ends —
-   otacon never commits, so you commit that copy yourself if you want it in git. On
+   On **Save** otacon also writes a copy into the repo under `plans.dir` (default
+   `.otacon/plans`; set it to `docs/plans` to group it with tracked plans) and the session
+   ends — otacon never commits, so you commit that copy yourself if you want it in git. On
    **Implement** the same agent builds straight from the home copy — worktree off the
    default branch, per-phase implement+review subagents, pause-on-first-blocker — and
    opens a PR, surfaced on the home card (§6, §12). No plan file rides in the repo on

@@ -176,8 +176,8 @@ describe("loadConfig notifications", () => {
 });
 
 describe("loadConfig worktree", () => {
-  test("worktree.dir defaults to .otacon/worktrees", () => {
-    expect(loadConfig(repo).worktree.dir).toBe(".otacon/worktrees");
+  test("worktree.dir defaults to ~/.otacon/worktrees", () => {
+    expect(loadConfig(repo).worktree.dir).toBe("~/.otacon/worktrees");
   });
 
   test("global config can override worktree.dir", () => {
@@ -193,9 +193,9 @@ describe("loadConfig worktree", () => {
 
   test("an empty or non-string worktree.dir is ignored, keeping the default", () => {
     writeGlobal({ worktree: { dir: "   " } });
-    expect(loadConfig(repo).worktree.dir).toBe(".otacon/worktrees");
+    expect(loadConfig(repo).worktree.dir).toBe("~/.otacon/worktrees");
     writeGlobal({ worktree: { dir: 5 } });
-    expect(loadConfig(repo).worktree.dir).toBe(".otacon/worktrees");
+    expect(loadConfig(repo).worktree.dir).toBe("~/.otacon/worktrees");
   });
 
   test("worktree.dir is trimmed", () => {
