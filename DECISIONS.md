@@ -310,8 +310,13 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   desired override set, so committing per field is free. The earlier flow refetched and
   reseeded the whole form after each save (fine for a once-at-the-end Save); under
   auto-save that fires mid-editing and the reseed would clobber an in-progress edit in
-  another field, so the baseline is advanced locally and the refetch dropped (a scope/repo
-  switch still remounts and refetches, so cross-scope hints can't go stale). Single-flight
+  another field, so the baseline is advanced locally and the network refetch dropped. A
+  scope-tab switch remounts `ScopeFields` (it is keyed by `scope:repo`) but reuses the
+  fetch already in memory rather than re-fetching, so the save *also* patches that cache
+  (`useConfig.applySaved`, mirroring the persisted values) — otherwise re-entering the
+  just-edited tab would re-seed from the pre-save fetch and show the stale value. A *repo*
+  switch genuinely refetches (the repo is the fetch key), so cross-scope hints stay fresh.
+  Single-flight
   is required because the endpoint *replaces* the file: two overlapping saves landing out
   of order would let a stale earlier payload overwrite a newer one.
 - **Revisit when:** A field wants debounced live-save while typing (not just on blur), or a

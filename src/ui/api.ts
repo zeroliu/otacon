@@ -534,6 +534,14 @@ export interface ConfigState extends Partial<ConfigPayload> {
   loading: boolean;
   error: boolean;
   reload: () => void;
+  /**
+   * Patch one scope's cached values after a successful save, so a remount (a
+   * scope-tab switch re-keys ScopeFields) re-seeds from the just-saved values
+   * instead of the stale fetch. A local patch, not a refetch — it mirrors what
+   * the daemon persisted, completing the "advance locally, don't refetch" save
+   * path (DECISIONS.md "Settings auto-saves on blur").
+   */
+  applySaved: (scope: ConfigScopeName, values: ScopeValues) => void;
 }
 
 /**
@@ -550,6 +558,18 @@ export function useConfig(repo?: string): ConfigState {
   const [error, setError] = useState(false);
   const [nonce, setNonce] = useState(0);
   const reload = () => setNonce((n) => n + 1);
+
+  // Reflect a save into the cached payload (no network): the saved scope now
+  // carries the persisted values, so leaving and re-entering its tab — which
+  // remounts ScopeFields via its scope:repo key — re-seeds from disk truth, not
+  // the values fetched on mount. A scope absent from the cache (no repo) is a no-op.
+  const applySaved = (scope: ConfigScopeName, values: ScopeValues) => {
+    setPayload((prev) => {
+      const existing = prev?.scopes[scope];
+      if (!prev || !existing) return prev;
+      return { ...prev, scopes: { ...prev.scopes, [scope]: { ...existing, values } } };
+    });
+  };
 
   useEffect(() => {
     let live = true;
@@ -576,7 +596,7 @@ export function useConfig(repo?: string): ConfigState {
     };
   }, [repo, nonce]);
 
-  return { schema: payload?.schema, scopes: payload?.scopes, loading, error, reload };
+  return { schema: payload?.schema, scopes: payload?.scopes, loading, error, reload, applySaved };
 }
 
 /**

@@ -86,8 +86,8 @@ test("Project · local view inherits the project value as its default", async ({
   await expect(row(page, "Summary lines").locator(".field-inherit")).toHaveText(
     "default from project",
   );
-  // Unset at the local level → the placeholder names the inherited project value.
-  await expect(page.getByLabel("Summary lines")).toHaveAttribute("placeholder", "default: 9");
+  // Unset at the local level → the placeholder is the inherited project value.
+  await expect(page.getByLabel("Summary lines")).toHaveAttribute("placeholder", "9");
   // Desktop is set only by the user scope → falls through project to the user.
   await expect(row(page, "Desktop notifications").locator(".field-inherit")).toHaveText(
     "default from user profile",
@@ -137,6 +137,18 @@ test("sections lead with worktree, then notifications", async ({ page }) => {
   await expect(titles.nth(1)).toHaveText("notifications");
 });
 
+test("worktree section carries both the worktree dir and the plans dir", async ({ page }) => {
+  await page.goto("/settings");
+  // Both storage-location knobs render, with worktree.dir leading plans.dir
+  // under the single worktree heading (they can't share a storage section).
+  const worktreeSection = page.locator(".settings-section", { hasText: "worktree" });
+  await expect(worktreeSection.getByLabel("Worktree directory")).toBeVisible();
+  await expect(worktreeSection.getByLabel("Plans directory")).toBeVisible();
+  const labels = worktreeSection.locator(".field-name");
+  await expect(labels.first()).toHaveText("Worktree directory");
+  await expect(labels.nth(1)).toHaveText("Plans directory");
+});
+
 // The POST /api/config a save fires (used as a deterministic "the save landed"
 // sync point so the reload-from-disk assertion can't run before it persisted).
 const configPost = (page: import("@playwright/test").Page) =>
@@ -161,6 +173,34 @@ test("a text field auto-saves on blur (no Save button)", async ({ page, request 
   await page.goto(`/settings?repo=${encodeURIComponent(session.repo)}`);
   await page.getByRole("tab", { name: "project", exact: true }).click();
   await expect(page.getByLabel("Summary lines")).toHaveValue("5");
+});
+
+test("a saved value survives a scope-tab switch without a reload", async ({ page, request }) => {
+  // The bug: the save persisted to disk, but switching scope tabs and back (no
+  // page reload) re-seeded ScopeFields from the values fetched on mount, so the
+  // field reverted to its old value. The save now patches the cached scope, so
+  // re-entering the tab re-seeds from the save. Worktree dir is the field hit.
+  const session = await createSession(request, uniqueTitle("settings-tab-switch"));
+  await page.goto(`/settings?repo=${encodeURIComponent(session.repo)}`);
+  await page.getByRole("tab", { name: "project", exact: true }).click();
+
+  const worktree = page.getByLabel("Worktree directory");
+  await worktree.fill("build/worktrees");
+  const saved = configPost(page);
+  await worktree.blur();
+  await saved;
+  await expect(page.locator(".settings-saved")).toHaveText("saved ✓");
+
+  // Leave the tab and come back — no page.goto, so this exercises the in-memory
+  // cache, not a fresh fetch from disk. The just-saved value must still show.
+  await page.getByRole("tab", { name: "user", exact: true }).click();
+  await page.getByRole("tab", { name: "project", exact: true }).click();
+  await expect(page.getByLabel("Worktree directory")).toHaveValue("build/worktrees");
+
+  // And it really is on disk: a full reload reads it back too.
+  await page.goto(`/settings?repo=${encodeURIComponent(session.repo)}`);
+  await page.getByRole("tab", { name: "project", exact: true }).click();
+  await expect(page.getByLabel("Worktree directory")).toHaveValue("build/worktrees");
 });
 
 test("a checkbox auto-saves the moment it toggles", async ({ page, request }) => {

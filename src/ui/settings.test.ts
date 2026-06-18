@@ -4,7 +4,7 @@
 // not the full field set.
 
 import { describe, expect, test } from "bun:test";
-import type { ConfigField, ScopeValues } from "../shared/config.js";
+import { CONFIG_SCHEMA, type ConfigField, type ScopeValues } from "../shared/config.js";
 import {
   currentValue,
   distinctRepos,
@@ -92,6 +92,36 @@ describe("fieldsBySection", () => {
 
   test("empty schema yields no groups", () => {
     expect(fieldsBySection([])).toEqual([]);
+  });
+
+  test("groups plans under the worktree heading, after the worktree field", () => {
+    const plansDir: ConfigField = {
+      section: "plans",
+      key: "dir",
+      label: "Plans directory",
+      type: "path",
+      default: ".otacon/plans",
+    };
+    const groups = fieldsBySection([plansDir, worktreeDir]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.section).toBe("worktree");
+    // worktree.dir leads, plans.dir follows — both under the one heading.
+    expect(groups[0]?.fields.map((f) => `${f.section}.${f.key}`)).toEqual([
+      "worktree.dir",
+      "plans.dir",
+    ]);
+  });
+
+  // Guard against render-vanish: every real CONFIG_SCHEMA field must land under
+  // some heading. plans.dir was silently dropped once because its section was in
+  // no group — this pins that it (and any future section) renders.
+  test("renders every CONFIG_SCHEMA field (none dropped)", () => {
+    const rendered = new Set(
+      fieldsBySection(CONFIG_SCHEMA).flatMap((g) => g.fields.map((f) => `${f.section}.${f.key}`)),
+    );
+    const all = CONFIG_SCHEMA.map((f) => `${f.section}.${f.key}`);
+    for (const id of all) expect(rendered.has(id)).toBe(true);
+    expect(rendered.size).toBe(all.length);
   });
 });
 

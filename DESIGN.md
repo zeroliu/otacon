@@ -796,8 +796,12 @@ screen (User / Project / Project · local scopes; reached from the masthead or `
 config`). Config is
 still file-backed (§16); the Settings screen is a web editor over those files. Sections
 render worktree → notifications → budgets → activity (the build-time and attention
-knobs lead; the line budgets are the long tail). Each field surfaces what it inherits
-when left unset and what shadows it from above, mirroring the file overlay order
+knobs lead; the line budgets are the long tail). The worktree heading carries both
+storage-location knobs — where Implement opens build worktrees (`worktree.dir`) and
+where Save writes the project plan copy (`plans.dir`); they share the heading though
+each is its own config section (both keys are `dir`). Each field surfaces what it
+inherits when left unset (the inherited value shown as the input placeholder) and what
+shadows it from above, mirroring the file overlay order
 (defaults ← user ← project ← project.local, §16). The inherit hint names the nearest
 scope below the active one that sets the field: the Project scope shows the user
 profile's value ("default from user profile"); the Project · local scope shows the

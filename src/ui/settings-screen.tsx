@@ -13,7 +13,7 @@
 
 import type { ChangeEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ConfigField, ConfigScope, ConfigScopeName } from "./api";
+import type { ConfigField, ConfigScope, ConfigScopeName, ScopeValues } from "./api";
 import { saveConfig, useConfig, useSessions } from "./api";
 import { linkClick } from "./router";
 import type { InheritedValue, OverrideScope, ParentScope } from "./settings";
@@ -58,7 +58,7 @@ export function SettingsScreen() {
   // the Project·local tab inherits project, then user, then the schema default.
   // An empty repo omits the param, so the daemon answers with the user scope alone.
   const repoForFetch = projectRepo !== "" ? projectRepo : undefined;
-  const { schema, scopes, loading, error } = useConfig(repoForFetch);
+  const { schema, scopes, loading, error, applySaved } = useConfig(repoForFetch);
 
   // The scope file being edited. Project scopes only resolve once an *absolute*
   // repo comes back from the daemon (it omits them otherwise), so a
@@ -119,6 +119,7 @@ export function SettingsScreen() {
           repo={isProjectScope(scope) ? target.repo : undefined}
           parents={parents}
           overriders={overriders}
+          onSaved={applySaved}
         />
       )}
     </div>
@@ -219,6 +220,7 @@ function ScopeFields({
   repo,
   parents,
   overriders,
+  onSaved,
 }: {
   schema: ConfigField[];
   target: ConfigScope;
@@ -226,6 +228,7 @@ function ScopeFields({
   repo: string | undefined;
   parents: ParentScope[];
   overriders: OverrideScope[];
+  onSaved: (scope: Scope, values: ScopeValues) => void;
 }) {
   const seeded = useMemo(() => initFormState(schema, target.values), [schema, target.values]);
   const [form, setForm] = useState<FormState>(seeded);
@@ -272,6 +275,9 @@ function ScopeFields({
       setBaseline(next); // the saved state is now the persisted baseline
       setErrors(new Map());
       setStatus({ kind: "saved" });
+      // Patch the parent cache with what the daemon persisted, so re-entering
+      // this tab (a remount) re-seeds from the save, not the stale fetch.
+      onSaved(scope, result.values);
     } else if (result.status === 422) {
       setErrors(errorsByField(result.fieldErrors ?? []));
       setStatus({ kind: "error", message: "some fields are invalid — see below" });
@@ -490,7 +496,7 @@ function FieldRow({
           inputMode={field.type === "int" ? "numeric" : undefined}
           min={field.type === "int" ? field.min : undefined}
           value={state.set ? state.text : ""}
-          placeholder={`default: ${inherited.value}`}
+          placeholder={String(inherited.value)}
           aria-label={field.label}
           aria-invalid={error ? true : undefined}
           onChange={onChange}
