@@ -698,7 +698,12 @@ function sseReader(res: Response) {
 describe("UI SSE streams", () => {
   test("the index stream opens with a snapshot, then carries session and revision frames", async () => {
     const reader = sseReader(await app.request("/api/stream"));
-    expect(await reader.next()).toEqual({ event: "snapshot", data: { sessions: [] } });
+    // The snapshot stamps the daemon version so open tabs can self-heal on an
+    // update-restart (DESIGN.md §16).
+    expect(await reader.next()).toEqual({
+      event: "snapshot",
+      data: { version: VERSION, sessions: [] },
+    });
 
     const created = (await (await postJson("/api/sessions", { title: "live", repo })).json()) as {
       id: string;
@@ -729,6 +734,8 @@ describe("UI SSE streams", () => {
     const snapshot = await reader.next();
     expect(snapshot.event).toBe("snapshot");
     expect((snapshot.data as { session: { id: string } }).session.id).toBe(mine.id);
+    // The per-session snapshot also carries the daemon version (self-heal, §16).
+    expect((snapshot.data as { version: string }).version).toBe(VERSION);
 
     await postJson(`/api/sessions/${other.id}/questions`, { body: "other" });
     await postJson(`/api/sessions/${mine.id}/questions`, { body: "mine" });

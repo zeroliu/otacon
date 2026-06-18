@@ -2489,3 +2489,35 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   upgrades, a non-npm global install path needs supporting, or the re-exec needs to
   carry more than the `start` argv (e.g. a flag added to `start` that must survive the
   hop — it already does, since the full argv is forwarded).
+
+## Auto-update: open tabs self-heal via a version in the SSE snapshot
+
+- **Decision:** An update restarts otacond under any open review tabs, but a tab keeps
+  running the JS bundle it already loaded — whose content-hashed lazy chunks (the plan
+  renderer, mermaid) 404 against the rebuilt `dist/ui`. So the daemon stamps its
+  `VERSION` onto every SSE `snapshot` frame (index and per-session, `src/daemon/ui.ts`),
+  the Vite build bakes the same version into the bundle (`__OTACON_VERSION__` via
+  `define`, `src/ui/vite.config.ts`), and `maybeSelfHeal` (`src/ui/self-heal.ts`),
+  called from the snapshot handlers in `src/ui/api.ts`, reloads the tab once when the two
+  differ. The reload is guarded by a `sessionStorage` key keyed to the **target** (the
+  daemon's) version, set before reloading, so a version that can't converge reloads at
+  most once and never loops. A snapshot rides the stream's open (and every EventSource
+  reconnect, since there is no event-id replay), so a tab re-learns the version right
+  after the restart. The review screen's renderer error boundary is the reactive
+  backstop: it auto-reloads once per tab on a vanished chunk, then falls back to a manual
+  "Reload" link. (Plan `docs/plans/2026-06-19-auto-update-outdated-version.md`, D10/D11.)
+- **Why:** Without this, an open tab silently wedges the moment it next fetches a lazy
+  chunk after an update — exactly the case auto-update makes common. The version already
+  rides a frame the tab receives on every (re)connect, so no new endpoint or poll is
+  needed; comparing it to the baked-in build version is a one-line, dependency-free check.
+  The fix is forcing the reload, not changing caching: `index.html` is already served
+  `no-cache` and the hashed assets `immutable`, so a reload fetches the fresh shell and
+  its new chunks. Keying the guard to the target version (not a plain "reloaded" flag) is
+  what makes a non-converging mismatch (CLI updated, daemon pinned, or vice versa)
+  safe — it reloads once for that target and then sits still. The proactive version path
+  is primary; the boundary's auto-reload is a belt-and-braces for a chunk that vanishes
+  without a version frame arriving to trigger the proactive path.
+- **Revisit when:** Snapshots stop being the universal reconnect carrier (e.g. event-id
+  replay is added, so a reconnect might not re-deliver `version`), the SPA gains routes
+  with no SSE stream that also need to self-heal, or a smoother in-place hot-swap (no full
+  reload) becomes worth the complexity.

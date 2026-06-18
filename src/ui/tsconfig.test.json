@@ -4,6 +4,7 @@
   "compilerOptions": {
     "types": ["bun", "vite/client"]
   },
-  "include": ["**/*.test.ts", "**/*.test.tsx"],
+  "//include": "Pull in *.d.ts (vite-env.d.ts) alongside the tests so ambient globals like __OTACON_VERSION__ — baked in by Vite's define, read by self-heal.ts — resolve when a test imports the module under test.",
+  "include": ["**/*.test.ts", "**/*.test.tsx", "**/*.d.ts"],
   "exclude": []
 }

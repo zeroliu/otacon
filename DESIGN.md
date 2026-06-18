@@ -562,7 +562,9 @@ finalize — and hand the agent an un-swept thread that wedges its L5 fold-in).
 `/` and `/s/:id` serve the SPA shell (static assets under `/assets/`); an unknown
 session id renders as a client-side not-found state. Each SSE stream opens with a
 `snapshot` frame (the per-session stream's snapshot carries the thread list, the
-grill transcript, and the activity feed), then pushes `session` / `revision` /
+grill transcript, and the activity feed; every snapshot — index and per-session —
+also carries the daemon's `version`, which open tabs use to self-heal after an
+update, see §16), then pushes `session` / `revision` /
 `queue` / `thread` / `grill` / `activity` / `removed` frames as state changes — a
 `revision` frame carries the revision number and its changelog; a `thread` frame is
 an upsert: a new comment/question thread (a follow-up question carries `replyTo`, the
@@ -1400,5 +1402,19 @@ install` fails for any reason (a non-writable global dir, npm missing) otacon **
 escalates to sudo** — it prints the manual `npm install -g otacon@latest` command and
 proceeds on the installed version.
 
+A restart swaps the daemon's code, but an already-open review tab is still running the
+JS bundle it loaded — whose content-hashed lazy chunks (the plan renderer, mermaid)
+404 against the rebuilt `dist/ui` and wedge the page. So **open tabs self-heal**: every
+SSE snapshot carries the daemon's `version` (§6), and an EventSource reconnect after the
+restart re-delivers it; when that differs from the version baked into the running bundle
+(`__OTACON_VERSION__`, stamped by the Vite build) the tab reloads once to fetch the
+fresh code. The reload is guarded by a `sessionStorage` key keyed to the target version,
+so a version that can't converge (the daemon updated but the bundle is pinned, or vice
+versa) reloads at most once and never loops. This leans on the existing cache headers:
+`index.html` is served `no-cache` and the hashed assets `immutable`, so the reload pulls
+the new shell and its new chunks rather than a stale cached copy. As a backstop, the
+review screen's renderer error boundary (which catches a vanished lazy chunk) also
+auto-reloads once per tab — falling back to a manual "Reload" link if that didn't fix it.
+
 `npm update -g otacon` still works for a manual bump; the version handshake restarts the
-daemon on next use either way.
+daemon on next use either way, and open tabs self-heal the same way.
