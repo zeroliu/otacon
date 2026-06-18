@@ -27,6 +27,15 @@ export function globalConfigPath(): string {
 }
 
 /**
+ * The auto-update check cache (`<OTACON_HOME>/update-check.json`, DESIGN.md
+ * §16): records `checkedAt` so `otacon start` throttles the registry fetch to
+ * once per hour instead of paying a round-trip on every start.
+ */
+export function updateCachePath(): string {
+  return join(otaconHome(), "update-check.json");
+}
+
+/**
  * The canonical home plan archive root (`<OTACON_HOME>/sessions`, DESIGN.md
  * §12): every approved plan lands here keyed by its session id, regardless of
  * the repo. This store is permanent — `otacon clean` never touches it — so a

@@ -2437,3 +2437,25 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Users ask otacon to scaffold `.gitignore` again (e.g. an opt-in
   `otacon install` flag), or `worktree.dir`'s `~` needs expanding somewhere otacon
   consumes it directly rather than handing it to a shell.
+
+## Auto-update: 1h throttle + registry fetch, both fail-open
+
+- **Decision:** The `otacon start` update check (DESIGN §16) throttles to once per hour
+  via a `$OTACON_HOME/update-check.json` cache (`checkedAt`), and discovers the latest
+  version by a direct GET to `registry.npmjs.org/otacon/latest` with a 1.5s
+  `AbortSignal.timeout` — not by shelling out to `npm view`. Every failure path is
+  fail-open: a malformed/absent cache counts as "due" rather than wedging the check off,
+  and any fetch error (network, non-200, bad JSON, missing version, timeout) resolves to
+  `undefined` so the caller proceeds on the installed version. `update.auto` (default
+  true) is the only opt-out — no env var, no CI auto-skip. (Plan
+  `docs/plans/2026-06-19-auto-update-outdated-version.md`, D3/D4/D5.)
+- **Why:** A network round-trip on every start would tax the common case for a check
+  that rarely changes anything; the 1h window keeps starts fast while still catching a
+  release within the hour. A raw registry GET avoids spawning npm just to read a version
+  (faster, no subprocess, easy to time-bound and mock in tests). Fail-open everywhere
+  keeps the update path strictly additive — a flaky registry, an offline machine, or a
+  corrupt cache can never block or slow a session, which is the whole point of running
+  the check before any session exists.
+- **Revisit when:** Releases need to propagate faster than an hour (shorten/parameterize
+  the window), the registry endpoint or its JSON shape changes, or users want an env-var
+  / CI auto-skip opt-out in addition to `update.auto`.

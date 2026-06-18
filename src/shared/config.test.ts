@@ -229,6 +229,28 @@ describe("loadConfig plans", () => {
   });
 });
 
+describe("loadConfig update", () => {
+  test("update.auto defaults to true", () => {
+    expect(loadConfig(repo).update.auto).toBe(true);
+  });
+
+  test("global config can turn auto-update off", () => {
+    writeGlobal({ update: { auto: false } });
+    expect(loadConfig(repo).update.auto).toBe(false);
+  });
+
+  test("repo config overrides global for update.auto", () => {
+    writeGlobal({ update: { auto: false } });
+    writeRepo({ update: { auto: true } });
+    expect(loadConfig(repo).update.auto).toBe(true);
+  });
+
+  test("a non-boolean auto value is ignored, keeping the default", () => {
+    writeGlobal({ update: { auto: "yes" } });
+    expect(loadConfig(repo).update.auto).toBe(true);
+  });
+});
+
 describe("CONFIG_SCHEMA guard", () => {
   test("enumerates exactly the leaf keys of DEFAULT_CONFIG", () => {
     const schemaLeaves = new Set(CONFIG_SCHEMA.map((f) => `${f.section}.${f.key}`));

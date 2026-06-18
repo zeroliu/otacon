@@ -58,12 +58,24 @@ export interface PlansConfig {
   dir: string;
 }
 
+/**
+ * Auto-update at `otacon start` (DESIGN.md §16). When `auto` is true (default),
+ * a pre-session gate fetches the latest published version and self-updates;
+ * set it false to pin the installed version (CI, air-gapped, pinned-version
+ * shops). Only `otacon start` ever runs the check; the 1h throttle and the
+ * registry fetch are fail-open.
+ */
+export interface UpdateConfig {
+  auto: boolean;
+}
+
 export interface OtaconConfig {
   budgets: Budgets;
   activity: ActivityConfig;
   notifications: Notifications;
   worktree: WorktreeConfig;
   plans: PlansConfig;
+  update: UpdateConfig;
 }
 
 export const DEFAULT_CONFIG: OtaconConfig = {
@@ -88,6 +100,7 @@ export const DEFAULT_CONFIG: OtaconConfig = {
   notifications: { desktop: true },
   worktree: { dir: "~/.otacon/worktrees" },
   plans: { dir: ".otacon/plans" },
+  update: { auto: true },
 };
 
 export type ConfigFieldType = "int" | "bool" | "path";
@@ -267,6 +280,15 @@ export const CONFIG_SCHEMA: ConfigField[] = [
     type: "path",
     default: DEFAULT_CONFIG.plans.dir,
   },
+  // update — auto-update at otacon start (DESIGN.md §16)
+  {
+    section: "update",
+    key: "auto",
+    label: "Auto-update on start",
+    description: "Self-update to the latest published version at otacon start (off pins the installed version).",
+    type: "bool",
+    default: DEFAULT_CONFIG.update.auto,
+  },
 ];
 
 type CoerceResult = { ok: true; value: number | boolean | string } | { ok: false };
@@ -352,6 +374,7 @@ function overlayConfig(base: OtaconConfig, raw: unknown, source: string): Otacon
     notifications: { ...base.notifications },
     worktree: { ...base.worktree },
     plans: { ...base.plans },
+    update: { ...base.update },
   };
   const mergedSections = merged as unknown as Record<string, Record<string, unknown>>;
   walkProvidedFields(raw, (section, field, result) => {
@@ -374,7 +397,7 @@ function overlayConfig(base: OtaconConfig, raw: unknown, source: string): Otacon
  * (`<repo>/.otacon/config.local.json`, personal). Closest wins. Loaded fresh
  * on every use so tuning takes effect immediately. Each file is overlaid field
  * by field against CONFIG_SCHEMA (budgets, activity, notifications, worktree,
- * plans).
+ * plans, update).
  */
 export function loadConfig(repoRoot?: string): OtaconConfig {
   const overlay = (source: string, into: OtaconConfig): OtaconConfig =>

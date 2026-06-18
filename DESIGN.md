@@ -1328,9 +1328,10 @@ Config is layered, mirroring Claude Code's `settings.json` + `settings.local.jso
 **personal**) — closest wins. Every override file is optional. Tunables include
 budgets/lint caps, the activity feed (`activity.cap`, `activity.noteMaxChars`),
 `notifications.desktop`, `worktree.dir` (base dir for Implement build worktrees, default
-`~/.otacon/worktrees`, outside the repo), and `plans.dir` (where **Save** writes the
+`~/.otacon/worktrees`, outside the repo), `plans.dir` (where **Save** writes the
 project copy of the approved plan, default `.otacon/plans`; set it to `docs/plans` to
-group it with other tracked plans). The home archive location is fixed
+group it with other tracked plans), and `update.auto` (auto-update at `otacon start`,
+default true; see Updating below). The home archive location is fixed
 (`~/.otacon/sessions/`), not configurable.
 
 Config is editable two ways over those override files: by hand, or through
@@ -1378,5 +1379,14 @@ looked in, and — when in a repo — mentions `--project` as an install option.
 
 ### Updating
 
-`npm update -g otacon` — the version handshake restarts the daemon on next use; no
-other steps.
+`otacon start` self-updates: before a session exists it discovers the latest
+published version (GET `registry.npmjs.org/otacon/latest`, short timeout, fail-open
+on any error) and updates the global install when a newer one is published. The check
+is throttled to once per hour via `$OTACON_HOME/update-check.json` (a `checkedAt`
+timestamp), so most starts pay no network cost. Turn it off with the `update.auto`
+config key (default true) to pin the installed version (CI, air-gapped, pinned-version
+shops). Only `otacon start` runs the check — the tight loops (wait/ask/progress) never
+do — and a run from a source checkout (a `.ts` daemon entry) is skipped.
+
+`npm update -g otacon` still works for a manual bump; the version handshake restarts the
+daemon on next use either way.

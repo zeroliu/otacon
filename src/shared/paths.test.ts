@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { homeSessionDir, homeSessionsDir } from "./paths.js";
+import { homeSessionDir, homeSessionsDir, updateCachePath } from "./paths.js";
 
 let savedHome: string | undefined;
 
@@ -29,5 +29,16 @@ describe("home plan archive paths", () => {
     process.env.OTACON_HOME = "/tmp/otacon-other";
     expect(homeSessionsDir()).toBe(join("/tmp/otacon-other", "sessions"));
     expect(homeSessionDir("otc_zzz")).toBe(join("/tmp/otacon-other", "sessions", "otc_zzz"));
+  });
+});
+
+describe("update check cache path", () => {
+  test("updateCachePath is <OTACON_HOME>/update-check.json", () => {
+    expect(updateCachePath()).toBe(join("/tmp/otacon-home-test", "update-check.json"));
+  });
+
+  test("OTACON_HOME is read at call time for the cache path too", () => {
+    process.env.OTACON_HOME = "/tmp/otacon-other";
+    expect(updateCachePath()).toBe(join("/tmp/otacon-other", "update-check.json"));
   });
 });
