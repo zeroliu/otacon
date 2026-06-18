@@ -1834,6 +1834,25 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   element, or scroll-driven compaction proves janky on a real low-end device (a
   scroll-timeline / `content-visibility` approach would be the next lever).
 
+## Review page disables scroll anchoring so the compacting header can't move scrollY
+
+- **Decision:** The review page (`.page-review`) sets `overflow-anchor: none` so the
+  sticky header's compact-on-scroll resize cannot move `window.scrollY`.
+- **Why:** Default scroll anchoring compensates the scroll offset when an above-the-fold
+  element resizes (~44px header collapse), and that compensation exceeds the compact
+  hysteresis band (enter 48 / exit 12), re-crossing the fold threshold and oscillating
+  the header compact⇄expand whenever the rest scroll sits near the fold (reproduced
+  in-browser; scrollY pumped 52→9→back). Disabling anchoring on the review subtree
+  freezes scrollY through the resize, so the fold decision is stable. Chosen over
+  widening the band because it removes the cause instead of out-tuning a content-dependent
+  delta (the band-width fragility this file's sticky-header "Revisit when" already
+  flagged). Safari ships no scroll anchoring at all and is unaffected; this just makes
+  Chrome/Firefox match it. Scoped to `.page-review` so index and settings keep anchoring.
+- **Revisit when:** A genuinely short plan (total height within the header-collapse delta
+  of the viewport) still clamp-loops at the bottom, or the review screen needs scroll
+  anchoring back for late-resizing above-the-fold content (a revision banner appearing
+  while scrolled down); then a controller-level room-gate would be the lever.
+
 ## Persistent thread marks paint from a ReviewLoop effect, never a PlanView re-render
 
 - **Decision:** Open threads (unanswered questions, unresolved comments) and unsent

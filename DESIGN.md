@@ -912,7 +912,9 @@ returns to the index.
   repo/branch, status, the agent-presence dot, plus the session switcher, the
   clean⇄diff toggle, and Approve. It **compacts** to a tight one-line bar as the plan
   scrolls down and re-expands at the top; because it is a single element there is no
-  second copy to keep in sync. The diff baseline picker, the changed-section tally
+  second copy to keep in sync. The review page disables scroll anchoring so the header's
+  compaction cannot perturb the scroll offset, which would otherwise re-cross the fold and
+  flicker the header. The diff baseline picker, the changed-section tally
   (`j`/`k`), and the changelog recall live below it in a contextual in-flow strip, not
   in the header.
 - Lead diagram: the Summary's ` ```mermaid ` chart (§4) is the **first screen** —
