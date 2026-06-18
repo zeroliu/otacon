@@ -27,12 +27,42 @@ export function globalConfigPath(): string {
 }
 
 /**
- * The gitignored, UI-written project config (`<repo>/.otacon/config.json`).
- * Lives in the already-gitignored `.otacon/` dir, so the Settings UI never
- * touches a tracked file. Overrides the global config for this repo.
+ * The canonical home plan archive root (`<OTACON_HOME>/sessions`, DESIGN.md
+ * §12): every approved plan lands here keyed by its session id, regardless of
+ * the repo. This store is permanent — `otacon clean` never touches it — so a
+ * plan is always recoverable even after its repo working state is archived.
+ */
+export function homeSessionsDir(): string {
+  return join(otaconHome(), "sessions");
+}
+
+/**
+ * One session's home archive dir (`<OTACON_HOME>/sessions/<id>`). The session
+ * id is a globally-unique hash, so this never collides across repos — mirroring
+ * the repo-local `.otacon/<id>/` layout. The approved plan lands here as
+ * `<date>-<slug>.md`.
+ */
+export function homeSessionDir(id: string): string {
+  return join(homeSessionsDir(), id);
+}
+
+/**
+ * The team-shared project config (`<repo>/.otacon/config.json`), mirroring
+ * Claude Code's `settings.json`. It overrides the global (user) config for this
+ * repo and is in turn overridden by the local override below.
+ */
+export function repoConfigPath(repoRoot: string): string {
+  return join(otaconDir(repoRoot), "config.json");
+}
+
+/**
+ * The personal, per-developer project override
+ * (`<repo>/.otacon/config.local.json`), mirroring Claude Code's
+ * `settings.local.json`. The Settings UI writes it for a one-off override that
+ * wins over both the user and the team project config.
  */
 export function repoLocalConfigPath(repoRoot: string): string {
-  return join(otaconDir(repoRoot), "config.json");
+  return join(otaconDir(repoRoot), "config.local.json");
 }
 
 export function otaconDir(repoRoot: string): string {
@@ -68,11 +98,6 @@ export function transcriptPath(repoRoot: string, id: string): string {
 /** The append-only live-activity feed (DESIGN.md §6, §12) — `otacon progress` notes. */
 export function activityPath(repoRoot: string, id: string): string {
   return join(sessionDir(repoRoot, id), "activity.json");
-}
-
-/** Where approved plan artifacts land (DESIGN.md §12). */
-export function plansDir(repoRoot: string): string {
-  return join(repoRoot, "docs", "plans");
 }
 
 export function revisionPath(repoRoot: string, id: string, n: number): string {

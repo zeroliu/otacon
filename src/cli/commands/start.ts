@@ -1,10 +1,7 @@
 // otacon start --title <t> [--quick] — mint and register a session (DESIGN.md
-// §6, §16): POST /api/sessions, append .otacon/ to the repo's .gitignore if
-// missing (with a notice), print the session id and review URL. No local
+// §6, §16): POST /api/sessions, print the session id and review URL. No local
 // session pointer — the daemon registry is the single source of truth (§7).
 
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import { parseArgs } from "node:util";
 import type { RegistrySession } from "../../shared/types.js";
 import { api, baseUrl, ensureDaemon } from "../client.js";
@@ -40,8 +37,6 @@ export async function startCommand(argv: string[]): Promise<number> {
   }
   const session = created.body as unknown as RegistrySession;
 
-  if (gitRoot !== undefined) ensureGitignore(gitRoot);
-
   printJson({
     ok: true,
     session: session.id,
@@ -52,20 +47,4 @@ export async function startCommand(argv: string[]): Promise<number> {
     url: `${baseUrl()}/s/${session.id}`,
   });
   return 0;
-}
-
-/** First start in a repo appends .otacon/ to .gitignore, with a notice (DESIGN.md §16). */
-export function ensureGitignore(repo: string): void {
-  const path = join(repo, ".gitignore");
-  const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
-  const covered = existing
-    .split("\n")
-    .some((line) => /^\/?\.otacon\/?$/.test(line.trim()));
-  if (covered) return;
-  // Match the file's own line endings — appending LF to a CRLF file would
-  // leave it with mixed endings.
-  const eol = existing.includes("\r\n") ? "\r\n" : "\n";
-  const separator = existing === "" || existing.endsWith("\n") ? "" : eol;
-  appendFileSync(path, `${separator}.otacon/${eol}`);
-  notice(`appended .otacon/ to ${path} (working state stays out of git, DESIGN.md §12)`);
 }

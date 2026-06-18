@@ -3,12 +3,21 @@ import type { ApproveResult } from "../api.js";
 import { approveMove } from "./approve.js";
 
 // approveMove is the pure translation both the direct fire and the drafts
-// "Send & commit" flush-then-fold path share — every UI branch (close, defer,
+// "Send & approve" flush-then-fold path share — every UI branch (close, defer,
 // warn, error) is decided here, so it carries the dialog's whole control flow.
 describe("approveMove", () => {
-  test("a finalize-now success carries the artifact path through to approved", () => {
-    const result: ApproveResult = { ok: true, path: "docs/plans/r3.md", revision: 3 };
-    expect(approveMove(result, false)).toEqual({ kind: "approved", path: "docs/plans/r3.md" });
+  test("a finalize-now success carries the saved path + home archive through to approved", () => {
+    const result: ApproveResult = {
+      ok: true,
+      path: ".otacon/plans/2026-06-16-x.md",
+      home: "/home/u/.otacon/sessions/otc_x/2026-06-16-x.md",
+      revision: 3,
+    };
+    expect(approveMove(result, false)).toEqual({
+      kind: "approved",
+      path: ".otacon/plans/2026-06-16-x.md",
+      home: "/home/u/.otacon/sessions/otc_x/2026-06-16-x.md",
+    });
   });
 
   test("a deferred (comment & approve) success becomes finalizing — the SSE frame drives", () => {
@@ -31,7 +40,7 @@ describe("approveMove", () => {
     expect(approveMove(result, false)).toEqual({ kind: "warn", unresolved: 1, openComments: 0 });
   });
 
-  test("a force commit never re-warns on unresolved threads — its 409 surfaces as an error", () => {
+  test("a force save never re-warns on unresolved threads — its 409 surfaces as an error", () => {
     const result: ApproveResult = {
       ok: false,
       code: "E_UNRESOLVED_THREADS",

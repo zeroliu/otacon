@@ -4,7 +4,8 @@
 # (idempotently; --hooks merges settings.json additively), doctor reports green
 # on a healthy setup and red on a squatted port, open prints the right URLs,
 # a full mini-loop then approve then clean archives the session dir and prunes
-# the registry while docs/plans survives, the Stop hook blocks/allows
+# the registry while the .otacon/plans project copy + home archive survive, the
+# Stop hook blocks/allows
 # correctly, and expose handles both a missing tailscale (graceful error) and
 # a stubbed one (tailnet URL). Hermetic: temp HOME, temp OTACON_HOME, temp git
 # repos, ephemeral port, OTACON_TAILSCALE pinned away from any real tailscale.
@@ -136,7 +137,11 @@ sed "s/otc_test01/$SID/" "$ROOT/test/fixtures/valid-plan.md" > ".otacon/$SID/pla
 otacon submit > /dev/null
 curl -s -X POST "$BASE/api/sessions/$SID/approve" -H 'content-type: application/json' \
   -d '{"force":true}' > "$TMP/approved.json"
+# A plain Save: path = the project copy under .otacon/plans; home = the archive.
 ART_PATH="$(json_field path "$TMP/approved.json")"
+[[ "$ART_PATH" == .otacon/plans/*.md ]] || fail "unexpected artifact path $ART_PATH"
+HOME_ART="$(json_field home "$TMP/approved.json")"
+[[ "$HOME_ART" == "$OTACON_HOME/sessions/$SID/"*.md ]] || fail "unexpected home archive path $HOME_ART"
 otacon wait --timeout 10 --session "$SID" > "$TMP/wait.json"
 [ "$(json_field event "$TMP/wait.json")" = "approved" ] || fail "wait did not drain the approved event"
 otacon clean > "$TMP/clean.json" 2> /dev/null
@@ -144,11 +149,14 @@ otacon clean > "$TMP/clean.json" 2> /dev/null
 [ -d "$REPO/.otacon/archive/$SID" ] || fail "session dir was not archived"
 [ -f "$REPO/.otacon/archive/$SID/session.json" ] || fail "archived dir lost its state files"
 [ ! -d "$REPO/.otacon/$SID" ] || fail "live session dir still exists after clean"
-[ -f "$REPO/$ART_PATH" ] || fail "clean must never touch docs/plans artifacts"
+# clean archives the session dir but must never touch the project plan copy
+# (.otacon/plans) nor the permanent home archive (~/.otacon/sessions/).
+[ -f "$REPO/$ART_PATH" ] || fail "clean must never touch the .otacon/plans project copy"
+[ -f "$HOME_ART" ] || fail "clean must never touch the home archive (~/.otacon/sessions/)"
 curl -s "$BASE/api/sessions" | grep -q "$SID" && fail "registry still lists the cleaned session"
 otacon clean > "$TMP/clean2.json" 2> /dev/null
 [ "$(json_field 'cleaned.length' "$TMP/clean2.json")" = "0" ] || fail "second clean should find nothing"
-ok "clean archived .otacon/$SID → .otacon/archive/, pruned the registry, kept docs/plans"
+ok "clean archived .otacon/$SID → .otacon/archive/, pruned the registry, kept the .otacon/plans copy + home archive"
 
 # --- 8. Stop hook: blocks open, allows approved/absent/daemon-down --------------
 cd "$REPO2"

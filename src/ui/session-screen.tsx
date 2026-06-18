@@ -145,6 +145,9 @@ function ReviewLoop({
   // notice falls back to the destination folder (the path is not persisted
   // on the session summary — DECISIONS.md).
   const [approvedPath, setApprovedPath] = useState<string | null>(null);
+  // The absolute home-archive path heard from the approve response, so the
+  // read-only notice can name the home copy alongside the project path.
+  const [approvedHome, setApprovedHome] = useState<string | null>(null);
   // Persistent thread marks (DESIGN.md §10): open threads + unsent drafts keep
   // their anchored plan text lit. `renderTick` re-fires the paint once the
   // lazy/memo'd PlanView commits (mount + every revision swap); `focusThread`
@@ -579,7 +582,7 @@ function ReviewLoop({
       />
       <div className="review-layout">
         <div className="review-main">
-          {over && <ApprovedNote path={approvedPath} />}
+          {over && <ApprovedNote path={approvedPath} home={approvedHome} />}
           {finalizing && <ApprovingNote sessionId={session.id} />}
           {hasPlan && (
             <ReviewControls
@@ -683,8 +686,8 @@ function ReviewLoop({
           sessionId={session.id}
           revision={session.revision}
           // The drawer holds browser-only drafts the daemon never saw; the gate
-          // catches them before finalize (Send & commit flushes + folds in,
-          // Discard & commit drops them) rather than letting Approve silently
+          // catches them before finalize (Send & approve flushes + folds in,
+          // Discard & approve drops them) rather than letting Approve silently
           // skip them (DESIGN.md §10, §12). Count only sendable (non-blank)
           // drafts: a half-typed blank isn't a comment to protect, and flushing
           // it would 400 the whole batch.
@@ -692,13 +695,16 @@ function ReviewLoop({
           onFlushDrafts={flushDrafts}
           onDiscardDrafts={() => setPending([])}
           onClose={() => setApproveOpen(false)}
-          onApproved={(path, implement) => {
-            // Plain approve: the session SSE frame flips the status (and this
-            // screen) to approved; the path renders in the read-only notice.
-            // Approve & Implement: the frame arrives as `implementing` (not
-            // over), so the screen stays interactive and the path notice never
-            // shows — don't pin it (it would mislead if the build later ends).
-            if (!implement) setApprovedPath(path);
+          onApproved={(path, home, implement) => {
+            // Save: the session SSE frame flips the status (and this screen) to
+            // approved; the saved path + home archive render in the read-only
+            // notice. Implement: the frame arrives as `implementing` (not over),
+            // so the screen stays interactive and the notice never shows — don't
+            // pin it (it would mislead if the build later ends).
+            if (!implement) {
+              setApprovedPath(path);
+              setApprovedHome(home);
+            }
             setApproveOpen(false);
           }}
         />
@@ -823,7 +829,7 @@ export function SessionScreen({ id }: { id: string }) {
           <p className="empty-title">session closed</p>
           <p className="empty-body">
             This session left the codec — approved and cleaned, or deleted from review. Any
-            approved plan stays committed under <code>docs/plans/</code>.
+            approved plan stays preserved in the home archive (<code>~/.otacon/sessions/</code>).
           </p>
         </main>
       </div>

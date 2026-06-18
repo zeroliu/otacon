@@ -7,15 +7,22 @@
 import type { ConfigField, OtaconConfig, ScopeValues } from "../shared/config.js";
 
 /**
- * Section render order for the Settings screen. Worktree leads (it's the field
- * an Approve & Implement build reads first), notifications second; the line
- * budgets follow as the long tail. Independent of CONFIG_SCHEMA's own order.
+ * Display grouping for the Settings screen: each heading collects one or more
+ * config sections' fields, in order. The two storage-location knobs — where
+ * Implement opens build worktrees (`worktree.dir`) and where Save writes the
+ * project plan copy (`plans.dir`) — share the "worktree" heading; they can't
+ * share a *storage* section (both keys are `dir`), so the display grouping is
+ * decoupled from the on-disk section here. Worktree leads (the field an Approve
+ * & Implement build reads first), notifications second, the line budgets as the
+ * long tail. Independent of CONFIG_SCHEMA's own order. A config section absent
+ * from every group has its fields dropped — the schema guard test (settings.test)
+ * asserts that set is empty, so no field can render-vanish.
  */
-const SECTION_ORDER: Array<keyof OtaconConfig> = [
-  "worktree",
-  "notifications",
-  "budgets",
-  "activity",
+const SECTION_GROUPS: ReadonlyArray<{ title: string; sections: ReadonlyArray<keyof OtaconConfig> }> = [
+  { title: "worktree", sections: ["worktree", "plans"] },
+  { title: "notifications", sections: ["notifications"] },
+  { title: "budgets", sections: ["budgets"] },
+  { title: "activity", sections: ["activity"] },
 ];
 
 /**
@@ -32,22 +39,24 @@ export function distinctRepos(sessions: Iterable<{ repo: string }>): string[] {
   return [...seen].sort((a, b) => a.localeCompare(b));
 }
 
-/** One section's heading plus its fields, in schema order. */
+/** One heading plus the fields rendered under it, in display order. */
 export interface SectionFields {
-  section: keyof OtaconConfig;
+  /** The display heading (a SECTION_GROUPS title, not necessarily a config key). */
+  section: string;
   fields: ConfigField[];
 }
 
 /**
- * Group the flat schema into sections in the fixed SECTION_ORDER, preserving
- * each field's order within its section. A section with no fields is omitted,
- * and any field whose section is outside the known order is dropped (it could
- * not render under a heading) — the schema guard test keeps that set empty.
+ * Group the flat schema into the fixed SECTION_GROUPS, preserving each field's
+ * order within its section and each section's order within a group. A group
+ * with no fields is omitted, and any field whose section is in no group is
+ * dropped (it could not render under a heading) — the schema guard test keeps
+ * that set empty.
  */
 export function fieldsBySection(schema: ConfigField[]): SectionFields[] {
-  return SECTION_ORDER.map((section) => ({
-    section,
-    fields: schema.filter((field) => field.section === section),
+  return SECTION_GROUPS.map(({ title, sections }) => ({
+    section: title,
+    fields: sections.flatMap((s) => schema.filter((field) => field.section === s)),
   })).filter((group) => group.fields.length > 0);
 }
 
@@ -71,24 +80,64 @@ export function isSet(values: ScopeValues | undefined, field: ConfigField): bool
   return section !== undefined && field.key in section;
 }
 
+/** Where an inherited fallback comes from, mirroring the overlay order. */
+export type InheritedFrom = "project" | "user" | "default";
+
+/**
+ * One ancestor scope in the inheritance chain: its label (the source the hint
+ * names) and its sparse values. The chain is passed highest-precedence-first
+ * (so `project` before `user`), mirroring the file overlay defaults ← user ←
+ * project ← project.local (DESIGN.md §16): the first ancestor that overrides the
+ * field wins, and reports itself as the source.
+ */
+export interface ParentScope {
+  from: "project" | "user";
+  values: ScopeValues | undefined;
+}
+
 /**
  * The value a field falls back to when the active scope doesn't override it,
- * plus where that fallback comes from. `parent` is the scope the active one
- * inherits from — the User profile when editing Project; `undefined` when
- * editing User (which has no parent, so it always falls back to the schema
- * default). When the parent overrides the field, *its* value is the effective
- * default the Project view shows; otherwise the schema default applies.
+ * plus where that fallback comes from. `parents` is the inheritance chain the
+ * active scope sits atop, highest-precedence first:
+ *   - User scope    → `[]` (no parent; always the schema default).
+ *   - Project scope → `[user]` (user override, else the schema default).
+ *   - Project·local → `[project, user]` (project override, else user override,
+ *     else the schema default).
+ * The first ancestor that sets the field wins and names itself as `from`;
+ * otherwise the schema default applies.
  */
 export interface InheritedValue {
   value: number | boolean | string;
-  from: "user" | "default";
+  from: InheritedFrom;
 }
 
-export function inheritedValue(
-  field: ConfigField,
-  parent: ScopeValues | undefined,
-): InheritedValue {
-  const fromParent = currentValue(parent, field);
-  if (fromParent !== undefined) return { value: fromParent, from: "user" };
+export function inheritedValue(field: ConfigField, parents: ParentScope[]): InheritedValue {
+  for (const parent of parents) {
+    const value = currentValue(parent.values, field);
+    if (value !== undefined) return { value, from: parent.from };
+  }
   return { value: field.default, from: "default" };
+}
+
+/** A higher-precedence scope that shadows the active one's value for a field. */
+export interface OverrideScope {
+  by: "project" | "project.local";
+  values: ScopeValues | undefined;
+}
+
+/**
+ * The highest-precedence scope *above* the active one that sets the field —
+ * what shadows the active scope's value at resolve time. `overriders` is passed
+ * highest-precedence first (project.local before project), so the first one that
+ * sets the field is the effective winner the active view flags. Returns `null`
+ * when nothing above the active scope overrides the field.
+ */
+export function overriddenBy(
+  field: ConfigField,
+  overriders: OverrideScope[],
+): "project" | "project.local" | null {
+  for (const scope of overriders) {
+    if (isSet(scope.values, field)) return scope.by;
+  }
+  return null;
 }

@@ -3,8 +3,9 @@
 # artifact (DESIGN.md §6 step 6, §8): otacon ask posts a question card, a curl
 # answer wakes the parked wait, lint L3 rejects citations of q ids missing
 # from the transcript and accepts real ones, approve refuses 409 on unresolved
-# threads, a forced approve writes docs/plans/<date>-<slug>.md with the
-# Interview appended and ends the session (mutations refused), and a --quick
+# threads, a forced approve (a plain Save) writes the home archive plus a
+# project copy under .otacon/plans/<date>-<slug>.md with the Interview appended
+# and ends the session (mutations refused), and a --quick
 # session downgrades L3 to warnings. Hermetic: temp OTACON_HOME, temp git
 # repo, ephemeral port.
 set -euo pipefail
@@ -130,7 +131,9 @@ HTTP=$(curl -s -o "$TMP/approved.json" -w '%{http_code}' \
   -X POST "$BASE/api/sessions/$SID/approve" -H 'content-type: application/json' -d '{"force":true}')
 [ "$HTTP" = "200" ] || fail "forced approve answered $HTTP"
 ART_PATH="$(json_field path "$TMP/approved.json")"
-[[ "$ART_PATH" == docs/plans/*-grill-loop.md ]] || fail "unexpected artifact path $ART_PATH"
+[[ "$ART_PATH" == .otacon/plans/*-grill-loop.md ]] || fail "unexpected artifact path $ART_PATH"
+HOME_ART="$(json_field home "$TMP/approved.json")"
+[[ "$HOME_ART" == "$OTACON_HOME/sessions/$SID/"*-grill-loop.md ]] || fail "unexpected home archive path $HOME_ART"
 wait "$WAIT_PID" || fail "parked wait exited nonzero"
 WAIT_PID=""
 # wait drains the comments event for t2 first; the approved event follows.
@@ -139,7 +142,8 @@ if [ "$(json_field event "$TMP/wait3.json")" = "comments" ]; then
 fi
 [ "$(json_field event "$TMP/wait3.json")" = "approved" ] || fail "wait did not deliver the approved event"
 [ "$(json_field path "$TMP/wait3.json")" = "$ART_PATH" ] || fail "approved event path mismatch"
-[ -f "$REPO/$ART_PATH" ] || fail "artifact file missing at $ART_PATH"
+[ "$(json_field home "$TMP/wait3.json")" = "$HOME_ART" ] || fail "approved event home mismatch"
+[ -f "$REPO/$ART_PATH" ] || fail "project copy missing at $ART_PATH"
 grep -q '^status: approved$' "$REPO/$ART_PATH" || fail "artifact frontmatter is not approved"
 grep -q '^revision: 2$' "$REPO/$ART_PATH" || fail "artifact frontmatter revision not corrected to 2"
 grep -q '^## Interview$' "$REPO/$ART_PATH" || fail "artifact has no Interview section"
@@ -147,7 +151,10 @@ grep -q '^### q1 — RS256 or HS256?$' "$REPO/$ART_PATH" || fail "Interview miss
 grep -q 'RS256 (recommended) | HS256' "$REPO/$ART_PATH" || fail "Interview missing the option chips"
 grep -q '^- Answer: RS256 — rotation story is simpler$' "$REPO/$ART_PATH" || fail "Interview missing q1's answer"
 grep -q '^- Answer: keep revocation out$' "$REPO/$ART_PATH" || fail "Interview missing q2's answer"
-ok "forced approve wrote $ART_PATH (status approved, Interview appended); wait got the event"
+# The canonical home archive carries the same approved artifact (permanent store).
+[ -f "$HOME_ART" ] || fail "home archive copy missing at $HOME_ART"
+grep -q '^status: approved$' "$HOME_ART" || fail "home archive frontmatter is not approved"
+ok "forced approve wrote $ART_PATH + home archive (status approved, Interview appended); wait got the event"
 
 # --- 7. the approved session refuses every further verb -----------------------
 set +e

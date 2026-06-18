@@ -55,7 +55,7 @@ test("config get returns the merged value (user overlay over defaults)", async (
 test("config get falls back to the default when no file overrides it", async () => {
   const code = await configCommand(["get", "worktree.dir"]);
   expect(code).toBe(0);
-  expect(printed()).toEqual({ ok: true, key: "worktree.dir", value: ".otacon/worktrees" });
+  expect(printed()).toEqual({ ok: true, key: "worktree.dir", value: "~/.otacon/worktrees" });
 });
 
 test("config get on an unknown key fails E_UNKNOWN_KEY (exit 1)", async () => {

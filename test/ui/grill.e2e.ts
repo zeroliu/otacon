@@ -3,7 +3,8 @@
 // card live (pre-plan: the grill happens before drafting), chip taps and free
 // text wake a parked `otacon wait` with the answer event, decision citations
 // deep-link into the Interview panel, and Approve warns on unresolved threads
-// before force writes the docs/plans/ artifact and locks the session.
+// before a force Save writes the .otacon/plans/ project copy (plus the home
+// archive) and locks the session.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -310,11 +311,12 @@ test("approve warns on unresolved threads, forces on confirm, locks the session,
   await page.goto(`/s/${session.id}`);
   await page.locator(".ctrl-approve").click();
 
-  // The confirm sheet is honest about what happens (§10): finalize → folder
-  // (the daemon picks the filename), session over.
+  // The confirm sheet is honest about what happens (§10): otacon never commits;
+  // Save writes the home archive plus a project copy, session over.
   const sheet = page.locator(".approve-sheet");
   await expect(sheet).toContainText("Finalize r1");
-  await expect(sheet).toContainText("docs/plans/");
+  await expect(sheet).toContainText("never commits");
+  await expect(sheet).toContainText(".otacon/plans");
   await expect(sheet).toContainText("the session is over");
   await sheet.locator(".btn-approve").click();
 
@@ -323,15 +325,16 @@ test("approve warns on unresolved threads, forces on confirm, locks the session,
   await expect(sheet).toContainText("1 unresolved thread");
   await sheet.locator(".btn-force").click();
 
-  // Approved: the quiet notice names the artifact; the chip flips over SSE.
+  // Approved: the quiet notice names the saved project copy; the chip flips
+  // over SSE.
   const note = page.locator(".approved-note");
   await expect(note).toBeVisible();
   await expect(page.locator(".chip")).toHaveText("approved");
   const noted = await note.locator(".approved-path").textContent();
-  const relPath = /docs\/plans\/\S+\.md/.exec(noted ?? "")?.[0];
+  const relPath = /\.otacon\/plans\/\S+\.md/.exec(noted ?? "")?.[0];
   expect(relPath).toBeTruthy();
 
-  // The artifact is on disk in the session's repo: daemon-rewritten
+  // The project copy is on disk in the session's repo: daemon-rewritten
   // frontmatter plus the appended interview (DESIGN.md §6 step 6).
   const artifact = readFileSync(join(session.repo, relPath!), "utf8");
   expect(artifact).toContain("status: approved");

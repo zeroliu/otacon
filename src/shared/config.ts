@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { globalConfigPath, repoLocalConfigPath } from "./paths.js";
+import { globalConfigPath, repoConfigPath, repoLocalConfigPath } from "./paths.js";
 
 export interface Budgets {
   summaryLines: number;
@@ -39,10 +39,22 @@ export interface Notifications {
 
 /**
  * Where Approve & Implement builds open their git worktrees. Consumed by the
- * agent implement loop; a repo-relative path is recommended so worktrees land
- * under the gitignored `.otacon/` tree.
+ * agent implement loop. Defaults to `~/.otacon/worktrees` (a `~`/absolute path
+ * outside the repo) so throwaway build trees never land in the project; a
+ * repo-relative path still works if you'd rather keep them under the repo.
  */
 export interface WorktreeConfig {
+  dir: string;
+}
+
+/**
+ * Where **Save** writes the approved plan's project copy (DESIGN.md §12). A
+ * repo-relative path; the default `.otacon/plans` keeps the copy beside otacon's
+ * other working state, set it to e.g. `docs/plans` to group it with other tracked
+ * plans. The canonical copy always lands in the home store
+ * (`~/.otacon/sessions/<id>/`); this only governs the in-project copy.
+ */
+export interface PlansConfig {
   dir: string;
 }
 
@@ -51,6 +63,7 @@ export interface OtaconConfig {
   activity: ActivityConfig;
   notifications: Notifications;
   worktree: WorktreeConfig;
+  plans: PlansConfig;
 }
 
 export const DEFAULT_CONFIG: OtaconConfig = {
@@ -73,7 +86,8 @@ export const DEFAULT_CONFIG: OtaconConfig = {
     noteMaxChars: 200,
   },
   notifications: { desktop: true },
-  worktree: { dir: ".otacon/worktrees" },
+  worktree: { dir: "~/.otacon/worktrees" },
+  plans: { dir: ".otacon/plans" },
 };
 
 export type ConfigFieldType = "int" | "bool" | "path";
@@ -240,9 +254,18 @@ export const CONFIG_SCHEMA: ConfigField[] = [
     section: "worktree",
     key: "dir",
     label: "Worktree directory",
-    description: "Base dir for Approve & Implement build worktrees (repo-relative recommended).",
+    description: "Base dir for Approve & Implement build worktrees (default ~/.otacon/worktrees, outside the repo).",
     type: "path",
     default: DEFAULT_CONFIG.worktree.dir,
+  },
+  // plans — where Save writes the approved plan's project copy (DESIGN.md §12)
+  {
+    section: "plans",
+    key: "dir",
+    label: "Plans directory",
+    description: "Where Save writes the approved plan copy in the project (repo-relative).",
+    type: "path",
+    default: DEFAULT_CONFIG.plans.dir,
   },
 ];
 
@@ -328,6 +351,7 @@ function overlayConfig(base: OtaconConfig, raw: unknown, source: string): Otacon
     activity: { ...base.activity },
     notifications: { ...base.notifications },
     worktree: { ...base.worktree },
+    plans: { ...base.plans },
   };
   const mergedSections = merged as unknown as Record<string, Record<string, unknown>>;
   walkProvidedFields(raw, (section, field, result) => {
@@ -345,16 +369,21 @@ function overlayConfig(base: OtaconConfig, raw: unknown, source: string): Otacon
 }
 
 /**
- * defaults ← $OTACON_HOME/config.json ← <repo>/.otacon/config.json.
- * Loaded fresh on every use so tuning takes effect immediately. Each file is
- * overlaid field by field against CONFIG_SCHEMA (budgets, activity,
- * notifications, worktree).
+ * defaults ← user (`$OTACON_HOME/config.json`) ← project
+ * (`<repo>/.otacon/config.json`, team-shared) ← project.local
+ * (`<repo>/.otacon/config.local.json`, personal). Closest wins. Loaded fresh
+ * on every use so tuning takes effect immediately. Each file is overlaid field
+ * by field against CONFIG_SCHEMA (budgets, activity, notifications, worktree,
+ * plans).
  */
 export function loadConfig(repoRoot?: string): OtaconConfig {
   const overlay = (source: string, into: OtaconConfig): OtaconConfig =>
     overlayConfig(into, readJsonFile(source), source);
   let config = overlay(globalConfigPath(), DEFAULT_CONFIG);
-  if (repoRoot) config = overlay(repoLocalConfigPath(repoRoot), config);
+  if (repoRoot) {
+    config = overlay(repoConfigPath(repoRoot), config);
+    config = overlay(repoLocalConfigPath(repoRoot), config);
+  }
   return config;
 }
 

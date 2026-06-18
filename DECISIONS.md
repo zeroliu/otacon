@@ -113,7 +113,8 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 - **Decision:** `otacon start` resolves `git rev-parse --show-toplevel` and puts
   `.otacon/` there (the daemon writes session state under `.otacon/<id>/`); in non-git
-  directories it warns and uses the cwd, skipping the `.gitignore` append.
+  directories it warns and uses the cwd. (otacon touches no `.gitignore` either way — see
+  "otacon manages no `.gitignore`" below.)
 - **Why:** Subdirectory invocations must resolve to the same repo root the registry
   records, so the cwd's single active session is found from anywhere under it; separate
   worktrees have distinct roots, which preserves worktree-parallel planning for free.
@@ -158,6 +159,11 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 ## Project config: gitignored `<repo>/.otacon/config.json`, no committed layer
 
+> [!warning] Superseded by "Two-tier project config" below. This made
+> `<repo>/.otacon/config.json` gitignored with no committed layer; the two-tier
+> decision makes `config.json` the **committed** project layer and adds a
+> gitignored `config.local.json` override.
+
 - **Decision:** The per-repo config override is `<repo>/.otacon/config.json` (in the
   already-gitignored `.otacon/` dir). The old committed `<repo>/otacon.config.json`
   layer is dropped — the read order is now defaults ← `~/.otacon/config.json` ←
@@ -170,17 +176,49 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** A genuinely shared, reviewed project config (committed, PR-edited)
   becomes worth reintroducing as a distinct layer.
 
+## Two-tier project config: committed `config.json` + gitignored `config.local.json`
+
+- **Decision:** Project config goes two-tier, mirroring Claude Code's `settings.json`
+  (committed) + `settings.local.json` (gitignored): `<repo>/.otacon/config.json` is the
+  **committed, team-shared** project layer and `<repo>/.otacon/config.local.json` is a
+  **gitignored, personal** override. Precedence is defaults ← user
+  (`~/.otacon/config.json`) ← project (`config.json`) ← project.local
+  (`config.local.json`) — closest wins. `otacon start` writes a **selective** ignore to
+  a fresh repo's `.gitignore` (`.otacon/*` + `!.otacon/config.json`) so all working
+  state stays ignored while `config.json` is trackable; `config.local.json` is caught by
+  the `.otacon/*` glob. The daemon `/api/config` GET/POST gain a `project.local` scope.
+  This supersedes the "gitignored, no committed layer" decision above (#11).
+- **Why:** The genuinely shared, reviewed project config that #11 deferred is now needed
+  so a team can commit a shared save location (the configurable-plan-storage feature):
+  `plans.dir` is a contract a team wants to share, not per-developer tuning. Claude
+  Code's two-tier split is the proven pattern — committed defaults plus a `.local`
+  personal escape hatch — so we adopt it verbatim rather than invent. The selective
+  gitignore keeps the one tracked file precise: `.otacon/*` + a single negation, instead
+  of enumerating every working-state path. No migration of pre-existing blanket
+  `.otacon/` ignores: pre-release, no repos carry one (decision t2), and `start` simply
+  leaves any existing otacon ignore line untouched.
+- **Revisit when:** Two tiers stop being enough (e.g. a third committed-but-environment
+  scope), or the selective-ignore negation collides with a path users want ignored under
+  `.otacon/`.
+- **Superseded in part** by "otacon manages no `.gitignore`; build worktrees live in
+  `~/.otacon`" below: the `.otacon/*` + `!.otacon/config.json` ignore `start` used to
+  write is gone. The two-tier *layering* survives unchanged (user ← project ←
+  project.local, closest wins); only the auto-ignore did — `config.local.json` is no
+  longer special-cased out of git, so a developer who wants it private now ignores it
+  themselves.
+
 ## Single `CONFIG_SCHEMA` as the source of truth; `worktree.dir` tunable
 
 - **Decision:** One `CONFIG_SCHEMA` (field metadata: section/key/label/type/default/min)
   enumerates every leaf config key; runtime merging, the API validator, and the future
   UI all derive from it. A guard test asserts it matches `DEFAULT_CONFIG` exactly. Added
-  a `worktree.dir` field (`type:"path"`, default `.otacon/worktrees`).
+  a `worktree.dir` field (`type:"path"`, default `~/.otacon/worktrees` — see the
+  worktree-location decision below; was `.otacon/worktrees` when first added).
 - **Why:** Two parallel code paths (file merge + API validation) drifting apart is the
   obvious failure mode once a UI can write config; one schema with one `coerceFieldValue`
   rule per type keeps them in lockstep, and the guard test makes "added a key but forgot
-  the schema/UI" a test failure. `worktree.dir` lets builds land outside `.otacon/` when
-  a developer prefers it, without a new bespoke knob.
+  the schema/UI" a test failure. `worktree.dir` lets a developer relocate the build tree
+  without a new bespoke knob.
 - **Revisit when:** A field needs validation richer than int/bool/path (enums, ranges,
   cross-field constraints), or config grows nested structures the flat schema can't model.
 
@@ -222,25 +260,34 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 ## Settings screen shows inherited defaults + cross-scope override flags
 
 - **Decision:** The Settings screen presents each field's *inherited* fallback, not just
-  the schema default: on the Project scope the placeholder/unchecked value is the user
-  profile's override when the profile set it (flagged "default from user profile"), else
-  the schema default; on the User scope a field the compared project overrides is flagged
-  "overridden by project". To compute those flags the screen fetches `GET /api/config`
-  with `?repo=` whenever a repo is selected — on *both* tabs, not only Project — so both
-  scopes are always in hand. The repo selector therefore stays visible on the User tab as
-  an optional "compare repo" (the user file it writes is global regardless). No API or
-  storage change: the GET already returns both scopes, and POST still replaces one file.
-- **Why:** The overlay order (defaults ← user ← project) is invisible if every field just
-  shows its hardcoded schema default — a Project value that "looks unset" is actually
-  inheriting a user override, and a user setting silently loses to a project one. Showing
-  the *effective* inherited value and the override direction makes the precedence legible
-  at the point of editing. Fetching the project scope on the User tab is the cheapest way
-  to know the override direction without a new endpoint; the cost is that picking a
-  compare repo re-fetches and re-seeds the form (mirroring the existing reload-reseed), so
-  an in-progress User edit is discarded on repo change — acceptable for a rare action.
+  the schema default, across all three scopes (user < project < project.local). When a
+  field is unset in the active scope it shows the value it inherits and flags its source:
+  Project inherits the user profile ("default from user profile"); Project · local
+  inherits the committed project first, then the user profile ("default from project" /
+  "default from user profile"). It also flags a value shadowed from above: User flags a
+  field a project or project · local overrides ("overridden by project" / "overridden by
+  project · local"); Project flags a project · local override. The inherit/override chains
+  are computed by walking ordered ancestor/overrider lists (highest precedence first), so
+  the first scope that sets the field wins and names itself — there is no fixed two-scope
+  special-casing. An override hint wins the single hint slot over an inherit hint. To
+  compute these the screen fetches `GET /api/config` with `?repo=` whenever a repo is
+  selected — on *every* tab, not only the project ones — so all three scopes are always in
+  hand. The repo selector stays visible on the User tab as an optional "compare repo" (the
+  user file it writes is global regardless). No API or storage change: the GET already
+  returns all three scopes, and POST still replaces one file.
+- **Why:** The overlay order is invisible if every field just shows its hardcoded schema
+  default — a value that "looks unset" is actually inheriting from a lower scope, and a
+  setting can silently lose to a higher one. Showing the *effective* inherited value and
+  the override direction makes the precedence legible at the point of editing. Walking
+  ordered scope lists (rather than a per-pair flag) is what let the third scope drop in
+  without re-special-casing the hint logic. Fetching the project scopes on the User tab is
+  the cheapest way to know the override direction without a new endpoint; the cost is that
+  picking a compare repo re-fetches and re-seeds the form (mirroring the existing
+  reload-reseed), so an in-progress User edit is discarded on repo change — acceptable for
+  a rare action.
 - **Revisit when:** A worktree config *scope* lands (today worktree is a section, not a
-  layer), adding a third precedence level the two-flag model can't express; or editing one
-  scope while comparing against several repos at once becomes a real need.
+  layer), adding a fourth precedence level; or editing one scope while comparing against
+  several repos at once becomes a real need.
 
 ## Settings auto-saves on blur; no Save button
 
@@ -263,8 +310,13 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   desired override set, so committing per field is free. The earlier flow refetched and
   reseeded the whole form after each save (fine for a once-at-the-end Save); under
   auto-save that fires mid-editing and the reseed would clobber an in-progress edit in
-  another field, so the baseline is advanced locally and the refetch dropped (a scope/repo
-  switch still remounts and refetches, so cross-scope hints can't go stale). Single-flight
+  another field, so the baseline is advanced locally and the network refetch dropped. A
+  scope-tab switch remounts `ScopeFields` (it is keyed by `scope:repo`) but reuses the
+  fetch already in memory rather than re-fetching, so the save *also* patches that cache
+  (`useConfig.applySaved`, mirroring the persisted values) — otherwise re-entering the
+  just-edited tab would re-seed from the pre-save fetch and show the stale value. A *repo*
+  switch genuinely refetches (the repo is the fetch key), so cross-scope hints stay fresh.
+  Single-flight
   is required because the endpoint *replaces* the file: two overlapping saves landing out
   of order would let a stale earlier payload overwrite a newer one.
 - **Revisit when:** A field wants debounced live-save while typing (not just on blur), or a
@@ -1044,6 +1096,11 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   manual escape.
 
 ## Approve archives logically; the artifact appends an "## Interview" section
+
+> **Superseded** by "Home plan store + Save vs Implement; otacon never commits" —
+> the artifact now lands in `~/.otacon/sessions/<id>/` (canonical) plus, on Save, a
+> project copy under `plans.dir`; otacon no longer writes `docs/plans/` or commits.
+> The "## Interview" append and the collision-suffix naming still hold.
 
 - **Decision:** Approve writes `docs/plans/YYYY-MM-DD-<slug>.md` (local approve
   date; slug from the session title, `plan` fallback; name collisions suffix
@@ -1985,6 +2042,11 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 ## Build layout: worktree under .otacon, one commit per green phase, PR vs default branch
 
+> **Superseded in part** by "otacon manages no `.gitignore`; build worktrees live in
+> `~/.otacon`" below: the build worktree now defaults to `<worktree.dir>/<slug>` with
+> `worktree.dir = ~/.otacon/worktrees` (outside the repo), not `.otacon/worktrees`. The
+> per-phase-commit + PR-vs-default-branch parts are unchanged.
+
 - **Decision:** The build runs in a git worktree at `.otacon/worktrees/<slug>`
   (gitignored, like the rest of `.otacon/`) on branch `otacon/impl-<slug>` rooted at the
   plan-doc commit; each clean+green phase is its own commit; the finish is a `gh pr
@@ -2004,6 +2066,11 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   own tooling.
 
 ## A successful build archives its plan via a PR commit; the agent owns the move
+
+> **Superseded** by "Dropped the docs/plans archive step from the Implement loop" —
+> the plan is no longer committed to `docs/plans/`, so there is nothing to `git mv`
+> into `docs/plans/archive/`. The build branches off the default-branch HEAD and
+> reads the plan from the home copy; no archive commit rides in the PR.
 
 - **Decision:** On a successful Approve & Implement build, the implementing agent
   `git mv`s the committed plan `docs/plans/YYYY-MM-DD-<slug>.md` into `docs/plans/archive/`
@@ -2270,3 +2337,103 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   warning preserves today's contract that wrappers for unused agents never fail the run.
 - **Revisit when:** Agents gain more wrapper search locations doctor should accept, or a
   per-agent "expected scope" makes listing every candidate path too noisy.
+
+## Home-canonical plan store keyed by session id
+
+- **Decision:** Every approved plan is written to a **home archive** at
+  `~/.otacon/sessions/<id>/YYYY-MM-DD-<slug>.md` — always, on both Save and Implement.
+  The session id (a globally-unique hash) is the namespace, mirroring the repo-local
+  `.otacon/<id>/` layout, so plans from different repos never collide and need no
+  repo-basename/hash prefix. `homeSessionsDir()`/`homeSessionDir(id)` build the paths;
+  `otacon clean` and session deletion NEVER touch `~/.otacon/sessions/`.
+- **Why:** "Default zero footprint" (q1, q9) means the target repo gets nothing unless
+  the reviewer chooses Save — but otacon still needs one canonical, always-present copy a
+  downstream implementer (or a future you on another machine) can find. The home store is
+  that record. Keying by the existing session id reuses a unique namespace we already mint
+  (q11 leaned toward repo-basename+hash, but the id is simpler and already unique — t1),
+  and keeping it out of `otacon clean` makes it a permanent archive, not transient working
+  state that gets swept with the session dir.
+- **Revisit when:** The home store grows unbounded enough to want pruning/retention, or a
+  user wants the canonical location configurable (today it is fixed).
+
+## Approve = Save vs Implement; otacon never git-commits a plan
+
+- **Decision:** The approve action has two outcomes, both honoring the existing
+  `{implement?}` POST flag. **Save** (implement=false) writes the artifact to the home
+  archive AND a project copy under the repo's `plans.dir`; the session ends (`approved`).
+  **Implement** (implement=true) writes the home copy only and flips to `implementing`;
+  the agent builds from the home copy. The `approved` event carries `home` (absolute
+  archive path, always) and `path` (project copy on Save; home copy on Implement).
+  **otacon runs no git for the plan** — it only chooses where the file is written; the
+  user commits the project copy themselves if they want it tracked.
+- **Why:** The grill (q7, q8) collapsed the earlier two-knob model (`dir` + `commit`,
+  with `git check-ignore` footgun guards) into one question otacon actually owns: *where
+  is the plan written?* Whether it lands in git is the user's call, not otacon's — so
+  every `git add`/commit path and the ignore-check downgrade logic disappear. Save vs
+  Implement maps cleanly onto "I want the plan in my repo" vs "build it now from the
+  archive," and matches Claude Code's instinct that plans live in a home store, not the
+  project tree, by default (q6). Keeping `home` on the event lets the agent/UI always name
+  the canonical copy even on Save.
+- **Revisit when:** A workflow needs otacon to commit (e.g. an unattended `snake` that
+  must land a tracked plan), or Save/Implement need a third outcome.
+
+## `plans.dir` config leaf (project copy location)
+
+- **Decision:** One new `CONFIG_SCHEMA` path leaf `plans.dir` (default `.otacon/plans`,
+  repo-relative) governs where **Save** writes the project copy. It renders in the
+  Settings UI and resolves via `otacon config get plans.dir` for free, like
+  `worktree.dir`. The home archive location is NOT configurable. otacon writes the copy
+  and leaves tracking to the user (it manages no `.gitignore`, see below), so the default
+  lands a file under `.otacon/plans` the user can commit or leave alone; a team that
+  wants it grouped with tracked plans sets `plans.dir=docs/plans` in the committed
+  `<repo>/.otacon/config.json`.
+- **Why:** Reusing the schema-driven config (single source of truth, guard test) means a
+  one-line leaf gets validation, the Settings third scope, and the CLI lookup with no
+  bespoke code (q6, q7). Making only the project-copy dir configurable — not the home
+  store — keeps the canonical archive predictable while letting each repo choose its
+  in-project convention. The default `.otacon/plans` keeps the copy beside the rest of
+  otacon's working state; `docs/plans` is the opt-in committed contract.
+- **Revisit when:** A repo wants per-session or templated plan paths, or the home archive
+  location itself needs to move.
+
+## Dropped the docs/plans archive step from the Implement loop
+
+- **Decision:** The Implement loop no longer commits the plan, branches off a "plan
+  commit," or `git mv`s the plan into `docs/plans/archive/`. It branches off the repo's
+  current **default-branch HEAD**, reads the phases from the home copy at the event
+  `path`, and the finishing PR carries no plan file. The skill card (`assets.ts`) and the
+  regenerated dogfood `SKILL.md` reflect this; DESIGN §6/§12 drop the archive narrative.
+- **Why:** With otacon never committing the plan (see Save vs Implement above) and the
+  plan living in the home archive on Implement, there is simply no committed plan in the
+  repo to archive — the `git mv → docs/plans/archive/` step (q2) became dead. Branching
+  off default-branch HEAD replaces "off the plan commit" because there is no plan commit;
+  the home copy is the agent's source of truth for phases.
+- **Revisit when:** A workflow wants the plan to ride in the implementation PR after all
+  (e.g. teams that require the plan as a reviewed artifact in the same PR).
+
+## otacon manages no `.gitignore`; build worktrees live in `~/.otacon`
+
+- **Decision:** `otacon start` no longer reads, writes, or migrates the repo's
+  `.gitignore` — the `ensureGitignore` step (and its `.otacon/*` + `!.otacon/config.json`
+  append) is gone. Whether `.otacon/` is tracked or ignored is entirely the user's call;
+  otacon special-cases nothing on git's behalf, so `config.local.json` and the Save-time
+  `.otacon/plans` copy are committable unless the user ignores them. To keep throwaway
+  build trees out of the project regardless, `worktree.dir` now defaults to
+  `~/.otacon/worktrees` (a `~`/absolute path **outside** the repo, alongside the home
+  sessions store) instead of the repo-relative `.otacon/worktrees`. This supersedes the
+  selective-ignore mechanism of "Two-tier project config" (#178) and the
+  worktree-under-`.otacon` location of "Build layout" above; the config *layering* and
+  the per-phase-commit build are unchanged.
+- **Why:** Editing a user's `.gitignore` is a surprising side effect for a planning tool,
+  and the selective `.otacon/* / !config.json` pair was subtle, easy to get wrong across
+  CRLF/blank-line/pre-existing-line cases, and coupled otacon to the user's VCS policy.
+  Not touching the file at all is the least-astonishing default and lets each team decide
+  what to track. The one thing that genuinely must not land in the repo is a build
+  worktree (a full second checkout); moving its default out to `~/.otacon/worktrees`
+  removes the only hard reason `.otacon/` had to be ignored, so dropping the ignore
+  becomes safe. A literal `~` is fine: the value is only ever interpolated into a shell
+  `git worktree add` the agent runs, where the shell expands it; nothing in otacon
+  resolves it as a path internally.
+- **Revisit when:** Users ask otacon to scaffold `.gitignore` again (e.g. an opt-in
+  `otacon install` flag), or `worktree.dir`'s `~` needs expanding somewhere otacon
+  consumes it directly rather than handing it to a shell.

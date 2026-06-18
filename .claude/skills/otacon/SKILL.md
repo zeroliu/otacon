@@ -1,6 +1,6 @@
 ---
 name: otacon
-description: Plan a feature for THIS repo through an otacon review session — grill interview, schema'd plan, browser/phone review with anchored comments, approved committed artifact. Use when the user asks to plan something with otacon, types /otacon, or wants a reviewed implementation plan before coding. Replaces native plan mode. Dogfoods otacon on its own development.
+description: Plan a feature for THIS repo through an otacon review session — grill interview, schema'd plan, browser/phone review with anchored comments, approved plan saved to a home archive (and your project on Save). Use when the user asks to plan something with otacon, types /otacon, or wants a reviewed implementation plan before coding. Replaces native plan mode. Dogfoods otacon on its own development.
 ---
 
 <!-- Generated from src/cli/install/assets.ts (dogfoodSkillMd) — do NOT hand-edit;
@@ -13,8 +13,9 @@ This repo **is** otacon. You plan features for it by running otacon's own CLI fr
 source via the `./bin/otacon` shim, so every command below exercises the code in
 this checkout. That shim runs the CLI from `src/` via bun — no build needed; it
 always reflects current source. The daemon auto-spawns from source on the first
-command. Working state lives in the gitignored `.otacon/`; the approved plan is
-committed to `docs/plans/`.
+command. Working state lives in `.otacon/`; the approved plan is archived in the
+home store (`~/.otacon/sessions/<id>/`) and, on Save, copied into the repo under
+`plans.dir` (default `.otacon/plans`).
 
 After editing **daemon** source (`src/daemon/**`) mid-session, restart the running
 daemon so your change loads: `./bin/otacon restart` (the next command respawns it
@@ -78,12 +79,13 @@ machine-readable error you can fix (read the JSON); exit 2 = you invoked it wron
      thread's prior turns for context, but still answer the new `q<n>`.
    - `answer` → use it and continue; park again whenever you are waiting.
    - `timeout` → park again immediately. A timeout is NEVER completion.
-   - `approved` → `git add` + commit the plan file at the printed `path`. Plain
-     `approved` (no `implement`) → print a one-line summary and STOP. `approved`
-     **with `implement:true`** → after committing, enter the **Implement loop**
-     (below) — do NOT stop; the session is now `implementing`.
+   - `approved` → the plan is saved at `path`. Plain `approved` (Save, no
+     `implement`) → print a one-line summary naming where it was saved (`path`),
+     then STOP. `approved` **with `implement:true`** → read the plan at `path` to
+     guide the build and enter the **Implement loop** (below) — do NOT stop; the
+     session is now `implementing`.
    - `deleted` → the user deleted this session in the review UI. It is over:
-     STOP. There is no approved plan and nothing to commit.
+     STOP. There is no approved plan.
 6. **Never end your turn while the session is open.** Nothing to do = park in
    `./bin/otacon wait` again. Confused, crashed, or compacted? `./bin/otacon status` returns
    the open session, revision, and pending events — resume the loop from it.
@@ -101,12 +103,14 @@ You are the **orchestrator**: you only coordinate and narrate
 (`./bin/otacon progress` at each checkpoint) — every phase's real work runs in a fresh
 native subagent (Task tool) so your own context stays lean.
 
-1. **Setup.** Commit the plan file at the event `path` (exactly as plain Approve),
-   then create the worktree under the configured `worktree.dir`
-   (`./bin/otacon config get worktree.dir` — default `.otacon/worktrees`):
-   `git worktree add <worktree.dir>/<slug> -b otacon/impl-<slug>` off that commit
-   (the default `.otacon/` is gitignored). `./bin/otacon progress` each checkpoint throughout.
-2. **Per phase, in order** (read the phases from the committed plan):
+1. **Setup.** On Implement the plan lives only in the home archive at the event
+   `path` (read the phases from there). Branch off the repo's current default branch
+   HEAD: create the
+   worktree under the configured `worktree.dir`
+   (`./bin/otacon config get worktree.dir` — default `~/.otacon/worktrees`, outside the repo):
+   `git worktree add <worktree.dir>/<slug> -b otacon/impl-<slug>` (off the default
+   branch). `./bin/otacon progress` each checkpoint throughout.
+2. **Per phase, in order** (read the phases from the home plan at the event `path`):
    - `./bin/otacon progress "phase N — implementing"`; spawn an **implement+test**
      subagent (Task tool) scoped to that phase's Goal/Files/Verification — it
      implements and runs the phase Verification plus the repo gates.
@@ -117,14 +121,10 @@ native subagent (Task tool) so your own context stays lean.
      review still flags, or a subagent is stuck) → on the FIRST blocker,
      `./bin/otacon ask` with options `retry|skip|abort|guidance`, park in `./bin/otacon wait`,
      and act on the answer. No auto-retry.
-3. **Finish.** On success, `git mv` the committed plan (the `approved` event's
-   `path`) into `docs/plans/archive/` and commit it on the impl branch, so the
-   archived plan rides along in the PR (it only takes effect on the default branch
-   when the PR merges). Then `gh pr create` against the default branch (PR body =
-   the plan summary + the per-phase log; fall back to the local branch + path when
-   there is no remote), then `./bin/otacon implement-done --pr <url>`. On abort, skip the
-   archive move (leave the plan in `docs/plans/` so it stays active) and run
-   `./bin/otacon implement-done --failed`.
+3. **Finish.** On success, open a PR against the default branch with `gh pr create`
+   (PR body = the plan summary + the per-phase log; fall back to the local branch +
+   path when there is no remote), then `./bin/otacon implement-done --pr <url>`. On abort,
+   run `./bin/otacon implement-done --failed`.
 
 While `implementing` the Stop hook still keeps you on the line — never end the turn
 until `implement-done`.

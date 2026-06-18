@@ -335,14 +335,15 @@ export function postAnswer(id: string, draft: AnswerDraft): Promise<boolean> {
 
 /**
  * The approve outcome (DESIGN.md §6 step 6, §12): a finalize-now success carries
- * the artifact's repo-relative path; a **comment & approve** success carries
- * `finalizing:true` instead (no artifact yet — the agent's fold-in submit writes
- * it, and the SSE `finalizing` frame drives the screen). E_UNRESOLVED_THREADS
- * carries `unresolved` (the warn count) and `openComments` (whether *Send to
- * agent* has anything to fold in).
+ * the saved `path` (Save = the project copy, Implement = the home copy) plus the
+ * absolute `home` archive path, so the note is honest about every place the plan
+ * landed; a **comment & approve** success carries `finalizing:true` instead (no
+ * artifact yet — the agent's fold-in submit writes it, and the SSE `finalizing`
+ * frame drives the screen). E_UNRESOLVED_THREADS carries `unresolved` (the warn
+ * count) and `openComments` (whether *Send to agent* has anything to fold in).
  */
 export type ApproveResult =
-  | { ok: true; path: string; revision: number }
+  | { ok: true; path: string; home: string; revision: number }
   | { ok: true; finalizing: true }
   | { ok: false; code: string; message?: string; unresolved?: number; openComments?: number };
 
@@ -378,6 +379,7 @@ export async function postApprove(id: string, opts: ApproveOptions = {}): Promis
     });
     const body = (await res.json()) as {
       path?: string;
+      home?: string;
       revision?: number;
       finalizing?: boolean;
       unresolved?: number;
@@ -388,7 +390,7 @@ export async function postApprove(id: string, opts: ApproveOptions = {}): Promis
       return { ok: true, finalizing: true };
     }
     if (res.ok && typeof body.path === "string") {
-      return { ok: true, path: body.path, revision: body.revision ?? 0 };
+      return { ok: true, path: body.path, home: body.home ?? "", revision: body.revision ?? 0 };
     }
     return {
       ok: false,
@@ -510,24 +512,36 @@ export function useRevision(id: string, n: number): RevisionPayload | undefined 
 export interface ConfigScope {
   path: string;
   values: ScopeValues;
-  /** The absolute repo this project scope writes under — project scope only. */
+  /** The absolute repo this project scope writes under — project scopes only. */
   repo?: string;
 }
+
+/** The three config scopes, in file-overlay precedence (low → high, §16). */
+export type ConfigScopeName = "user" | "project" | "project.local";
 
 /**
  * GET /api/config payload (DESIGN.md §6 config surface): the full field schema
  * plus each scope's target path and current values. `user` is always present;
- * `project` only when an absolute `repo` was supplied.
+ * `project` (team-shared) and `project.local` (personal) only when an absolute
+ * `repo` was supplied.
  */
 export interface ConfigPayload {
   schema: ConfigField[];
-  scopes: { user: ConfigScope; project?: ConfigScope };
+  scopes: { user: ConfigScope; project?: ConfigScope; "project.local"?: ConfigScope };
 }
 
 export interface ConfigState extends Partial<ConfigPayload> {
   loading: boolean;
   error: boolean;
   reload: () => void;
+  /**
+   * Patch one scope's cached values after a successful save, so a remount (a
+   * scope-tab switch re-keys ScopeFields) re-seeds from the just-saved values
+   * instead of the stale fetch. A local patch, not a refetch — it mirrors what
+   * the daemon persisted, completing the "advance locally, don't refetch" save
+   * path (DECISIONS.md "Settings auto-saves on blur").
+   */
+  applySaved: (scope: ConfigScopeName, values: ScopeValues) => void;
 }
 
 /**
@@ -544,6 +558,18 @@ export function useConfig(repo?: string): ConfigState {
   const [error, setError] = useState(false);
   const [nonce, setNonce] = useState(0);
   const reload = () => setNonce((n) => n + 1);
+
+  // Reflect a save into the cached payload (no network): the saved scope now
+  // carries the persisted values, so leaving and re-entering its tab — which
+  // remounts ScopeFields via its scope:repo key — re-seeds from disk truth, not
+  // the values fetched on mount. A scope absent from the cache (no repo) is a no-op.
+  const applySaved = (scope: ConfigScopeName, values: ScopeValues) => {
+    setPayload((prev) => {
+      const existing = prev?.scopes[scope];
+      if (!prev || !existing) return prev;
+      return { ...prev, scopes: { ...prev.scopes, [scope]: { ...existing, values } } };
+    });
+  };
 
   useEffect(() => {
     let live = true;
@@ -570,7 +596,7 @@ export function useConfig(repo?: string): ConfigState {
     };
   }, [repo, nonce]);
 
-  return { schema: payload?.schema, scopes: payload?.scopes, loading, error, reload };
+  return { schema: payload?.schema, scopes: payload?.scopes, loading, error, reload, applySaved };
 }
 
 /**
@@ -590,7 +616,7 @@ export type SaveConfigResult =
  * non-JSON body lands as a status-0 error so the screen can message it.
  */
 export async function saveConfig(
-  scope: "user" | "project",
+  scope: ConfigScopeName,
   repo: string | undefined,
   values: ScopeValues,
 ): Promise<SaveConfigResult> {

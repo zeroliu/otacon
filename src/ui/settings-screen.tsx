@@ -1,7 +1,9 @@
-// The /settings screen (DESIGN.md §6 config surface): toggle User | Project
-// scope, pick the Project repo, surface the exact target file the scope writes,
-// and render every config field with its current value (schema default shown as
-// the placeholder when unset). Edits auto-save (DECISIONS.md "Settings auto-saves
+// The /settings screen (DESIGN.md §6 config surface): toggle User | Project |
+// Project · local scope, pick the Project repo, surface the exact target file the
+// scope writes, and render every config field with its current value (schema
+// default shown as the placeholder when unset). Each field surfaces what it
+// inherits when unset, mirroring the overlay order defaults ← user ← project ←
+// project.local (§16). Edits auto-save (DECISIONS.md "Settings auto-saves
 // on blur"): a text/number field commits when it loses focus, a checkbox and a
 // reset commit on the spot, so there is no Save button to forget. Each save posts a
 // *sparse* payload (settings-form.buildPayload) that REPLACES the scope file, so
@@ -11,12 +13,11 @@
 
 import type { ChangeEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ConfigField, ConfigScope } from "./api";
+import type { ConfigField, ConfigScope, ConfigScopeName, ScopeValues } from "./api";
 import { saveConfig, useConfig, useSessions } from "./api";
 import { linkClick } from "./router";
-import type { ScopeValues } from "../shared/config.js";
-import type { InheritedValue } from "./settings";
-import { distinctRepos, fieldsBySection, inheritedValue, isSet } from "./settings";
+import type { InheritedValue, OverrideScope, ParentScope } from "./settings";
+import { distinctRepos, fieldsBySection, inheritedValue, overriddenBy } from "./settings";
 import type { FormState } from "./settings-form";
 import {
   buildPayload,
@@ -30,7 +31,12 @@ import {
   setFieldText,
 } from "./settings-form";
 
-type Scope = "user" | "project";
+type Scope = ConfigScopeName;
+
+/** Whether a scope writes a repo-relative file (vs the global user file). */
+function isProjectScope(scope: Scope): boolean {
+  return scope === "project" || scope === "project.local";
+}
 
 /** The `?repo=` query param, decoded — the screen defaults the Project repo to it. */
 function repoFromQuery(): string {
@@ -45,25 +51,43 @@ export function SettingsScreen() {
   const { sessions } = useSessions();
   const repos = useMemo(() => distinctRepos(sessions), [sessions]);
 
-  // Fetch the project scope alongside the user scope whenever a repo is chosen —
-  // not just on the Project tab. The User tab needs the project's values too, to
-  // flag the fields it overrides ("overridden by project"); the Project tab needs
-  // the user's values to show as its inherited defaults. An empty repo omits the
-  // param, so the daemon answers with the user scope alone.
+  // Fetch the project scopes alongside the user scope whenever a repo is chosen —
+  // not just on a project tab. Each scope needs the others to show inheritance:
+  // the User tab flags fields a project (or project·local) overrides; the Project
+  // tab shows the user value as its default and flags a project·local override;
+  // the Project·local tab inherits project, then user, then the schema default.
+  // An empty repo omits the param, so the daemon answers with the user scope alone.
   const repoForFetch = projectRepo !== "" ? projectRepo : undefined;
-  const { schema, scopes, loading, error } = useConfig(repoForFetch);
+  const { schema, scopes, loading, error, applySaved } = useConfig(repoForFetch);
 
-  // The scope file being edited. Project scope only resolves once an *absolute*
-  // repo comes back from the daemon (it omits the project scope otherwise), so a
+  // The scope file being edited. Project scopes only resolve once an *absolute*
+  // repo comes back from the daemon (it omits them otherwise), so a
   // picked-but-unresolvable repo lands here as undefined.
-  const target = scope === "user" ? scopes?.user : scopes?.project;
+  const target =
+    scope === "user" ? scopes?.user : scope === "project" ? scopes?.project : scopes?.["project.local"];
 
-  // The scope `target` inherits from (Project ← User; User ← nothing), so the
-  // Project view can show the user profile's value as its effective default; and
-  // the scope that overrides `target` (User ← Project; Project ← nothing), so the
-  // User view can flag fields a project overrides.
-  const parentValues = scope === "project" ? scopes?.user?.values : undefined;
-  const overrideValues = scope === "user" ? scopes?.project?.values : undefined;
+  // The inheritance chain the active scope sits atop, highest-precedence first
+  // (mirroring the file overlay defaults ← user ← project ← project.local): the
+  // first ancestor that sets a field is its effective default. User has none;
+  // Project inherits User; Project·local inherits Project then User.
+  const userParent: ParentScope = { from: "user", values: scopes?.user?.values };
+  const projectParent: ParentScope = { from: "project", values: scopes?.project?.values };
+  const parents: ParentScope[] =
+    scope === "user" ? [] : scope === "project" ? [userParent] : [projectParent, userParent];
+
+  // The scopes that shadow the active one's value (those above it in precedence),
+  // highest-precedence first, so the active view can flag an overridden field.
+  // User is shadowed by project·local then project; Project by project·local;
+  // Project·local by nothing (it's the top layer).
+  const overriders: OverrideScope[] =
+    scope === "user"
+      ? [
+          { by: "project.local", values: scopes?.["project.local"]?.values },
+          { by: "project", values: scopes?.project?.values },
+        ]
+      : scope === "project"
+        ? [{ by: "project.local", values: scopes?.["project.local"]?.values }]
+        : [];
 
   return (
     <div className="page">
@@ -80,7 +104,7 @@ export function SettingsScreen() {
 
       {error ? (
         <p className="settings-error">couldn't load config — is otacond running?</p>
-      ) : scope === "project" && projectRepo === "" ? (
+      ) : isProjectScope(scope) && projectRepo === "" ? (
         <p className="settings-inert">Pick a repo to edit project config.</p>
       ) : loading || schema === undefined ? (
         <p className="loading">loading config…</p>
@@ -92,20 +116,31 @@ export function SettingsScreen() {
           schema={schema}
           target={target}
           scope={scope}
-          repo={scope === "project" ? target.repo : undefined}
-          parentValues={parentValues}
-          overrideValues={overrideValues}
+          repo={isProjectScope(scope) ? target.repo : undefined}
+          parents={parents}
+          overriders={overriders}
+          onSaved={applySaved}
         />
       )}
     </div>
   );
 }
 
-/** The User | Project segmented control — drives which scope file is edited. */
+/** The display label for each scope tab — `project.local` reads "project · local". */
+const SCOPE_LABEL: Record<Scope, string> = {
+  user: "user",
+  project: "project",
+  "project.local": "project · local",
+};
+
+/**
+ * The User | Project | Project · local segmented control — drives which scope
+ * file is edited, in file-overlay precedence (user lowest, project·local highest).
+ */
 function ScopeToggle({ scope, onScope }: { scope: Scope; onScope: (s: Scope) => void }) {
   return (
     <div className="scope-toggle" role="tablist" aria-label="config scope">
-      {(["user", "project"] as const).map((value) => (
+      {(["user", "project", "project.local"] as const).map((value) => (
         <button
           key={value}
           type="button"
@@ -114,7 +149,7 @@ function ScopeToggle({ scope, onScope }: { scope: Scope; onScope: (s: Scope) => 
           className={scope === value ? "scope-tab active" : "scope-tab"}
           onClick={() => onScope(value)}
         >
-          {value}
+          {SCOPE_LABEL[value]}
         </button>
       ))}
     </div>
@@ -122,10 +157,11 @@ function ScopeToggle({ scope, onScope }: { scope: Scope; onScope: (s: Scope) => 
 }
 
 /**
- * The repo `<select>`, populated from the open sessions' repos. On the Project
- * tab it names the scope file being edited (required). On the User tab the user
- * file is global, so the repo only picks which project to compare against — its
- * overrides surface as "overridden by project" hints — and is optional.
+ * The repo `<select>`, populated from the open sessions' repos. On a Project
+ * scope (committed or ·local) it names the scope file being edited (required).
+ * On the User tab the user file is global, so the repo only picks which project
+ * to compare against — its overrides surface as "overridden by project" hints —
+ * and is optional.
  */
 function RepoPicker({
   scope,
@@ -138,13 +174,14 @@ function RepoPicker({
   value: string;
   onChange: (repo: string) => void;
 }) {
-  const label = scope === "project" ? "repo" : "compare repo";
+  const forProject = isProjectScope(scope);
+  const label = forProject ? "repo" : "compare repo";
   return (
     <label className="repo-picker">
       <span className="repo-picker-label">{label}</span>
       <span className="repo-picker-select">
         <select value={value} onChange={(e) => onChange(e.target.value)}>
-          <option value="">{scope === "project" ? "— select a repo —" : "— none —"}</option>
+          <option value="">{forProject ? "— select a repo —" : "— none —"}</option>
           {/* A ?repo= not in the open-session list still needs to be selectable. */}
           {value !== "" && !repos.includes(value) && <option value={value}>{value}</option>}
           {repos.map((repo) => (
@@ -181,15 +218,17 @@ function ScopeFields({
   target,
   scope,
   repo,
-  parentValues,
-  overrideValues,
+  parents,
+  overriders,
+  onSaved,
 }: {
   schema: ConfigField[];
   target: ConfigScope;
   scope: Scope;
   repo: string | undefined;
-  parentValues: ScopeValues | undefined;
-  overrideValues: ScopeValues | undefined;
+  parents: ParentScope[];
+  overriders: OverrideScope[];
+  onSaved: (scope: Scope, values: ScopeValues) => void;
 }) {
   const seeded = useMemo(() => initFormState(schema, target.values), [schema, target.values]);
   const [form, setForm] = useState<FormState>(seeded);
@@ -236,6 +275,9 @@ function ScopeFields({
       setBaseline(next); // the saved state is now the persisted baseline
       setErrors(new Map());
       setStatus({ kind: "saved" });
+      // Patch the parent cache with what the daemon persisted, so re-entering
+      // this tab (a remount) re-seeds from the save, not the stale fetch.
+      onSaved(scope, result.values);
     } else if (result.status === 422) {
       setErrors(errorsByField(result.fieldErrors ?? []));
       setStatus({ kind: "error", message: "some fields are invalid — see below" });
@@ -292,8 +334,8 @@ function ScopeFields({
               field={field}
               state={fieldState(form, field)}
               modified={isModified(form, baseline, field)}
-              inherited={inheritedValue(field, parentValues)}
-              overriddenByProject={isSet(overrideValues, field)}
+              inherited={inheritedValue(field, parents)}
+              overriddenBy={overriddenBy(field, overriders)}
               error={errors.get(fieldId(field))}
               onText={(text) => editField(setFieldText(form, field, text))}
               onCommit={commit}
@@ -335,21 +377,38 @@ function SaveToast({ status }: { status: SaveStatus }) {
   );
 }
 
-/** The inherit/override hint under a field's description, at most one at a time:
- *  the Project view notes when its default comes from the user profile; the User
- *  view notes when the compared project overrides the field. */
+/** Where a field's inherited default comes from, in human words for the hint. */
+const INHERIT_LABEL: Record<"user" | "project", string> = {
+  user: "default from user profile",
+  project: "default from project",
+};
+
+/** Which higher-precedence scope shadows the field, in human words for the hint. */
+const OVERRIDE_LABEL: Record<"project" | "project.local", string> = {
+  project: "overridden by project",
+  "project.local": "overridden by project · local",
+};
+
+/**
+ * The inherit/override hint under a field's description, at most one at a time.
+ * An override wins the slot (a shadowed value matters more than its source):
+ * the User view flags a field a project / project·local overrides; the Project
+ * view flags a project·local override. Otherwise the inherit hint names the
+ * scope the active one's default falls through to — the project for a
+ * project·local field, else the user profile (the schema default shows no hint).
+ */
 function FieldHint({
   inherited,
-  overriddenByProject,
+  overriddenBy,
 }: {
   inherited: InheritedValue;
-  overriddenByProject: boolean;
+  overriddenBy: "project" | "project.local" | null;
 }) {
-  if (overriddenByProject) {
-    return <span className="field-override">overridden by project</span>;
+  if (overriddenBy) {
+    return <span className="field-override">{OVERRIDE_LABEL[overriddenBy]}</span>;
   }
-  if (inherited.from === "user") {
-    return <span className="field-inherit">default from user profile</span>;
+  if (inherited.from !== "default") {
+    return <span className="field-inherit">{INHERIT_LABEL[inherited.from]}</span>;
   }
   return null;
 }
@@ -366,7 +425,7 @@ function FieldRow({
   state,
   modified,
   inherited,
-  overriddenByProject,
+  overriddenBy,
   error,
   onText,
   onCommit,
@@ -377,7 +436,7 @@ function FieldRow({
   state: ReturnType<typeof fieldState>;
   modified: boolean;
   inherited: InheritedValue;
-  overriddenByProject: boolean;
+  overriddenBy: "project" | "project.local" | null;
   error: string | undefined;
   onText: (text: string) => void;
   onCommit: () => void;
@@ -389,7 +448,7 @@ function FieldRow({
       reset
     </button>
   ) : null;
-  const hint = <FieldHint inherited={inherited} overriddenByProject={overriddenByProject} />;
+  const hint = <FieldHint inherited={inherited} overriddenBy={overriddenBy} />;
 
   if (field.type === "bool") {
     return (
@@ -437,7 +496,7 @@ function FieldRow({
           inputMode={field.type === "int" ? "numeric" : undefined}
           min={field.type === "int" ? field.min : undefined}
           value={state.set ? state.text : ""}
-          placeholder={`default: ${inherited.value}`}
+          placeholder={String(inherited.value)}
           aria-label={field.label}
           aria-invalid={error ? true : undefined}
           onChange={onChange}

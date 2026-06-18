@@ -21,7 +21,12 @@ import {
   validateScopeInput,
 } from "../shared/config.js";
 import type { ScopeValues } from "../shared/config.js";
-import { globalConfigPath, otaconPort, repoLocalConfigPath } from "../shared/paths.js";
+import {
+  globalConfigPath,
+  otaconPort,
+  repoConfigPath,
+  repoLocalConfigPath,
+} from "../shared/paths.js";
 import { parseQuestionSpec } from "../shared/question-spec.js";
 import { TERMINAL_STATUSES } from "../shared/types.js";
 import type {
@@ -42,7 +47,7 @@ import type {
 import { VERSION } from "../shared/version.js";
 import { appendActivity, latestNote, readActivity } from "./activity.js";
 import type { ReviewNote } from "./approve.js";
-import { composeArtifact, localDate, pickArtifactRelPath } from "./approve.js";
+import { composeArtifact, localDate, pickHomePath, pickProjectRelPath } from "./approve.js";
 import type { DesktopNotifier } from "./desktop-notify.js";
 import { createDesktopNotifier } from "./desktop-notify.js";
 import { diffPlans } from "./diff.js";
@@ -334,25 +339,40 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   }
 
   /**
-   * Finalize an approval: compose the committed artifact (with the comment-&-
-   * approve `## Review notes` when `reviewNotes` are present), write it to
-   * docs/plans/ — the crash-safe commit point, file before the status flip —
-   * flip the session to `approved` or `implementing`, disarm any deferred
+   * Finalize an approval (DESIGN.md §6 step 6/7, §12). Writes the composed
+   * artifact (with the comment-&-approve `## Review notes` when `reviewNotes` are
+   * present). It ALWAYS writes the canonical home copy
+   * (`~/.otacon/sessions/<id>/`, the permanent archive).
+   * On **Save** (implement=false) it ALSO writes a project copy under the repo's
+   * configured `plans.dir`, and the event `path` points there. On **Implement**
+   * (implement=true) it writes home only, and `path` equals `home`. The home
+   * write is the crash-safe finalize point — file(s) before the status flip.
+   * Then flip the session to `approved` or `implementing`, disarm any deferred
    * approval, and queue the `approved` wake-up. Shared by plain/force approve and
    * the deferred fold-in submit so the artifact and event shapes are identical on
-   * every path. Returns the artifact's repo-relative path.
+   * every path. Returns the event's `path` and absolute `home`.
    */
   const finalizeApproval = (
     session: RegistrySession,
     opts: { revision: number; markdown: string; implement: boolean; reviewNotes?: ReviewNote[] },
-  ): string => {
+  ): { path: string; home: string } => {
     const artifact = composeArtifact(opts.markdown, {
       revision: opts.revision,
       entries: readTranscript(store.transcriptPath(session.id)),
       reviewNotes: opts.reviewNotes,
     });
-    const relPath = pickArtifactRelPath(session.repo, session.title, localDate());
-    writeFileAtomic(join(session.repo, relPath), artifact);
+    const date = localDate();
+    const home = pickHomePath(session.id, session.title, date);
+    writeFileAtomic(home, artifact);
+    // Save writes a project copy and reports it; Implement builds from home, so
+    // nothing is written into the project and `path` is the home copy.
+    let path = home;
+    if (!opts.implement) {
+      const plansDir = loadConfig(session.repo).plans.dir;
+      const relPath = pickProjectRelPath(session.repo, plansDir, session.title, date);
+      writeFileAtomic(join(session.repo, relPath), artifact);
+      path = relPath;
+    }
     const updated = store.updateSession(session.id, {
       status: opts.implement ? "implementing" : "approved",
     });
@@ -361,11 +381,11 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     // never a finalizing session that lost its flag (which would re-open review).
     store.clearPendingApproval(session.id);
     const payload: EventPayload = opts.implement
-      ? { event: "approved", session: session.id, path: relPath, implement: true }
-      : { event: "approved", session: session.id, path: relPath };
+      ? { event: "approved", session: session.id, path, home, implement: true }
+      : { event: "approved", session: session.id, path, home };
     queueFor(session.id).enqueue(payload, store.bumpCounter(session.id, "eventSeq"));
     publishSession(updated); // after the enqueue, so the summary carries the fresh pending count
-    return relPath;
+    return { path, home };
   };
 
   const app = new Hono<{ Bindings: NodeBindings }>();
@@ -402,18 +422,21 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
 
   // The Settings UI's config surface (DESIGN.md §6). GET returns the full
   // schema plus each scope's current sparse, coerced values. The `user` scope
-  // (~/.otacon/config.json) is always present; the `project` scope
-  // (<repo>/.otacon/config.json) only when an absolute `repo` is named — User
-  // config needs no repo, so an absent/empty/non-absolute `repo` omits it
-  // entirely (matching the isAbsolute guard POST applies to the write).
+  // (~/.otacon/config.json) is always present; the project scopes only when an
+  // absolute `repo` is named — User config needs no repo, so an absent/empty/
+  // non-absolute `repo` omits them (matching the isAbsolute guard POST applies
+  // to the write). `project` is the team-shared <repo>/.otacon/config.json;
+  // `project.local` is the personal <repo>/.otacon/config.local.json override.
   app.get("/api/config", (c) => {
     const repo = c.req.query("repo");
     const scopes: Record<string, { path: string; values: ScopeValues; repo?: string }> = {
       user: { path: globalConfigPath(), values: readScopeValues(globalConfigPath()) },
     };
     if (repo !== undefined && repo !== "" && isAbsolute(repo)) {
-      const path = repoLocalConfigPath(repo);
-      scopes.project = { path, values: readScopeValues(path), repo };
+      const projectPath = repoConfigPath(repo);
+      const localPath = repoLocalConfigPath(repo);
+      scopes.project = { path: projectPath, values: readScopeValues(projectPath), repo };
+      scopes["project.local"] = { path: localPath, values: readScopeValues(localPath), repo };
     }
     return c.json({ schema: CONFIG_SCHEMA, scopes });
   });
@@ -421,15 +444,15 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   // POST replaces one scope file with the sanitized sparse values
   // (DECISIONS.md "Config POST replaces"). A field the UI cleared is absent
   // from `values` and so is dropped from the file — it reverts to inherited.
-  // `scope` must be "user" or "project"; project requires a `repo` (400
-  // otherwise). Validation failures return 422 with per-field errors and write
-  // nothing. The same-origin guard above (covering every non-GET /api/*)
-  // protects this mutating call.
+  // `scope` must be "user", "project", or "project.local"; both project scopes
+  // require a `repo` (400 otherwise). Validation failures return 422 with
+  // per-field errors and write nothing. The same-origin guard above (covering
+  // every non-GET /api/*) protects this mutating call.
   app.post("/api/config", async (c) => {
     const body = (await readJsonBody(c)) ?? {};
     const { scope, repo } = body;
-    if (scope !== "user" && scope !== "project") {
-      return badRequest(c, 'scope must be "user" or "project"');
+    if (scope !== "user" && scope !== "project" && scope !== "project.local") {
+      return badRequest(c, 'scope must be "user", "project", or "project.local"');
     }
     let path: string;
     if (scope === "user") {
@@ -438,7 +461,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       if (typeof repo !== "string" || !isAbsolute(repo)) {
         return badRequest(c, "project scope requires an absolute repo path");
       }
-      path = repoLocalConfigPath(repo);
+      path = scope === "project" ? repoConfigPath(repo) : repoLocalConfigPath(repo);
     }
     const result = validateScopeInput(body.values);
     if (result.errors.length > 0) {
@@ -491,11 +514,12 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     return c.json(summarize(session));
   });
 
-  // DELETE removes a session from the registry, status-branched on whether it
-  // has committed value (DESIGN.md §6, §12). **Terminal** (approved, plus
+  // DELETE removes a session from the registry, status-branched on whether its
+  // plan is already preserved (DESIGN.md §6, §12). **Terminal** (approved, plus
   // implemented/implement_failed once a build finishes): its plan + transcript
-  // are committed under docs/plans/, so the working dir is *archived* to
-  // .otacon/archive/ (recoverable) — `otacon clean` and the UI's delete of an
+  // are in the home archive (~/.otacon/sessions/<id>/, never touched here), so the
+  // working dir is *archived* to .otacon/archive/ (recoverable) — `otacon clean`
+  // and the UI's delete of an
   // over session both take this path. Gated on TERMINAL_STATUSES so this split
   // agrees with the UI's `over` (which passes `approved={isOver(status)}` to the
   // confirm sheet) — otherwise an `implemented` delete would promise archival
@@ -694,7 +718,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
           body: t.body,
           resolution: t.resolution?.body ?? "",
         }));
-      const path = finalizeApproval(session, {
+      const { path, home } = finalizeApproval(session, {
         revision,
         markdown: content,
         implement: pending.implement,
@@ -710,6 +734,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
         revision,
         status: pending.implement ? "implementing" : "approved",
         path,
+        home,
         finalized: true,
         warnings: result.warnings,
         resolved: Object.keys(replies),
@@ -1180,14 +1205,16 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     return c.json({ ok: true, session: session.id, note: text });
   });
 
-  // Approve ends the planning session (DESIGN.md §6 step 6, §12): the daemon
-  // writes docs/plans/YYYY-MM-DD-<slug>.md (final revision, status: approved,
-  // grill transcript appended) and queues the `approved` event for the parked
-  // agent to commit the file. Plain Approve flips the session `approved` —
-  // terminal, every mutating verb then refuses. **Approve & Implement**
-  // ({implement:true}) instead flips it to the non-terminal `implementing` and
-  // sets `implement:true` on the event: the agent commits the plan exactly as
-  // plain Approve, then proceeds to build it (DESIGN.md §12).
+  // Approve ends the planning session (DESIGN.md §6 step 6/7, §12). Writes the
+  // composed artifact (final revision, status: approved, grill transcript
+  // appended). The canonical copy ALWAYS lands in the home store
+  // (~/.otacon/sessions/<id>/). **Save** (plain Approve, implement=false) ALSO
+  // writes a project copy under the repo's `plans.dir` and sets the event `path`
+  // there; the session flips to `approved` (terminal) and the agent reports where
+  // the plan landed before it stops.
+  // **Implement** ({implement:true}) writes the home copy only, sets `path`=home,
+  // flips to the non-terminal `implementing`, and the agent builds from the home
+  // copy. The event always carries `home` (the absolute canonical path).
   //
   // Unresolved threads refuse 409 carrying the count; the UI's warn stage then
   // offers two ways past it: **{force:true}** finalizes now and drops the open
@@ -1315,7 +1342,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     }
     // Finalize now (plain/force approve, or the force escape mid-finalize): no
     // review notes — a force drop leaves the open threads unaddressed.
-    const relPath = finalizeApproval(session, {
+    const { path, home } = finalizeApproval(session, {
       revision: state.revision,
       markdown: store.readRevision(session.id, state.revision),
       implement,
@@ -1324,7 +1351,8 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       ok: true,
       session: session.id,
       revision: state.revision,
-      path: relPath,
+      path,
+      home,
       unresolved,
       implement,
     });

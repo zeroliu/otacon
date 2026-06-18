@@ -3,8 +3,9 @@
 // calls DELETE /api/sessions/:id; the daemon deregisters the session and
 // archives its .otacon/<id>/ dir to .otacon/archive/<id>/, reporting the
 // destination as `archivedTo` (the review UI drives the same route — terminal
-// archives, non-terminal hard-deletes). Committed artifacts under docs/plans/
-// are never touched (DECISIONS.md "clean: daemon deregisters and archives").
+// archives, non-terminal hard-deletes). The home archive (~/.otacon/sessions/)
+// and any Save-time project copy are never touched (DECISIONS.md "clean: daemon
+// deregisters and archives").
 
 import { parseArgs } from "node:util";
 import { TERMINAL_STATUSES } from "../../shared/types.js";

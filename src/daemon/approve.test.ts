@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TranscriptEntry } from "../shared/types.js";
-import { composeArtifact, localDate, pickArtifactRelPath } from "./approve.js";
+import { homeSessionDir } from "../shared/paths.js";
+import { composeArtifact, localDate, pickHomePath, pickProjectRelPath } from "./approve.js";
 
 const PLAN = `---
 title: auth-refactor
@@ -109,7 +110,46 @@ describe("composeArtifact", () => {
   });
 });
 
-describe("pickArtifactRelPath", () => {
+describe("pickHomePath", () => {
+  let home: string;
+  let savedHome: string | undefined;
+
+  beforeEach(() => {
+    savedHome = process.env.OTACON_HOME;
+    home = mkdtempSync(join(tmpdir(), "otacon-home-"));
+    process.env.OTACON_HOME = home;
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.OTACON_HOME;
+    else process.env.OTACON_HOME = savedHome;
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  test("the canonical home copy lands under ~/.otacon/sessions/<id>/ named by date+slug", () => {
+    expect(pickHomePath("otc_a1b2c3", "Auth Refactor!", "2026-06-13")).toBe(
+      join(homeSessionDir("otc_a1b2c3"), "2026-06-13-auth-refactor.md"),
+    );
+  });
+
+  test("collisions in the same id dir get numeric suffixes, never overwrite", () => {
+    const dir = homeSessionDir("otc_a1b2c3");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "2026-06-13-auth.md"), "x");
+    writeFileSync(join(dir, "2026-06-13-auth-2.md"), "x");
+    expect(pickHomePath("otc_a1b2c3", "auth", "2026-06-13")).toBe(
+      join(dir, "2026-06-13-auth-3.md"),
+    );
+  });
+
+  test("an unsluggable title falls back to 'plan'", () => {
+    expect(pickHomePath("otc_a1b2c3", "???", "2026-06-13")).toBe(
+      join(homeSessionDir("otc_a1b2c3"), "2026-06-13-plan.md"),
+    );
+  });
+});
+
+describe("pickProjectRelPath", () => {
   let repo: string;
 
   beforeEach(() => {
@@ -120,9 +160,13 @@ describe("pickArtifactRelPath", () => {
     rmSync(repo, { recursive: true, force: true });
   });
 
-  test("slugs the title under docs/plans with the date", () => {
-    expect(pickArtifactRelPath(repo, "Auth Refactor!", "2026-06-13")).toBe(
-      join("docs", "plans", "2026-06-13-auth-refactor.md"),
+  test("slugs the title under the configured plans dir with the date (repo-relative)", () => {
+    expect(pickProjectRelPath(repo, ".otacon/plans", "Auth Refactor!", "2026-06-13")).toBe(
+      join(".otacon/plans", "2026-06-13-auth-refactor.md"),
+    );
+    // A committed-contract plans dir works the same way.
+    expect(pickProjectRelPath(repo, "docs/plans", "Auth Refactor!", "2026-06-13")).toBe(
+      join("docs/plans", "2026-06-13-auth-refactor.md"),
     );
   });
 
@@ -130,14 +174,14 @@ describe("pickArtifactRelPath", () => {
     mkdirSync(join(repo, "docs", "plans"), { recursive: true });
     writeFileSync(join(repo, "docs", "plans", "2026-06-13-auth.md"), "x");
     writeFileSync(join(repo, "docs", "plans", "2026-06-13-auth-2.md"), "x");
-    expect(pickArtifactRelPath(repo, "auth", "2026-06-13")).toBe(
-      join("docs", "plans", "2026-06-13-auth-3.md"),
+    expect(pickProjectRelPath(repo, "docs/plans", "auth", "2026-06-13")).toBe(
+      join("docs/plans", "2026-06-13-auth-3.md"),
     );
   });
 
   test("an unsluggable title falls back to 'plan'", () => {
-    expect(pickArtifactRelPath(repo, "???", "2026-06-13")).toBe(
-      join("docs", "plans", "2026-06-13-plan.md"),
+    expect(pickProjectRelPath(repo, ".otacon/plans", "???", "2026-06-13")).toBe(
+      join(".otacon/plans", "2026-06-13-plan.md"),
     );
   });
 });
