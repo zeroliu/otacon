@@ -1421,6 +1421,13 @@ code {
 
 .page-review {
   padding-bottom: 120px; /* the drawer floats over the column's tail */
+  /* The sticky header compacts on scroll; default scroll anchoring would shift
+   * window.scrollY by the header's height change (~44px, wider than the
+   * compact hysteresis band), re-crossing the fold threshold and flickering the
+   * header expand⇄compact. Opting this review subtree out of anchoring freezes
+   * the scroll offset through the resize so it can't feed back. Scoped here (not
+   * global) so the index and settings screens keep anchoring. */
+  overflow-anchor: none;
 }
 
 .review-layout {
