@@ -1,13 +1,26 @@
-// The pure update-check core for `otacon start`'s auto-update gate (DESIGN.md
-// §16). Side-effect-free helpers only — no npm spawn, no re-exec, no start
-// wiring (those land in Phase 2). Everything here is testable without a network
-// or a package manager.
+// `otacon start`'s auto-update gate (DESIGN.md §16). The top of this file is the
+// pure, side-effect-free decision core (Phase 1); `maybeAutoUpdate` at the
+// bottom wires the side effects (Phase 2): the npm update and the re-exec.
 //
-// Two decisions shape the shapes below:
+// Decisions that shape the code:
 //   - D3: the whole check is throttled to once per hour via the
 //     `update-check.json` cache (`updateCheckDue`).
 //   - D5: latest is discovered by GET registry.npmjs.org/otacon/latest with a
 //     short timeout, fail-open on ANY error (`fetchLatest` → undefined).
+//   - D6: a source-tree run (the `.ts` daemon entry signal, `isSourceRun`) is
+//     skipped — there is no global npm package to update from a checkout.
+//   - D7: update with `npm install -g otacon@latest`; on any failure notify the
+//     manual command and proceed on the installed version — never sudo.
+//   - D8: `OTACON_UPDATED=1` guards the re-exec'd child against a second check.
+
+import { spawnSync as nodeSpawnSync } from "node:child_process";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { loadConfig } from "../shared/config.js";
+import { otaconHome, updateCachePath } from "../shared/paths.js";
+import { VERSION } from "../shared/version.js";
+import { isSourceRun } from "./client.js";
+import { notice } from "./output.js";
+import { findRepoRoot, realpathOr } from "./session.js";
 
 /**
  * True iff `latest` is a strictly greater semver than `current`. Parses
@@ -81,4 +94,120 @@ export async function fetchLatest(signal?: AbortSignal): Promise<string | undefi
   } catch {
     return undefined;
   }
+}
+
+/** Read+parse the throttle cache; a missing/corrupt file is `undefined` (= due). */
+function readCache(): UpdateCache | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(updateCachePath(), "utf8")) as unknown;
+    if (typeof parsed === "object" && parsed !== null && "checkedAt" in parsed) {
+      return parsed as UpdateCache;
+    }
+  } catch {
+    // missing or malformed → treated as due by updateCheckDue(undefined, …)
+  }
+  return undefined;
+}
+
+/** Persist `checkedAt: now` BEFORE attempting the update, so a failed update still throttles. */
+function writeCache(nowMs: number): void {
+  try {
+    mkdirSync(otaconHome(), { recursive: true });
+    writeFileSync(updateCachePath(), `${JSON.stringify({ checkedAt: nowMs })}\n`);
+  } catch {
+    // a cache we can't write just means the next start re-checks; never fatal
+  }
+}
+
+/**
+ * Seams for `maybeAutoUpdate` so tests drive every branch without a real
+ * registry, npm, or process exit. Defaults wire the real implementations; a
+ * test passes stubs. `spawnSync` runs the npm install and the re-exec; `exit`
+ * ends the parent after a successful re-exec (so maybeAutoUpdate never returns
+ * on that path). `nowMs`/`fetch` mirror the pure helpers' injectable shape.
+ */
+export interface AutoUpdateDeps {
+  fetch: typeof fetchLatest;
+  spawnSync: typeof nodeSpawnSync;
+  exit: (code: number) => never;
+  nowMs: () => number;
+  sourceRun: () => boolean;
+}
+
+const REAL_DEPS: AutoUpdateDeps = {
+  fetch: fetchLatest,
+  spawnSync: nodeSpawnSync,
+  exit: (code) => process.exit(code),
+  nowMs: () => Date.now(),
+  sourceRun: isSourceRun,
+};
+
+/**
+ * The pre-session auto-update gate, called as the very first thing in
+ * `otacon start` (DESIGN.md §16). Guards in order — each early return means
+ * "proceed on the installed version" (the no-op path):
+ *
+ *   1. loop guard   — `OTACON_UPDATED` set → the re-exec'd child, don't re-check (D8)
+ *   2. dev-run skip — a source checkout has no global package to update (D6)
+ *   3. config gate  — `update.auto:false` pins the version (D4)
+ *   4. throttle     — checked within the hour → skip; else stamp the cache now (D3)
+ *   5. fetch+compare— registry latest (fail-open) must be strictly newer (D5)
+ *   6. update       — `npm install -g otacon@latest`; on success notice + re-exec
+ *                     `start <argv>` with OTACON_UPDATED=1 and exit the parent;
+ *                     on ANY failure notice the manual command and return (D1/D7)
+ *
+ * On the successful-update path this NEVER returns: it re-execs and exits with
+ * the child's status. The child runs the new CLI, mints the session, and (via
+ * the version handshake in ensureDaemon) restarts the stale daemon — no extra
+ * restart code (D9).
+ */
+export async function maybeAutoUpdate(
+  argv: string[],
+  deps: AutoUpdateDeps = REAL_DEPS,
+): Promise<void> {
+  // 1. Loop guard (D8): the re-exec'd child must not check again.
+  if (process.env.OTACON_UPDATED) return;
+
+  // 2. Dev-run skip (D6): a source checkout has no global npm package.
+  if (deps.sourceRun()) return;
+
+  // 3. Config gate (D4): honor project config the same way start.ts resolves the repo.
+  const cwd = realpathOr(process.cwd());
+  const repo = findRepoRoot(cwd) ?? cwd;
+  if (loadConfig(repo).update.auto === false) return;
+
+  // 4. Throttle (D3): stamp the cache BEFORE attempting the update so a failed
+  // attempt still throttles the next hour (no npm hammering on a flaky network).
+  const now = deps.nowMs();
+  if (!updateCheckDue(readCache(), now)) return;
+  writeCache(now);
+
+  // 5. Fetch + compare (D5): fail-open on no answer; only act if strictly newer.
+  const latest = await deps.fetch();
+  if (latest === undefined) return;
+  if (!isNewer(latest, VERSION)) return;
+
+  // 6. Update (D7): npm install -g; fail-open to a notice on any error.
+  const install = deps.spawnSync("npm", ["install", "-g", "otacon@latest"], {
+    stdio: "inherit",
+  });
+  if (install.error !== undefined || install.status !== 0) {
+    // ENOENT (npm missing), non-zero exit, or a non-writable global dir — never
+    // escalate to sudo (D1). Notify the manual command and proceed on current.
+    notice(
+      `a newer otacon ${latest} is available but auto-update failed; run: npm install -g otacon@latest`,
+    );
+    return;
+  }
+
+  // Success: re-exec the same `start` invocation on the freshly-installed CLI.
+  // OTACON_UPDATED=1 trips the loop guard above; stdio is inherited so the child
+  // prints the single JSON line on stdout, preserving the start contract.
+  notice(`updated otacon ${VERSION} → ${latest}; restarting`);
+  const child = deps.spawnSync(
+    process.execPath,
+    [process.argv[1] ?? "", "start", ...argv],
+    { stdio: "inherit", env: { ...process.env, OTACON_UPDATED: "1" } },
+  );
+  deps.exit(child.status ?? 0);
 }

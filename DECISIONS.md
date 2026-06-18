@@ -2459,3 +2459,33 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Releases need to propagate faster than an hour (shorten/parameterize
   the window), the registry endpoint or its JSON shape changes, or users want an env-var
   / CI auto-skip opt-out in addition to `update.auto`.
+
+## Auto-update: re-exec at start, fail-open, never sudo
+
+- **Decision:** When `otacon start` finds a strictly newer published version it runs
+  `npm install -g otacon@latest` and then **re-execs** itself —
+  `process.execPath [process.argv[1], "start", ...argv]` with `OTACON_UPDATED=1` — and
+  exits with the child's status (`maybeAutoUpdate` never returns on this path). The
+  re-exec reproduces the user's original flags exactly, so the new CLI mints the session
+  and its `ensureDaemon` version handshake restarts the stale daemon; no separate
+  daemon-update code exists (D7/D9). `OTACON_UPDATED=1` is the loop guard that stops the
+  re-exec'd child from running the check a second time (D8). The check runs only at
+  `start`, before any session exists, and the gate order is: loop guard → source-tree
+  skip → `update.auto` → 1h throttle → fetch → `isNewer`. The throttle cache is stamped
+  with `checkedAt: now` **before** the update is attempted, so a failed update still
+  throttles the next hour rather than hammering npm. On ANY npm failure (non-zero exit,
+  spawn ENOENT, non-writable global dir) otacon prints the manual `npm install -g
+  otacon@latest` command and proceeds on the installed version — it **never escalates to
+  sudo** (D1). (Plan `docs/plans/2026-06-19-auto-update-outdated-version.md`, D1/D7/D8.)
+- **Why:** `start` is the one safe place to swap the binary — nothing is in flight, so a
+  re-exec can hand the whole command to the new code without corrupting a live session.
+  Re-exec + inherited stdio means the freshly-installed CLI (not the stale parent) prints
+  the single JSON line, keeping the start contract intact, and reusing the existing
+  version handshake means the daemon converges for free. Fail-open-never-sudo matches
+  Claude Code's behavior and keeps auto-update strictly additive: a read-only global dir
+  degrades to a notice instead of a prompt or a hang. Stamping the cache before the
+  attempt guarantees a broken release can't turn every start into an npm install storm.
+- **Revisit when:** A standalone `otacon update` command is wanted for manual/forced
+  upgrades, a non-npm global install path needs supporting, or the re-exec needs to
+  carry more than the `start` argv (e.g. a flag added to `start` that must survive the
+  hop — it already does, since the full argv is forwarded).

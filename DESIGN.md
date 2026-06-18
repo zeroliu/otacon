@@ -1388,5 +1388,17 @@ config key (default true) to pin the installed version (CI, air-gapped, pinned-v
 shops). Only `otacon start` runs the check — the tight loops (wait/ask/progress) never
 do — and a run from a source checkout (a `.ts` daemon entry) is skipped.
 
+When a newer version is published, `otacon start` runs `npm install -g otacon@latest`
+and then **re-execs itself** — `node main.js start <original argv>` with
+`OTACON_UPDATED=1` set — so the rest of the command runs on the freshly-installed CLI
+(the env var is the loop guard that stops the re-exec'd child from re-checking). stdio
+is inherited, so the child prints the single JSON line on stdout and the start contract
+is preserved; the parent exits with the child's code. The daemon needs no separate
+update step: the re-exec'd child's `ensureDaemon` version handshake restarts a stale
+`otacond` on its next call, just as it already does after any manual bump. If `npm
+install` fails for any reason (a non-writable global dir, npm missing) otacon **never
+escalates to sudo** — it prints the manual `npm install -g otacon@latest` command and
+proceeds on the installed version.
+
 `npm update -g otacon` still works for a manual bump; the version handshake restarts the
 daemon on next use either way.

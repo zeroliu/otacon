@@ -7,8 +7,16 @@ import type { RegistrySession } from "../../shared/types.js";
 import { api, baseUrl, ensureDaemon } from "../client.js";
 import { fail, notice, printJson, usageError } from "../output.js";
 import { currentBranch, findRepoRoot, realpathOr } from "../session.js";
+import { maybeAutoUpdate } from "../update.js";
 
 export async function startCommand(argv: string[]): Promise<number> {
+  // Pre-session auto-update gate (DESIGN.md §16): on a newer published version
+  // this self-updates and re-execs `start` with the original argv, so the flags
+  // below are reconstructed exactly; in every other case it returns and we
+  // proceed on the installed version. Must run before ensureDaemon so the
+  // re-exec's version handshake restarts the stale daemon.
+  await maybeAutoUpdate(argv);
+
   const { values } = parseArgs({
     args: argv,
     options: { title: { type: "string" }, quick: { type: "boolean", default: false } },

@@ -1,5 +1,18 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { fetchLatest, isNewer, type UpdateCache, updateCheckDue } from "./update.js";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { updateCachePath } from "../shared/paths.js";
+import { VERSION } from "../shared/version.js";
+import {
+  type AutoUpdateDeps,
+  fetchLatest,
+  isNewer,
+  maybeAutoUpdate,
+  type UpdateCache,
+  updateCheckDue,
+} from "./update.js";
 
 describe("isNewer", () => {
   test("a strictly greater patch is newer", () => {
@@ -118,5 +131,158 @@ describe("fetchLatest", () => {
     const controller = new AbortController();
     expect(await fetchLatest(controller.signal)).toBe("0.4.0");
     expect(seen).toBe(controller.signal);
+  });
+});
+
+describe("maybeAutoUpdate", () => {
+  // A version strictly newer than the installed VERSION, so isNewer fires.
+  const NEWER = "99.0.0";
+  let home: string;
+  const savedHome = process.env.OTACON_HOME;
+  const savedUpdated = process.env.OTACON_UPDATED;
+
+  // Records of what the seams were asked to do.
+  type SpawnCall = { cmd: string; args: string[]; env?: NodeJS.ProcessEnv };
+
+  interface Harness {
+    deps: AutoUpdateDeps;
+    spawnCalls: SpawnCall[];
+    exitCalls: number[];
+    fetchCalls: number;
+  }
+
+  function harness(over: {
+    latest?: string | undefined;
+    installStatus?: number; // status for the `npm install` spawn
+    installError?: Error; // spawn error for `npm install` (e.g. ENOENT)
+    sourceRun?: boolean;
+  }): Harness {
+    const spawnCalls: SpawnCall[] = [];
+    const exitCalls: number[] = [];
+    let fetchCalls = 0;
+    const deps: AutoUpdateDeps = {
+      sourceRun: () => over.sourceRun ?? false,
+      nowMs: () => 1_000_000_000,
+      fetch: async () => {
+        fetchCalls++;
+        return "latest" in over ? over.latest : NEWER;
+      },
+      spawnSync: ((cmd: string, args: string[], opts?: { env?: NodeJS.ProcessEnv }) => {
+        spawnCalls.push({ cmd, args, env: opts?.env });
+        // First spawn is the npm install; later spawn is the re-exec (status 0).
+        const isInstall = cmd === "npm";
+        if (isInstall && over.installError) return { error: over.installError, status: null };
+        return { status: isInstall ? (over.installStatus ?? 0) : 0, error: undefined };
+      }) as unknown as typeof spawnSync,
+      exit: ((code: number) => {
+        exitCalls.push(code);
+        // Do NOT actually exit; throw a sentinel so the caller stops like exit would.
+        throw new Error("__exit__");
+      }) as (code: number) => never,
+    };
+    return { deps, spawnCalls, exitCalls, get fetchCalls() { return fetchCalls; } } as Harness;
+  }
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "otacon-update-"));
+    process.env.OTACON_HOME = home;
+    delete process.env.OTACON_UPDATED;
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.OTACON_HOME;
+    else process.env.OTACON_HOME = savedHome;
+    if (savedUpdated === undefined) delete process.env.OTACON_UPDATED;
+    else process.env.OTACON_UPDATED = savedUpdated;
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  test("OTACON_UPDATED set short-circuits before any fetch", async () => {
+    process.env.OTACON_UPDATED = "1";
+    const h = harness({});
+    await maybeAutoUpdate([], h.deps);
+    expect(h.fetchCalls).toBe(0);
+    expect(h.spawnCalls).toHaveLength(0);
+  });
+
+  test("a source-tree run is skipped before any fetch", async () => {
+    const h = harness({ sourceRun: true });
+    await maybeAutoUpdate([], h.deps);
+    expect(h.fetchCalls).toBe(0);
+    expect(h.spawnCalls).toHaveLength(0);
+  });
+
+  test("update.auto:false skips before any fetch", async () => {
+    writeFileSync(join(home, "config.json"), JSON.stringify({ update: { auto: false } }));
+    const h = harness({});
+    await maybeAutoUpdate([], h.deps);
+    expect(h.fetchCalls).toBe(0);
+    expect(h.spawnCalls).toHaveLength(0);
+  });
+
+  test("a fresh throttle cache skips before any fetch", async () => {
+    // checkedAt = now → within the 1h window → not due.
+    writeFileSync(updateCachePath(), JSON.stringify({ checkedAt: 1_000_000_000 }));
+    const h = harness({});
+    await maybeAutoUpdate([], h.deps);
+    expect(h.fetchCalls).toBe(0);
+    expect(h.spawnCalls).toHaveLength(0);
+  });
+
+  test("the cache is stamped BEFORE the update attempt (failed update still throttles)", async () => {
+    const h = harness({ installStatus: 1 });
+    await maybeAutoUpdate([], h.deps);
+    // npm install was attempted (and failed), but the cache was written first.
+    const cache = JSON.parse(readFileSync(updateCachePath(), "utf8")) as { checkedAt: number };
+    expect(cache.checkedAt).toBe(1_000_000_000);
+    expect(h.spawnCalls[0]?.cmd).toBe("npm");
+  });
+
+  test("latest === undefined (fail-open) returns without spawning", async () => {
+    const h = harness({ latest: undefined });
+    await maybeAutoUpdate([], h.deps);
+    expect(h.fetchCalls).toBe(1);
+    expect(h.spawnCalls).toHaveLength(0);
+  });
+
+  test("not newer than installed returns without spawning", async () => {
+    const h = harness({ latest: VERSION });
+    await maybeAutoUpdate([], h.deps);
+    expect(h.fetchCalls).toBe(1);
+    expect(h.spawnCalls).toHaveLength(0);
+  });
+
+  test("newer + npm success re-execs once with start + original argv + OTACON_UPDATED", async () => {
+    const h = harness({ installStatus: 0 });
+    // exit() throws our sentinel — maybeAutoUpdate never returns on this path.
+    await expect(maybeAutoUpdate(["--title", "x", "--quick"], h.deps)).rejects.toThrow("__exit__");
+
+    // exactly two spawns: the npm install, then the re-exec.
+    expect(h.spawnCalls).toHaveLength(2);
+    expect(h.spawnCalls[0]).toMatchObject({
+      cmd: "npm",
+      args: ["install", "-g", "otacon@latest"],
+    });
+    const reexec = h.spawnCalls[1];
+    expect(reexec?.cmd).toBe(process.execPath);
+    expect(reexec?.args).toEqual([process.argv[1] ?? "", "start", "--title", "x", "--quick"]);
+    expect(reexec?.env?.OTACON_UPDATED).toBe("1");
+    expect(h.exitCalls).toEqual([0]);
+  });
+
+  test("newer + npm non-zero status notices and returns (no re-exec, no exit)", async () => {
+    const h = harness({ installStatus: 1 });
+    await maybeAutoUpdate(["--title", "x"], h.deps);
+    // only the install spawn — no re-exec.
+    expect(h.spawnCalls).toHaveLength(1);
+    expect(h.spawnCalls[0]?.cmd).toBe("npm");
+    expect(h.exitCalls).toHaveLength(0);
+  });
+
+  test("newer + npm ENOENT (spawn error) notices and returns", async () => {
+    const h = harness({ installError: Object.assign(new Error("spawn npm ENOENT"), { code: "ENOENT" }) });
+    await maybeAutoUpdate(["--title", "x"], h.deps);
+    expect(h.spawnCalls).toHaveLength(1);
+    expect(h.exitCalls).toHaveLength(0);
   });
 });

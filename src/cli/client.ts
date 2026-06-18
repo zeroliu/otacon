@@ -109,6 +109,18 @@ function daemonEntry(): string {
   return fileURLToPath(new URL("../daemon/main.ts", import.meta.url));
 }
 
+/**
+ * True when this CLI is running from a source checkout rather than a built
+ * `dist/` install — exactly the signal `daemonEntry()` uses (no built
+ * `dist/daemon/main.js` sibling means we're a `bun run src/...` dev run). The
+ * auto-update gate (update.ts, DESIGN.md §16) reuses this to skip self-update: a
+ * global npm package update is meaningless, and would be destructive, from a
+ * source tree (D6).
+ */
+export function isSourceRun(): boolean {
+  return !existsSync(fileURLToPath(new URL("../daemon/main.js", import.meta.url)));
+}
+
 /** Spawn the daemon detached; returns the child's exit code, undefined while alive. */
 function spawnDaemon(): () => number | undefined {
   mkdirSync(otaconHome(), { recursive: true });
