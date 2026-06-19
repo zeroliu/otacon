@@ -16,13 +16,15 @@ import { progressCommand } from "./commands/progress.js";
 import { startCommand } from "./commands/start.js";
 import { statusCommand } from "./commands/status.js";
 import { submitCommand } from "./commands/submit.js";
+import { updateCommand } from "./commands/update.js";
 import { waitCommand } from "./commands/wait.js";
 import { CliError, printJson } from "./output.js";
 
 const USAGE =
-  "usage: otacon <start|submit|wait|ask|answer|progress|implement-done|status|open|config|clean|install|doctor|expose> [options]\n" +
+  "usage: otacon <start|submit|wait|ask|answer|progress|implement-done|status|open|config|clean|install|doctor|expose|update> [options]\n" +
   "       otacon config [open]      open the Settings web UI in the browser\n" +
-  "       otacon config get <key>   print the merged value of one config key";
+  "       otacon config get <key>   print the merged value of one config key\n" +
+  "       otacon update [--check]   update the global install to the latest published version";
 
 async function dispatch(command: string | undefined, argv: string[]): Promise<number> {
   switch (command) {
@@ -54,6 +56,8 @@ async function dispatch(command: string | undefined, argv: string[]): Promise<nu
       return doctorCommand(argv);
     case "expose":
       return exposeCommand(argv);
+    case "update":
+      return updateCommand(argv);
     default:
       throw new CliError("E_USAGE", USAGE, 2);
   }

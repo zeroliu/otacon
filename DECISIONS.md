@@ -2521,3 +2521,26 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   replay is added, so a reconnect might not re-deliver `version`), the SPA gains routes
   with no SSE stream that also need to self-heal, or a smoother in-place hot-swap (no full
   reload) becomes worth the complexity.
+
+- **Decision:** `otacon update [--check]` (`src/cli/commands/update.ts`) is the manual/forced
+  upgrade command, and it deliberately bypasses both suppressors of the start-time
+  auto-update gate: the 1h throttle and the `update.auto:false` config. It shares
+  `runNpmUpdate` (`src/cli/update.ts`) with `maybeAutoUpdate` so the install behavior is
+  byte-identical, still fails open on a registry blip (`latest:null`, exit 0), refuses on a
+  source checkout, and never escalates to sudo. After a successful install it does NOT call
+  `ensureDaemon` to restart the daemon. (Plan `docs/plans/2026-06-19-auto-update-outdated-version.md`, D12.)
+- **Why:** The throttle and `update.auto` exist to keep the *implicit*, every-start check
+  cheap and pinnable; an *explicit* `otacon update` is the user asking for the upgrade right
+  now, so honoring those gates would be surprising (a pinned shop still wants `otacon update`
+  to work; a check 10 minutes ago should not make it a no-op). Extracting `runNpmUpdate`
+  keeps the one mutating side effect in a single tested place rather than duplicating the
+  spawn. Skipping the post-install daemon restart is correctness, not laziness: after
+  `npm install -g`, the currently running process is still the OLD code, so its `VERSION`
+  equals the running daemon's — `ensureDaemon` would detect no mismatch and could not pull
+  the new version. The real restart (and the open tabs' self-heal) happens on the next
+  `otacon` invocation, which runs the new binary and trips the version handshake. Reporting
+  that plainly beats claiming a restart that did not occur.
+- **Revisit when:** A non-npm install path is supported (so the "global package" assumption
+  and the source-checkout refusal need rethinking), or `otacon update` should also be able to
+  restart the daemon in-place to the new version without waiting for the next command (e.g. by
+  re-exec'ing the freshly-installed binary the way `maybeAutoUpdate` does).

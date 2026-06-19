@@ -341,6 +341,7 @@ the model is suspended — no inference, no token spend.
 | `otacon config [open]`                                                      | Open the Settings web UI in the browser: `/settings?repo=<cwd repo root>` inside a repo (Project scope), bare `/settings` outside one (User scope); `OTACON_NO_BROWSER` prints the URL instead |
 | `otacon config get <key>`                                                   | Read-only: print the merged effective value of one dotted key (`worktree.dir`, `budgets.summaryLines`, …) from the config files; no daemon. Unknown key → exit 1 |
 | `otacon clean [--all]`                                                      | Archive ended sessions' working state to `.otacon/archive/` and prune the registry (§12) |
+| `otacon update [--check]`                                                   | Update the global install to the latest published version now, bypassing the start-time throttle and `update.auto` (§16); `--check` reports current/latest/outdated without installing |
 
 The `--resolutions` file is the revision-accompaniment document:
 
@@ -1415,6 +1416,19 @@ versa) reloads at most once and never loops. This leans on the existing cache he
 the new shell and its new chunks rather than a stale cached copy. As a backstop, the
 review screen's renderer error boundary (which catches a vanished lazy chunk) also
 auto-reloads once per tab — falling back to a manual "Reload" link if that didn't fix it.
+
+`otacon update` forces the upgrade on demand. Unlike the start-time gate it ignores both
+suppressors: the 1h throttle (the user asked now) and `update.auto:false` (an explicit
+command overrides a config that only governs the implicit start-time check). It discovers
+the latest version the same way (fail-open on any registry error → reports `latest:null`,
+exit 0), refuses on a source checkout (nothing global to update), and runs the same
+`npm install -g otacon@latest` — never sudo. `--check` reports `{current, latest, outdated}`
+and never installs (the dry run, and the only safe mode in CI / pinned shops). On a
+successful install it does **not** restart the daemon: the running process is still the old
+code, so its `ensureDaemon` would see no version mismatch; the new daemon and the open
+tabs' self-heal come up on the next `otacon` command, which runs the freshly-installed
+binary. A failed install is the one exit-1 path (`E_UPDATE_FAILED`), pointing at the manual
+command.
 
 `npm update -g otacon` still works for a manual bump; the version handshake restarts the
 daemon on next use either way, and open tabs self-heal the same way.

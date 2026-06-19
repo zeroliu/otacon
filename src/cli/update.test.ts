@@ -10,6 +10,7 @@ import {
   fetchLatest,
   isNewer,
   maybeAutoUpdate,
+  runNpmUpdate,
   type UpdateCache,
   updateCheckDue,
 } from "./update.js";
@@ -131,6 +132,35 @@ describe("fetchLatest", () => {
     const controller = new AbortController();
     expect(await fetchLatest(controller.signal)).toBe("0.4.0");
     expect(seen).toBe(controller.signal);
+  });
+});
+
+describe("runNpmUpdate", () => {
+  type Spawn = typeof spawnSync;
+
+  test("runs `npm install -g otacon@latest` with inherited stdio", () => {
+    const calls: { cmd: string; args: string[]; opts?: { stdio?: unknown } }[] = [];
+    const spawn = ((cmd: string, args: string[], opts?: { stdio?: unknown }) => {
+      calls.push({ cmd, args, opts });
+      return { status: 0, error: undefined };
+    }) as unknown as Spawn;
+    expect(runNpmUpdate("99.0.0", spawn).ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ cmd: "npm", args: ["install", "-g", "otacon@latest"] });
+    expect(calls[0]?.opts?.stdio).toBe("inherit");
+  });
+
+  test("a non-zero exit status is ok:false", () => {
+    const spawn = (() => ({ status: 1, error: undefined })) as unknown as Spawn;
+    expect(runNpmUpdate("99.0.0", spawn).ok).toBe(false);
+  });
+
+  test("a spawn error (ENOENT, npm missing) is ok:false", () => {
+    const spawn = (() => ({
+      status: null,
+      error: Object.assign(new Error("spawn npm ENOENT"), { code: "ENOENT" }),
+    })) as unknown as Spawn;
+    expect(runNpmUpdate("99.0.0", spawn).ok).toBe(false);
   });
 });
 

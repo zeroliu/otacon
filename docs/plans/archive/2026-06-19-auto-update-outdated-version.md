@@ -1,7 +1,7 @@
 ---
 title: auto-update-outdated-version
 session: otc_ip8kno
-revision: 2
+revision: 3
 status: approved
 created: 2026-06-18
 ---
@@ -58,6 +58,7 @@ export async function maybeAutoUpdate(argv: string[]): Promise<void>;
 - D9: Post-update restart inventory — CLI = the re-exec itself; daemon = the existing version handshake restarts otacond on the next call. No new restart code for those two ← q8
 - D10: Open browser tabs self-heal — on a daemon version change seen over SSE, the SPA reloads once (sessionStorage-guarded) so no tab runs a stale in-memory bundle ← [assumed]
 - D11: Cache headers already correct (index.html `no-cache`, hashed assets `immutable`, verified r1); the fix is forcing the reload, not changing caching ← [assumed]
+- D12: `otacon update` is the manual/forced path — bypasses the throttle and `update.auto` (explicit intent overrides the auto opt-out), reuses the Phase 1/2 core, and refuses from a source checkout ← [assumed]
 
 ## Impact
 
@@ -178,6 +179,43 @@ When it sees version B again
 Then it does not reload again (the sessionStorage guard holds)
 ```
 
+### Phase 4 — Standalone `otacon update` command [new]
+
+Goal: a manual/forced upgrade path independent of the start-time gate — `otacon
+update` checks the registry and installs `otacon@latest` on demand, bypassing the
+throttle and `update.auto` opt-out, and reports the outcome as one JSON line.
+
+Files:
+- `src/cli/update.ts` — extract the npm-install side effect into a shared
+  `runNpmUpdate(latest)` helper reused by both `maybeAutoUpdate` and the command
+  (no duplication).
+- `src/cli/commands/update.ts` (new) — `otacon update [--check]`: `fetchLatest` →
+  compare to `VERSION`. `--check` reports `{current, latest, outdated}` only; else
+  if outdated, run `runNpmUpdate` and report `{updated, from, to}` or the fail-open
+  notice. Refuse on a source checkout (`isSourceRun` → notice, nothing to update).
+  After a successful install, `ensureDaemon` restarts the stale daemon so open tabs
+  self-heal (Phase 3) immediately.
+- `src/cli/main.ts` — register `update` in dispatch + USAGE.
+- tests: check mode, outdated→install (stubbed), already-latest, source-checkout
+  refusal, fail-open on npm error.
+
+Verification: `bun test`; build; `node dist/cli/main.js update --check` prints the
+current/latest JSON.
+
+```gwt
+Given the installed version is behind the registry
+When `otacon update` runs (no --check)
+Then it installs otacon@latest, reports {updated, from, to}, and restarts the daemon
+
+Given the installed version equals the registry latest
+When `otacon update --check` runs
+Then it reports outdated:false and installs nothing
+
+Given a source checkout
+When `otacon update` runs
+Then it refuses with a notice and installs nothing
+```
+
 ## Risks
 
 > [!risk]
@@ -197,8 +235,6 @@ Then it does not reload again (the sessionStorage guard holds)
 
 ## Open Questions
 
-- Should a standalone `otacon update` command exist for manual/forced upgrades?
-  Out of scope here (start-only was the answered surface); flag if wanted later.
 - Self-heal reuses the existing `RendererBoundary` reload (manual today); Phase 3
   makes it automatic. No daemon protocol break, so no migration.
 

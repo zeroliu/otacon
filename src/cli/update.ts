@@ -120,6 +120,26 @@ function writeCache(nowMs: number): void {
 }
 
 /**
+ * Run `npm install -g otacon@latest` (D7), the one mutating side effect shared
+ * by the auto-update gate (`maybeAutoUpdate`) and the standalone `otacon update`
+ * command. stdio is inherited so npm's own progress reaches the human's stderr.
+ * Returns `{ ok }`: false on a non-zero exit (a non-writable global dir, an npm
+ * error) OR a spawn error (`ENOENT` when npm is missing) — never throws, and
+ * never escalates to sudo (D1). `latest` is accepted for symmetry/logging at the
+ * call site; the registry tag `otacon@latest` is what npm actually resolves.
+ * `spawnSync` is injectable so tests drive both outcomes with no real npm.
+ */
+export function runNpmUpdate(
+  _latest: string,
+  spawnSync: typeof nodeSpawnSync = nodeSpawnSync,
+): { ok: boolean } {
+  const install = spawnSync("npm", ["install", "-g", "otacon@latest"], {
+    stdio: "inherit",
+  });
+  return { ok: install.error === undefined && install.status === 0 };
+}
+
+/**
  * Seams for `maybeAutoUpdate` so tests drive every branch without a real
  * registry, npm, or process exit. Defaults wire the real implementations; a
  * test passes stubs. `spawnSync` runs the npm install and the re-exec; `exit`
@@ -187,11 +207,8 @@ export async function maybeAutoUpdate(
   if (latest === undefined) return;
   if (!isNewer(latest, VERSION)) return;
 
-  // 6. Update (D7): npm install -g; fail-open to a notice on any error.
-  const install = deps.spawnSync("npm", ["install", "-g", "otacon@latest"], {
-    stdio: "inherit",
-  });
-  if (install.error !== undefined || install.status !== 0) {
+  // 6. Update (D7): npm install -g via the shared helper; fail-open on any error.
+  if (!runNpmUpdate(latest, deps.spawnSync).ok) {
     // ENOENT (npm missing), non-zero exit, or a non-writable global dir — never
     // escalate to sudo (D1). Notify the manual command and proceed on current.
     notice(
