@@ -1,4 +1,4 @@
-// The persistent session switcher in the review header (DESIGN.md §7):
+// The persistent session switcher in the review header (session registry and switcher):
 // a dropdown on desktop, horizontally scrollable chips on a phone —
 // `auth-refactor ●2 │ search-index ✋awaiting` — each chip in its session's
 // accent so rapid phone switching can't post feedback to the wrong plan.
@@ -19,10 +19,10 @@ const GLYPHS: Record<SessionStatus, { glyph: string; word: string }> = {
   draft: { glyph: "✎", word: "drafting" },
   in_review: { glyph: "✋", word: "awaiting" },
   revising: { glyph: "⏳", word: "revising" },
-  // comment & approve (§12): the agent is folding open comments in before commit.
+  // comment & approve (approval and archive lifecycle): the agent is folding open comments in before commit.
   finalizing: { glyph: "⏳", word: "finalizing" },
   approved: { glyph: "✓", word: "approved" },
-  // The implement lifecycle (DESIGN.md §12): a spinner-ish gear while the agent
+  // The implement lifecycle (approval and archive lifecycle): a spinner-ish gear while the agent
   // builds, the approved check once it lands, a cross when the build aborted.
   implementing: { glyph: "⚙", word: "implementing" },
   implemented: { glyph: "✔", word: "implemented" },
@@ -41,9 +41,9 @@ function stateOf(session: LiveSession): { glyph: string; word: string } {
 export function SessionSwitcher({ current }: { current: string }) {
   const { sessions: byActivity } = useSessions();
   const now = useNow(30_000);
-  // Over sessions (the terminal set) drop from the switcher entirely (DESIGN.md
-  // §7) — both faces, one list — so a finished plan stops cluttering the strip
-  // you switch through, including the one you are on (D1). `implementing` is NOT
+  // Over sessions (the terminal set) drop from the switcher entirely, so a
+  // finished plan stops cluttering the strip you switch through, including the
+  // one you are on (D1). `implementing` is NOT
   // over, so a building session keeps its chip live. The split is shared with
   // home so the two surfaces can never disagree about what is hidden.
   const { active } = partitionByApproval(byActivity);
@@ -56,12 +56,12 @@ export function SessionSwitcher({ current }: { current: string }) {
   const currentSession = byActivity.find((s) => s.id === current);
   const gone = !currentSession || isOver(currentSession.status);
   // Render nothing only when the registry is genuinely empty. An all-over
-  // registry still has a current to anchor: the placeholder must show (DESIGN.md
-  // §7), so the switcher doesn't vanish out from under the one over session
-  // you opened from home. Keying on `byActivity` (not `active`) keeps the
+  // registry still has a current to anchor: the placeholder must show, so the
+  // switcher doesn't vanish out from under the one over session you opened from
+  // home. Keying on `byActivity` (not `active`) keeps the
   // placeholder reachable instead of short-circuiting before it.
   if (byActivity.length === 0) return null;
-  // The chip you are on leads the strip (§7's sketch): the "you are here"
+  // The chip you are on leads the strip: the "you are here"
   // anchor never scrolls out of reach; the rest keep their activity order.
   // Unread is computed once here for both faces (select + chips); the entry
   // you are on never wears a badge — you are reading it.

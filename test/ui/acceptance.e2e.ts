@@ -1,6 +1,6 @@
-// FINAL UI acceptance (DESIGN.md §16): the human-facing surface, end to end,
+// FINAL UI acceptance (install/update): the human-facing surface, end to end,
 // in a real browser against the real built daemon AND the real built CLI. One
-// session is driven through the entire §6 loop — grill → draft → review →
+// session is driven through the entire agent/reviewer loop — grill → draft → review →
 // revise → approve — and every screen a real reviewer touches is asserted:
 //   • the index card surfaces the session and its live status chip;
 //   • a grill question card is answerable, waking a parked `otacon wait`;
@@ -49,7 +49,7 @@ async function cliSubmit(
   expect(result.code, `otacon submit failed:\n${result.stdout}\n${result.stderr}`).toBe(0);
 }
 
-test("UI acceptance: the whole §6 loop renders and round-trips in the browser", async ({
+test("UI acceptance: the whole agent/reviewer loop renders and round-trips in the browser", async ({
   page,
   request,
 }) => {

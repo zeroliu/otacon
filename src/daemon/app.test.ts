@@ -393,7 +393,7 @@ describe("threads", () => {
     expect(body.ok).toBe(true);
     expect(body.question).toBe("q1");
     expect(typeof body.answeredAt).toBe("string");
-    // Status untouched — answers never flip the session (DESIGN.md §9).
+    // Status untouched — answers never flip the session (threaded review and revision).
     expect(store.getSession(session.id)?.status).toBe("draft");
 
     const threads = (await (await app.request(`/api/sessions/${session.id}/threads`)).json()) as {
@@ -699,7 +699,7 @@ describe("UI SSE streams", () => {
   test("the index stream opens with a snapshot, then carries session and revision frames", async () => {
     const reader = sseReader(await app.request("/api/stream"));
     // The snapshot stamps the daemon version so open tabs can self-heal on an
-    // update-restart (DESIGN.md §16).
+    // update-restart (install/update).
     expect(await reader.next()).toEqual({
       event: "snapshot",
       data: { version: VERSION, sessions: [] },
@@ -734,7 +734,7 @@ describe("UI SSE streams", () => {
     const snapshot = await reader.next();
     expect(snapshot.event).toBe("snapshot");
     expect((snapshot.data as { session: { id: string } }).session.id).toBe(mine.id);
-    // The per-session snapshot also carries the daemon version (self-heal, §16).
+    // The per-session snapshot also carries the daemon version (self-heal, install/update).
     expect((snapshot.data as { version: string }).version).toBe(VERSION);
 
     await postJson(`/api/sessions/${other.id}/questions`, { body: "other" });
@@ -1304,7 +1304,7 @@ describe("the grill loop: ask, answers, transcript, L3 (M4)", () => {
     expect(askedFrame.event).toBe("grill");
     expect((askedFrame.data as { entry: { id: string } }).entry.id).toBe("q1");
     // The transcript change publishes a session frame: openQuestions feeds the
-    // index's "questions pending" chip (DESIGN.md §10).
+    // index's "questions pending" chip (review UI).
     const askedSession = await reader.next();
     expect(askedSession.event).toBe("session");
     expect((askedSession.data as { session: { openQuestions: number } }).session.openQuestions).toBe(1);
@@ -1368,7 +1368,7 @@ describe("progress and live activity (live-agent-activity)", () => {
     const activityFrame = await reader.next();
     expect(activityFrame.event).toBe("activity");
     expect((activityFrame.data as { note: { text: string } }).note.text).toBe("drafting plan");
-    // The draft chip rides the session frame's latestActivity (DESIGN.md §10).
+    // The draft chip rides the session frame's latestActivity (review UI).
     const sessionFrame = await reader.next();
     expect(sessionFrame.event).toBe("session");
     const summary = (

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// otacon CLI dispatch (DESIGN.md §6). stdout carries exactly one JSON line per
+// otacon CLI dispatch (review loop and daemon API). stdout carries exactly one JSON line per
 // invocation; notices go to stderr; exit 0 success / 1 expected failure /
 // 2 usage or internal error (src/cli/output.ts).
 

@@ -1,5 +1,5 @@
 // Per-session live-activity feed: .otacon/<id>/activity.json holds the agent's
-// recent `otacon progress` notes (DESIGN.md §6) — the append-only telemetry the
+// recent `otacon progress` notes (review loop and daemon API) — the append-only telemetry the
 // review UI watches while the agent researches and drafts. Append-only and
 // capped to the newest N (config), so it stays small and the feed never grows
 // without bound. Same storage posture as the queue/transcript readers: atomic

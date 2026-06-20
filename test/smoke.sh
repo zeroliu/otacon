@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# bun run smoke — the M1 acceptance loop against the BUILT artifact (DESIGN.md
-# §6 "The full loop", minus grill/approve which land in M3/M4): status
+# bun run smoke — the M1 acceptance loop against the BUILT artifact. It covers
+# the core daemon loop, minus grill/approve which land in later UI tests: status
 # auto-spawns the daemon, start mints a session in a fresh git repo, a bad plan
 # is lint-rejected, the fixed plan stores revision 1, a parked wait is fed by a
 # comment POSTed over curl (the phone's path), status reports the queue going

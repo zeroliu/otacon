@@ -1,6 +1,6 @@
-// otacon open [--session id]: launch the review URL in the browser (DESIGN.md
-// §6, human convenience). It runs on the human's machine and the verb means "show
-// me the page", so it spawns the browser; OTACON_NO_BROWSER prints the URL as JSON
+// otacon open [--session id]: launch the review URL in the browser. It runs on
+// the human's machine and the verb means "show me the page", so it spawns the
+// browser; OTACON_NO_BROWSER prints the URL as JSON
 // instead, for headless hosts and URL-parsing agents (DECISIONS.md "open and
 // config launch the browser"). With no resolvable session the index URL is the
 // answer, not an error; reading is never the wrong screen, and the never-guess

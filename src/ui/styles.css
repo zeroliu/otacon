@@ -1,6 +1,6 @@
 /* otacon — codec-screen utilitarianism.
  *
- * System stacks only (DESIGN.md §3): the sans stack carries prose, the mono
+ * System stacks only (local-only daemon and system UI): the sans stack carries prose, the mono
  * stack carries everything operational — ids, repos, chips, timestamps — so
  * the UI reads like good mission telemetry, not a generic dashboard.
  * Light = warm paper; dark = green-tinted near-black. Each session's accent
@@ -31,7 +31,7 @@
   --chip-draft-bg: #e9e7dd;
   --chip-approved-ink: #2c6a38;
   --chip-approved-bg: #dcecdc;
-  /* The implement lifecycle (§12): a working blue-green for the in-progress
+  /* The implement lifecycle (approval and archive lifecycle): a working blue-green for the in-progress
    * `implementing`, the approved green for `implemented`, the dossier's del-red
    * for `implement_failed` (the only true-error surface — the palette otherwise
    * carries no red, so failure earns it). */
@@ -193,7 +193,7 @@ body::before {
   }
 }
 
-/* Agent presence (DESIGN.md §10, D4): a small live/offline dot beside the
+/* Agent presence (review UI, D4): a small live/offline dot beside the
  * status chips — the "is the agent on the line?" signal. Deliberately distinct
  * from .link-state (the browser↔daemon link): a hollow ring that fills + pulses
  * when live, vs the link dot's solid fill. Labelled "agent" vs "link". */
@@ -245,7 +245,7 @@ body::before {
 
 /* ───────────────────────── session cards ───────────────────────── */
 
-/* Hairline-telemetry list: rows divided by thin rules, no boxes (DESIGN.md §10). */
+/* Hairline-telemetry list: rows divided by thin rules, no boxes (review UI). */
 .cards {
   display: grid;
   gap: 0;
@@ -357,7 +357,7 @@ body::before {
   white-space: nowrap;
 }
 
-/* The PR link on a card once the build finishes (§12): a quiet accent pill
+/* The PR link on a card once the build finishes (approval and archive lifecycle): a quiet accent pill
  * beside the chip — leaving the codec for GitHub, so the ↗ + new tab. */
 .card-pr {
   flex: none;
@@ -388,7 +388,7 @@ body::before {
   margin-left: 0;
 }
 
-/* Approved sessions, collapsed by default on home (DESIGN.md §10): the same
+/* Approved sessions, collapsed by default on home (review UI): the same
  * disclosure idiom as the activity panel, holding a nested .cards grid. */
 .approved-group {
   margin-top: 18px;
@@ -496,7 +496,7 @@ body::before {
   color: var(--chip-approved-ink);
 }
 
-/* The implement lifecycle (§12): in-progress, then the two terminal outcomes. */
+/* The implement lifecycle (approval and archive lifecycle): in-progress, then the two terminal outcomes. */
 .chip-implementing {
   background: var(--chip-implementing-bg);
   color: var(--chip-implementing-ink);
@@ -508,7 +508,7 @@ body::before {
   animation: chip-breathe 1.6s ease-in-out infinite;
 }
 
-/* Finalizing (comment & approve, §12): the agent is folding the open comments in
+/* Finalizing (comment & approve, approval and archive lifecycle): the agent is folding the open comments in
  * before the commit — active work, so it reuses the implementing palette and the
  * breathing dot. */
 .chip-finalizing {
@@ -611,7 +611,7 @@ code {
   color: var(--ink);
 }
 
-/* The sticky session masthead (DESIGN.md §7, §10): one always-present header
+/* The sticky session masthead (session registry and switcher, review UI): one always-present header
  * pinned to the top of the scroll. It carries the identity surface treatment —
  * accent on the top edge (the hairline-telemetry rule), a surface-tinted
  * backdrop so the plan scrolls cleanly beneath it, and a bottom hairline. Sits
@@ -765,7 +765,7 @@ code {
   margin-top: 8px;
 }
 
-/* Scroll-jump targets must clear the sticky header (DESIGN.md §10): the ❓-queue
+/* Scroll-jump targets must clear the sticky header (review UI): the ❓-queue
  * jump (block:start), and — defensively — the section/phase anchors that j/k,
  * thread clicks, and decision deep-links land on, so none come to rest hidden
  * under the pinned bar. */
@@ -814,7 +814,7 @@ code {
 }
 
 /* The optional review-altitude sections (Contract, Impact) carry the intent/
- * risk layer the reviewer reads first (DESIGN.md §4, §10). They render through
+ * risk layer the reviewer reads first (plan structure, lint, and anchoring, review UI). They render through
  * the same SectionBlock as any H2; an accent-inked rail and section glyph mark
  * them apart from phase detail without a card, fill, or radius. */
 .plan-altitude .section-title::before {
@@ -829,9 +829,9 @@ code {
   );
 }
 
-/* Lead diagram (DESIGN.md §4, §10): the Summary's mermaid chart is the plan's
+/* Lead diagram (plan structure, lint, and anchoring, review UI): the Summary's mermaid chart is the plan's
  * first screen — strongly recommended up top so the reviewer reads shape before
- * prose. It rides the §10 hairline vocabulary — a 2px accent top rule and an
+ * prose. It rides the review UI hairline vocabulary — a 2px accent top rule and an
  * accent-inked caption lift it as the headline figure, no card or fill. Absent
  * on plans that opted out, where the selector simply matches nothing. */
 .plan-lead .diagram {
@@ -903,7 +903,7 @@ code {
   color: var(--ink-soft);
 }
 
-/* ── callouts: semantic ink (DESIGN.md §4 visuals, §10) ──
+/* ── callouts: semantic ink (plan structure, lint, and anchoring visuals, review UI) ──
  * A typed blockquote (`> [!risk]`) renders flat: a 2px top rule and a
  * glyph+label inked in the type's hue, no fill and no radius. Hues are drawn
  * only from the tested chip/accent palette, so contrast holds in light + dark
@@ -950,7 +950,7 @@ code {
   margin-bottom: 0;
 }
 
-/* ── inline scope pills (DESIGN.md §4) ──
+/* ── inline scope pills (plan structure, lint, and anchoring) ──
  * Bracket tokens like `[new]` become small mono tags inline in prose, hue per
  * scope, from the tested chip/diff palette. Rendered inline (not inline-block)
  * so a text selection still flows across them. Always budget-free. */
@@ -979,7 +979,7 @@ code {
   background: color-mix(in srgb, var(--diff-del) 15%, transparent);
 }
 
-/* ── behavioral assertions: gwt scenario cards (DESIGN.md §4, §9, §10) ──
+/* ── behavioral assertions: gwt scenario cards (plan structure, lint, and anchoring, threaded review and revision, review UI) ──
  * A ```gwt fence renders as Given/When/Then cards — the Test-Driven Review
  * approve checklist. Flat panels, a 2px top rule, mono clause labels; no fill
  * or radius, matching the callout/codec language. The clause text stays the
@@ -1079,7 +1079,7 @@ code {
 
 /* Decision matrix: the chosen row (first cell ✓) is accent-inked so the winner
  * reads at a glance — a 2px accent rule on the marker cell plus a faint wash,
- * staying in the semantic-ink vocabulary (DESIGN.md §4, §10). Tables with no
+ * staying in the semantic-ink vocabulary (plan structure, lint, and anchoring, review UI). Tables with no
  * ✓ row are untouched and read as ordinary tables. */
 .md tbody tr.chosen > td {
   font-weight: 600;
@@ -1560,7 +1560,7 @@ code {
 .composer-sheet {
   left: 50%;
   top: auto;
-  /* --kb-inset lifts the sheet above the on-screen keyboard (DESIGN.md §10);
+  /* --kb-inset lifts the sheet above the on-screen keyboard (review UI);
    * 0 with no keyboard up or on desktop, so the resting spot is unchanged. */
   bottom: calc(14px + env(safe-area-inset-bottom) + var(--kb-inset, 0px));
   width: min(520px, calc(100vw - 24px));
@@ -2044,7 +2044,7 @@ code {
   }
 }
 
-/* ── conversation card: a question + its follow-up turns (DESIGN.md §9) ── */
+/* ── conversation card: a question + its follow-up turns (threaded review and revision) ── */
 .thread-meta-jump {
   cursor: pointer;
 }
@@ -2144,7 +2144,7 @@ code {
   background-color: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
-/* Persistent thread marks (DESIGN.md §10): open threads + unsent drafts keep
+/* Persistent thread marks (review UI): open threads + unsent drafts keep
  * their anchored text lit *beneath* the click flash (which keeps top priority).
  * Low-opacity washes plus a shape cue — questions underlined, comments not —
  * read apart from each other, from the amber gutter markers, and from the
@@ -2177,7 +2177,7 @@ code {
   }
 }
 
-/* Reverse interaction (DESIGN.md §10): a tap on a lit span pulses a ring around
+/* Reverse interaction (review UI): a tap on a lit span pulses a ring around
  * its rail card. Ring only — never touches the card's own background. */
 .thread-focus {
   animation: thread-focus 1.6s ease-out both;
@@ -2198,7 +2198,7 @@ code {
 }
 
 /* ───────────────────────── the re-review layer ─────────────────────────
- * M3's three layers (DESIGN.md §9): the changelog banner is an incoming
+ * M3's three layers (threaded review and revision): the changelog banner is an incoming
  * transmission card, the controls strip is the instrument row under the
  * header, the diff view re-reads the same column as change telemetry, and
  * gutter markers brand changed sections even in the clean view. Amber — the
@@ -2553,11 +2553,11 @@ code {
   user-select: none;
 }
 
-/* ── resolved threads: collapsed to their ✓ line (§10 sketch) ── */
+/* ── resolved threads: collapsed to their ✓ line (review UI) ── */
 
 .thread-resolved {
   padding: 0;
-  /* resolved reads green from its ✓ + word; no blade needed (§10 hairline) */
+  /* resolved reads green from its ✓ + word; no blade needed (review UI hairline) */
 }
 
 .resolved-summary {
@@ -2712,7 +2712,7 @@ code {
 }
 
 /* ───────────────────────── the grill: agent question cards ─────────────────
- * M4 (DESIGN.md §8, §10). The queue is the codec call coming in: cards wear
+ * M4 (interview questions, review UI). The queue is the codec call coming in: cards wear
  * the session accent like the header and the revision banner — one family of
  * "the agent is transmitting" surfaces — and every control is a thumb-sized
  * target, because grilling happens on a phone, walking.
@@ -2766,7 +2766,7 @@ code {
 
 /* Incoming transmission, hairline-telemetry: flat panel, accent as a top rule
  * + the ▍ meta tag (not a fat left blade), meta divided from the question by a
- * thin rule — a real-instrument readout (DESIGN.md §10). */
+ * thin rule — a real-instrument readout (review UI). */
 .grill-card {
   padding: 13px 15px 14px;
   background: color-mix(in srgb, var(--accent) 5%, var(--surface));
@@ -2820,7 +2820,7 @@ code {
   margin-top: 13px;
 }
 
-/* One thumb (DESIGN.md §8): every chip is a full ≥44px tap target. */
+/* One thumb (interview questions): every chip is a full ≥44px tap target. */
 .grill-chip {
   display: inline-flex;
   align-items: center;
@@ -2955,7 +2955,7 @@ code {
 }
 
 /* Answered: the card settles — calm, green-checked, the answer echoed. The
- * accent top rule cools to approved-green; no fill, no blade (§10 hairline). */
+ * accent top rule cools to approved-green; no fill, no blade (review UI hairline). */
 .grill-settled {
   padding: 11px 14px 12px;
   background: var(--surface);
@@ -2999,7 +2999,7 @@ code {
 }
 
 /* ───────────────────────── the interview panel ─────────────────────────
- * The grill transcript as reviewable telemetry (DESIGN.md §8): collapsible,
+ * The grill transcript as reviewable telemetry (interview questions): collapsible,
  * with decision citations deep-linking (and flashing) into its entries.
  */
 
@@ -3059,8 +3059,8 @@ code {
 }
 
 /* ───────────────────────── the activity log ─────────────────────────
- * The agent's `otacon progress` narration as live telemetry (DESIGN.md §6,
- * §10): a compact collapsible panel on the review screen, led-with open on the
+ * The agent's `otacon progress` narration as live telemetry (review loop and daemon API,
+ * review UI): a compact collapsible panel on the review screen, led-with open on the
  * pre-plan placeholder. Newest-on-top via column-reverse over a DOM that stays
  * oldest→newest, so append-only keys never churn.
  */
@@ -3279,7 +3279,7 @@ code {
   animation: anchor-hit 1.6s ease-out both;
 }
 
-/* ── decision traceability chrome in the dossier (DESIGN.md §4, §8) ── */
+/* ── decision traceability chrome in the dossier (plan structure, lint, and anchoring, interview questions) ── */
 
 .q-cite {
   font: 600 0.94em var(--mono);
@@ -3312,7 +3312,7 @@ code {
 
 /* ───────────────────────── approve: the deliberate end ─────────────────────
  * No keyboard shortcut, a confirm sheet, and a warn-then-force path for
- * unresolved threads (DESIGN.md §9, §10). Approval green is terminal — the
+ * unresolved threads (threaded review and revision, review UI). Approval green is terminal — the
  * one surface that uses it as a fill.
  */
 
@@ -3367,7 +3367,7 @@ code {
 .approve-sheet {
   position: fixed;
   left: 50%;
-  /* Rides the keyboard inset like the composer (DESIGN.md §10); the desktop
+  /* Rides the keyboard inset like the composer (review UI); the desktop
    * media query below resets `bottom: auto`, where the inset is always 0. */
   bottom: calc(14px + env(safe-area-inset-bottom) + var(--kb-inset, 0px));
   transform: translateX(-50%);
@@ -3470,7 +3470,7 @@ code {
   filter: brightness(1.08);
 }
 
-/* Implement (§12): the second primary action — the implementing tone
+/* Implement (approval and archive lifecycle): the second primary action — the implementing tone
  * so it reads as a sibling of "Save Plan", visually the move that keeps the
  * agent building rather than the one that stops. */
 .btn-implement {
@@ -3493,7 +3493,7 @@ code {
   border-color: var(--chip-await-ink);
 }
 
-/* Send to agent (comment & approve, §12): the recommended way past the warning —
+/* Send to agent (comment & approve, approval and archive lifecycle): the recommended way past the warning —
  * fold the open comments in rather than drop them — so it carries the primary
  * approved ink, leaving "Save/Implement anyway" the quieter amber escape beside it. */
 .btn-send {
@@ -3621,7 +3621,7 @@ code {
   font-size: 10px;
 }
 
-/* The read-only finalizing notice (comment & approve, §12, D2): the agent is
+/* The read-only finalizing notice (comment & approve, approval and archive lifecycle, D2): the agent is
  * folding the open comments in before the finalize — the implementing palette
  * (active work) plus a breathing spinner, with the "Finalize anyway" escape (D7)
  * docked at the end. Flips to the approved notice once the agent finalizes. */
@@ -3683,7 +3683,7 @@ code {
 }
 
 /* ───────────────────────── phone polish (M5b) ─────────────────────────
- * The §10 one-thumb surface. Three instruments, one design family: the
+ * The review UI one-thumb surface. Three instruments, one design family: the
  * topbar's session switcher (dropdown on desktop, an accent-coded chip strip
  * on phones), the section ⋯ menus (coarse anchoring — selection is miserable
  * on glass), and the sticky bar, which on a phone absorbs the header strip's
@@ -3842,7 +3842,7 @@ code {
 /* No popovers on a phone: the menu docks in thumb range, like the composer. */
 .sec-sheet {
   left: 50%;
-  /* Keyboard-aware like the other sheets (DESIGN.md §10); 0 inset when no
+  /* Keyboard-aware like the other sheets (review UI); 0 inset when no
    * keyboard is up — the menu itself has no field, but a shared mechanism keeps
    * every sheet consistent if one opens a composer over it. */
   bottom: calc(14px + env(safe-area-inset-bottom) + var(--kb-inset, 0px));
@@ -3939,7 +3939,7 @@ code {
     font-size: 16px;
   }
 
-  /* The sticky header goes lean on phone (DESIGN.md §10): title + switcher chips
+  /* The sticky header goes lean on phone (review UI): title + switcher chips
    * + the clean⇄diff toggle. The revision and Approve fold away — Approve to the
    * fixed bottom bar, so it is never shown in two places; the toggle stays, so
    * diff review is still reachable on a phone. */
@@ -4107,7 +4107,7 @@ code {
 
 /* ───────────────────────── settings ─────────────────────────
  *
- * The /settings config surface (DESIGN.md §6): a User|Project scope toggle, the
+ * The /settings config surface (review loop and daemon API): a User|Project scope toggle, the
  * Project repo picker, a prominent "writes to" path banner, and the schema
  * fields grouped by section. Reuses the page column, the mono telemetry voice,
  * and the accent/line tokens — no new palette. */
@@ -4306,7 +4306,7 @@ code {
 }
 
 /* A modified field gets a quiet accent left-edge — the "you changed this, it'll
- * be in the next save" affordance, in the §10 hairline vocabulary. */
+ * be in the next save" affordance, in the review UI hairline vocabulary. */
 .field-modified {
   margin-left: -10px;
   padding-left: 10px;
@@ -4342,7 +4342,7 @@ code {
   color: var(--ink-soft);
 }
 
-/* Inherit/override provenance, sat under the description in the §10 hairline
+/* Inherit/override provenance, sat under the description in the review UI hairline
  * vocabulary — a quiet mono tag, not a painted badge. `field-inherit` (Project
  * view) notes the default came from the user profile, not the schema; it's
  * informational, so it stays in the soft ink. `field-override` (User view) is

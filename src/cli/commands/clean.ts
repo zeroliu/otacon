@@ -1,6 +1,6 @@
-// otacon clean [--all] — archive working state for ended sessions (DESIGN.md
-// §6, §12): for every terminal session in this repo (--all: everywhere), it
-// calls DELETE /api/sessions/:id; the daemon deregisters the session and
+// otacon clean [--all] — archive working state for ended sessions: for every
+// terminal session in this repo (--all: everywhere), it calls
+// DELETE /api/sessions/:id; the daemon deregisters the session and
 // archives its .otacon/<id>/ dir to .otacon/archive/<id>/, reporting the
 // destination as `archivedTo` (the review UI drives the same route — terminal
 // archives, non-terminal hard-deletes). The home archive (~/.otacon/sessions/)
@@ -22,7 +22,7 @@ export async function cleanCommand(argv: string[]): Promise<number> {
   const cwd = realpathOr(process.cwd());
   const root = findRepoRoot(cwd) ?? cwd;
   // Only terminal (ended) sessions qualify — approved, plus implemented /
-  // implement_failed once a build finishes (DESIGN.md §12). A terminal session
+  // implement_failed once a build finishes (approval and archive lifecycle). A terminal session
   // stays terminal, so clean's DELETE always takes the daemon's archive branch,
   // never the non-terminal hard-delete one — a racing status change cannot
   // sweep a live (including `implementing`) session.

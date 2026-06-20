@@ -1,4 +1,4 @@
-// Open-tab self-heal after a daemon update (DESIGN.md §16). `otacon start` can
+// Open-tab self-heal after a daemon update (install/update). `otacon start` can
 // auto-update and re-exec, which restarts otacond on a newer version — but an
 // already-open review tab keeps running the old in-memory bundle, whose hashed
 // lazy chunks (the plan renderer + mermaid) 404 against the rebuilt dist/ui and

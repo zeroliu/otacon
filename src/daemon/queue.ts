@@ -1,4 +1,4 @@
-// Per-session disk-backed FIFO event queue with waiter parking (DESIGN.md §6, §7).
+// Per-session disk-backed FIFO event queue with waiter parking.
 //
 // Every method is synchronous: Node's single thread therefore cannot interleave
 // an enqueue between a queue-empty check and a waiter parking — the whole
@@ -107,7 +107,7 @@ export class SessionQueue {
 
   /**
    * Detach from disk AND wake every parked waiter with one terminal event
-   * (DELETE of a *pending* session, DESIGN.md §12): set `closed` first so
+   * (DELETE of a *pending* session, approval and archive lifecycle): set `closed` first so
    * flush/requeue/dispatch all become no-ops — the synthetic event is never
    * persisted or requeued, and a late post-response ack can't recreate the
    * `.otacon/<id>/` dir the caller is about to hard-remove — then hand each

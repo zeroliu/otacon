@@ -1,4 +1,4 @@
-// Fold a flat thread list into rail units (DESIGN.md §9 follow-ups): a comment
+// Fold a flat thread list into rail units (threaded review and revision follow-ups): a comment
 // or a root question is one unit; a follow-up question (carrying `replyTo`) is
 // not its own top-level entry — it collapses under its root, so a conversation
 // renders once as a card, never twice (once in the card, once as a loose entry).
@@ -27,7 +27,7 @@ function isFollowup(thread: Thread): thread is QuestionThread & { replyTo: strin
  * Group threads into rail units, preserving the input's (oldest-first) order of
  * roots. Follow-ups fold under their root's `followups`, ordered by createdAt; a
  * follow-up whose root is missing — or, only via a corrupt threads.json, points
- * at a comment — degrades to its own unit rather than vanishing (DESIGN.md §4:
+ * at a comment — degrades to its own unit rather than vanishing (plan structure, lint, and anchoring:
  * kept, never silently dropped). Only question roots are valid attach targets.
  */
 export function groupThreads(threads: Thread[]): ThreadGroup[] {

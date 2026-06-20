@@ -1,8 +1,8 @@
-// The plan dossier (DESIGN.md §10): schema-aware rendering of a stored
+// The plan dossier (review UI): schema-aware rendering of a stored
 // revision. Sections keep one continuous reading column; phases are the one
 // carded element; Details collapse behind a size badge so skipping them is a
 // conscious choice. Section/phase DOM ids are the anchoring contract M2c
-// comments attach to (DESIGN.md §4). Default export — session-screen lazy
+// comments attach to (plan structure, lint, and anchoring). Default export — session-screen lazy
 // loads this chunk so the index bundle stays light.
 
 import type { CSSProperties } from "react";
@@ -16,7 +16,7 @@ import { parsePlan } from "./parse";
 import { ScenarioCards } from "./scenario-card";
 
 /**
- * The section/phase ⋯ menu affordance (DESIGN.md §10): always available, and
+ * The section/phase ⋯ menu affordance (review UI): always available, and
  * the primary anchoring path on a phone, where text selection is miserable.
  * Pure markup — the click is delegated in session-screen (like the q-cite
  * links), so PlanView stays callback-free and its memo survives.
@@ -119,7 +119,7 @@ function PhaseCard({
 // attacker-controlled text — and the whole render still passes DOMPurify.
 
 /**
- * Decision traceability chrome (DESIGN.md §4, §8): `← q7` citations become
+ * Decision traceability chrome (plan structure, lint, and anchoring, interview questions): `← q7` citations become
  * deep-links into the Interview panel (the click is delegated in
  * session-screen, so this stays a pure text transform and PlanView's memo
  * survives), and `[assumed]` becomes the visible "veto me" tag.
@@ -151,7 +151,7 @@ function decisionBlocks(blocks: Block[]): Block[] {
   );
 }
 
-// The optional review-altitude sections (DESIGN.md §4): Contract (the interface
+// The optional review-altitude sections (plan structure, lint, and anchoring): Contract (the interface
 // the reviewer signs off) and Impact (blast radius). They render through the
 // same SectionBlock as any H2, but carry an `altitude` class so the codec ink
 // marks them as the intent/risk layer above the phase detail.
@@ -171,7 +171,7 @@ function SectionBlock({
   const blocks =
     section.id === "decisions" ? decisionBlocks(section.blocks) : section.blocks;
   // Summary leads the document; `plan-lead` lets CSS lift its recommended lead
-  // diagram (a mermaid fence, DESIGN.md §4) as the headline figure — an accent
+  // diagram (a mermaid fence, plan structure, lint, and anchoring) as the headline figure — an accent
   // top rule and inked caption (.plan-lead .diagram), no card or fill.
   const className = [
     "plan-section",
@@ -216,7 +216,7 @@ export default memo(function PlanView({
 }: {
   markdown: string;
   warnings: LintIssue[];
-  /** Space-joined slug ids changed vs the diff baseline (gutter markers, §10). */
+  /** Space-joined slug ids changed vs the diff baseline (gutter markers, review UI). */
   changedIds?: string;
   /** Fired after each commit so the persistent thread marks can repaint once
    *  the (memo'd) dossier's DOM lands — a new revision swaps the whole subtree.

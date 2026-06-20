@@ -3,7 +3,7 @@ import type { LintIssue, LintSeverity } from "../../shared/types.js";
 import { CITATION_RE, SESSION_STATUSES } from "../../shared/types.js";
 import type { GwtBlock, ParsedPlan, Phase } from "./parse.js";
 
-// Rule semantics follow DESIGN.md §4-5; resolved edge cases follow
+// Rule semantics follow the plan grammar and lint rules; resolved edge cases follow
 // DECISIONS.md ("Schema is closed", "Frontmatter authority", "Plan grammar").
 
 const REQUIRED_FRONTMATTER_KEYS = [
@@ -16,7 +16,7 @@ const REQUIRED_FRONTMATTER_KEYS = [
 
 /**
  * The H2 sections in canonical order. Optional sections (Contract, Impact) are
- * linted when present but never required (DESIGN.md §4, q3): a trivial plan
+ * linted when present but never required (plan structure, lint, and anchoring, q3): a trivial plan
  * stays minimal, a complex one scales up. The order check tolerates absent
  * optionals — it compares the sections found against this order filtered to the
  * ones actually present, so dropping an optional never trips E_SECTION_ORDER.
@@ -150,7 +150,7 @@ export function checkL1(plan: ParsedPlan, session?: string): LintIssue[] {
     // A gwt fence in a section's read path (outside any phase) is misplaced —
     // behavioral assertions live under a phase's Verification. Reject it here so
     // it can't slip through as an ordinary budgeted fence while the UI still
-    // renders it as a scenario checklist (DESIGN.md §4).
+    // renders it as a scenario checklist (plan structure, lint, and anchoring).
     for (const gwt of section.gwtBlocks) {
       issues.push(
         issue(
@@ -172,7 +172,7 @@ export function checkL1(plan: ParsedPlan, session?: string): LintIssue[] {
     }
   }
   // Filtering the canonical order to present sections is what makes the order
-  // check tolerant of absent optionals (DESIGN.md §4): a plan without Contract
+  // check tolerant of absent optionals (plan structure, lint, and anchoring): a plan without Contract
   // simply never contributes a "contract" slot to compare against.
   const expectedOrder = knownIds.filter((id) => seen.has(id));
   if (firstOccurrences.join(",") !== expectedOrder.join(",")) {
@@ -443,7 +443,7 @@ export function checkL6(plan: ParsedPlan, budgets: Budgets): LintIssue[] {
 }
 
 /**
- * L7 (DESIGN.md §4, §5, q6): a lead diagram near the top is *strongly
+ * L7: a lead diagram near the top is *strongly
  * recommended, not required* — ~90% of plans — so the reviewer sees the
  * change's shape before its prose. A Summary with no ` ```mermaid ` diagram and
  * no `<!-- no-lead-diagram -->` escape-hatch marker earns one **warning**, never
@@ -484,7 +484,7 @@ const DECISION_RE = /^[-*+]\s+(D\d+):/;
 // invisibly.
 
 /**
- * L3 (DESIGN.md §4, §5, §8): every `- D<n>:` decision entry must cite the
+ * L3: every `- D<n>:` decision entry must cite the
  * grill question(s) that produced it (`← q7`) or wear `[assumed]`, and every
  * cited q id must exist in the transcript. Errors normally; warnings in
  * --quick sessions (codes stay stable — severity is the contextual dimension).
@@ -545,7 +545,7 @@ export interface ResolutionContext {
 }
 
 /**
- * L5 (DESIGN.md §5, §9): a resubmit must resolve every unresolved comment
+ * L5: a resubmit must resolve every unresolved comment
  * thread, and every revision ≥ 2 must carry a changelog. Unknown thread ids
  * (typos, question ids — questions are answered via `otacon answer`, never
  * resolved) are errors; re-resolving an already-resolved thread is allowed

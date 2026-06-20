@@ -1,8 +1,8 @@
-// otacon status [--all] — the crash/resume entry point (DESIGN.md §6): a
+// otacon status [--all] — the crash/resume entry point (review loop and daemon API): a
 // brand-new agent session runs this to find its open session, current
 // revision, and undelivered event count, then resumes the loop.
 //
-// Routing is registry-first (DESIGN.md §7): the daemon's registry says where
+// Routing is registry-first (session registry and switcher): the daemon's registry says where
 // every session's repo lives, so the default view is "sessions whose repo
 // contains my cwd" — no local state needed, the registry is the source of truth.
 

@@ -1,4 +1,4 @@
-// Same-origin client for the daemon's HTTP API + SSE streams (DESIGN.md §6).
+// Same-origin client for the daemon's HTTP API + SSE streams (review loop and daemon API).
 // Every stream opens with a `snapshot` frame, so these hooks never race a
 // fetch against the event feed; an EventSource reconnect re-syncs the same way
 // (DECISIONS.md "UI live updates: in-process Notifier, snapshot-first SSE").
@@ -39,7 +39,7 @@ export type {
 };
 
 /**
- * Newest progress notes the client keeps live (DESIGN.md §6). The daemon caps
+ * Newest progress notes the client keeps live (review loop and daemon API). The daemon caps
  * the feed (config; default 20) and the snapshot reflects that — this is a
  * generous client safety bound so a tuned-up server cap still renders in full.
  */
@@ -112,9 +112,9 @@ export interface SessionDetail {
   session?: LiveSession;
   /** Review threads, oldest first; live over the stream's `thread` frames. */
   threads: Thread[];
-  /** The grill transcript, oldest first; live over `grill` frames (DESIGN.md §8). */
+  /** The grill transcript, oldest first; live over `grill` frames (interview questions). */
   transcript: TranscriptEntry[];
-  /** The live-activity feed, oldest first; live over `activity` frames (DESIGN.md §6). */
+  /** The live-activity feed, oldest first; live over `activity` frames (review loop and daemon API). */
   activity: ActivityNote[];
   missing: boolean;
   /** True once a `removed` frame lands: the session was cleaned/archived or deleted. */
@@ -180,7 +180,7 @@ export function useSession(id: string): SessionDetail {
             transcript?: TranscriptEntry[];
             activity?: ActivityNote[];
           }>(source, "snapshot", (data) => {
-            // Self-heal on a daemon version change (DESIGN.md §16): a reconnect
+            // Self-heal on a daemon version change (install/update): a reconnect
             // after an update-restart re-delivers the version, reloading a stale
             // tab before it ever tries to fetch a vanished lazy chunk.
             maybeSelfHeal(data.version);
@@ -205,7 +205,7 @@ export function useSession(id: string): SessionDetail {
             setTranscript((prev) => upsertById(prev, entry)),
           );
           // Append-only feed: trim to the client view cap so a long session
-          // can't grow it without bound (DESIGN.md §6).
+          // can't grow it without bound (review loop and daemon API).
           on<{ session: string; note: ActivityNote }>(source, "activity", ({ note }) =>
             setActivity((prev) => [...prev, note].slice(-ACTIVITY_VIEW_CAP)),
           );
@@ -237,7 +237,7 @@ export function useSession(id: string): SessionDetail {
 const PRESENCE_HEARTBEAT_MS = 20_000;
 
 /**
- * Report this session's review visibility to the daemon (DESIGN.md §6), so a
+ * Report this session's review visibility to the daemon (review loop and daemon API), so a
  * desktop banner is suppressed only while the user is actually looking. POSTs
  * {visible:true} when visible and on a ~20s heartbeat, {visible:false} on
  * visibilitychange→hidden, and a sendBeacon false on unload (the daemon's ~45s
@@ -290,7 +290,7 @@ export function usePresence(id: string): void {
   }, [id]);
 }
 
-/** A drawer item not yet flushed to the daemon (DESIGN.md §9 batching). */
+/** A drawer item not yet flushed to the daemon (threaded review and revision batching). */
 export interface CommentDraft {
   anchor: Anchor | null;
   body: string;
@@ -315,13 +315,13 @@ export function postComments(id: string, items: CommentDraft[]): Promise<boolean
   return post202(`/api/sessions/${id}/comments`, { items });
 }
 
-/** Fire a question instantly (DESIGN.md §9); the answer arrives as a thread frame. */
+/** Fire a question instantly (threaded review and revision); the answer arrives as a thread frame. */
 export function postQuestion(id: string, anchor: Anchor | null, body: string): Promise<boolean> {
   return post202(`/api/sessions/${id}/questions`, { anchor, body });
 }
 
 /**
- * Post a follow-up question on an existing conversation (DESIGN.md §9): a new
+ * Post a follow-up question on an existing conversation (threaded review and revision): a new
  * linked question that inherits the root's anchor. `rootId` is the conversation
  * root the rail groups on; the new turn folds in over the `thread` SSE frame.
  */
@@ -329,7 +329,7 @@ export function postFollowup(id: string, rootId: string, body: string): Promise<
   return post202(`/api/sessions/${id}/questions`, { replyTo: rootId, body });
 }
 
-/** The user's side of a grill question (DESIGN.md §8): chip choice(s) and/or text. */
+/** The user's side of a grill question (interview questions): chip choice(s) and/or text. */
 export interface AnswerDraft {
   question: string;
   choice?: string;
@@ -343,7 +343,7 @@ export function postAnswer(id: string, draft: AnswerDraft): Promise<boolean> {
 }
 
 /**
- * The approve outcome (DESIGN.md §6 step 6, §12): a finalize-now success carries
+ * The approve outcome: a finalize-now success carries
  * the saved `path` (Save = the project copy, Implement = the home copy) plus the
  * absolute `home` archive path, so the note is honest about every place the plan
  * landed; a **comment & approve** success carries `finalizing:true` instead (no
@@ -356,7 +356,7 @@ export type ApproveResult =
   | { ok: true; finalizing: true }
   | { ok: false; code: string; message?: string; unresolved?: number; openComments?: number };
 
-/** The three approve modes, folded into the POST body (DESIGN.md §6, §12). */
+/** The three approve modes, folded into the POST body. */
 export interface ApproveOptions {
   /** Carry past the unresolved-threads warning, force-dropping the open threads. */
   force?: boolean;
@@ -367,7 +367,7 @@ export interface ApproveOptions {
 }
 
 /**
- * Approve the plan (DESIGN.md §6 step 6, §12). `implement:true` is the Approve &
+ * Approve the plan. `implement:true` is the Approve &
  * Implement variant: the daemon finalizes the artifact exactly as a plain
  * approve, then flips the session to `implementing` (not over) and wakes the
  * agent with `implement:true` to build it. `sendOpenComments:true` is comment &
@@ -414,7 +414,7 @@ export async function postApprove(id: string, opts: ApproveOptions = {}): Promis
 }
 
 /**
- * The delete outcome (DESIGN.md §6, §12): success is the 200; a failure carries
+ * The delete outcome: success is the 200; a failure carries
  * the daemon's own error code/message so the sheet can tell a real server fault
  * (a registry-flush throw → 500) apart from an unreachable daemon, instead of
  * blaming the network for either.
@@ -422,7 +422,7 @@ export async function postApprove(id: string, opts: ApproveOptions = {}): Promis
 export type DeleteResult = { ok: true } | { ok: false; code: string; message?: string };
 
 /**
- * Permanently delete a pending (non-approved) session (DESIGN.md §6, §12): the
+ * Permanently delete a pending (non-approved) session: the
  * daemon hard-removes its working state and publishes the `removed` frame both
  * session hooks already handle, so callers need no local teardown — the card
  * drops / the screen closes off that frame. Resolves ok only on the 200.
@@ -439,7 +439,7 @@ export async function postDelete(id: string): Promise<DeleteResult> {
 }
 
 /**
- * Mark a revision reviewed (DESIGN.md §9 layer 3) — the banner's dismiss and
+ * Mark a revision reviewed (threaded review and revision layer 3) — the banner's dismiss and
  * the explicit "mark reviewed" both land here. The daemon answers with a
  * session SSE frame carrying the moved baseline, so callers need no local
  * state: banner visibility and gutter markers are derived from the summary.
@@ -497,7 +497,7 @@ function usePolledJson<T>(path: string | null): T | undefined {
 }
 
 /**
- * The structural diff `from` → `to` (DESIGN.md §6). One payload drives both
+ * The structural diff `from` → `to` (review loop and daemon API). One payload drives both
  * the diff view's hunks and the clean view's gutter markers, so it is fetched
  * whenever a plan exists. Refetches when either endpoint moves (a new
  * revision over SSE, a baseline pick, a dismiss moving last-reviewed).
@@ -525,11 +525,11 @@ export interface ConfigScope {
   repo?: string;
 }
 
-/** The three config scopes, in file-overlay precedence (low → high, §16). */
+/** The three config scopes, in file-overlay precedence (low → high, install/update). */
 export type ConfigScopeName = "user" | "project" | "project.local";
 
 /**
- * GET /api/config payload (DESIGN.md §6 config surface): the full field schema
+ * GET /api/config payload: the full field schema
  * plus each scope's target path and current values. `user` is always present;
  * `project` (team-shared) and `project.local` (personal) only when an absolute
  * `repo` was supplied.
@@ -609,7 +609,7 @@ export function useConfig(repo?: string): ConfigState {
 }
 
 /**
- * The save outcome for POST /api/config (DESIGN.md §6 config surface). Success
+ * The save outcome for POST /api/config. Success
  * echoes the persisted sparse values; 422 carries per-field validation errors
  * the Settings screen renders inline; 400/network carries a top-level error.
  */
@@ -618,7 +618,7 @@ export type SaveConfigResult =
   | { ok: false; status: number; fieldErrors?: ScopeFieldError[]; error?: { code: string; message: string } };
 
 /**
- * Persist a scope's overrides (DESIGN.md §6): POSTs the sparse `values` to
+ * Persist a scope's overrides (review loop and daemon API): POSTs the sparse `values` to
  * /api/config, which REPLACES the scope file — so `values` must be the complete
  * desired override set (see settings-form.buildPayload). Parses the daemon's
  * 200 / 422 / 400 into a discriminated result; an unreachable daemon or a

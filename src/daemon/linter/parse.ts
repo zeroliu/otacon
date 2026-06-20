@@ -29,7 +29,7 @@ export interface DetailsBlock {
 }
 
 /**
- * A ```gwt behavioral-assertion fence (DESIGN.md §4). Captured structurally —
+ * A ```gwt behavioral-assertion fence (plan structure, lint, and anchoring). Captured structurally —
  * `scenarios` is tokenized once here by the shared grammar (src/shared/gwt.ts)
  * so the linter (shape/budget verdicts) and a UI that ever reuses this never
  * re-parse; `field` is the active phase field when the fence opened, so the
@@ -106,7 +106,7 @@ const FIELD_RE =
 const PHASE_RE = /^### Phase (\d+) [—-] (.+?)\s*$/;
 const HEADING_RE = /^(#{2,4})\s+(.+?)\s*$/;
 // Capture the info string too — a `gwt` fence is a behavioral-assertion block,
-// not a budgeted/visual fence (DESIGN.md §4). Group 1 stays the delimiter.
+// not a budgeted/visual fence (plan structure, lint, and anchoring). Group 1 stays the delimiter.
 const FENCE_RE = /^\s*(`{3,}|~{3,})\s*(.*)$/;
 const LIST_ITEM_RE = /^[-*+]\s+/;
 // A blockquote line, and the callout marker that must be its first line — the
@@ -115,7 +115,7 @@ const LIST_ITEM_RE = /^[-*+]\s+/;
 // blockquote (or an unknown `[!type]`) stays ordinary budgeted prose.
 const QUOTE_RE = /^\s*>/;
 const CALLOUT_RE = /^\s*>\s*\[!(?:risk|note|decision|assumption)\]\s*$/i;
-// The lead-diagram escape hatch (DESIGN.md §4): an HTML-comment directive that
+// The lead-diagram escape hatch (plan structure, lint, and anchoring): an HTML-comment directive that
 // suppresses the L7 nudge when a chart isn't meaningful. Like a callout marker
 // it is chrome, not prose, so a section's read path exempts it from the budget.
 const LEAD_OPT_OUT_RE = /^\s*<!--\s*no-lead-diagram\b.*?-->\s*$/i;
@@ -381,7 +381,7 @@ export function parsePlan(content: string): ParsedPlan {
       continue;
     }
 
-    // The lead-diagram escape hatch (DESIGN.md §4): in a section's read path it
+    // The lead-diagram escape hatch (plan structure, lint, and anchoring): in a section's read path it
     // records the opt-out and, being chrome, is exempt from the line budget —
     // so declining a diagram never costs a Summary content line.
     if (section && !phase && LEAD_OPT_OUT_RE.test(line)) {

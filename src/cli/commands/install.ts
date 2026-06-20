@@ -1,5 +1,5 @@
 // otacon install --agent claude|codex|opencode [--agent …] | --all [--hooks] —
-// write the protocol wrapper into each agent's skill location (DESIGN.md §16).
+// write the protocol wrapper into each agent's skill location (install/update).
 // Pure file writes — no daemon needed. Wrappers are managed files: reinstall
 // overwrites them wholesale. --hooks additionally registers the Claude Code Stop
 // hook in ~/.claude/settings.json — merged additively and idempotently, with a
@@ -98,7 +98,7 @@ function applyStopHook(): HooksReport {
   return { registered: true, command, settings: path, ...(backup ? { backup } : {}) };
 }
 
-// Without --hooks: report registration state without nagging (DESIGN.md §16). The
+// Without --hooks: report registration state without nagging (install/update). The
 // Stop hook is optional, so its absence is neither warned about nor "offered" — the
 // JSON still factually carries `registered` for anyone who wants to wire it up.
 function offerStopHook(): HooksReport {

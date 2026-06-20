@@ -1,5 +1,5 @@
 // Per-session grill transcript: .otacon/<id>/transcript.json holds every
-// agent question and the user's answer (DESIGN.md §8) — distinct from
+// agent question and the user's answer (interview questions) — distinct from
 // user-question threads (threads.json), because the Interview panel and the
 // threads rail are different surfaces with different lifecycles, and the
 // transcript ships with the approved artifact while threads stay review

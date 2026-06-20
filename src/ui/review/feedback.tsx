@@ -1,4 +1,4 @@
-// The selection instruments (DESIGN.md §10): a docked Comment/Ask bar that
+// The selection instruments (review UI): a docked Comment/Ask bar that
 // appears when plan text is selected — Comment stacks into the drawer, Ask
 // fires instantly — and the anchored composer both actions open. The bar is
 // pinned to a fixed bottom edge (thumb range on phone, a slim strip on
@@ -87,7 +87,7 @@ export function SelectionBar({
 
 export interface ComposerState {
   mode: "comment" | "ask";
-  /** null = whole-plan comment (DESIGN.md §4). */
+  /** null = whole-plan comment (plan structure, lint, and anchoring). */
   anchor: Anchor | null;
   /** Viewport point to pin under; null = bottom sheet (whole-plan, phones). */
   at: { x: number; y: number } | null;

@@ -1,4 +1,4 @@
-// Registry-first session resolution (DESIGN.md §7): explicit --session always
+// Registry-first session resolution (session registry and switcher): explicit --session always
 // wins; otherwise the repo's single active session in the daemon registry — the
 // registry is the single source of truth, there is no local pointer. Zero active
 // sessions for the repo, or two or more, is a refusal carrying the candidates,
@@ -71,7 +71,7 @@ export function resolveSession(
   }
 
   // No local pointer: the repo's single active (non-terminal) session is the
-  // implicit default. A terminal session is over (DESIGN.md §6) — approved, or
+  // implicit default. A terminal session is over (review loop and daemon API) — approved, or
   // a finished build (implemented/implement_failed) — so it never counts;
   // reaching it needs an explicit --session. Two or more active sessions refuse
   // with the candidate list rather than guess: cross-posting feedback to the

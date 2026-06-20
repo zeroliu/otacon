@@ -1,4 +1,4 @@
-// Where each agent reads its wrapper from (DESIGN.md §16; DECISIONS.md
+// Where each agent reads its wrapper from (install/update; DECISIONS.md
 // "Wrapper destinations per agent"), plus the merge/registration helpers
 // install and doctor share. homedir() honors $HOME, which is what keeps the
 // install e2e hermetic under a temp HOME.

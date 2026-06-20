@@ -1,5 +1,5 @@
 // Tracks which sessions have a *visible* review open, so a desktop banner is
-// suppressed only while the user is actually looking (DESIGN.md §6, §10). The
+// suppressed only while the user is actually looking (review loop and daemon API, review UI). The
 // UI reports `document.visibilityState` over POST /api/sessions/:id/presence —
 // {visible:true} when the review becomes visible and on a heartbeat while it
 // stays visible, {visible:false} on visibilitychange→hidden and on unload.

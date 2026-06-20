@@ -27,19 +27,19 @@ export function globalConfigPath(): string {
 }
 
 /**
- * The auto-update check cache (`<OTACON_HOME>/update-check.json`, DESIGN.md
- * §16): records `checkedAt` so `otacon start` throttles the registry fetch to
- * once per hour instead of paying a round-trip on every start.
+ * The auto-update check cache (`<OTACON_HOME>/update-check.json`): records
+ * `checkedAt` so `otacon start` throttles the registry fetch to once per hour
+ * instead of paying a round-trip on every start.
  */
 export function updateCachePath(): string {
   return join(otaconHome(), "update-check.json");
 }
 
 /**
- * The canonical home plan archive root (`<OTACON_HOME>/sessions`, DESIGN.md
- * §12): every approved plan lands here keyed by its session id, regardless of
- * the repo. This store is permanent — `otacon clean` never touches it — so a
- * plan is always recoverable even after its repo working state is archived.
+ * The canonical home plan archive root (`<OTACON_HOME>/sessions`): every
+ * approved plan lands here keyed by its session id, regardless of the repo.
+ * This store is permanent — `otacon clean` never touches it — so a plan is
+ * always recoverable even after its repo working state is archived.
  */
 export function homeSessionsDir(): string {
   return join(otaconHome(), "sessions");
@@ -94,17 +94,17 @@ export function eventsPath(repoRoot: string, id: string): string {
   return join(sessionDir(repoRoot, id), "events.json");
 }
 
-/** Comment + question threads for the review UI's rail (DESIGN.md §9, §12). */
+/** Comment + question threads for the review UI's rail (threaded review and revision, approval and archive lifecycle). */
 export function threadsPath(repoRoot: string, id: string): string {
   return join(sessionDir(repoRoot, id), "threads.json");
 }
 
-/** The grill Q&A transcript (DESIGN.md §8) — appended to the approved artifact. */
+/** The grill Q&A transcript (interview questions) — appended to the approved artifact. */
 export function transcriptPath(repoRoot: string, id: string): string {
   return join(sessionDir(repoRoot, id), "transcript.json");
 }
 
-/** The append-only live-activity feed (DESIGN.md §6, §12) — `otacon progress` notes. */
+/** The append-only live-activity feed: `otacon progress` notes. */
 export function activityPath(repoRoot: string, id: string): string {
   return join(sessionDir(repoRoot, id), "activity.json");
 }
@@ -118,7 +118,7 @@ export function revisionWarningsPath(repoRoot: string, id: string, n: number): s
   return join(sessionDir(repoRoot, id), `r${n}.warnings.json`);
 }
 
-/** The agent's changelog submitted with r<n>.md (DESIGN.md §9 layer 1). */
+/** The agent's changelog submitted with r<n>.md (threaded review and revision layer 1). */
 export function revisionChangelogPath(repoRoot: string, id: string, n: number): string {
   return join(sessionDir(repoRoot, id), `r${n}.changelog.md`);
 }

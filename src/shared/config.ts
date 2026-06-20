@@ -3,14 +3,14 @@ import { globalConfigPath, repoConfigPath, repoLocalConfigPath } from "./paths.j
 
 export interface Budgets {
   summaryLines: number;
-  /** Read-path line budget for the optional `## Contract` section (DESIGN.md §4). */
+  /** Read-path line budget for the optional `## Contract` section (plan structure, lint, and anchoring). */
   contractLines: number;
-  /** Read-path line budget for the optional `## Impact` (blast-radius) section (DESIGN.md §4). */
+  /** Read-path line budget for the optional `## Impact` (blast-radius) section (plan structure, lint, and anchoring). */
   impactLines: number;
   decisionEntryLines: number;
   phaseGoalLines: number;
   phaseVerificationLines: number;
-  /** Max Given/When/Then scenarios in one phase's ```gwt block (DESIGN.md §4). */
+  /** Max Given/When/Then scenarios in one phase's ```gwt block (plan structure, lint, and anchoring). */
   gwtMaxScenarios: number;
   risksMaxItems: number;
   riskEntryLines: number;
@@ -21,10 +21,10 @@ export interface Budgets {
 }
 
 /**
- * Live-activity tuning (DESIGN.md §6, §15): `cap` is how many newest progress
+ * Live-activity tuning (review loop and daemon API, tuning defaults): `cap` is how many newest progress
  * notes the feed keeps and shows; `noteMaxChars` trims an over-long note
  * server-side so narration never fails or bloats payloads. Both are first-week
- * tuning guesses (§15). The UI's live/offline threshold is a sibling tunable
+ * tuning guesses (tuning defaults). The UI's live/offline threshold is a sibling tunable
  * but lives as a UI constant — the SPA reads no config file.
  */
 export interface ActivityConfig {
@@ -32,7 +32,7 @@ export interface ActivityConfig {
   noteMaxChars: number;
 }
 
-/** Attention notifications (DESIGN.md §6). Desktop = a native macOS banner. */
+/** Attention notifications (review loop and daemon API). Desktop = a native macOS banner. */
 export interface Notifications {
   desktop: boolean;
 }
@@ -48,7 +48,7 @@ export interface WorktreeConfig {
 }
 
 /**
- * Where **Save** writes the approved plan's project copy (DESIGN.md §12). A
+ * Where **Save** writes the approved plan's project copy (approval and archive lifecycle). A
  * repo-relative path; the default `.otacon/plans` keeps the copy beside otacon's
  * other working state, set it to e.g. `docs/plans` to group it with other tracked
  * plans. The canonical copy always lands in the home store
@@ -59,7 +59,7 @@ export interface PlansConfig {
 }
 
 /**
- * Auto-update at `otacon start` (DESIGN.md §16). When `auto` is true (default),
+ * Auto-update at `otacon start` (install/update). When `auto` is true (default),
  * a pre-session gate fetches the latest published version and self-updates;
  * set it false to pin the installed version (CI, air-gapped, pinned-version
  * shops). Only `otacon start` ever runs the check; the 1h throttle and the
@@ -125,7 +125,7 @@ export interface ConfigField {
  * the leaves of DEFAULT_CONFIG, so config can never grow without a schema entry.
  */
 export const CONFIG_SCHEMA: ConfigField[] = [
-  // budgets — read-path line caps (DESIGN.md §4, §5)
+  // budgets — read-path line caps (plan structure, lint, and anchoring, lint severity)
   {
     section: "budgets",
     key: "summaryLines",
@@ -234,7 +234,7 @@ export const CONFIG_SCHEMA: ConfigField[] = [
     default: DEFAULT_CONFIG.budgets.detailsSoftCapLines,
     min: 1,
   },
-  // activity — live feed tuning (DESIGN.md §6, §15)
+  // activity — live feed tuning (review loop and daemon API, tuning defaults)
   {
     section: "activity",
     key: "cap",
@@ -253,7 +253,7 @@ export const CONFIG_SCHEMA: ConfigField[] = [
     default: DEFAULT_CONFIG.activity.noteMaxChars,
     min: 1,
   },
-  // notifications — attention banners (DESIGN.md §6)
+  // notifications — attention banners (review loop and daemon API)
   {
     section: "notifications",
     key: "desktop",
@@ -262,7 +262,7 @@ export const CONFIG_SCHEMA: ConfigField[] = [
     type: "bool",
     default: DEFAULT_CONFIG.notifications.desktop,
   },
-  // worktree — Approve & Implement build location (DESIGN.md §12)
+  // worktree — Approve & Implement build location (approval and archive lifecycle)
   {
     section: "worktree",
     key: "dir",
@@ -271,7 +271,7 @@ export const CONFIG_SCHEMA: ConfigField[] = [
     type: "path",
     default: DEFAULT_CONFIG.worktree.dir,
   },
-  // plans — where Save writes the approved plan's project copy (DESIGN.md §12)
+  // plans — where Save writes the approved plan's project copy (approval and archive lifecycle)
   {
     section: "plans",
     key: "dir",
@@ -280,7 +280,7 @@ export const CONFIG_SCHEMA: ConfigField[] = [
     type: "path",
     default: DEFAULT_CONFIG.plans.dir,
   },
-  // update — auto-update at otacon start (DESIGN.md §16)
+  // update — auto-update at otacon start (install/update)
   {
     section: "update",
     key: "auto",

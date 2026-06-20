@@ -1,4 +1,4 @@
-// Stable per-session accent color (DESIGN.md §7): FNV-1a over the session id
+// Stable per-session accent color (session registry and switcher): FNV-1a over the session id
 // picks a hue; saturation/lightness are fixed per color scheme in styles.css
 // (DECISIONS.md "Session accent color: FNV-1a of the id picks a hue").
 

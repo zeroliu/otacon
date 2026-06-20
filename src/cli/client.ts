@@ -1,5 +1,5 @@
 // HTTP client for otacond, plus ensureDaemon — the auto-spawn and version
-// handshake every CLI command runs first (DESIGN.md §16).
+// handshake every CLI command runs first (install/update).
 //
 // The daemon is spawned by resolved path — the dist/daemon/main.js sibling of
 // this very module — never via PATH (DECISIONS.md "Daemon spawned by resolved
@@ -113,7 +113,7 @@ function daemonEntry(): string {
  * True when this CLI is running from a source checkout rather than a built
  * `dist/` install — exactly the signal `daemonEntry()` uses (no built
  * `dist/daemon/main.js` sibling means we're a `bun run src/...` dev run). The
- * auto-update gate (update.ts, DESIGN.md §16) reuses this to skip self-update: a
+ * auto-update gate (update.ts, install/update) reuses this to skip self-update: a
  * global npm package update is meaningless, and would be destructive, from a
  * source tree (D6).
  */
@@ -197,7 +197,7 @@ const RESTART_ATTEMPTS = 3;
 
 /**
  * Health probe → spawn if down → exact-version handshake, restarting a stale
- * daemon via POST /api/shutdown (DESIGN.md §16). Refuses a port held by a
+ * daemon via POST /api/shutdown (install/update). Refuses a port held by a
  * non-otacond process. The restart cycle is bounded (peer CLIs of different
  * versions could otherwise ping-pong restarts forever), and the shutdown
  * re-checks the daemon's version right before firing, so a peer's completed

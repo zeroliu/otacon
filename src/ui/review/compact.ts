@@ -1,4 +1,4 @@
-// Scroll→compact threshold math for the sticky session header (DESIGN.md §10).
+// Scroll→compact threshold math for the sticky session header (review UI).
 // Pure and DOM-free so it unit-tests in isolation; the rAF-throttled
 // `useCompactOnScroll` hook in header.tsx wraps it around `window.scrollY`.
 

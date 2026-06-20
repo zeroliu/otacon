@@ -1,4 +1,4 @@
-// M5b e2e: the §10 phone review surface, against the real daemon and the
+// M5b e2e: the review UI phone review surface, against the real daemon and the
 // real built CLI. Section ⋯ menus mint section-only anchors ({section}, no
 // exact quote) that round-trip to a parked `otacon wait`; the sticky bar is
 // the whole one-thumb control surface (❓ queue jump, drawer + send all,

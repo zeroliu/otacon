@@ -1,9 +1,9 @@
-// The /settings screen (DESIGN.md §6 config surface): toggle User | Project |
+// The /settings screen: toggle User | Project |
 // Project · local scope, pick the Project repo, surface the exact target file the
 // scope writes, and render every config field with its current value (schema
 // default shown as the placeholder when unset). Each field surfaces what it
 // inherits when unset, mirroring the overlay order defaults ← user ← project ←
-// project.local (§16). Edits auto-save (DECISIONS.md "Settings auto-saves
+// project.local (install/update). Edits auto-save (DECISIONS.md "Settings auto-saves
 // on blur"): a text/number field commits when it loses focus, a checkbox and a
 // reset commit on the spot, so there is no Save button to forget. Each save posts a
 // *sparse* payload (settings-form.buildPayload) that REPLACES the scope file, so

@@ -1,5 +1,5 @@
 // In-process pub/sub bridging daemon state changes to the web UI's SSE
-// streams (DESIGN.md §10 "UI updates over SSE"). One daemon process owns all
+// streams (review UI "UI updates over SSE"). One daemon process owns all
 // state, so an EventEmitter is the entire bus (DECISIONS.md "UI live updates:
 // in-process Notifier, snapshot-first SSE, no replay").
 
@@ -16,7 +16,7 @@ import type { ActivityNote, SessionSummary, Thread, TranscriptEntry } from "../s
  * progress note for the per-session activity log (the chip rides `session`
  * frames' `latestActivity` instead). A `removed` frame is terminal: the
  * session left the registry (otacon clean) — the index drops its card and an
- * open review screen flips to its cleaned state (DESIGN.md §12).
+ * open review screen flips to its cleaned state (approval and archive lifecycle).
  */
 export type UiEvent =
   | { type: "session"; session: string; data: { session: SessionSummary } }

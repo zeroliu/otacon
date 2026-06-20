@@ -1,4 +1,4 @@
-// The inline diff (DESIGN.md §9 layer 3, §10): the same 720px reading column
+// The inline diff (threaded review and revision layer 3, review UI): the same 720px reading column
 // as the clean dossier, re-read as change telemetry. Each slug unit keeps its
 // section rail and gains a status tag; changed units render their server
 // hunks as instrument lines (op gutter + tinted wash, mono because the lines

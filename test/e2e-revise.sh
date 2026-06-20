@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end exercise of the M3 revise loop against the real built artifact
-# (DESIGN.md §6 step 5, §9): submit r1, flush a comment batch over curl (the
+# submit r1, flush a comment batch over curl (the
 # phone's path), resubmit WITHOUT resolutions → 422 carrying the L5 errors,
 # resubmit WITH resolutions + changelog → r2 accepted, the thread resolved,
 # the diff endpoint reporting changed sections vs the last-reviewed revision,

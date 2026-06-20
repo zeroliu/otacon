@@ -38,7 +38,7 @@ test("the dossier renders the plan schema under stable slug ids", async ({ page,
   await submitRichPlan(request, session.id);
   await page.goto(`/s/${session.id}`);
 
-  // The anchoring contract (DESIGN.md §4): slugged section ids + phase-<n>.
+  // The anchoring contract (plan structure, lint, and anchoring): slugged section ids + phase-<n>.
   for (const id of SLUG_IDS) {
     await expect(page.locator(`#${id}`)).toHaveCount(1);
   }

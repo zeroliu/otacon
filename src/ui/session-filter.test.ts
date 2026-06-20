@@ -1,5 +1,5 @@
-// Pins the one split both the switcher and the home list read (DESIGN.md §7,
-// §10, §12): the terminal set is the only divider, order is preserved on both
+// Pins the one split both the switcher and the home list read (session registry and switcher,
+// review UI, approval and archive lifecycle): the terminal set is the only divider, order is preserved on both
 // sides, and no session is dropped or duplicated — the property the "they can
 // never disagree" claim rests on. `implementing` is active, not over. Runs
 // under the root tsconfig/bun (no DOM needed).

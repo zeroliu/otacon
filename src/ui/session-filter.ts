@@ -1,4 +1,4 @@
-// The shared "session is over" split (DESIGN.md §7, §10, §12): one React-free
+// The shared "session is over" split (session registry and switcher, review UI, approval and archive lifecycle): one React-free
 // source of truth for active-vs-over, so the switcher (which hides over
 // sessions) and the home list (which parks them in a collapsed section) can
 // never disagree about what is hidden. Mirrors the single-source rule the
@@ -12,7 +12,7 @@ import { TERMINAL_STATUSES, type SessionStatus } from "../shared/types.js";
 const TERMINAL = new Set<SessionStatus>(TERMINAL_STATUSES);
 
 /**
- * A session is over once it reaches a terminal state (DESIGN.md §12:
+ * A session is over once it reaches a terminal state (approval and archive lifecycle:
  * `approved`/`implemented`/`implement_failed`): it drops out of the switcher,
  * sits in home's collapsed section, and — caught live — sends the review screen
  * home. `implementing` is deliberately NOT terminal: the agent is still on the

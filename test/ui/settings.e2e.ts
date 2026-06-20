@@ -1,5 +1,5 @@
-// UI e2e for the Settings screen's scope inheritance + auto-save (DESIGN.md §10,
-// §16): the Project view shows the user profile's override as a field's default;
+// UI e2e for the Settings screen's scope inheritance + auto-save (review UI,
+// install/update): the Project view shows the user profile's override as a field's default;
 // the User view flags a field the compared project overrides; sections lead with
 // worktree then notifications; and edits persist on blur / toggle with no Save
 // button (DECISIONS.md "Settings auto-saves on blur"). Driven over the real built

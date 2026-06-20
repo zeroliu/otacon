@@ -1,4 +1,4 @@
-// The delete flow (DESIGN.md §6, §12): a deliberate control — like Approve, no
+// The delete flow: a deliberate control — like Approve, no
 // keyboard shortcut exists — opening a confirm sheet whose copy is honest about
 // the disposition, which depends on whether the session has committed value.
 // An **approved** session is archived (recoverable, like `otacon clean`); a

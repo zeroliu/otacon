@@ -1,4 +1,4 @@
-// Approved-plan artifact composition (DESIGN.md §6 step 6, §12): the final
+// Approved-plan artifact composition: the final
 // revision's markdown with daemon-rewritten frontmatter (status: approved,
 // revision corrected — the daemon owns both) plus the grill transcript
 // appended as an "## Interview" section. The artifact is post-lint output; the
@@ -109,7 +109,7 @@ function renderEntry(entry: TranscriptEntry): string {
  * the transcript is empty — a --quick session has no interview to ship), then —
  * only when the approval went through **comment & approve** — a "## Review notes"
  * section recording the comments the agent folded in unreviewed and how it
- * resolved them, so the trusted fold-in stays auditable (DESIGN.md §12). A plain
+ * resolved them, so the trusted fold-in stays auditable (approval and archive lifecycle). A plain
  * or force approve carries no `reviewNotes`, so the section is omitted.
  */
 export function composeArtifact(

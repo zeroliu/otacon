@@ -1,10 +1,10 @@
-// Native macOS desktop banners for "this plan needs your attention" (DESIGN.md
-// §6). The daemon already runs on the Mac, so it fires the banner directly
-// rather than over Web Push (phone is a deferred path — §14). Prefers
+// Native macOS desktop banners for "this plan needs your attention". The daemon
+// already runs on the Mac, so it fires the banner directly rather than over Web
+// Push (phone is a deferred path). Prefers
 // `terminal-notifier` when on PATH (its banner is clickable — tapping opens the
 // review URL), falls back to `osascript` (zero dependency, not clickable); a
 // no-op off macOS. These are LOCAL OS calls, never a model API — the
-// zero-API-spend invariant (§13) is untouched.
+// zero-API-spend invariant is untouched.
 
 import { execFile, execFileSync } from "node:child_process";
 

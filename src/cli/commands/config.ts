@@ -1,4 +1,4 @@
-// otacon config [open] | config get <key> (DESIGN.md §6, §16).
+// otacon config [open] | config get <key> (review loop and daemon API, install/update).
 //
 //   otacon config            open the Settings web UI in the browser. Inside a
 //     git repo the URL carries `?repo=<repo root>` so the screen defaults to

@@ -1,7 +1,7 @@
 import type { ActivityNote, SessionStatus } from "./api";
 import { isOver } from "./session-filter";
 
-// DESIGN.md §10 status chips. "questions pending" is derived state, not a
+// review UI status chips. "questions pending" is derived state, not a
 // stored status: it lights while unanswered agent grill questions exist
 // (summary.openQuestions > 0) on a live session — answering is the user's
 // move, so it outranks the agent-side statuses until the session is over. The
@@ -10,12 +10,12 @@ import { isOver } from "./session-filter";
 const CHIPS: Record<Exclude<SessionStatus, "draft">, { label: string; tone: string }> = {
   in_review: { label: "awaiting your review", tone: "await" },
   revising: { label: "agent revising", tone: "revise" },
-  // comment & approve (§12): the reviewer approved with open comments and sent
+  // comment & approve (approval and archive lifecycle): the reviewer approved with open comments and sent
   // them to the agent; it is folding them in before the commit. Active work —
   // the breathing dot, like implementing.
   finalizing: { label: "finalizing", tone: "finalizing" },
   approved: { label: "approved", tone: "approved" },
-  // The implement lifecycle (DESIGN.md §12): `implementing` is an active,
+  // The implement lifecycle (approval and archive lifecycle): `implementing` is an active,
   // in-progress state (working tone, the only one of the three with a breathing
   // dot — see CSS); the two terminal outcomes read done (green) and failed
   // (caution amber, the palette's error stand-in).
@@ -25,7 +25,7 @@ const CHIPS: Record<Exclude<SessionStatus, "draft">, { label: string; tone: stri
 };
 
 /**
- * The §10 derivation, single-sourced for every status surface (this chip, the
+ * The review UI derivation, single-sourced for every status surface (this chip, the
  * switcher's glyphs): unanswered grill questions are the user's move, so they
  * outrank the agent-side statuses until the session is over. `implementing`
  * counts as live — the orchestrator can post `otacon ask` on a build blocker —
@@ -43,7 +43,7 @@ export function StatusChip({
   status: SessionStatus;
   /** Unanswered agent questions (summary.openQuestions); flips the chip. */
   openQuestions?: number;
-  /** Newest progress note; drives the `draft` chip's label (DESIGN.md §10, D3). */
+  /** Newest progress note; drives the `draft` chip's label (review UI, D3). */
   latestActivity?: ActivityNote;
 }) {
   if (questionsPending(status, openQuestions)) {
@@ -78,9 +78,9 @@ export function StatusChip({
 }
 
 // The live/offline window for the agent dot: must exceed `otacon wait`'s 240s
-// park slice so the dot can't blink offline between re-parks (DESIGN.md §6 —
+// park slice so the dot can't blink offline between re-parks (review loop and daemon API —
 // the daemon refreshes lastContactAt on every park). A guess flagged for
-// first-week tuning (§15); 5 min leaves margin while still falling to offline
+// first-week tuning (tuning defaults); 5 min leaves margin while still falling to offline
 // when the agent truly stops calling.
 const AGENT_LIVE_THRESHOLD_MS = 300_000;
 
@@ -90,7 +90,7 @@ export function agentLive(parked: boolean, lastContactAt: number | undefined, no
 }
 
 /**
- * The agent-presence dot (DESIGN.md §10, D4): a small live/offline mark beside
+ * The agent-presence dot (review UI, D4): a small live/offline mark beside
  * the status chip — the subtle "is the agent still on the line?" signal, with
  * the chips staying the primary "your turn" cue. Visually distinct from
  * LinkState (the browser↔daemon link) — labelled "agent" vs "link". Hidden on

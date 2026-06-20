@@ -1,4 +1,4 @@
-// `otacon start`'s auto-update gate (DESIGN.md §16). The top of this file is the
+// `otacon start`'s auto-update gate (install/update). The top of this file is the
 // pure, side-effect-free decision core (Phase 1); `maybeAutoUpdate` at the
 // bottom wires the side effects (Phase 2): the npm update and the re-exec.
 //
@@ -164,7 +164,7 @@ const REAL_DEPS: AutoUpdateDeps = {
 
 /**
  * The pre-session auto-update gate, called as the very first thing in
- * `otacon start` (DESIGN.md §16). Guards in order — each early return means
+ * `otacon start` (install/update). Guards in order — each early return means
  * "proceed on the installed version" (the no-op path):
  *
  *   1. loop guard   — `OTACON_UPDATED` set → the re-exec'd child, don't re-check (D8)

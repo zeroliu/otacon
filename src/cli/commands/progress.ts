@@ -1,5 +1,5 @@
 // otacon progress "<note>" [--session id] — narrate what you are doing
-// (DESIGN.md §6, §8). Appends a timestamped note to the session's live activity
+// Appends a timestamped note to the session's live activity
 // feed so the review UI shows the agent at work during research and drafting,
 // when no other command is firing. Non-blocking — it never parks; the agent
 // calls it at checkpoints and keeps working. Prints {ok, session, note}.

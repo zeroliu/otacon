@@ -1,5 +1,5 @@
 // otacon implement-done [--pr <url>] [--failed] [--session id] — the agent's
-// build-outcome report for Approve & Implement (DESIGN.md §6, §12). Once the
+// build-outcome report for Approve & Implement. Once the
 // approved plan is built, the agent calls this to flip the session out of
 // `implementing`: `--failed` → `implement_failed`, otherwise `implemented`
 // (both terminal). `--pr` records the opened PR's URL so the home card can

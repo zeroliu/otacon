@@ -1,4 +1,4 @@
-// The sticky session header (DESIGN.md §7, §10): one always-present masthead
+// The sticky session header (session registry and switcher, review UI): one always-present masthead
 // pinned to `top: 0` that compacts on scroll and re-expands at the top. It
 // subsumes the old `.topbar` (back + switcher) and the scroll-away
 // `SessionHead` hero. Expanded it carries the full identity — title, revision,
@@ -9,7 +9,7 @@
 // there is no second condensed copy to gate — a dropped scroll frame merely
 // leaves it expanded, still fully usable. On phone it stays lean: title +
 // switcher chips and the clean⇄diff toggle only; the revision and Approve fold
-// away — Approve to the fixed bottom bar (§10 — never shown in two places).
+// away — Approve to the fixed bottom bar (review UI — never shown in two places).
 
 import type { MouseEvent } from "react";
 import { useEffect, useState } from "react";
@@ -82,11 +82,11 @@ export function ReviewHeader({
   /** A plan exists (r≥1): the clean⇄diff toggle only makes sense then. */
   hasPlan: boolean;
   /**
-   * Opens the approve confirm sheet (DESIGN.md §10) — undefined on an approved
+   * Opens the approve confirm sheet (review UI) — undefined on an approved
    * (ended) session. Click-only: no keyboard shortcut exists, on purpose.
    */
   onApprove?: () => void;
-  /** Opens the delete confirm sheet; every session is deletable (DESIGN.md §10). */
+  /** Opens the delete confirm sheet; every session is deletable (review UI). */
   onDelete?: () => void;
 }) {
   const compact = useCompactOnScroll();

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// otacond entry point: bind the Hono app to 127.0.0.1 only (DESIGN.md §3;
+// otacond entry point: bind the Hono app to 127.0.0.1 only (local-only daemon and system UI;
 // remote access is Tailscale's job, never a wider bind).
 
 import { serve } from "@hono/node-server";
