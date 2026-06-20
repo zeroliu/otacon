@@ -46,7 +46,7 @@ describe("single-source wrappers (D7)", () => {
   test("every wrapper teaches the terminal `deleted` event (delete-pending-session)", () => {
     for (const text of [skillMd(), dogfoodSkillMd()]) {
       // The review loop must stop, not re-park or error, when the user deletes
-      // a pending session in the UI (DESIGN.md §6).
+      // a pending session in the UI.
       expect(text).toContain("`deleted`");
       expect(text).toContain("deleted this session in the review UI");
     }
@@ -56,7 +56,7 @@ describe("single-source wrappers (D7)", () => {
     for (const text of [skillMd(), dogfoodSkillMd()]) {
       // A `final:true` comments batch ends the review: the next clean submit
       // finalizes (the agent gets `approved`, maybe implement:true), not another
-      // review round (DESIGN.md §6, §12).
+      // review round.
       expect(text).toContain('`"final":true`');
       expect(text).toContain("next clean submit **finalizes**");
     }

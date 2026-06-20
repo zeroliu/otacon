@@ -1,8 +1,8 @@
-// otacon expose — configure phone access over Tailscale (DESIGN.md §11, §16):
-// verify the tailscale CLI exists and is logged in, make sure the daemon is
-// up, run `tailscale serve --bg` against the daemon port, then confirm the
-// tailnet URL actually serves before printing it. Deliberately thin: install,
-// login (`tailscale up`), and tailnet HTTPS enablement are interactive/
+// otacon expose — configure phone access over Tailscale: verify the tailscale
+// CLI exists and is logged in, make sure the daemon is up, run
+// `tailscale serve --bg` against the daemon port, then confirm the tailnet URL
+// actually serves before printing it. Deliberately thin: install, login
+// (`tailscale up`), and tailnet HTTPS enablement are interactive/
 // account-level steps this command points at instead of automating (DECISIONS.md
 // "doctor/expose automation boundary").
 
@@ -67,7 +67,7 @@ export async function exposeCommand(argv: string[]): Promise<number> {
   if (bin === undefined) {
     fail(
       "E_TAILSCALE_MISSING",
-      "tailscale CLI not found — install Tailscale and log in first (DESIGN.md §11; README \"Phone access\"), or set OTACON_TAILSCALE to the binary",
+      'tailscale CLI not found — install Tailscale and log in first (see README "Phone access"), or set OTACON_TAILSCALE to the binary',
     );
   }
   const status = tailscaleStatus(bin);
@@ -94,7 +94,7 @@ export async function exposeCommand(argv: string[]): Promise<number> {
     const detail = typeof stderr === "string" && stderr.trim() !== "" ? stderr.trim() : String(error);
     fail(
       "E_TAILSCALE_SERVE",
-      `\`tailscale serve --bg ${target}\` failed: ${detail} (HTTPS certificates may need enabling on the tailnet — DESIGN.md §11)`,
+      `\`tailscale serve --bg ${target}\` failed: ${detail} (HTTPS certificates may need enabling on the tailnet)`,
     );
   }
 

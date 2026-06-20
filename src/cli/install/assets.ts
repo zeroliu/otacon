@@ -1,8 +1,8 @@
-// The wrapper content `otacon install` writes (DESIGN.md §16) — this is the
-// product-critical text that teaches an agent the whole protocol: the §6 full
-// loop, §8 grill discipline, and §13 "never end your turn". One protocol card,
+// The wrapper content `otacon install` writes — this is the product-critical
+// text that teaches an agent the whole protocol: the full review loop, grill
+// discipline, and "never end your turn" rule. One protocol card,
 // three destinations — Claude Code, Codex, and OpenCode each get it as a
-// SKILL.md in their own skills dir. Plus the Stop hook shell script (§13).
+// SKILL.md in their own skills dir. Plus the Stop hook shell script.
 // Wrappers are managed files: reinstall overwrites them wholesale (DECISIONS.md
 // "Wrappers are managed files").
 
@@ -10,8 +10,8 @@
 export const MANAGED_MARKER = 'managed by `otacon install`';
 
 /**
- * The protocol card — §6 full loop (start-first) + §8 grill discipline + §13
- * failure habits — parametrized by the command prefix so one source feeds both
+ * The protocol card — start-first full loop + grill discipline + failure habits
+ * — parametrized by the command prefix so one source feeds both
  * wrappers (D7): `otacon` for what `otacon install` writes into any repo,
  * `./bin/otacon` for this repo's dogfood (run-from-source). The only thing that
  * varies between the two is `cmd`; the protocol text is identical, so a change
@@ -197,7 +197,7 @@ name: otacon
 description: Plan a feature through an otacon review session — grill interview, schema'd plan, phone review with anchored comments, approved plan saved to a home archive (and your project on Save). Use when the user asks to plan something with otacon, types /otacon, or wants a reviewed implementation plan before coding. Replaces native plan mode.
 ---
 
-<!-- ${MANAGED_MARKER} — reinstall overwrites this file; the spec lives in otacon's DESIGN.md -->
+<!-- ${MANAGED_MARKER} — reinstall overwrites this file. -->
 
 # Otacon plan session protocol
 
@@ -205,8 +205,8 @@ ${protocolCard('otacon')}`;
 }
 
 /**
- * THIS repo's dogfood wrapper — the committed \`.claude/skills/otacon/SKILL.md\`
- * (DESIGN.md §16). It is the same protocol card as \`skillMd()\`, but with the
+ * THIS repo's dogfood wrapper — the committed \`.claude/skills/otacon/SKILL.md\`.
+ * It is the same protocol card as \`skillMd()\`, but with the
  * \`./bin/otacon\` run-from-source command prefix and a repo preamble (run from
  * source, restart after daemon edits). Generated from this function and never
  * hand-edited; \`assets.test.ts\` asserts the committed file equals this output,
@@ -239,8 +239,8 @@ from current source). Use \`./bin/otacon restart\`, not a raw curl to a fixed po
 in a git worktree the shim runs the daemon on a derived port, and \`restart\` always
 targets the one this checkout talks to. CLI/linter/parser edits need no restart.
 
-The spec these commands implement is otacon's own DESIGN.md (§6 loop, §8 grill, §13
-failure habits); the canonical wrapper text lives in \`src/cli/install/assets.ts\`.
+These commands implement otacon's full review loop, grill discipline, and
+failure habits; the canonical wrapper text lives in \`src/cli/install/assets.ts\`.
 
 ---
 
@@ -248,18 +248,18 @@ ${protocolCard('./bin/otacon')}`;
 }
 
 /**
- * The Claude Code Stop hook (DESIGN.md §13): blocks ending the turn while an
+ * The Claude Code Stop hook: blocks ending the turn while an
  * open otacon session exists in the cwd's repo. Plain sh, fast, fail-open —
  * any failure (daemon down, curl missing, no match) allows the stop. With no
  * local pointer, the open session is found by scanning the daemon registry for
- * a non-terminal session whose repo equals the cwd's git root (DESIGN.md §7) —
+ * a non-terminal session whose repo equals the cwd's git root —
  * `implementing` still blocks (the build is live); only the terminal states
  * (approved/implemented/implement_failed) let the agent end its turn.
  */
 export const STOP_HOOK_SCRIPT = `#!/bin/sh
 # otacon Stop hook — ${MANAGED_MARKER}; reinstall overwrites this file.
 # Blocks Claude Code from ending its turn while the cwd's repo has an open
-# otacon plan session (DESIGN.md §13). Fail-open by design: when anything here
+# otacon plan session. Fail-open by design: when anything here
 # fails (daemon unreachable, curl missing, no match), the stop is allowed.
 input=$(cat 2>/dev/null) || input=""
 cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p')
