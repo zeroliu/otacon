@@ -46,10 +46,11 @@ otacon install --project --all    # write into the current repo so you can commi
 /otacon add rate limiting to the login endpoint
 ```
 
-It interviews you to lock down intent, drafts the plan, and hands you a local review URL.
-(You can also just ask your agent to plan something with Otacon.)
+Your agent replies with a local URL. Open it: that's your plan surface, where Otacon
+interviews you to lock down intent, drafts the plan, and you watch it all unfold. (You can
+also just ask your agent to plan something with Otacon.)
 
-**Review and sign off.** Open the URL: answer the interview, leave inline comments, ask
+**Review and sign off.** On that surface, answer the interview, leave inline comments, ask
 questions, and diff revisions in the browser, or [from your phone](docs/PHONE-ACCESS.md).
 
 When the plan is ready, choose how it ships:
