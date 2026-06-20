@@ -60,17 +60,51 @@ import { useNow } from "./tick";
 
 const PlanView = lazy(() => import("./plan/plan-view"));
 
+// One reload per tab for a failed renderer chunk: the version-based self-heal
+// (self-heal.ts) is the proactive path, but a chunk can still vanish without a
+// version frame to trigger it (the snapshot version matched, or the stream
+// dropped before re-delivering one). This is the reactive backstop — reload
+// once to fetch the current build, then, if the chunk is *genuinely* broken
+// (the reload didn't fix it), fall back to the manual link so a real failure
+// never infinite-reloads. sessionStorage scopes the guard to this tab.
+const BOUNDARY_GUARD_KEY = "otacon-renderer-reloaded";
+
+function rendererReloadAttempted(): boolean {
+  // No usable guard store (absent, or a throwing sessionStorage like Safari
+  // private mode historically): don't auto-reload — we can't promise "once".
+  if (typeof sessionStorage === "undefined") return true;
+  try {
+    return sessionStorage.getItem(BOUNDARY_GUARD_KEY) !== null;
+  } catch {
+    return true;
+  }
+}
+
 /**
  * Catches a failed plan-view chunk load (offline, or a stale tab whose chunk
  * URLs vanished when the daemon was rebuilt) — and any renderer crash —
  * instead of letting React unmount the whole tree to a blank page. React
- * caches a lazy() rejection, so recovery is a real reload, not a re-render.
+ * caches a lazy() rejection, so recovery is a real reload, not a re-render. On
+ * the first failure this tab has seen we auto-reload once (a vanished chunk is
+ * almost always a stale build); a second failure shows the manual link.
  */
 class RendererBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
 
   static getDerivedStateFromError(): { failed: boolean } {
     return { failed: true };
+  }
+
+  componentDidCatch() {
+    // Auto-reload only on the first failure this tab has hit. Set the guard
+    // before reloading so a genuinely broken renderer reloads at most once.
+    if (typeof window === "undefined" || rendererReloadAttempted()) return;
+    try {
+      sessionStorage.setItem(BOUNDARY_GUARD_KEY, "1");
+    } catch {
+      return; // can't record the guard → don't risk a reload loop
+    }
+    location.reload();
   }
 
   render() {

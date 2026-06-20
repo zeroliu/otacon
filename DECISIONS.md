@@ -2437,3 +2437,110 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Users ask otacon to scaffold `.gitignore` again (e.g. an opt-in
   `otacon install` flag), or `worktree.dir`'s `~` needs expanding somewhere otacon
   consumes it directly rather than handing it to a shell.
+
+## Auto-update: 1h throttle + registry fetch, both fail-open
+
+- **Decision:** The `otacon start` update check (DESIGN §16) throttles to once per hour
+  via a `$OTACON_HOME/update-check.json` cache (`checkedAt`), and discovers the latest
+  version by a direct GET to `registry.npmjs.org/otacon/latest` with a 1.5s
+  `AbortSignal.timeout` — not by shelling out to `npm view`. Every failure path is
+  fail-open: a malformed/absent cache counts as "due" rather than wedging the check off,
+  and any fetch error (network, non-200, bad JSON, missing version, timeout) resolves to
+  `undefined` so the caller proceeds on the installed version. `update.auto` (default
+  true) is the only opt-out — no env var, no CI auto-skip. (Plan
+  `docs/plans/2026-06-19-auto-update-outdated-version.md`, D3/D4/D5.)
+- **Why:** A network round-trip on every start would tax the common case for a check
+  that rarely changes anything; the 1h window keeps starts fast while still catching a
+  release within the hour. A raw registry GET avoids spawning npm just to read a version
+  (faster, no subprocess, easy to time-bound and mock in tests). Fail-open everywhere
+  keeps the update path strictly additive — a flaky registry, an offline machine, or a
+  corrupt cache can never block or slow a session, which is the whole point of running
+  the check before any session exists.
+- **Revisit when:** Releases need to propagate faster than an hour (shorten/parameterize
+  the window), the registry endpoint or its JSON shape changes, or users want an env-var
+  / CI auto-skip opt-out in addition to `update.auto`.
+
+## Auto-update: re-exec at start, fail-open, never sudo
+
+- **Decision:** When `otacon start` finds a strictly newer published version it runs
+  `npm install -g otacon@latest` and then **re-execs** itself —
+  `process.execPath [process.argv[1], "start", ...argv]` with `OTACON_UPDATED=1` — and
+  exits with the child's status (`maybeAutoUpdate` never returns on this path). The
+  re-exec reproduces the user's original flags exactly, so the new CLI mints the session
+  and its `ensureDaemon` version handshake restarts the stale daemon; no separate
+  daemon-update code exists (D7/D9). `OTACON_UPDATED=1` is the loop guard that stops the
+  re-exec'd child from running the check a second time (D8). The check runs only at
+  `start`, before any session exists, and the gate order is: loop guard → source-tree
+  skip → `update.auto` → 1h throttle → fetch → `isNewer`. The throttle cache is stamped
+  with `checkedAt: now` **before** the update is attempted, so a failed update still
+  throttles the next hour rather than hammering npm. On ANY npm failure (non-zero exit,
+  spawn ENOENT, non-writable global dir) otacon prints the manual `npm install -g
+  otacon@latest` command and proceeds on the installed version — it **never escalates to
+  sudo** (D1). (Plan `docs/plans/2026-06-19-auto-update-outdated-version.md`, D1/D7/D8.)
+- **Why:** `start` is the one safe place to swap the binary — nothing is in flight, so a
+  re-exec can hand the whole command to the new code without corrupting a live session.
+  Re-exec + inherited stdio means the freshly-installed CLI (not the stale parent) prints
+  the single JSON line, keeping the start contract intact, and reusing the existing
+  version handshake means the daemon converges for free. Fail-open-never-sudo matches
+  Claude Code's behavior and keeps auto-update strictly additive: a read-only global dir
+  degrades to a notice instead of a prompt or a hang. Stamping the cache before the
+  attempt guarantees a broken release can't turn every start into an npm install storm.
+- **Revisit when:** A standalone `otacon update` command is wanted for manual/forced
+  upgrades, a non-npm global install path needs supporting, or the re-exec needs to
+  carry more than the `start` argv (e.g. a flag added to `start` that must survive the
+  hop — it already does, since the full argv is forwarded).
+
+## Auto-update: open tabs self-heal via a version in the SSE snapshot
+
+- **Decision:** An update restarts otacond under any open review tabs, but a tab keeps
+  running the JS bundle it already loaded — whose content-hashed lazy chunks (the plan
+  renderer, mermaid) 404 against the rebuilt `dist/ui`. So the daemon stamps its
+  `VERSION` onto every SSE `snapshot` frame (index and per-session, `src/daemon/ui.ts`),
+  the Vite build bakes the same version into the bundle (`__OTACON_VERSION__` via
+  `define`, `src/ui/vite.config.ts`), and `maybeSelfHeal` (`src/ui/self-heal.ts`),
+  called from the snapshot handlers in `src/ui/api.ts`, reloads the tab once when the two
+  differ. The reload is guarded by a `sessionStorage` key keyed to the **target** (the
+  daemon's) version, set before reloading, so a version that can't converge reloads at
+  most once and never loops. A snapshot rides the stream's open (and every EventSource
+  reconnect, since there is no event-id replay), so a tab re-learns the version right
+  after the restart. The review screen's renderer error boundary is the reactive
+  backstop: it auto-reloads once per tab on a vanished chunk, then falls back to a manual
+  "Reload" link. (Plan `docs/plans/2026-06-19-auto-update-outdated-version.md`, D10/D11.)
+- **Why:** Without this, an open tab silently wedges the moment it next fetches a lazy
+  chunk after an update — exactly the case auto-update makes common. The version already
+  rides a frame the tab receives on every (re)connect, so no new endpoint or poll is
+  needed; comparing it to the baked-in build version is a one-line, dependency-free check.
+  The fix is forcing the reload, not changing caching: `index.html` is already served
+  `no-cache` and the hashed assets `immutable`, so a reload fetches the fresh shell and
+  its new chunks. Keying the guard to the target version (not a plain "reloaded" flag) is
+  what makes a non-converging mismatch (CLI updated, daemon pinned, or vice versa)
+  safe — it reloads once for that target and then sits still. The proactive version path
+  is primary; the boundary's auto-reload is a belt-and-braces for a chunk that vanishes
+  without a version frame arriving to trigger the proactive path.
+- **Revisit when:** Snapshots stop being the universal reconnect carrier (e.g. event-id
+  replay is added, so a reconnect might not re-deliver `version`), the SPA gains routes
+  with no SSE stream that also need to self-heal, or a smoother in-place hot-swap (no full
+  reload) becomes worth the complexity.
+
+- **Decision:** `otacon update [--check]` (`src/cli/commands/update.ts`) is the manual/forced
+  upgrade command, and it deliberately bypasses both suppressors of the start-time
+  auto-update gate: the 1h throttle and the `update.auto:false` config. It shares
+  `runNpmUpdate` (`src/cli/update.ts`) with `maybeAutoUpdate` so the install behavior is
+  byte-identical, still fails open on a registry blip (`latest:null`, exit 0), refuses on a
+  source checkout, and never escalates to sudo. After a successful install it does NOT call
+  `ensureDaemon` to restart the daemon. (Plan `docs/plans/2026-06-19-auto-update-outdated-version.md`, D12.)
+- **Why:** The throttle and `update.auto` exist to keep the *implicit*, every-start check
+  cheap and pinnable; an *explicit* `otacon update` is the user asking for the upgrade right
+  now, so honoring those gates would be surprising (a pinned shop still wants `otacon update`
+  to work; a check 10 minutes ago should not make it a no-op). Extracting `runNpmUpdate`
+  keeps the one mutating side effect in a single tested place rather than duplicating the
+  spawn. Skipping the post-install daemon restart is correctness, not laziness: after
+  `npm install -g`, the currently running process is still the OLD code, so its `VERSION`
+  equals the running daemon's — `ensureDaemon` would detect no mismatch and could not pull
+  the new version. The real restart (and the open tabs' self-heal) happens on the next
+  `otacon` invocation, which runs the new binary and trips the version handshake. Reporting
+  that plainly beats claiming a restart that did not occur.
+- **Revisit when:** A non-npm install path is supported (so the "global package" assumption
+  and the source-checkout refusal need rethinking), or `otacon update` should also be able to
+  restart the daemon in-place to the new version without waiting for the next command (e.g. by
+  re-exec'ing the freshly-installed binary the way `maybeAutoUpdate` does).

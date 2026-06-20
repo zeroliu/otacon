@@ -341,6 +341,7 @@ the model is suspended — no inference, no token spend.
 | `otacon config [open]`                                                      | Open the Settings web UI in the browser: `/settings?repo=<cwd repo root>` inside a repo (Project scope), bare `/settings` outside one (User scope); `OTACON_NO_BROWSER` prints the URL instead |
 | `otacon config get <key>`                                                   | Read-only: print the merged effective value of one dotted key (`worktree.dir`, `budgets.summaryLines`, …) from the config files; no daemon. Unknown key → exit 1 |
 | `otacon clean [--all]`                                                      | Archive ended sessions' working state to `.otacon/archive/` and prune the registry (§12) |
+| `otacon update [--check]`                                                   | Update the global install to the latest published version now, bypassing the start-time throttle and `update.auto` (§16); `--check` reports current/latest/outdated without installing |
 
 The `--resolutions` file is the revision-accompaniment document:
 
@@ -562,7 +563,9 @@ finalize — and hand the agent an un-swept thread that wedges its L5 fold-in).
 `/` and `/s/:id` serve the SPA shell (static assets under `/assets/`); an unknown
 session id renders as a client-side not-found state. Each SSE stream opens with a
 `snapshot` frame (the per-session stream's snapshot carries the thread list, the
-grill transcript, and the activity feed), then pushes `session` / `revision` /
+grill transcript, and the activity feed; every snapshot — index and per-session —
+also carries the daemon's `version`, which open tabs use to self-heal after an
+update, see §16), then pushes `session` / `revision` /
 `queue` / `thread` / `grill` / `activity` / `removed` frames as state changes — a
 `revision` frame carries the revision number and its changelog; a `thread` frame is
 an upsert: a new comment/question thread (a follow-up question carries `replyTo`, the
@@ -1328,9 +1331,10 @@ Config is layered, mirroring Claude Code's `settings.json` + `settings.local.jso
 **personal**) — closest wins. Every override file is optional. Tunables include
 budgets/lint caps, the activity feed (`activity.cap`, `activity.noteMaxChars`),
 `notifications.desktop`, `worktree.dir` (base dir for Implement build worktrees, default
-`~/.otacon/worktrees`, outside the repo), and `plans.dir` (where **Save** writes the
+`~/.otacon/worktrees`, outside the repo), `plans.dir` (where **Save** writes the
 project copy of the approved plan, default `.otacon/plans`; set it to `docs/plans` to
-group it with other tracked plans). The home archive location is fixed
+group it with other tracked plans), and `update.auto` (auto-update at `otacon start`,
+default true; see Updating below). The home archive location is fixed
 (`~/.otacon/sessions/`), not configurable.
 
 Config is editable two ways over those override files: by hand, or through
@@ -1378,5 +1382,53 @@ looked in, and — when in a repo — mentions `--project` as an install option.
 
 ### Updating
 
-`npm update -g otacon` — the version handshake restarts the daemon on next use; no
-other steps.
+`otacon start` self-updates: before a session exists it discovers the latest
+published version (GET `registry.npmjs.org/otacon/latest`, short timeout, fail-open
+on any error) and updates the global install when a newer one is published. The check
+is throttled to once per hour via `$OTACON_HOME/update-check.json` (a `checkedAt`
+timestamp), so most starts pay no network cost. Turn it off with the `update.auto`
+config key (default true) to pin the installed version (CI, air-gapped, pinned-version
+shops). Only `otacon start` runs the check — the tight loops (wait/ask/progress) never
+do — and a run from a source checkout (a `.ts` daemon entry) is skipped.
+
+When a newer version is published, `otacon start` runs `npm install -g otacon@latest`
+and then **re-execs itself** — `node main.js start <original argv>` with
+`OTACON_UPDATED=1` set — so the rest of the command runs on the freshly-installed CLI
+(the env var is the loop guard that stops the re-exec'd child from re-checking). stdio
+is inherited, so the child prints the single JSON line on stdout and the start contract
+is preserved; the parent exits with the child's code. The daemon needs no separate
+update step: the re-exec'd child's `ensureDaemon` version handshake restarts a stale
+`otacond` on its next call, just as it already does after any manual bump. If `npm
+install` fails for any reason (a non-writable global dir, npm missing) otacon **never
+escalates to sudo** — it prints the manual `npm install -g otacon@latest` command and
+proceeds on the installed version.
+
+A restart swaps the daemon's code, but an already-open review tab is still running the
+JS bundle it loaded — whose content-hashed lazy chunks (the plan renderer, mermaid)
+404 against the rebuilt `dist/ui` and wedge the page. So **open tabs self-heal**: every
+SSE snapshot carries the daemon's `version` (§6), and an EventSource reconnect after the
+restart re-delivers it; when that differs from the version baked into the running bundle
+(`__OTACON_VERSION__`, stamped by the Vite build) the tab reloads once to fetch the
+fresh code. The reload is guarded by a `sessionStorage` key keyed to the target version,
+so a version that can't converge (the daemon updated but the bundle is pinned, or vice
+versa) reloads at most once and never loops. This leans on the existing cache headers:
+`index.html` is served `no-cache` and the hashed assets `immutable`, so the reload pulls
+the new shell and its new chunks rather than a stale cached copy. As a backstop, the
+review screen's renderer error boundary (which catches a vanished lazy chunk) also
+auto-reloads once per tab — falling back to a manual "Reload" link if that didn't fix it.
+
+`otacon update` forces the upgrade on demand. Unlike the start-time gate it ignores both
+suppressors: the 1h throttle (the user asked now) and `update.auto:false` (an explicit
+command overrides a config that only governs the implicit start-time check). It discovers
+the latest version the same way (fail-open on any registry error → reports `latest:null`,
+exit 0), refuses on a source checkout (nothing global to update), and runs the same
+`npm install -g otacon@latest` — never sudo. `--check` reports `{current, latest, outdated}`
+and never installs (the dry run, and the only safe mode in CI / pinned shops). On a
+successful install it does **not** restart the daemon: the running process is still the old
+code, so its `ensureDaemon` would see no version mismatch; the new daemon and the open
+tabs' self-heal come up on the next `otacon` command, which runs the freshly-installed
+binary. A failed install is the one exit-1 path (`E_UPDATE_FAILED`), pointing at the manual
+command.
+
+`npm update -g otacon` still works for a manual bump; the version handshake restarts the
+daemon on next use either way, and open tabs self-heal the same way.

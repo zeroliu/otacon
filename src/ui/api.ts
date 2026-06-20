@@ -4,6 +4,7 @@
 // (DECISIONS.md "UI live updates: in-process Notifier, snapshot-first SSE").
 
 import { useEffect, useMemo, useState } from "react";
+import { maybeSelfHeal } from "./self-heal";
 import type { ConfigField, ScopeFieldError, ScopeValues } from "../shared/config";
 import type {
   ActivityNote,
@@ -71,7 +72,10 @@ export function useSessions(): { sessions: LiveSession[]; connected: boolean } {
     const source = new EventSource("/api/stream");
     source.onopen = () => setConnected(true);
     source.onerror = () => setConnected(false); // EventSource retries on its own
-    on<{ sessions: SessionSummary[] }>(source, "snapshot", ({ sessions }) => {
+    on<{ version?: string; sessions: SessionSummary[] }>(source, "snapshot", ({ version, sessions }) => {
+      // Every snapshot carries the daemon version (ui.ts); a reconnect after an
+      // update-restart re-delivers it, so the tab self-heals to the fresh bundle.
+      maybeSelfHeal(version);
       setById(new Map(sessions.map((s) => [s.id, s])));
     });
     on<{ session: SessionSummary }>(source, "session", ({ session }) => {
@@ -170,11 +174,16 @@ export function useSession(id: string): SessionDetail {
           // race) and arrive as upserts after that: an existing id is the
           // agent's answer (thread) or the user's answer (grill) landing.
           on<{
+            version?: string;
             session: SessionSummary;
             threads?: Thread[];
             transcript?: TranscriptEntry[];
             activity?: ActivityNote[];
           }>(source, "snapshot", (data) => {
+            // Self-heal on a daemon version change (DESIGN.md §16): a reconnect
+            // after an update-restart re-delivers the version, reloading a stale
+            // tab before it ever tries to fetch a vanished lazy chunk.
+            maybeSelfHeal(data.version);
             setSession(data.session);
             setThreads(data.threads ?? []);
             setTranscript(data.transcript ?? []);

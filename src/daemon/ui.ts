@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Context, Hono } from "hono";
 import type { ActivityNote, SessionSummary, Thread, TranscriptEntry } from "../shared/types.js";
+import { VERSION } from "../shared/version.js";
 import type { NodeBindings } from "./app.js";
 import type { Notifier, UiEvent } from "./notify.js";
 
@@ -192,7 +193,12 @@ export function registerUiRoutes(app: Hono<{ Bindings: NodeBindings }>, deps: Ui
     });
   });
 
-  app.get("/api/stream", (c) => sse(c, deps, () => ({ sessions: deps.listSummaries() })));
+  // `version` rides every snapshot (DESIGN.md §6, §16): a tab built against an
+  // older daemon re-learns the live version on each (re)connect and self-heals
+  // by reloading, so an update-restarted daemon never strands a stale bundle.
+  app.get("/api/stream", (c) =>
+    sse(c, deps, () => ({ version: VERSION, sessions: deps.listSummaries() })),
+  );
 
   app.get("/api/sessions/:id/stream", (c) => {
     const id = c.req.param("id");
@@ -207,6 +213,7 @@ export function registerUiRoutes(app: Hono<{ Bindings: NodeBindings }>, deps: Ui
       c,
       deps,
       () => ({
+        version: VERSION,
         session: deps.getSummary(id),
         threads: deps.getThreads(id),
         transcript: deps.getTranscript(id),
