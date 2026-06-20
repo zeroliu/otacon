@@ -23,11 +23,11 @@ Otacon replaces your coding agent's native plan mode with a review surface you'l
 
 ## Installation
 
+**Install the CLI.**
+
 ```sh
 npm install -g otacon
 ```
-
-## Get started
 
 **Install the skill into your agent.** This drops the Otacon skill into the agent's skill
 folder so it knows how to run a review:
@@ -35,11 +35,19 @@ folder so it knows how to run a review:
 ```sh
 otacon install --all              # all three agents
 otacon install --agent claude     # or just one: claude, codex, or opencode
+otacon install --project --all    # write into the current repo so you can commit + share it
 ```
 
-**Plan a feature.** In your agent, run `/otacon` (or just ask it to plan something with
-Otacon). It interviews you to lock down intent, drafts the plan, and hands you a local
-review URL.
+## Get started
+
+**Plan a feature.** In Claude Code, run `/otacon` with what you want to build:
+
+```
+/otacon add rate limiting to the login endpoint
+```
+
+It interviews you to lock down intent, drafts the plan, and hands you a local review URL.
+(You can also just ask your agent to plan something with Otacon.)
 
 **Review and sign off.** Open the URL: answer the interview, leave inline comments, ask
 questions, and diff revisions in the browser, or [from your phone](docs/PHONE-ACCESS.md).
