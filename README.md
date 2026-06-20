@@ -46,7 +46,8 @@ otacon install --project --all    # write into the current repo so you can commi
 /otacon add rate limiting to the login endpoint
 ```
 
-Your agent replies with a local URL. Open it: that's your plan surface, where Otacon
+Your agent replies with a local URL (like `http://127.0.0.1:4747/s/otc_a1b2c3`). Open it:
+that's your plan surface, where Otacon
 interviews you to lock down intent, drafts the plan, and you watch it all unfold. (You can
 also just ask your agent to plan something with Otacon.)
 
