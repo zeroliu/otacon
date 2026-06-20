@@ -23,8 +23,8 @@ from current source). Use `./bin/otacon restart`, not a raw curl to a fixed port
 in a git worktree the shim runs the daemon on a derived port, and `restart` always
 targets the one this checkout talks to. CLI/linter/parser edits need no restart.
 
-The spec these commands implement is otacon's own DESIGN.md (§6 loop, §8 grill, §13
-failure habits); the canonical wrapper text lives in `src/cli/install/assets.ts`.
+These commands implement otacon's full review loop, grill discipline, and
+failure habits; the canonical wrapper text lives in `src/cli/install/assets.ts`.
 
 ---
 

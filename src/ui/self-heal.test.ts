@@ -1,4 +1,4 @@
-// Pins the open-tab self-heal contract (DESIGN.md §16): reload exactly once on a
+// Pins the open-tab self-heal contract (install/update): reload exactly once on a
 // daemon version change, never on a match/empty version, and never twice for the
 // same target. No DOM library needed — we stub the three browser globals the
 // module touches (window, sessionStorage, location.reload) directly, so the test

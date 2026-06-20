@@ -1,5 +1,5 @@
 // Launch a URL in the user's default browser for `otacon open` / `otacon config`
-// (DESIGN.md §6, DECISIONS.md "open and config launch the browser"). Both run on
+// (review loop and daemon API, DECISIONS.md "open and config launch the browser"). Both run on
 // the human's machine and the whole point of these two verbs is "show me the
 // page", so they spawn the browser instead of printing the URL.
 //

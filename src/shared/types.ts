@@ -1,5 +1,5 @@
 // Cross-layer types shared by the daemon and the CLI.
-// Wire shapes (EventPayload) follow DESIGN.md §6 exactly.
+// Wire shapes (EventPayload) follow review loop and daemon API exactly.
 
 import type { QuestionSpec } from "./question-spec.js";
 
@@ -27,7 +27,7 @@ export const SESSION_STATUSES: readonly SessionStatus[] = [
 ];
 
 /**
- * The terminal states (DESIGN.md §12 status machine): a session here is *over* —
+ * The terminal states (approval and archive lifecycle status machine): a session here is *over* —
  * every mutating verb refuses (app.ts `sessionEnded`), and the CLI's pointer
  * rules stop resolving it implicitly. `implementing` is deliberately NOT here:
  * it re-opens progress/ask/wait/answer while the agent builds the approved plan.
@@ -58,7 +58,7 @@ export interface RegistrySession {
   /**
    * The PR the agent opened for the implemented plan (`otacon implement-done
    * --pr`); absent until a build finishes. Persists in registry.json and flows
-   * to SessionSummary so the home card can surface the link (DESIGN.md §12).
+   * to SessionSummary so the home card can surface the link (approval and archive lifecycle).
    */
   prUrl?: string;
 }
@@ -75,12 +75,12 @@ export interface SessionSummary extends RegistrySession {
   pendingEvents: number;
   /**
    * Unanswered agent grill questions (transcript entries without an answer) —
-   * the index's "questions pending" chip derives from this (DESIGN.md §10),
+   * the index's "questions pending" chip derives from this (review UI),
    * never from a stored status.
    */
   openQuestions: number;
   /**
-   * The newest progress note (DESIGN.md §6 `otacon progress`); absent until the
+   * The newest progress note (review loop and daemon API `otacon progress`); absent until the
    * agent narrates. The `draft` chip reads it (latest note, falling back to
    * "agent working"); the full feed lives on the per-session activity stream.
    */
@@ -98,7 +98,7 @@ export interface SessionSummary extends RegistrySession {
 }
 
 /**
- * One entry in a session's append-only activity feed (DESIGN.md §6) — a
+ * One entry in a session's append-only activity feed (review loop and daemon API) — a
  * timestamped progress note the agent emits with `otacon progress`. `text` is
  * length-capped server-side so a long note never bloats payloads or fails.
  */
@@ -108,7 +108,7 @@ export interface ActivityNote {
   text: string;
 }
 
-/** .otacon/<id>/activity.json — the capped, newest-last progress feed (DESIGN.md §12). */
+/** .otacon/<id>/activity.json — the capped, newest-last progress feed (approval and archive lifecycle). */
 export interface ActivityFile {
   version: 1;
   notes: ActivityNote[];
@@ -129,7 +129,7 @@ export interface CommentItem {
 }
 
 export type EventPayload =
-  // `final:true` is the **comment & approve** fold-in batch (DESIGN.md §6, §12):
+  // `final:true` is the **comment & approve** fold-in batch:
   // the reviewer approved while comments were open and chose "Send to agent", so
   // this batch re-delivers every still-open comment thread for one solo pass —
   // the agent's next clean `submit` finalizes the plan (it gets `approved`, which
@@ -142,7 +142,7 @@ export type EventPayload =
       id: string;
       anchor: Anchor | null;
       body: string;
-      /** Root question id this follows up on (DESIGN.md §9); absent on a root question. */
+      /** Root question id this follows up on (threaded review and revision); absent on a root question. */
       replyTo?: string;
     }
   | {
@@ -153,27 +153,27 @@ export type EventPayload =
       choices?: string[];
       text?: string;
     }
-  // The approval wake-up (DESIGN.md §6, §12). `home` is the absolute canonical
+  // The approval wake-up. `home` is the absolute canonical
   // copy under `~/.otacon/sessions/<id>/`. `path` is the copy the agent acts on:
   // on **Save** (no `implement`) the repo-relative project copy under `plans.dir`,
   // which the agent reports before it stops; on **Implement** (`implement:true`)
   // `path` equals `home` and the agent builds from it.
   | { event: "approved"; session: string; path: string; home: string; implement?: true }
   // Terminal: the reviewer deleted a pending (non-approved) session from the UI
-  // (DESIGN.md §6, §12). The daemon wakes the parked agent with this so its
+  // The daemon wakes the parked agent with this so its
   // `wait` loop stops cleanly instead of 404ing on a later call; there is no
   // artifact path.
   | { event: "deleted"; session: string };
 
 /**
- * One review thread, persisted in .otacon/<id>/threads.json (DESIGN.md §9).
+ * One review thread, persisted in .otacon/<id>/threads.json (threaded review and revision).
  * Comment threads come from comment batches (one per item) and gain a
  * `resolution` from the agent's resolutions on resubmit (lint L5); question
  * threads gain an `answer` when the agent runs `otacon answer`. A follow-up
- * question is its own thread linked to the root by `replyTo` (DESIGN.md §9):
+ * question is its own thread linked to the root by `replyTo` (threaded review and revision):
  * it inherits the root's anchor, so a whole conversation groups, jumps, and
  * orphans as one unit. `anchorState` "orphaned" means re-anchoring lost the
- * quote in the current revision (DESIGN.md §4 orphaned tray); absent = anchored.
+ * quote in the current revision; absent = anchored.
  */
 export type Thread =
   | {
@@ -200,9 +200,9 @@ export type Thread =
 
 /**
  * The agent-written revision-accompaniment document (resolutions.json,
- * DESIGN.md §6): `threads` maps comment-thread ids to resolution replies
+ * submitted with a revision: `threads` maps comment-thread ids to resolution replies
  * (lint L5); `changelog` is the agent's summary of the revision (required on
- * revisions ≥ 2, DESIGN.md §9 layer 1).
+ * revisions ≥ 2, threaded review and revision layer 1).
  */
 export interface Resolutions {
   changelog?: string;
@@ -226,7 +226,7 @@ export interface GrillAnswer {
 }
 
 /**
- * One grill Q&A, persisted in .otacon/<id>/transcript.json (DESIGN.md §8) —
+ * One grill Q&A, persisted in .otacon/<id>/transcript.json (interview questions) —
  * distinct from user-question threads (threads.json); ids share the q counter
  * so citations (`D3 ← q7`, lint L3) and deep links are one unambiguous space.
  * The asked shape is the `QuestionSpec` the agent posted, plus the minted id,
@@ -273,12 +273,12 @@ export interface SessionStateFile {
   /**
    * Highest revision the user has actually reviewed (0 = never): set when a
    * comment batch is flushed and via POST /reviewed; the diff endpoint's
-   * default baseline (DESIGN.md §9 layer 3). Monotonic.
+   * default baseline (threaded review and revision layer 3). Monotonic.
    */
   lastReviewedRevision: number;
   counters: { batch: number; thread: number; question: number; eventSeq: number };
   /**
-   * A deferred approval armed by **comment & approve** (DESIGN.md §6, §12): the
+   * A deferred approval armed by **comment & approve**: the
    * reviewer approved with open comments and chose "Send to agent", so the
    * session sits in `finalizing` until the agent's next clean `submit`, which
    * then finalizes instead of returning to in_review. `implement` carries the
@@ -315,14 +315,14 @@ export interface LintResult {
 /**
  * JSON variant of GET /api/sessions/:id/revisions/:n (Accept: application/json).
  * `warnings` are the lint warnings the revision was accepted with — the review
- * screen renders the L6 entries as badges on Details blocks (DESIGN.md §5, §10).
+ * screen renders the L6 entries as badges on Details blocks (lint severity, review UI).
  */
 export interface RevisionPayload {
   session: string;
   revision: number;
   markdown: string;
   warnings: LintIssue[];
-  /** The agent's changelog for this revision (DESIGN.md §9 layer 1); null on r1. */
+  /** The agent's changelog for this revision (threaded review and revision layer 1); null on r1. */
   changelog: string | null;
 }
 
@@ -353,7 +353,7 @@ export interface SectionDiff {
   hunks: DiffHunk[];
 }
 
-/** GET /api/sessions/:id/diff?from=&to= (DESIGN.md §6). from=0 = empty plan. */
+/** GET /api/sessions/:id/diff?from=&to= (review loop and daemon API). from=0 = empty plan. */
 export interface DiffPayload {
   session: string;
   from: number;

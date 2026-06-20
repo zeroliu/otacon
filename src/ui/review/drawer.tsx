@@ -1,10 +1,10 @@
-// The comment drawer (DESIGN.md §9, §10): comments batch here by default —
+// The comment drawer (threaded review and revision, review UI): comments batch here by default —
 // one flush, one revision, one changelog — with a per-comment "send now"
 // override. It floats as a glass instrument bar over the reading column; when
 // nothing is pending it shrinks to the whole-plan affordance alone, so no
 // dead Send button ever trains the eye to skip the bar.
 //
-// On a phone the same bar is the WHOLE control surface (§10 "sticky bar"):
+// On a phone the same bar is the WHOLE control surface (review UI "sticky bar"):
 // ❓ pending agent questions (tap → the question queue), ✎ whole-plan, 💬
 // count + Send, ✓ Approve. One DOM, CSS-responsive — desktop keeps approve
 // and the question tally in the header instrument strip and hides the
@@ -37,7 +37,7 @@ export function CommentDrawer({
   failed: boolean;
   /** Unanswered agent questions — the sticky bar's ❓ badge (phone only). */
   questions: number;
-  /** Scrolls to the question queue (the ❓ tap, DESIGN.md §10). */
+  /** Scrolls to the question queue (the ❓ tap, review UI). */
   onQuestions: () => void;
   /** Opens the approve confirm sheet; undefined hides the phone ✓ control. */
   onApprove?: () => void;

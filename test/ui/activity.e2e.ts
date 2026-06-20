@@ -1,4 +1,4 @@
-// UI e2e for live agent activity (DESIGN.md §6, §10): a posted `otacon
+// UI e2e for live agent activity (review loop and daemon API, review UI): a posted `otacon
 // progress` note drives the activity-driven draft chip, the live activity log,
 // and the agent-presence dot — over the real built daemon (see
 // playwright.config.ts). Sessions are seeded through the real HTTP API.
@@ -24,7 +24,7 @@ test("a progress note drives the draft chip, the activity log, and the live dot"
   await postProgress(request, session.id, "reading the auth module");
   await page.goto(`/s/${session.id}`);
 
-  // The activity-driven draft chip reads the latest note (DESIGN.md §10, D3),
+  // The activity-driven draft chip reads the latest note (review UI, D3),
   // not a fixed "agent drafting".
   await expect(page.locator(".review-header .chip")).toHaveText("reading the auth module");
   // The pre-plan placeholder leads with the activity log, open.

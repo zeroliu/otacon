@@ -1,4 +1,4 @@
-// Agent question cards (DESIGN.md §8, §10): the grill's pinned queue above
+// Agent question cards (interview questions, review UI): the grill's pinned queue above
 // the plan — incoming-transmission cards in the session's accent, designed
 // for one thumb while walking. Option chips are full tap targets with the
 // recommended option first and starred; a single-choice chip tap IS the
@@ -59,7 +59,7 @@ export const GrillQueue = memo(function GrillQueue({
   );
 });
 
-/** The agent's options with the recommended one first (DESIGN.md §8). */
+/** The agent's options with the recommended one first (interview questions). */
 function orderedOptions(entry: TranscriptEntry): string[] {
   if (!entry.options) return [];
   const { recommend } = entry;
@@ -100,7 +100,7 @@ function QuestionCard({
       prev.includes(option) ? prev.filter((o) => o !== option) : [...prev, option],
     );
 
-  // The explicit send button (DESIGN.md §8): free text and multi-select always
+  // The explicit send button (interview questions): free text and multi-select always
   // carry one; single-select grows one only while a custom answer is open — the
   // "+ add a note" box doubles as the chip-less custom-answer field, so typed
   // text alone is a valid answer ("Other" parity), or it rides a chip tap.

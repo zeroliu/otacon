@@ -1,6 +1,6 @@
 // The /s/:id review screen: session header in the session's accent color,
 // live over its SSE stream, rendering the latest stored revision as the plan
-// dossier (DESIGN.md §10) — with the review loop's desktop verbs (select text
+// dossier (review UI) — with the review loop's desktop verbs (select text
 // → toolbar, comments batch in the drawer, questions fire instantly, threads
 // in the rail), M3's re-review layer (banner, [clean|diff] + baseline picker,
 // gutter markers, j/k), and M4's grill + approve surfaces: agent-question
@@ -8,7 +8,7 @@
 // drafting), the collapsible Interview panel that decision citations
 // deep-link into, and the warn-then-force Approve control. Keyboard:
 // c = comment, q = ask, j/k = changed sections; no Approve shortcut exists,
-// deliberately (§10). Approved sessions render read-only behind the quiet
+// deliberately (review UI). Approved sessions render read-only behind the quiet
 // approved notice. The renderer stays a lazy chunk.
 
 import type { MouseEvent, ReactNode, RefObject } from "react";
@@ -155,18 +155,18 @@ function ReviewLoop({
   // and a half-typed draft must never silently follow the new anchor.
   const composerSeq = useRef(0);
   const [composer, setComposer] = useState<ComposerState | null>(null);
-  // The open section ⋯ menu (DESIGN.md §10): the coarse-anchor path. Phone
+  // The open section ⋯ menu (review UI): the coarse-anchor path. Phone
   // (at: null) docks it as a bottom sheet; desktop drops it under the button.
   const [menu, setMenu] = useState<SectionMenuState | null>(null);
   const [pending, setPending] = useState<PendingComment[]>([]);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const [view, setView] = useState<ReviewView>("clean");
-  // null = follow the server's last-reviewed baseline (DESIGN.md §9 layer 3);
+  // null = follow the server's last-reviewed baseline (threaded review and revision layer 3);
   // a number = the user picked another baseline from the diff controls.
   const [baseline, setBaseline] = useState<number | null>(null);
   const [changelogOpen, setChangelogOpen] = useState(false);
-  // The Interview panel (DESIGN.md §8): open state is screen-local; a
+  // The Interview panel (interview questions): open state is screen-local; a
   // decision citation sets `ivTarget` (nonce re-fires repeat clicks) and
   // opens the panel in the same commit, so the entry exists when its
   // deep-link effect runs.
@@ -182,7 +182,7 @@ function ReviewLoop({
   // The absolute home-archive path heard from the approve response, so the
   // read-only notice can name the home copy alongside the project path.
   const [approvedHome, setApprovedHome] = useState<string | null>(null);
-  // Persistent thread marks (DESIGN.md §10): open threads + unsent drafts keep
+  // Persistent thread marks (review UI): open threads + unsent drafts keep
   // their anchored plan text lit. `renderTick` re-fires the paint once the
   // lazy/memo'd PlanView commits (mount + every revision swap); `focusThread`
   // drives the reverse gesture — a tap on a lit span targets its rail thread.
@@ -194,14 +194,14 @@ function ReviewLoop({
   // off the per-keystroke `litEntries` identity (updated in the paint effect).
   const litRef = useRef<LitThread[]>([]);
   const hasPlan = session.revision > 0;
-  // Over = the session reached a terminal state (DESIGN.md §12: approved /
+  // Over = the session reached a terminal state (approval and archive lifecycle: approved /
   // implemented / implement_failed): the whole screen goes read-only — no
   // selection anchoring, no composer, no drawer, no cards. `implementing` is NOT
   // over — the agent is building the approved plan, so the screen stays
   // interactive (the SSE frame drives the status; an Approve & Implement leaves
   // this view live as `implementing` rather than ending it).
   const over = isOver(session.status);
-  // `finalizing` (comment & approve, §12) is not over — the agent is folding the
+  // `finalizing` (comment & approve, approval and archive lifecycle) is not over — the agent is folding the
   // open comments in and will commit — but the plan is locked while it does, so
   // the whole editing surface goes read-only just like `over`. The redirect-home
   // and approved-notice logic stays keyed on `over` (finalizing has no committed
@@ -224,7 +224,7 @@ function ReviewLoop({
     composer === null && menu === null && view === "clean" && !readOnly,
   );
 
-  // Keyboard-aware bottom sheets (DESIGN.md §10). The keyboard inset publishes
+  // Keyboard-aware bottom sheets (review UI). The keyboard inset publishes
   // as a CSS var the sheets add to their `bottom`, so they ride above the
   // keyboard as it animates; it stays 0 on desktop (no on-screen keyboard).
   const kbInset = useKeyboardInset();
@@ -262,7 +262,7 @@ function ReviewLoop({
   const from = Math.min(baseline ?? session.lastReviewedRevision, session.revision);
   const diff = useDiff(session.id, from, session.revision);
 
-  // Gutter markers (§10): changed/added units vs the baseline, in clean view.
+  // Gutter markers (review UI): changed/added units vs the baseline, in clean view.
   // Joined to one string so PlanView's memo survives this loop's re-renders
   // (it ticks per selection change and drawer keystroke). A baseline of 0
   // means "never reviewed" — everything is new, so marking every section
@@ -307,7 +307,7 @@ function ReviewLoop({
   // The lit set: open questions (one ink) and open comments + unsent drawer
   // drafts (another), each with a re-locatable quote. Answered/resolved threads
   // drop out (so their mark clears on the next paint); orphaned and whole-plan
-  // (null/quote-less) anchors are never lit — no text to paint (DESIGN.md §10).
+  // (null/quote-less) anchors are never lit — no text to paint (review UI).
   const litEntries = useMemo<LitThread[]>(() => {
     const lit: LitThread[] = [];
     for (const thread of threads) {
@@ -357,7 +357,7 @@ function ReviewLoop({
   // teardown, not on mount.
   useEffect(() => clearThreadHighlights, []);
 
-  // Reload / close-tab guard (DESIGN.md §10): drawer drafts live only in this
+  // Reload / close-tab guard (review UI): drawer drafts live only in this
   // browser until Send, so a reload or tab-close would wipe them with no warning.
   // Register beforeunload only while drafts are actually staged and tear it down
   // the moment the drawer empties (sent or deleted), so a clean session never
@@ -406,7 +406,7 @@ function ReviewLoop({
   }, []);
 
   // Keyboard: c = comment on selection, q = ask, j/k = jump changed sections
-  // (DESIGN.md §10 — there is no Approve shortcut, on purpose). Esc closes
+  // (review UI — there is no Approve shortcut, on purpose). Esc closes
   // the composer from anywhere.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -496,7 +496,7 @@ function ReviewLoop({
     if (await sendItems(batch.map(({ anchor, body }) => ({ anchor, body })))) dropSent(batch);
   };
 
-  // The approve drafts gate's flush (DESIGN.md §10): POST the non-blank drafts and
+  // The approve drafts gate's flush (review UI): POST the non-blank drafts and
   // drop exactly those, WITHOUT lighting the drawer's busy/failed. The dialog owns
   // its own busy/error, and the drawer dimmed behind the approve scrim must not
   // flash state for a batch its own Send never started. Blank drafts are skipped,
@@ -528,14 +528,14 @@ function ReviewLoop({
     if (planRef.current) flashAnchor(planRef.current, anchor);
   }, []);
 
-  // A follow-up question on an existing conversation (DESIGN.md §9): inherits
+  // A follow-up question on an existing conversation (threaded review and revision): inherits
   // the root's anchor server-side, so the rail only passes the root id + body.
   const followup = useCallback(
     (rootId: string, body: string): Promise<boolean> => postFollowup(session.id, rootId, body),
     [session.id],
   );
 
-  // Decision deep-links (DESIGN.md §8) and the section ⋯ menus (§10) are both
+  // Decision deep-links (interview questions) and the section ⋯ menus (review UI) are both
   // delegated here, so PlanView takes no callback props and its memo survives.
   // `← q7` citations render as `a.q-cite[data-q]`; the menu buttons as
   // `button.sec-menu[data-menu]`.
@@ -580,7 +580,7 @@ function ReviewLoop({
   );
 
   // The ⋯ menu's verbs ride the existing composer with a section-only anchor
-  // ({section}, no exact quote — DESIGN.md §4 anchors don't require one). A
+  // ({section}, no exact quote — plan structure, lint, and anchoring anchors don't require one). A
   // zero-width rect at the button's corner reuses openComposer's placement:
   // pinned under the ⋯ on desktop, the sheet on phones.
   const menuCompose = (mode: "comment" | "ask") => {
@@ -593,7 +593,7 @@ function ReviewLoop({
     setMenu(null);
   };
 
-  // The sticky bar's ❓ (DESIGN.md §10): jump back up to the question queue.
+  // The sticky bar's ❓ (review UI): jump back up to the question queue.
   const openQuestions = transcript.filter((entry) => entry.answer === undefined).length;
   const jumpQuestions = useCallback(() => {
     const queue = document.querySelector(".grill-queue");
@@ -696,7 +696,7 @@ function ReviewLoop({
             <main className="review-wait">
               <p className="wait-line">// no revision yet</p>
               {/* During research + drafting the activity log is the main thing
-                  to watch, so the placeholder leads with it open (DESIGN.md §10). */}
+                  to watch, so the placeholder leads with it open (review UI). */}
               <ActivityLog activity={activity} now={now} defaultOpen />
               <p>
                 The agent interviews before it drafts — questions land above as cards, one at a
@@ -722,7 +722,7 @@ function ReviewLoop({
           // The drawer holds browser-only drafts the daemon never saw; the gate
           // catches them before finalize (Send & approve flushes + folds in,
           // Discard & approve drops them) rather than letting Approve silently
-          // skip them (DESIGN.md §10, §12). Count only sendable (non-blank)
+          // skip them (review UI, approval and archive lifecycle). Count only sendable (non-blank)
           // drafts: a half-typed blank isn't a comment to protect, and flushing
           // it would 400 the whole batch.
           pendingCount={pending.filter((item) => item.body.trim() !== "").length}
@@ -810,7 +810,7 @@ export function SessionScreen({ id }: { id: string }) {
   // they stay honest while the screen idles between SSE frames.
   const now = useNow(30_000);
   // Report visibility so the daemon suppresses desktop banners only while this
-  // review is actually on screen (DESIGN.md §6).
+  // review is actually on screen (review loop and daemon API).
   usePresence(id);
 
   const revision = session?.revision;
@@ -819,8 +819,8 @@ export function SessionScreen({ id }: { id: string }) {
   }, [session, revision]);
 
   // When the session you're viewing crosses into an over (terminal) state, its
-  // switcher chip is gone (§7) so send yourself home, where the collapsed
-  // section holds it (DESIGN.md §12, D3). Fire only on the live active → over
+  // switcher chip is gone (session registry and switcher) so send yourself home, where the collapsed
+  // section holds it (approval and archive lifecycle, D3). Fire only on the live active → over
   // crossing: opening a session that is ALREADY over (you tapped a card in the
   // collapsed section on home) must stay, or finished plans become unopenable.
   // `sawActive` records that we observed a non-terminal status first, so the
@@ -847,7 +847,7 @@ export function SessionScreen({ id }: { id: string }) {
     }
   }, [session]);
 
-  // A `removed` frame landed while this screen was open (DESIGN.md §12): the
+  // A `removed` frame landed while this screen was open (approval and archive lifecycle): the
   // session left the registry — `otacon clean` archived an approved one, or it
   // was deleted from review while pending. The frame carries no reason, so the
   // copy covers both. A terminal state, not an error — the stream is closed and

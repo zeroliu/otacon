@@ -1,4 +1,4 @@
-// ensureDaemon's restart state machine (DESIGN.md §16; DECISIONS.md
+// ensureDaemon's restart state machine (install/update; DECISIONS.md
 // "Stale-daemon restart") against fake HTTP daemons: the fast path, the
 // foreign-port refusal, the probe→shutdown TOCTOU re-check (a daemon already
 // current by shutdown time is spared), a peer's respawn being adopted, and a

@@ -1,4 +1,4 @@
-// The collapsible Interview panel (DESIGN.md §8, §10): the grill transcript
+// The collapsible Interview panel (interview questions, review UI): the grill transcript
 // as reviewable telemetry — every Q&A with its asked/answered state and
 // timestamps. Decisions in the rendered plan citing `← q<n>` deep-link here:
 // the panel opens, scrolls to the entry, and flashes it, answering "why?"

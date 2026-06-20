@@ -1,5 +1,5 @@
-// Best-effort Tailscale discovery shared by doctor and expose (DESIGN.md §11,
-// §16). OTACON_TAILSCALE pins the binary (hermetic tests; nonstandard
+// Best-effort Tailscale discovery shared by doctor and expose (install/expose,
+// install/update). OTACON_TAILSCALE pins the binary (hermetic tests; nonstandard
 // installs) and is authoritative when set; otherwise PATH, then the macOS app
 // bundle's embedded CLI (DECISIONS.md "doctor/expose automation boundary").
 

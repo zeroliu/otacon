@@ -62,7 +62,7 @@ if [ "$FLAVOR" = visuals ]; then
   # scenario-card block under a phase's Verification. At most one budget-exempt
   # visual (callout/matrix) per section keeps it under any reasonable per-section
   # visual cap; inline pills are always free, and a ```gwt block is fence- and
-  # visual-exempt (validated separately by the linter, DESIGN.md §4).
+  # visual-exempt (validated separately by the linter, plan structure, lint, and anchoring).
   cat > ".otacon/$SID/plan.md" <<EOF
 ---
 title: visuals-demo
@@ -184,8 +184,8 @@ JSON
 fi
 
 # ---- a second, APPROVED session ---------------------------------------------
-# So the hide-approved work is demoable: it is gone from the switcher (§7) and
-# grouped under home's collapsed `approved` section (§10). The redirect (§12) is
+# So the hide-approved work is demoable: it is gone from the switcher (session registry and switcher) and
+# grouped under home's collapsed `approved` section (review UI). The redirect (approval and archive lifecycle) is
 # a manual approve of the MAIN (active) session in the UI. Force-approve here is
 # what the UI does after its unresolved-thread warning; this is a plain Save, so
 # the project copy lands in the scratch repo's .otacon/plans/ (untracked, otacon

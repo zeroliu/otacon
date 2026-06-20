@@ -1,4 +1,4 @@
-// Visuals v1 (DESIGN.md §4): syntax-highlighted fences, client-rendered
+// Visuals v1 (plan structure, lint, and anchoring): syntax-highlighted fences, client-rendered
 // mermaid diagrams, and before/after pairs. highlight.js's common-language
 // build rides in the review chunk (the whole plan renderer is lazy-loaded);
 // mermaid is far heavier, so it stays its own dynamic chunk fetched on the
@@ -47,7 +47,7 @@ export function CodeFence({
   );
 }
 
-/** Before/after pair, side-by-side on desktop, stacked on phones (DESIGN.md §4). */
+/** Before/after pair, side-by-side on desktop, stacked on phones (plan structure, lint, and anchoring). */
 export function PairFences({ pair }: { pair: PairBlock }) {
   const tag = (fence: FenceBlock, word: string) =>
     fence.lang === "" ? word : `${word} · ${fence.lang}`;

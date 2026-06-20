@@ -1,4 +1,4 @@
-// The live activity log (DESIGN.md §6, §10): the agent's `otacon progress`
+// The live activity log (review loop and daemon API, review UI): the agent's `otacon progress`
 // narration as append-only telemetry — what it's reading, drafting, revising —
 // so the review surface shows work happening from the first second, before any
 // revision exists. A compact collapsible panel on the review screen (near the

@@ -1,4 +1,4 @@
-// otacond's HTTP surface (DESIGN.md §6 "HTTP API sketch"), as a Hono app
+// otacond's HTTP surface (review loop and daemon API), as a Hono app
 // factory so tests drive it via app.request() with no socket.
 //
 // Long-poll delivery honors at-least-once (DECISIONS.md "SessionQueue API"):
@@ -98,7 +98,7 @@ const badRequest = (c: AppContext, message: string) =>
 const notFound = (c: AppContext, message: string) =>
   c.json({ error: { code: "E_NOT_FOUND", message } }, 404);
 const timeoutEvent = (c: AppContext) => c.json({ event: "timeout" });
-// A session in a terminal state is over (DESIGN.md §6, §12 status machine):
+// A session in a terminal state is over according to the status machine:
 // every state-mutating verb refuses — the CLI's pointer rules guard its side,
 // but curl/UI/--session calls must hit the same wall. Each route checks *after*
 // its body await (see sessionEnded in createApp): a pre-await snapshot goes
@@ -159,7 +159,7 @@ function parseAnchor(raw: unknown): Anchor | null | undefined {
 }
 
 /**
- * Validate the submit body's `resolutions` (DESIGN.md §6): an object with
+ * Validate the submit body's `resolutions` (review loop and daemon API): an object with
  * only `changelog` (string) and `threads` (string → string). Strict — an
  * unknown key is a typo that would silently drop resolutions, so it refuses.
  * undefined/null = none provided ({}); any other bad shape = undefined.
@@ -235,7 +235,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     return status !== undefined && TERMINAL_STATUSES.includes(status);
   };
 
-  // Agent presence (DESIGN.md §6): ephemeral, in-memory liveness only — the
+  // Agent presence (review loop and daemon API): ephemeral, in-memory liveness only — the
   // epoch-ms of each session's last agent contact. Every mutating verb and each
   // `wait` park bumps it; the summary exposes it (plus `parked`) and the UI
   // derives live/offline from its recency, so the daemon needs no timer. A
@@ -272,7 +272,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   const publishGrill = (id: string, entry: TranscriptEntry): void =>
     notifier.publish({ type: "grill", session: id, data: { session: id, entry } });
 
-  // Desktop attention banners (DESIGN.md §6). Presence tracks which sessions
+  // Desktop attention banners (review loop and daemon API). Presence tracks which sessions
   // have a *visible* review open; the notify sink fires the native macOS banner
   // (a no-op off darwin). Both are injectable for tests.
   const presence = options.presence ?? new Presence();
@@ -283,8 +283,8 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
    * watching this session's review (presence) or has disabled them (config,
    * loaded fresh per session.repo so a repo override applies). The whole thing
    * is wrapped: a spawn or config error must never break the submit/ask response
-   * — it is swallowed to stderr (DESIGN.md §13: zero-API-spend untouched; this
-   * is a local OS call).
+   * — it is swallowed to stderr (this is a local OS call, so the zero model-network-call
+   * invariant is untouched).
    */
   const maybeNotify = (
     session: RegistrySession,
@@ -339,7 +339,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   }
 
   /**
-   * Finalize an approval (DESIGN.md §6 step 6/7, §12). Writes the composed
+   * Finalize an approval. Writes the composed
    * artifact (with the comment-&-approve `## Review notes` when `reviewNotes` are
    * present). It ALWAYS writes the canonical home copy
    * (`~/.otacon/sessions/<id>/`, the permanent archive).
@@ -420,7 +420,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     c.json({ app: "otacond", version: VERSION, pid: process.pid }),
   );
 
-  // The Settings UI's config surface (DESIGN.md §6). GET returns the full
+  // The Settings UI's config surface (review loop and daemon API). GET returns the full
   // schema plus each scope's current sparse, coerced values. The `user` scope
   // (~/.otacon/config.json) is always present; the project scopes only when an
   // absolute `repo` is named — User config needs no repo, so an absent/empty/
@@ -515,7 +515,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   });
 
   // DELETE removes a session from the registry, status-branched on whether its
-  // plan is already preserved (DESIGN.md §6, §12). **Terminal** (approved, plus
+  // plan is already preserved. **Terminal** (approved, plus
   // implemented/implement_failed once a build finishes): its plan + transcript
   // are in the home archive (~/.otacon/sessions/<id>/, never touched here), so the
   // working dir is *archived* to .otacon/archive/ (recoverable) — `otacon clean`
@@ -609,7 +609,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       if (!settled) {
         // Genuinely parked (the queue was empty at take()): broadcast
         // parked=true + the refreshed lastContactAt so the live dot reaches the
-        // UI within one park slice (DESIGN.md §6).
+        // UI within one park slice (review loop and daemon API).
         publishSession(session);
         timer = setTimeout(() => settle(timeoutEvent(c)), waitSeconds * 1000);
         signal.addEventListener("abort", onAbort);
@@ -621,12 +621,12 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
     // Raw markdown body, or {"plan": "...", "resolutions": {...}} JSON — the
-    // CLI sends resolutions.json's content along (DESIGN.md §6). The raw path
+    // CLI sends resolutions.json's content along (review loop and daemon API). The raw path
     // carries no resolutions, so L5 still rejects it when threads are open.
     let content = await c.req.text();
     if (sessionEnded(session.id)) return sessionOver(c, session.id);
     // A submit cannot land mid-build. `implementing` is non-terminal (it re-opens
-    // progress/ask/wait/answer, DESIGN.md §6) so it slips past sessionEnded — but
+    // progress/ask/wait/answer, review loop and daemon API) so it slips past sessionEnded — but
     // submit is not in that verb set, and a revision here would clobber the
     // approved plan. This also serializes the double-finalize race: a comment-&-
     // approve fold-in that flips to `implementing` is the winner, and a second
@@ -683,7 +683,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     const revision = store.saveRevision(session.id, content, result.warnings, changelog ?? undefined);
     // The accepted revision settles its threads: resolutions land on their
     // threads, every anchor is re-located in the new text, lost ones orphan
-    // (DESIGN.md §4, §9). SSE upserts keep the rail live.
+    // (plan structure, lint, and anchoring, threaded review and revision). SSE upserts keep the rail live.
     const changedThreads = applyRevisionToThreads(store.threadsPath(session.id), {
       plan: content,
       replies,
@@ -701,7 +701,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       for (const thread of changedThreads) publishThread(session.id, thread);
     };
 
-    // Deferred approval (comment & approve, DESIGN.md §6, §12): a send-to-agent
+    // Deferred approval (comment & approve): a send-to-agent
     // approve armed `pendingApproval` and parked the session in `finalizing`.
     // This clean submit is the agent's fold-in pass — L5 has just vouched that
     // every open comment carries a resolution — so finalize now instead of
@@ -756,7 +756,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     });
   });
 
-  // The user's side of re-review bookkeeping (DESIGN.md §9 layer 3): the UI's
+  // The user's side of re-review bookkeeping (threaded review and revision layer 3): the UI's
   // "mark reviewed" / banner-dismiss POSTs here; comment flushes mark it
   // implicitly. Monotonic — see Store.markReviewed.
   app.post("/api/sessions/:id/reviewed", async (c) => {
@@ -776,7 +776,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     return c.json({ ok: true, session: session.id, lastReviewedRevision });
   });
 
-  // The review screen reports its visibility here (DESIGN.md §6): {visible:true}
+  // The review screen reports its visibility here (review loop and daemon API): {visible:true}
   // when shown + on a heartbeat, {visible:false} on blur/unload. The daemon
   // suppresses a desktop banner only while a review is visible — a hidden or
   // backgrounded tab (its SSE stream still open) does NOT suppress. No status
@@ -794,7 +794,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     return c.json({ ok: true, session: session.id, visible: body.visible });
   });
 
-  // Structural diff between two stored revisions (DESIGN.md §6, §9 layer 3).
+  // Structural diff between two stored revisions, defaulting to the last-reviewed baseline.
   // Defaults: to = latest, from = last-reviewed (?from= selects any other
   // baseline; 0 = the empty plan, so a never-reviewed session shows all-new).
   app.get("/api/sessions/:id/diff", (c) => {
@@ -867,7 +867,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       ...draft,
     }));
     const batch = `b${counters.batch}`;
-    // Each item becomes a persistent thread (DESIGN.md §9) — the rail's
+    // Each item becomes a persistent thread (threaded review and revision) — the rail's
     // source of truth; the queued event is only the agent's wake-up copy.
     const createdAt = new Date().toISOString();
     const threads: Thread[] = items.map((item) => ({
@@ -880,7 +880,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     }));
     appendThreads(store.threadsPath(session.id), threads);
     // Flushing a batch is the implicit "I reviewed this revision" signal
-    // (DESIGN.md §9 layer 3) — the diff baseline moves with it.
+    // (threaded review and revision layer 3) — the diff baseline moves with it.
     store.markReviewed(session.id, store.readState(session.id).revision);
     // Comments are revision requests (DECISIONS.md "Status transitions"); flip
     // status before the enqueue wakes a parked agent.
@@ -905,7 +905,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     if (typeof body.body !== "string" || body.body.trim() === "") {
       return badRequest(c, "question needs a non-empty body");
     }
-    // A follow-up (DESIGN.md §9) names the question it continues with `replyTo`
+    // A follow-up (threaded review and revision) names the question it continues with `replyTo`
     // and inherits that conversation's anchor — so a client anchor is ignored on
     // a follow-up; a root question parses its own anchor (or null = whole-plan).
     let anchor: Anchor | null;
@@ -963,7 +963,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       ...(replyTo !== undefined ? { replyTo } : {}),
     };
     appendThreads(store.threadsPath(session.id), [thread]);
-    // Questions leave the plan — and the status — untouched (DESIGN.md §9).
+    // Questions leave the plan — and the status — untouched (threaded review and revision).
     const payload: EventPayload = {
       event: "question",
       session: session.id,
@@ -978,7 +978,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     return c.json({ ok: true, id, seq: counters.eventSeq }, 202);
   });
 
-  // The agent's side of a user question (otacon answer, DESIGN.md §6, §9):
+  // The agent's side of a user question (`otacon answer`):
   // the answer lands on the thread — the plan and the status stay untouched —
   // and the UI's "answering…" placeholder resolves over SSE.
   app.post("/api/sessions/:id/questions/:qid/answer", async (c) => {
@@ -1018,11 +1018,11 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     return c.json({ session: session.id, threads: readThreads(store.threadsPath(session.id)) });
   });
 
-  // The agent's grill question (otacon ask, DESIGN.md §6, §8): persisted in
+  // The agent's grill question (`otacon ask`): persisted in
   // the transcript and pushed to the UI as a card; no agent event is queued —
   // the asker goes straight back to `otacon wait` for the answer. Accepts a
   // single question body or a batch (`{questions:[…]}`) of independent
-  // questions — independent siblings the agent posts in one call (§8); they
+  // questions — independent siblings the agent posts in one call (interview questions); they
   // render as ordinary cards, each answered instantly.
   app.post("/api/sessions/:id/ask", async (c) => {
     const session = sessionFor(c);
@@ -1052,7 +1052,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       appendEntries(store.transcriptPath(session.id), entries);
       for (const entry of entries) publishGrill(session.id, entry);
       publishSession(store.getSession(session.id) ?? session);
-      // A batch coalesces to one banner — N questions need answering (DESIGN.md §6).
+      // A batch coalesces to one banner — N questions need answering (review loop and daemon API).
       maybeNotify(
         session,
         entries.length === 1
@@ -1075,7 +1075,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     return c.json({ ok: true, session: session.id, id: entry.id }, 201);
   });
 
-  // The user's side of a grill question (DESIGN.md §6, §8): the answer lands
+  // The user's side of a grill question: the answer lands
   // on the transcript entry and an `answer` event wakes the parked agent.
   app.post("/api/sessions/:id/answers", async (c) => {
     const session = sessionFor(c);
@@ -1105,12 +1105,12 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     // The answer must fit the question's shape: chips for option questions
     // (one chip, or 1+ under --multi), free text for optionless ones. A
     // non-empty custom answer with no chip is valid on option questions too
-    // (native-AskUserQuestion "Other" parity, DESIGN.md §8) — and text may
+    // (native-AskUserQuestion "Other" parity, interview questions) — and text may
     // still ride a chosen chip as a note.
     const customText = typeof text === "string" && text.trim() !== "";
     const noChips = choice === undefined && choices === undefined;
     if (noChips) {
-      // "Other" parity (DESIGN.md §8): a non-empty custom answer with no chip
+      // "Other" parity (interview questions): a non-empty custom answer with no chip
       // is valid on ANY question shape — the one branch-independent rule, so it
       // lives here, not re-stated per shape. Only the hint names the shape.
       if (!customText) {
@@ -1172,7 +1172,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     });
   });
 
-  // The agent's narration (otacon progress, DESIGN.md §6, §8): a non-blocking
+  // The agent's narration (`otacon progress`): a non-blocking
   // progress note appended to the capped activity feed and pushed to the UI as
   // an `activity` frame (the per-session log) plus a `session` frame (the
   // chip's latestActivity). No agent event is queued — like `ask`, this is
@@ -1205,7 +1205,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     return c.json({ ok: true, session: session.id, note: text });
   });
 
-  // Approve ends the planning session (DESIGN.md §6 step 6/7, §12). Writes the
+  // Approve ends the planning session. Writes the
   // composed artifact (final revision, status: approved, grill transcript
   // appended). The canonical copy ALWAYS lands in the home store
   // (~/.otacon/sessions/<id>/). **Save** (plain Approve, implement=false) ALSO
@@ -1358,7 +1358,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     });
   });
 
-  // Approve & Implement's outcome report (DESIGN.md §6, §12): once the agent has
+  // Approve & Implement's outcome report: once the agent has
   // built the approved plan it reports here. `failed:true` flips the session
   // `implement_failed`, otherwise `implemented` (both terminal). A `pr` URL is
   // persisted on the registry session so the home card can surface the link.
@@ -1410,7 +1410,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     }
     // Default is the raw markdown (byte-identical read-back; the CLI/curl
     // path). The web UI asks for JSON to get the lint warnings the revision
-    // was accepted with alongside it (DESIGN.md §6).
+    // was accepted with alongside it (review loop and daemon API).
     if (c.req.header("accept")?.toLowerCase().includes("application/json")) {
       const payload: RevisionPayload = {
         session: session.id,

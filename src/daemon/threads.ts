@@ -1,6 +1,6 @@
 // Per-session thread persistence: .otacon/<id>/threads.json holds every
 // comment and question thread so the review UI's rail can render the whole
-// conversation on any load (DESIGN.md §9, §12) — the event queue drains, so
+// conversation on any load (threaded review and revision, approval and archive lifecycle) — the event queue drains, so
 // it cannot be the rail's source. Same storage posture as the rest of the
 // daemon: atomic writes, corrupt files quarantined and rebuilt empty, never
 // fatal (DECISIONS.md "Threads: one threads.json per session").
@@ -109,7 +109,7 @@ export function answerQuestion(path: string, id: string, body: string): Answered
  * Apply an accepted revision to the threads file, in one read + one atomic
  * write: record the resolution replies on their comment threads (lint L5 has
  * already vouched for them; re-resolving overwrites — at-least-once), then
- * re-locate every thread's anchor in the new plan (DESIGN.md §4) — lost or
+ * re-locate every thread's anchor in the new plan (plan structure, lint, and anchoring) — lost or
  * ambiguous quotes turn anchorState "orphaned", re-found ones recover.
  * Returns the threads that changed, for the daemon's SSE `thread` upserts.
  */
@@ -166,7 +166,7 @@ export function commentThreadStates(path: string): { id: string; resolved: boole
 
 /**
  * The still-open comment threads (no resolution) — what a **comment & approve**
- * fold-in sweeps (DESIGN.md §6, §12): each is re-delivered to the agent in the
+ * fold-in sweeps: each is re-delivered to the agent in the
  * `final:true` comments batch and replayed into the committed `## Review notes`.
  * Pure over an already-read thread list so the approve handler reads disk once.
  * Open *questions* are not swept — they are answered via `otacon answer`, never

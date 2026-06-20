@@ -1,5 +1,5 @@
-// otacon update [--check] — the manual/forced upgrade command (DESIGN.md §6,
-// §16). It deliberately bypasses the auto-update gate's two suppressors: it
+// otacon update [--check] — the manual/forced upgrade command (review loop and daemon API,
+// install/update). It deliberately bypasses the auto-update gate's two suppressors: it
 // ignores the 1h throttle (the user asked NOW) and `update.auto:false` (an
 // explicit command overrides a config that only governs the implicit start-time
 // check). It still fails open on a registry blip and never escalates to sudo —

@@ -1,4 +1,4 @@
-// Pure helpers the Settings screen renders from (DESIGN.md §6 config surface),
+// Pure helpers the Settings screen renders from,
 // kept React-free + co-located-tested like session-filter.ts: the screen wires
 // these to the DOM, the unit tests pin the logic. `ConfigField` and the sparse
 // `ScopeValues` shape come from the shared config module — the same schema the
@@ -88,7 +88,7 @@ export type InheritedFrom = "project" | "user" | "default";
  * One ancestor scope in the inheritance chain: its label (the source the hint
  * names) and its sparse values. The chain is passed highest-precedence-first
  * (so `project` before `user`), mirroring the file overlay defaults ← user ←
- * project ← project.local (DESIGN.md §16): the first ancestor that overrides the
+ * project ← project.local (install/update): the first ancestor that overrides the
  * field wins, and reports itself as the source.
  */
 export interface ParentScope {

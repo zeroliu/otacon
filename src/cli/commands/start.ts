@@ -1,6 +1,6 @@
-// otacon start --title <t> [--quick] — mint and register a session (DESIGN.md
-// §6, §16): POST /api/sessions, print the session id and review URL. No local
-// session pointer — the daemon registry is the single source of truth (§7).
+// otacon start --title <t> [--quick] — mint and register a session:
+// POST /api/sessions, print the session id and review URL. No local session
+// pointer — the daemon registry is the single source of truth.
 
 import { parseArgs } from "node:util";
 import type { RegistrySession } from "../../shared/types.js";
@@ -10,7 +10,7 @@ import { currentBranch, findRepoRoot, realpathOr } from "../session.js";
 import { maybeAutoUpdate } from "../update.js";
 
 export async function startCommand(argv: string[]): Promise<number> {
-  // Pre-session auto-update gate (DESIGN.md §16): on a newer published version
+  // Pre-session auto-update gate (install/update): on a newer published version
   // this self-updates and re-execs `start` with the original argv, so the flags
   // below are reconstructed exactly; in every other case it returns and we
   // proceed on the installed version. Must run before ensureDaemon so the

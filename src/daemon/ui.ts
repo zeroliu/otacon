@@ -1,5 +1,5 @@
 // The daemon's browser-facing surface: the built SPA (static files from
-// dist/ui) and the SSE streams the UI watches (DESIGN.md §6, §10). Static
+// dist/ui) and the SSE streams the UI watches. Static
 // serving is hand-rolled because @hono/node-server's serveStatic resolves
 // roots against process.cwd(), which is meaningless for a daemon spawned from
 // any repo (DECISIONS.md "Daemon serves the built SPA from dist/ui").
@@ -176,7 +176,7 @@ export function registerUiRoutes(app: Hono<{ Bindings: NodeBindings }>, deps: Ui
   };
   app.get("/", shell);
   app.get("/s/:id", shell);
-  // The Settings screen (DESIGN.md §6 config surface) is a client route on the
+  // The Settings screen is a client route on the
   // same SPA shell — served identically to /s/:id.
   app.get("/settings", shell);
 
@@ -193,7 +193,7 @@ export function registerUiRoutes(app: Hono<{ Bindings: NodeBindings }>, deps: Ui
     });
   });
 
-  // `version` rides every snapshot (DESIGN.md §6, §16): a tab built against an
+  // `version` rides every snapshot: a tab built against an
   // older daemon re-learns the live version on each (re)connect and self-heals
   // by reloading, so an update-restarted daemon never strands a stale bundle.
   app.get("/api/stream", (c) =>

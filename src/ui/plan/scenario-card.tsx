@@ -1,4 +1,4 @@
-// Behavioral-assertion cards (DESIGN.md §4, §9, §10): a ```gwt fence in a
+// Behavioral-assertion cards (plan structure, lint, and anchoring, threaded review and revision, review UI): a ```gwt fence in a
 // phase's Verification renders as Given/When/Then scenario cards — the human's
 // Test-Driven Review approve checklist. The grammar is the shared tokenizer
 // (src/shared/gwt.ts), the same one the daemon linter validates with, so what

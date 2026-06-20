@@ -1,5 +1,4 @@
-// Server-computed structural diff between two plan revisions (DESIGN.md §6,
-// §9 layer 3). The plan is segmented into the same slug units the review
+// Server-computed structural diff between two plan revisions. The plan is segmented into the same slug units the review
 // screen renders (summary, decisions, phase-<n>, risks, open-questions) by
 // reusing the linter's pure parser; each unit gets a changed/unchanged status
 // for the gutter markers plus unified-style line hunks for the diff view.

@@ -1,4 +1,4 @@
-// The section ⋯ menu (DESIGN.md §10): coarse anchoring by design — every
+// The section ⋯ menu (review UI): coarse anchoring by design — every
 // section/phase header carries the affordance, and on a phone it is the
 // primary path because text selection is miserable there. Two verbs only:
 // "comment on section" stacks into the drawer, "ask about section" fires

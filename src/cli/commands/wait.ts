@@ -1,4 +1,4 @@
-// otacon wait [--timeout 540] [--session id] — the parked wait (DESIGN.md §6):
+// otacon wait [--timeout 540] [--session id] — the parked wait (review loop and daemon API):
 // long-poll the session's queue and print exactly one event as JSON, exit 0
 // ({"event":"timeout"} included — re-parking is the agent's normal loop).
 //

@@ -76,7 +76,7 @@ test("the revision loop: banner, dismiss, diff + j/k, resolution, orphan tray", 
   await expect(page.locator(".unit-changed")).toHaveCount(0);
 
   // Comment through the UI (send now flushes immediately — and commenting IS
-  // reviewing, so the daemon marks r1 as the baseline, DESIGN.md §9).
+  // reviewing, so the daemon marks r1 as the baseline, threaded review and revision).
   await selectText(page, "#decisions .md", "RS256 over HS256");
   await page.locator(".sel-btn", { hasText: "comment" }).click();
   await page.locator(".composer-input").fill("justify the choice in the decision");
@@ -166,7 +166,7 @@ test("the revision loop: banner, dismiss, diff + j/k, resolution, orphan tray", 
   await expect(page.locator("#summary.anchor-hit")).toHaveCount(1);
 
   // r4 deletes the quoted decision text: the thread orphans into the tray,
-  // live over the SSE thread frame — never silently dropped (DESIGN.md §4).
+  // live over the SSE thread frame — never silently dropped (plan structure, lint, and anchoring).
   plan = plan.replace("- D1: RS256 over HS256 [assumed]\n", "");
   await cliSubmit(session, dir, plan, { changelog: "Dropped the RS256 decision line." });
   const tray = page.locator(".orphan-toggle");

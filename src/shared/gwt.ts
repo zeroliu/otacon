@@ -1,4 +1,4 @@
-// The behavioral-assertion grammar (DESIGN.md §4, §9): a ```gwt fence inside a
+// The behavioral-assertion grammar (plan structure, lint, and anchoring, threaded review and revision): a ```gwt fence inside a
 // phase's Verification holds one or more Given/When/Then scenarios that double
 // as the human's Test-Driven Review approve checklist. This tokenizer is the
 // single source of truth for what a scenario *is*, shared by the daemon linter

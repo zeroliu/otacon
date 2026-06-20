@@ -1,4 +1,4 @@
-// Semantic callouts (DESIGN.md §4 visuals, §10 semantic ink): a typed
+// Semantic callouts (plan structure, lint, and anchoring visuals, review UI semantic ink): a typed
 // blockquote — `> [!risk]` on its own first line — renders as a flat panel
 // with a 2px top rule and a glyph+label inked in the type's hue (no fill, no
 // radius). The marker line is renderer chrome (consumed, never anchored); the

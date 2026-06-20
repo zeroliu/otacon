@@ -1,5 +1,5 @@
 // The single source of `marked` configuration for plan rendering: GFM plus the
-// markdown-native review visuals (DESIGN.md §4). Kept free of React and
+// markdown-native review visuals (plan structure, lint, and anchoring). Kept free of React and
 // DOMPurify so the whole transform pipeline is unit-testable without a DOM
 // (markdown.test.ts) and typechecks under the no-JSX test config. markdown.tsx
 // imports the configured `marked` from here, then parses + sanitizes.
@@ -10,10 +10,10 @@ import { calloutHtml } from "./callout.js";
 // A decision-matrix row is "chosen" when its first body cell is the ✓ marker.
 // We test the already-rendered cells — header cells render as `<th>`, so the
 // header row never matches, and any other table just degrades to a plain table
-// (DESIGN.md §4, §10).
+// (plan structure, lint, and anchoring, review UI).
 const CHOSEN_CELL_RE = /^\s*<td[^>]*>\s*✓/;
 
-// Inline scope pills: a closed set of bracket tokens (DESIGN.md §4). The
+// Inline scope pills: a closed set of bracket tokens (plan structure, lint, and anchoring). The
 // negative lookahead leaves markdown links (`[new](url)`) and reference links
 // (`[new][ref]`) to marked's own tokenizers — our inline extension is tried
 // first, so without it `[new](url)` would render as a pill and swallow the
@@ -21,7 +21,7 @@ const CHOSEN_CELL_RE = /^\s*<td[^>]*>\s*✓/;
 // tag, converted to its own span before parse (plan-view.tsx), never a pill.
 // The pill renders its keyword without the brackets, so — like inline emphasis
 // — a comment whose quote spans a pill may not survive a cross-revision
-// re-anchor; it orphans gracefully (DESIGN.md §4 orphan tray).
+// re-anchor; it orphans gracefully (plan structure, lint, and anchoring orphan tray).
 const PILL_RE = /^\[(new|breaking|risky|deletes)\](?![([])/;
 
 marked.use({

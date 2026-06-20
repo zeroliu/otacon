@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end exercise of the M4 grill + approve flow against the real built
-# artifact (DESIGN.md §6 step 6, §8): otacon ask posts a question card, a curl
+# artifact: otacon ask posts a question card, a curl
 # answer wakes the parked wait, lint L3 rejects citations of q ids missing
 # from the transcript and accepts real ones, approve refuses 409 on unresolved
 # threads, a forced approve (a plain Save) writes the home archive plus a

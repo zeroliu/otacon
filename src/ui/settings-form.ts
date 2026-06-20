@@ -1,4 +1,4 @@
-// The Settings screen's save-payload logic (DESIGN.md §6 config surface), kept
+// The Settings screen's save-payload logic, kept
 // React-free + co-located-tested like settings.ts: the screen wires this to the
 // DOM, the unit tests pin the semantics. The form models the *complete desired
 // set of overrides* for the active scope, because POST /api/config REPLACES the

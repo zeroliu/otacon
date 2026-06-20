@@ -1,4 +1,4 @@
-// The re-review chrome (DESIGN.md §9, §10): the new-revision banner — an
+// The re-review chrome (threaded review and revision, review UI): the new-revision banner — an
 // incoming-transmission card carrying the agent's changelog with the
 // _changelog / diff / dismiss_ verbs — the [clean|diff] segmented toggle (now
 // riding the sticky header, exported as ViewToggle), and the contextual
@@ -83,7 +83,7 @@ export function RevisionBanner({
 export type ReviewView = "clean" | "diff";
 
 /**
- * The clean⇄diff segmented toggle (DESIGN.md §10). Lives in the sticky header
+ * The clean⇄diff segmented toggle (review UI). Lives in the sticky header
  * (ReviewHeader) so the view switch rides along as the plan scrolls; the rest
  * of the re-review controls stay in the contextual in-flow strip below.
  */

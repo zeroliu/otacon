@@ -1,4 +1,4 @@
-// Keyboard-aware bottom sheets (DESIGN.md §10): on a phone the on-screen
+// Keyboard-aware bottom sheets (review UI): on a phone the on-screen
 // keyboard slides over the bottom-docked composer/menu/approve sheets, burying
 // their Send buttons, and the page behind keeps scrolling while you type. Two
 // hooks fix both: `useKeyboardInset` measures how much of the layout the

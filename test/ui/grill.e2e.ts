@@ -74,11 +74,11 @@ test("pre-plan grill: `otacon ask` raises a live card, recommended chip first, o
   await expect(card).toBeVisible();
   expect(await readMarker(page)).toBe(true); // SSE, not a navigation
   await expect(page.locator(".grill-open-count")).toHaveText("1 open");
-  // The chip flips to your-move state while a question is open (§10).
+  // The chip flips to your-move state while a question is open (review UI).
   await expect(page.locator(".chip")).toHaveText("questions pending");
 
   // Recommended option leads the row and wears the star, despite the agent
-  // listing it second (DESIGN.md §8).
+  // listing it second (interview questions).
   const chips = card.locator(".grill-chip");
   await expect(chips.first()).toHaveClass(/grill-chip-rec/);
   await expect(chips.first().locator(".grill-chip-label")).toHaveText("HS256");
@@ -231,7 +231,7 @@ test("the Interview archive renders a chip-less custom answer: no option highlig
     options: ["sqlite", "json"],
     recommend: "sqlite",
   });
-  // "Other" parity (DESIGN.md §8): answer an option question with text alone.
+  // "Other" parity (interview questions): answer an option question with text alone.
   await answer(request, session.id, { question: qid, text: "postgres, actually" });
   await page.goto(`/s/${session.id}`);
 
@@ -311,7 +311,7 @@ test("approve warns on unresolved threads, forces on confirm, locks the session,
   await page.goto(`/s/${session.id}`);
   await page.locator(".ctrl-approve").click();
 
-  // The confirm sheet is honest about what happens (§10): otacon never commits;
+  // The confirm sheet is honest about what happens (review UI): otacon never commits;
   // Save writes the home archive plus a project copy, session over.
   const sheet = page.locator(".approve-sheet");
   await expect(sheet).toContainText("Finalize r1");
@@ -335,7 +335,7 @@ test("approve warns on unresolved threads, forces on confirm, locks the session,
   expect(relPath).toBeTruthy();
 
   // The project copy is on disk in the session's repo: daemon-rewritten
-  // frontmatter plus the appended interview (DESIGN.md §6 step 6).
+  // frontmatter plus the appended interview.
   const artifact = readFileSync(join(session.repo, relPath!), "utf8");
   expect(artifact).toContain("status: approved");
   expect(artifact).toContain("## Interview");
@@ -367,7 +367,7 @@ test("index chips: questions pending lights live on an open question, approved s
   await expect(card.locator(".chip")).toHaveText("agent working");
   await plantMarker(page);
 
-  // An open agent question outranks the stored status (derived, §10)…
+  // An open agent question outranks the stored status (derived, review UI)…
   const qid = await ask(request, session.id, { question: "One thing to verify?" });
   await expect(card.locator(".chip")).toHaveText("questions pending");
   // …and answering hands the turn back.
@@ -400,7 +400,7 @@ test("375px: cards are one-thumb — ≥44px targets, no horizontal scroll, appr
   await page.goto(`/s/${session.id}`);
   await expect(page.locator(".grill-card")).toBeVisible();
 
-  // Every chip and the send button meet the 44px thumb target (§8); rounded
+  // Every chip and the send button meet the 44px thumb target (interview questions); rounded
   // because Chrome renders the 1.5px chip border at subpixel widths.
   for (const target of await page.locator(".grill-chip, .grill-send").all()) {
     const box = await target.boundingBox();

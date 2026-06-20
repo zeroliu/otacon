@@ -1,7 +1,7 @@
 // Sanitized markdown for plan prose. Plans are semi-trusted (the user's own
 // agent wrote them), but everything still passes through DOMPurify before it
 // touches the DOM — defense in depth against raw-HTML injection via plan
-// content (DESIGN.md §10).
+// content (review UI).
 
 import DOMPurify from "dompurify";
 import { memo, useMemo } from "react";

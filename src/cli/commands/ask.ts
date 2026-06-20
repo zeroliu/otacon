@@ -1,12 +1,12 @@
 // otacon ask --question "…" [--options "A|B|C"] [--recommend A] [--multi]
-// [--session id] — post a grill question card to the UI (DESIGN.md §6, §8).
+// [--session id] — post a grill question card to the UI.
 // Prints the question id; the agent then parks in `otacon wait` and the
 // user's answer arrives as an {"event":"answer"} on stdout there.
 //
 // `--batch <file|->` posts several INDEPENDENT questions in one call (a JSON
 // array of the same specs): the daemon mints them atomically and they render
 // as ordinary cards, each answered instantly. Dependency-first grilling still
-// holds — only independent siblings batch (DESIGN.md §8).
+// holds — only independent siblings batch (interview questions).
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -17,7 +17,7 @@ import { fail, printJson, usageError } from "../output.js";
 import { listSessions, realpathOr, resolveSession } from "../session.js";
 
 /**
- * Hold one question body to the shared validator (DESIGN.md §6, §8) — the same
+ * Hold one question body to the shared validator — the same
  * rules the daemon re-checks — turning its error string into a usage error
  * (E_USAGE, exit 2) carrying the caller's context: a `--batch[i] ` index, or
  * "" for the bare flag form.

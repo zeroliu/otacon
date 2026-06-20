@@ -1,8 +1,8 @@
 // otacon submit [plan.md] [--resolutions res.json] [--session id] — read the
-// plan (default: .otacon/<session>/plan.md in the session's repo, DESIGN.md
-// §4) and POST it for linting. A 422 prints the daemon's lint issues JSON and
-// exits 1 so the agent fixes and resubmits (DESIGN.md §5). The resolutions
-// file is the revision-accompaniment document (DESIGN.md §6):
+// plan (default: .otacon/<session>/plan.md in the session's repo) and POST it
+// for linting. A 422 prints the daemon's lint issues JSON and exits 1 so the
+// agent fixes and resubmits. The resolutions file is the
+// revision-accompaniment document:
 // {"changelog": "...", "threads": {"t1": "reply", ...}} — required by L5 on
 // resubmits after comment batches and on every revision ≥ 2.
 

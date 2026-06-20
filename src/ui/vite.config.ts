@@ -10,7 +10,7 @@ export default defineConfig({
   plugins: [react()],
   // Bake the build's version into the bundle so a tab can compare it against the
   // daemon version it learns over SSE and self-heal on a mismatch (self-heal.ts,
-  // DESIGN.md §16). Same VERSION the daemon's snapshot carries.
+  // install/update). Same VERSION the daemon's snapshot carries.
   define: { __OTACON_VERSION__: JSON.stringify(VERSION) },
   // mermaid is one intentionally huge lazy chunk (fetched on the first
   // diagram, never by the index) — don't warn about its size.

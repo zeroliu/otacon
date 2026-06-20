@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end exercise of the M5 install/ops surface against the real built
-# artifact (DESIGN.md §6, §11, §12, §13, §16): install writes the wrappers
+# artifact: install writes the wrappers
 # (idempotently; --hooks merges settings.json additively), doctor reports green
 # on a healthy setup and red on a squatted port, open prints the right URLs,
 # a full mini-loop then approve then clean archives the session dir and prunes

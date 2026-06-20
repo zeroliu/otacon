@@ -1,4 +1,4 @@
-// The grill-question spec (DESIGN.md §6, §8): the one shape + validator behind
+// The grill-question spec: the one shape + validator behind
 // `otacon ask`. The CLI validates client-side (single flag form and --batch)
 // so the agent fixes its invocation before the daemon sees it; the daemon
 // re-validates as the trust boundary. Keeping both layers on this single

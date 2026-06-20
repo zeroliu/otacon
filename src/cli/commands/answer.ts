@@ -1,5 +1,5 @@
 // otacon answer <question-id> (--body "…" | --file f.md) [--session id] — the
-// agent's reply to a user question (DESIGN.md §6, §9): the answer lands on the
+// agent's reply to a user question: the answer lands on the
 // question's thread, the plan and status stay untouched, and the agent goes
 // back to `otacon wait`.
 

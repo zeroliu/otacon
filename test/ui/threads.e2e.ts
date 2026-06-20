@@ -47,7 +47,7 @@ test("comment flow: selection → bar → drawer → Send all wakes a parked CLI
   await composer.locator(".composer-input").fill("name the issuing service explicitly");
   await composer.locator(".btn-primary", { hasText: "add to drawer" }).click();
 
-  // Batched, not sent: the drawer holds it (DESIGN.md §9).
+  // Batched, not sent: the drawer holds it (threaded review and revision).
   await expect(page.locator(".drawer-count")).toHaveText("1");
   await expect(page.locator(".thread")).toHaveCount(0);
 

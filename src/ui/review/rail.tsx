@@ -1,12 +1,12 @@
-// The threads rail (DESIGN.md §10): every comment and question thread, newest
+// The threads rail (review UI): every comment and question thread, newest
 // first — anchored ones jump-and-flash their quoted text in the plan; a
 // question with no answer yet blinks the codec cursor until `otacon answer`
-// lands over SSE. A question and its follow-ups (DESIGN.md §9) render as one
+// lands over SSE. A question and its follow-ups (threaded review and revision) render as one
 // conversation card — each turn with its answer — with a collapsed "Follow up"
 // reply box for the next question. M3 states: a resolved comment collapses to
-// its ✓ line (the §10 sketch) and expands to the agent's reply + the revision
+// its ✓ line (the review UI) and expands to the agent's reply + the revision
 // it landed in; orphaned threads — anchors whose quoted text no longer exists in
-// the current revision (DESIGN.md §4) — leave the list for the orphan tray at
+// the current revision (plan structure, lint, and anchoring) — leave the list for the orphan tray at
 // the top of the rail, badge-counted, never silently dropped. A conversation
 // keys on its root, so an orphaned root takes its whole chain to the tray.
 
@@ -38,7 +38,7 @@ export const ThreadsRail = memo(function ThreadsRail({
   onJump: Jump;
   /** Absent when the session is over: the reply box hides, the rest stays read-only. */
   onFollowup?: Followup;
-  /** Tap-a-lit-span → focus its rail thread (DESIGN.md §10); null = no target. */
+  /** Tap-a-lit-span → focus its rail thread (review UI); null = no target. */
   focus?: FocusTarget | null;
 }) {
   const railRef = useRef<HTMLElement>(null);
@@ -131,7 +131,7 @@ export const ThreadsRail = memo(function ThreadsRail({
   );
 });
 
-/** An unresolved comment thread (DESIGN.md §10). */
+/** An unresolved comment thread (review UI). */
 function ThreadCard({ thread, onJump }: { thread: CommentThread; onJump: Jump }) {
   const { anchor } = thread;
   const jump = anchor === null ? undefined : () => onJump(anchor);
@@ -178,7 +178,7 @@ function QuestionAnswer({ thread }: { thread: QuestionThread }) {
 }
 
 /**
- * A question and its follow-ups as one conversation (DESIGN.md §9): the root
+ * A question and its follow-ups as one conversation (threaded review and revision): the root
  * question + each follow-up turn, each with its answer, then a collapsed
  * "Follow up" reply box. The card itself isn't a jump button (it holds the
  * interactive reply box) — the meta row and the quote carry the jump instead.
@@ -252,7 +252,7 @@ function ConversationCard({
 
 /**
  * The collapsed "Follow up" button → a reply box posting the next follow-up
- * (DESIGN.md §9). On success the new turn arrives over the `thread` SSE frame
+ * (threaded review and revision). On success the new turn arrives over the `thread` SSE frame
  * and folds into the card, and the box collapses again.
  */
 function FollowupBox({ rootId, onFollowup }: { rootId: string; onFollowup: Followup }) {
@@ -330,7 +330,7 @@ function FollowupBox({ rootId, onFollowup }: { rootId: string; onFollowup: Follo
   );
 }
 
-/** A resolved comment: collapsed to its ✓ line, per the §10 sketch. */
+/** A resolved comment: collapsed to its ✓ line, per the review UI. */
 function ResolvedCard({ thread, onJump }: { thread: CommentThread; onJump: Jump }) {
   const { anchor, resolution } = thread;
   if (!resolution) return null; // callers only route resolved comments here
@@ -369,7 +369,7 @@ function ResolvedCard({ thread, onJump }: { thread: CommentThread; onJump: Jump 
  * A tray entry: the dead quote is the headline (clamped); clicking the card
  * unclamps it to the full original anchor text and reveals the agent's reply
  * (a comment's resolution, or a question's answer) plus any follow-up turns —
- * an orphaned conversation travels whole, never silently dropped (DESIGN.md §4).
+ * an orphaned conversation travels whole, never silently dropped (plan structure, lint, and anchoring).
  */
 function OrphanCard({ group }: { group: ThreadGroup }) {
   const [open, setOpen] = useState(false);

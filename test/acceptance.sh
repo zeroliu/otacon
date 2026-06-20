@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# bun run accept — the FINAL end-to-end acceptance test (DESIGN.md §16:
-# "install otacon on a repo and test the plan functionalities e2e"). One
+# bun run accept — the FINAL end-to-end acceptance test for install/update:
+# "install otacon on a repo and test the plan functionalities e2e". One
 # hermetic script, run entirely against the BUILT artifact (node
 # dist/cli/main.js — never the TS source), simulating BOTH actors: the human
 # (curl, the phone's path) and the coding agent (the CLI, driven as an agent's
-# Bash tool would). It proves the §16 promise against what actually ships.
+# Bash tool would). It proves the install/update promise against what actually ships.
 #
 # Acts:
 #   INSTALL   install --agent claude --hooks → SKILL.md + Stop hook + merged
 #             settings.json; doctor → green JSON (tailscale absent → warn).
-#   LOOP      the full DESIGN.md §6 loop on the real auto-spawned daemon:
+#   LOOP      the full agent/reviewer loop on the real auto-spawned daemon:
 #             start → grill (ask/answer) → draft (lint reject, then accept) →
 #             review (comment batch) → revise (L5 reject, then resolve) →
 #             approve (home archive + untracked project copy, otacon never
 #             commits) → post-approve refusal → clean (archive + registry prune).
-#   INVARIANT structural grep of dist/ for any model/LLM network call (§13).
+#   INVARIANT structural grep of dist/ for any model/LLM network call (zero model-network-call invariant).
 #
 # Hermetic: temp HOME, temp OTACON_HOME, temp OTACON_PORT, a fresh `git init`
 # temp repo as the "user's project", NO_PROXY for loopback, OTACON_TAILSCALE
@@ -130,7 +130,7 @@ otacon wait --timeout 30 > "$TMP/grill-wait.json" &
 WAIT_PID=$!
 # The phone answers the card over curl (the human's path). The daemon queues
 # the answer and the wait drains it whether or not it was mid-park (at-least-
-# once delivery, DESIGN.md §6) — the brief sleep just lets it park first.
+# once delivery, review loop and daemon API) — the brief sleep just lets it park first.
 sleep 0.5
 curl -s -X POST "$BASE/api/sessions/$SID/answers" -H 'content-type: application/json' \
   -d '{"question":"q1","choice":"RS256","text":"verifiers only need the public key"}' > /dev/null
@@ -366,7 +366,7 @@ ok "clean: archived .otacon/$SID → .otacon/archive/, pruned the registry, kept
 
 echo "# ── ACT 3: ZERO-API-SPEND INVARIANT (structural) ─────────────────────"
 
-# --- 14. the shipped dist/ never reaches out to a model API (DESIGN.md §13) ----
+# --- 14. the shipped dist/ never reaches out to a model API (zero model-network-call invariant) ----
 # A cheap structural guard: grep the BUILT, runnable artifact for any LLM
 # provider host or SDK. The daemon/CLI/linter/UI are pure TypeScript — there
 # must be zero. (The UI bundles marked/mermaid etc.; none of those phone home
@@ -387,5 +387,5 @@ for _ in $(seq 1 30); do
 done
 
 echo
-echo "# acceptance: all $PASS checks passed — DESIGN.md §16 install-and-plan loop"
+echo "# acceptance: all $PASS checks passed — install and plan review loop"
 echo "#   proven end to end against the BUILT artifact (node dist/cli/main.js)."

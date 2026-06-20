@@ -1,6 +1,6 @@
-// otacon doctor — verify the machine setup (DESIGN.md §16): Node version,
-// daemon boots and the port is free-or-ours (ensureDaemon does both), wrapper
-// presence per agent, Stop hook registration, Tailscale state. Hard checks
+// otacon doctor — verify the machine setup: Node version, daemon boots and the
+// port is free-or-ours (ensureDaemon does both), wrapper presence per agent,
+// Stop hook registration, Tailscale state. Hard checks
 // (node, daemon) fail the run with exit 1; everything optional — wrappers for
 // agents the user may not use, phone access — is a warning, never a failure.
 
@@ -71,7 +71,7 @@ function tailscaleCheck(): Check {
     return {
       name,
       status: "warn",
-      detail: "tailscale CLI not found — phone access is optional (DESIGN.md §11; otacon expose)",
+      detail: "tailscale CLI not found — phone access is optional; run `otacon expose` after installing it",
     };
   }
   const status = tailscaleStatus(bin);

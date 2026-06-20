@@ -1,5 +1,5 @@
 // Global session registry, per-session daemon state, and revision snapshots
-// (DESIGN.md §7, §12). All state is plain JSON written atomically — temp file +
+// (session registry and switcher, approval and archive lifecycle). All state is plain JSON written atomically — temp file +
 // rename — so a crash can never leave a half-written file (DECISIONS.md
 // "Storage: plain JSON files, not SQLite"). A file that is corrupt anyway
 // (manual edit, disk fault) is quarantined, never fatal: it is renamed aside
@@ -262,7 +262,7 @@ export class Store {
   }
 
   /**
-   * Remove a session from the registry (otacon clean, DESIGN.md §12); the
+   * Remove a session from the registry (otacon clean, approval and archive lifecycle); the
    * .otacon/<id>/ dir in its repo is the CLI's to archive afterwards.
    */
   deleteSession(id: string): RegistrySession {
@@ -274,7 +274,7 @@ export class Store {
 
   /**
    * Hard-remove a session's working dir `.otacon/<id>/` (the UI deleting a
-   * *pending* session, DESIGN.md §12): permanent, no archive — for a session
+   * *pending* session, approval and archive lifecycle): permanent, no archive — for a session
    * with no committed artifact. `repo` is passed explicitly because the caller
    * deregisters first, so require() would already throw. Idempotent: a missing
    * dir is fine (force).
@@ -343,7 +343,7 @@ export class Store {
   }
 
   /**
-   * Arm a deferred approval (comment & approve, DESIGN.md §6, §12): the session
+   * Arm a deferred approval (comment & approve): the session
    * has flipped to `finalizing`, and the agent's next clean `submit` finalizes,
    * carrying the `implement` choice and the swept comment-thread ids. Persisted
    * on session.json (not the registry) — daemon-owned detail, like the counters.
@@ -364,7 +364,7 @@ export class Store {
     writeFileAtomic(paths.sessionStatePath(session.repo, id), stringify(state));
   }
 
-  /** Increment one daemon-owned counter (DESIGN.md §6 stable ids) and persist it. */
+  /** Increment one daemon-owned counter (review loop and daemon API stable ids) and persist it. */
   bumpCounter(id: string, key: keyof SessionStateFile["counters"]): number {
     return this.bumpCounters(id, { [key]: 1 })[key];
   }
@@ -389,7 +389,7 @@ export class Store {
 
   /**
    * Store the next revision snapshot r<N>.md plus the lint warnings it was
-   * accepted with (r<N>.warnings.json — the UI's L6 badges; DESIGN.md §12)
+   * accepted with (r<N>.warnings.json — the UI's L6 badges; approval and archive lifecycle)
    * and the agent's changelog when one accompanied it (r<N>.changelog.md);
    * returns N.
    */

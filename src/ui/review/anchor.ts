@@ -1,4 +1,4 @@
-// Selection anchoring (DESIGN.md §4): a selection inside the plan becomes a
+// Selection anchoring (plan structure, lint, and anchoring): a selection inside the plan becomes a
 // W3C-annotation-style anchor — the enclosing slug-ID section (plan-view
 // renders sections and phases as <section id="decisions">/<section
 // id="phase-2">; closest() prefers the innermost, so phase ids win) plus the
@@ -151,7 +151,7 @@ export function locateAnchor(container: HTMLElement, anchor: Anchor): Range | nu
 
 const FLASH_MS = 1700;
 // The flash sits above the persistent thread marks, so a clicked thread still
-// pops over its own steady ink (DESIGN.md §10; persistent layers keep the
+// pops over its own steady ink (review UI; persistent layers keep the
 // default priority 0).
 const FLASH_PRIORITY = 1;
 let flashTimer: ReturnType<typeof setTimeout> | undefined;
@@ -201,7 +201,7 @@ export function flashAnchor(container: HTMLElement, anchor: Anchor): void {
   }, FLASH_MS);
 }
 
-/** The two persistent thread inks (DESIGN.md §10), keyed by thread kind. */
+/** The two persistent thread inks (review UI), keyed by thread kind. */
 export type HighlightKind = "question" | "comment";
 
 /** One open thread (or unsent draft) to keep lit on its anchored plan text. */

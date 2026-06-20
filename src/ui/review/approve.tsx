@@ -1,4 +1,4 @@
-// The approve flow (DESIGN.md §6 step 6, §9, §10, §12): a deliberate control —
+// The approve flow: a deliberate control —
 // no keyboard shortcut exists, on purpose — opening a confirm sheet whose
 // copy is honest about what happens. Two primary actions:
 //   • save plan — the daemon writes the approved plan to your home archive
@@ -28,7 +28,7 @@ import { postApprove } from "../api";
 
 type Stage =
   | { kind: "confirm" }
-  // The drafts gate (DESIGN.md §10, D1/D3): a Save/Implement variant was picked
+  // The drafts gate (review UI, D1/D3): a Save/Implement variant was picked
   // while unsent drawer drafts are staged. Interjects before finalize so they're
   // never silently dropped; carries the variant on `pendingImplement`.
   | { kind: "drafts" }
@@ -380,7 +380,7 @@ export function ApproveDialog({
 }
 
 /**
- * The quiet post-approve notice (§10): the saved plan's location right after
+ * The quiet post-approve notice (review UI): the saved plan's location right after
  * approving (this tab heard the response) — the project copy under the plans
  * dir, plus the home archive. otacon never commits it; after a reload the live
  * path is gone, so the notice falls back to naming the home archive folder.
@@ -402,7 +402,7 @@ export function ApprovedNote({ path, home }: { path: string | null; home?: strin
 }
 
 /**
- * The read-only finalizing notice (comment & approve, §12, D2): the screen the
+ * The read-only finalizing notice (comment & approve, approval and archive lifecycle, D2): the screen the
  * reviewer sees the instant they hit "Send to agent" — the agent is folding the
  * open comments in and will commit on its next pass, after which the SSE frame
  * flips the screen to the approved notice (or stays live as `implementing`). A

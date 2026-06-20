@@ -1,4 +1,4 @@
-// The Index — the phone bookmark (DESIGN.md §10): one card per session,
+// The Index — the phone bookmark (review UI): one card per session,
 // status chip, unread badge, last activity, session accent. Live over SSE.
 
 import type { CSSProperties, MouseEvent } from "react";
@@ -21,9 +21,9 @@ export function IndexScreen() {
   // agent-presence dot honest while the page idles between SSE frames.
   const now = useNow(30_000);
   // Over sessions (the terminal set: approved/implemented/implement_failed)
-  // leave the main list for a collapsed section below (DESIGN.md §10, §12) so
+  // leave the main list for a collapsed section below (review UI, approval and archive lifecycle) so
   // finished plans stop crowding what still needs you; the switcher hides them
-  // outright (§7). `implementing` is NOT over — the agent is still building, so
+  // outright (session registry and switcher). `implementing` is NOT over — the agent is still building, so
   // it stays in the active list. One shared split keeps the two surfaces in
   // agreement.
   const { active, over } = partitionByApproval(sessions);
@@ -32,7 +32,7 @@ export function IndexScreen() {
       <header className="masthead">
         <div>
           {/* Graphic OTACON wordmark, painted in the brand accent via CSS mask
-              so it tracks light/dark and per-session hue (DESIGN.md §3). */}
+              so it tracks light/dark and per-session hue (local-only daemon and system UI). */}
           <h1
             className="wordmark"
             aria-label="otacon"
@@ -40,7 +40,7 @@ export function IndexScreen() {
           />
         </div>
         <div className="masthead-side">
-          {/* Settings lands on User scope — no repo needed (DESIGN.md §6). */}
+          {/* Settings lands on User scope — no repo needed (review loop and daemon API). */}
           <a
             className="settings-link"
             href="/settings"
@@ -129,7 +129,7 @@ function SessionCard({
   const unread = unreadCount(session.id, session.revision) > 0;
   const href = `/s/${session.id}`;
   const style = { ...accentStyle(session.id), "--i": index } as CSSProperties;
-  // Any session can be deleted from the list (DESIGN.md §10): over (terminal)
+  // Any session can be deleted from the list (review UI): over (terminal)
   // ones are archived (recoverable, like `otacon clean`), still-live ones
   // hard-deleted — the daemon gates on the same terminal set, so this drives
   // only the confirm copy.
@@ -169,7 +169,7 @@ function SessionCard({
             lastContactAt={session.lastContactAt}
             now={now}
           />
-          {/* The PR the agent opened once the build finished (DESIGN.md §12):
+          {/* The PR the agent opened once the build finished (approval and archive lifecycle):
               surfaced beside the chip so an implemented plan is one tap from its
               code review. New tab — leaving the codec for GitHub. The click is
               swallowed so it doesn't navigate the card-link underneath. */}

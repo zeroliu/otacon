@@ -1,4 +1,4 @@
-// Re-anchoring across revisions (DESIGN.md §4): when a new revision is
+// Re-anchoring across revisions (plan structure, lint, and anchoring): when a new revision is
 // accepted, every thread's text quote is re-located in the new plan. The
 // ladder is strict-to-fuzzy: raw exact match → prefix/suffix-scored
 // disambiguation → normalized match (whitespace collapsed, markdown emphasis

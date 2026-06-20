@@ -1,8 +1,8 @@
-// JSON-only stdout discipline for the otacon CLI (DESIGN.md §6): every command
+// JSON-only stdout discipline for the otacon CLI (review loop and daemon API): every command
 // prints exactly one JSON line on stdout — the machine-readable result a coding
 // agent parses as its Bash tool output — and human-facing notices go to stderr.
 //
-// Exit codes: 0 success (including {"event":"timeout"}, DESIGN.md §6), 1
+// Exit codes: 0 success (including {"event":"timeout"}, review loop and daemon API), 1
 // expected failure the agent can act on (lint reject, ambiguous session, port
 // conflict), 2 usage or internal error.
 

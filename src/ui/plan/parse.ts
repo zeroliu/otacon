@@ -3,7 +3,7 @@
 // Goal/Files/Verification labels, "#### Details", fences) but it keeps the
 // content the linter only measures (DECISIONS.md "Review screen renders via a
 // ported line grammar, not the linter parser"). Section and phase ids are the
-// anchoring contract (DESIGN.md §4): slugified H2 titles and "phase-<n>".
+// anchoring contract (plan structure, lint, and anchoring): slugified H2 titles and "phase-<n>".
 //
 // The parser is deliberately tolerant: every stored revision already passed
 // the linter at submit, so anything structurally odd renders as plain
@@ -18,7 +18,7 @@ export interface FenceBlock {
   kind: "fence";
   /** First info-string token, lowercased; "" for a bare fence. */
   lang: string;
-  /** Remaining info tokens, lowercased — "before"/"after" mark pairs (DESIGN.md §4). */
+  /** Remaining info tokens, lowercased — "before"/"after" mark pairs (plan structure, lint, and anchoring). */
   tags: string[];
   code: string;
 }
@@ -51,7 +51,7 @@ export interface PlanDetails {
 }
 
 export interface PlanPhase {
-  /** "phase-<n>" — the anchor id (DESIGN.md §4). */
+  /** "phase-<n>" — the anchor id (plan structure, lint, and anchoring). */
   id: string;
   n: number;
   name: string;
@@ -62,7 +62,7 @@ export interface PlanPhase {
 }
 
 export interface PlanSection {
-  /** Slug of the H2 title — the anchor id (DESIGN.md §4). */
+  /** Slug of the H2 title — the anchor id (plan structure, lint, and anchoring). */
   id: string;
   title: string;
   blocks: Block[];
