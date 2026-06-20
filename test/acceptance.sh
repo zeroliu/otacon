@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# bun run accept — the FINAL end-to-end acceptance test (install/update:
-# "install otacon on a repo and test the plan functionalities e2e"). One
+# bun run accept — the FINAL end-to-end acceptance test for install/update:
+# "install otacon on a repo and test the plan functionalities e2e". One
 # hermetic script, run entirely against the BUILT artifact (node
 # dist/cli/main.js — never the TS source), simulating BOTH actors: the human
 # (curl, the phone's path) and the coding agent (the CLI, driven as an agent's
