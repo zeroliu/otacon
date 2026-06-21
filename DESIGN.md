@@ -376,6 +376,7 @@ replies are refused 400 before linting.
   {"thread":"t12","anchor":{"section":"phase-2","exact":"…","prefix":"…","suffix":"…"},"body":"…"}]}
 {"event":"question","session":"otc_a1b2c3","id":"q12","anchor":{"section":"decisions"},"body":"…","replyTo":"q7"}
 {"event":"answer","session":"otc_a1b2c3","question":"q7","choice":"A","text":"…"}
+{"event":"answer","session":"otc_a1b2c3","question":"q7","choice":"B","revised":true,"prior":{"choice":"A"}}
 {"event":"approved","session":"otc_a1b2c3","path":"/Users/me/.otacon/sessions/otc_a1b2c3/2026-06-12-auth-refactor.md","home":"/Users/me/.otacon/sessions/otc_a1b2c3/2026-06-12-auth-refactor.md","implement":true}
 {"event":"deleted","session":"otc_a1b2c3"}
 {"event":"timeout"}
@@ -386,7 +387,14 @@ An `answer` to a `--multi` question carries `choices` (an array) instead of `cho
 answer to an optionless question carries only `text` (`text` may also accompany a choice
 as extra context). An option question also accepts a **free-form custom answer** — a
 non-empty `text` with no `choice`/`choices` (native-AskUserQuestion "Other" parity), so
-the user is never trapped by the offered chips. A `question` event carries `replyTo`
+the user is never trapped by the offered chips. Re-answering an already-answered
+question overwrites it (at-least-once: a duplicate POST is legitimate), and that second
+`answer` event carries `revised:true` plus `prior` (the previous answer's content, the
+defined `choice`/`choices`/`text` only, no `answeredAt`); a first answer omits both. A
+`revised` answer **supersedes** the old one: the agent treats it as a correction, finds
+every plan Decision citing `← q<n>` for that question and rewrites those entries from the
+new value, and (if the plan is already submitted) resubmits a revision whose changelog
+notes the correction. A `question` event carries `replyTo`
 when it is a **follow-up** on an earlier question (§9) — the agent skims that thread's
 prior turns for context and answers the new `q<n>` the usual way. A `comments` event
 carries `final:true` when it is the **comment & approve** fold-in batch (§12): the

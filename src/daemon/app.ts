@@ -1150,6 +1150,10 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       ...(customText ? { text: text as string } : {}),
       answeredAt: new Date().toISOString(),
     };
+    // Snapshot the pre-overwrite answer BEFORE answerEntry mutates the entry: a
+    // re-answer carries `revised` + `prior` so the agent reconciles supersession.
+    const prior = asked.answer;
+    const wasAnswered = prior !== undefined;
     // Re-answering overwrites (at-least-once: a duplicate POST is legitimate);
     // the agent sees a second answer event with the same question id.
     const updated = answerEntry(store.transcriptPath(session.id), question, answer);
@@ -1160,6 +1164,16 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       ...(answer.choice !== undefined ? { choice: answer.choice } : {}),
       ...(answer.choices !== undefined ? { choices: answer.choices } : {}),
       ...(answer.text !== undefined ? { text: answer.text } : {}),
+      ...(wasAnswered
+        ? {
+            revised: true,
+            prior: {
+              ...(prior.choice !== undefined ? { choice: prior.choice } : {}),
+              ...(prior.choices !== undefined ? { choices: prior.choices } : {}),
+              ...(prior.text !== undefined ? { text: prior.text } : {}),
+            },
+          }
+        : {}),
     };
     queue.enqueue(payload, store.bumpCounter(session.id, "eventSeq"));
     publishQueue(session.id, queue.size);
