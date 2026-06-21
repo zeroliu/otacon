@@ -45,7 +45,7 @@ import { CommentDrawer } from "./review/drawer";
 import type { ComposerState } from "./review/feedback";
 import { Composer, SelectionBar, useSelection } from "./review/feedback";
 import { GrillQueue } from "./review/grill";
-import { BackLink, ReviewHeader } from "./review/header";
+import { ReviewHeader } from "./review/header";
 import type { InterviewTarget } from "./review/interview";
 import { InterviewPanel } from "./review/interview";
 import { useKeyboardInset, useScrollLock } from "./review/keyboard";
@@ -56,7 +56,6 @@ import { isTypingTarget } from "./review/session-nav";
 import { navigate } from "./router";
 import { markSeen } from "./seen";
 import { isOver } from "./session-filter";
-import { SessionSwitcher } from "./switcher";
 import { useNow } from "./tick";
 
 const PlanView = lazy(() => import("./plan/plan-view"));
@@ -845,15 +844,15 @@ export function SessionScreen({ id }: { id: string }) {
   // A `removed` frame landed while this screen was open (approval and archive lifecycle): the
   // session left the registry — `otacon clean` archived an approved one, or it
   // was deleted from review while pending. The frame carries no reason, so the
-  // copy covers both. A terminal state, not an error — the stream is closed and
-  // the switcher still offers everything live.
+  // copy covers both. A terminal state, not an error — the stream is closed, and
+  // the app shell (sidebar ≥960px, the review switcher below it) still offers
+  // every live session.
+  // Because the shell provides session switching + the home link on every route,
+  // these closed/unknown/loading shells carry no topbar of their own — just the
+  // message body, centered in the content track.
   if (cleaned) {
     return (
       <div className="page">
-        <div className="topbar">
-          <BackLink />
-          <SessionSwitcher current={id} />
-        </div>
         <main className="empty">
           <p className="empty-title">session closed</p>
           <p className="empty-body">
@@ -867,7 +866,6 @@ export function SessionScreen({ id }: { id: string }) {
   if (missing) {
     return (
       <div className="page">
-        <BackLink />
         <main className="empty">
           <p className="empty-title">unknown session</p>
           <p className="empty-body">
@@ -881,7 +879,6 @@ export function SessionScreen({ id }: { id: string }) {
   if (!session) {
     return (
       <div className="page">
-        <BackLink />
         <p className="loading">connecting…</p>
       </div>
     );
@@ -891,8 +888,9 @@ export function SessionScreen({ id }: { id: string }) {
     <div className="page page-review" style={accentStyle(session.id)}>
       {/* ReviewHeader (rendered inside ReviewLoop) is the sticky masthead —
           back + switcher + identity + controls — so there is no separate
-          topbar here. The cleaned/missing/loading shells below keep their own
-          minimal topbar: no plan exists there, nothing to pin. */}
+          topbar here. The cleaned/missing/loading shells above carry no topbar
+          either: no plan exists there, and the app shell already provides
+          switching + home on every route. */}
       <ReviewLoop
         key={session.id}
         session={session}
