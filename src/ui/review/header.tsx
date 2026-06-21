@@ -2,14 +2,17 @@
 // pinned to `top: 0` that compacts on scroll and re-expands at the top. It
 // subsumes the old `.topbar` (back + switcher) and the scroll-away
 // `SessionHead` hero. Expanded it carries the full identity — title, revision,
-// repo/branch, status, agent + link dots — plus the session switcher, the
-// clean⇄diff toggle, and Approve; scrolled past a small threshold it collapses
-// the detail rows to a tight one-line bar (DECISIONS.md "Sticky header: one
-// element compacts on scroll"). Because it is a single persistent element
-// there is no second condensed copy to gate — a dropped scroll frame merely
-// leaves it expanded, still fully usable. On phone it stays lean: title +
-// switcher chips and the clean⇄diff toggle only; the revision and Approve fold
-// away — Approve to the fixed bottom bar (review UI — never shown in two places).
+// repo/branch, status, agent + link dots — plus the clean⇄diff toggle and
+// Approve; scrolled past a small threshold it collapses the detail rows to a
+// tight one-line bar (DECISIONS.md "Sticky header: one element compacts on
+// scroll"). Because it is a single persistent element there is no second
+// condensed copy to gate — a dropped scroll frame merely leaves it expanded,
+// still fully usable. On phone it stays lean: title + the clean⇄diff toggle and
+// the ☰ "show sessions" button only; the revision and Approve fold away —
+// Approve to the fixed bottom bar (review UI — never shown in two places). The
+// ☰ button (<960px) opens the shell's mobile session sheet — the overflow menu
+// that replaced the old in-header switcher; at ≥960px the sidebar is the list,
+// so it's hidden (CSS).
 
 import type { MouseEvent } from "react";
 import { useEffect, useState } from "react";
@@ -17,7 +20,7 @@ import type { LiveSession } from "../api";
 import { AgentDot, LinkState, StatusChip } from "../chip";
 import { relativeTime, repoName } from "../format";
 import { navigate } from "../router";
-import { SessionSwitcher } from "../switcher";
+import { SessionMenuButton } from "../session-sheet";
 import type { ReviewView } from "./banner";
 import { ViewToggle } from "./banner";
 import { nextCompact } from "./compact";
@@ -108,7 +111,10 @@ export function ReviewHeader({
             )}
           </div>
         )}
-        <SessionSwitcher current={session.id} />
+        {/* The <960px overflow menu: opens the shell's bottom-sheet session list
+            (the switcher's replacement). Hidden at ≥960px, where the sidebar is
+            the list (CSS). Sits where the switcher used to, at the bar's end. */}
+        <SessionMenuButton className="rh-menu" />
       </div>
       <div className="rh-detail">
         <p className="session-where" title={session.repo}>

@@ -1,10 +1,11 @@
-// The reusable session list for the persistent sidebar (app shell): a condensed
-// sibling of the home index — one accent-coded row per session, status glyph,
-// agent dot, unread badge — over the same live index SSE stream. Wired into
-// nothing yet; this phase ships the component alone. Active sessions lead in
-// delivered activity order; over (terminal) sessions sit behind a collapsed
-// `approved (n)` disclosure, mirroring the home screen's ApprovedSection so the
-// two surfaces can never disagree about what is hidden.
+// The reusable session list (app shell): one condensed accent-coded row per
+// session — status glyph, agent dot, unread badge — over the live index SSE
+// stream. Rendered in two places off the same component: the persistent desktop
+// sidebar (≥960px) and the mobile session sheet the ☰ overflow menu opens
+// (<960px). Active sessions lead in delivered activity order; over (terminal)
+// sessions sit behind a collapsed `approved (n)` disclosure, mirroring the old
+// home screen's ApprovedSection so the two surfaces can never disagree about
+// what is hidden.
 
 import type { CSSProperties, MouseEvent } from "react";
 import { useState } from "react";
@@ -26,7 +27,7 @@ export function SessionList({
 }: {
   /** The session being viewed, highlighted in the list (aria-current). */
   current?: string;
-  /** Fired after an in-app navigation — lets a host close a phone drawer (later phase). */
+  /** Fired after an in-app navigation — lets the mobile session sheet close itself. */
   onNavigate?: () => void;
 }) {
   const { sessions } = useSessions();
@@ -35,7 +36,7 @@ export function SessionList({
   const now = useNow(30_000);
   // The shared split (session-filter): active sessions stay in the main list,
   // over (terminal) ones fall to the collapsed disclosure below — the same
-  // partition the home screen and switcher read, so no surface disagrees.
+  // partition every session surface reads, so no surface disagrees.
   const { active, over } = partitionByApproval(sessions);
   return (
     <nav className="session-list" aria-label="sessions">
@@ -126,7 +127,7 @@ function SessionRow({
   const [deleting, setDeleting] = useState(false);
   // Plain left-click navigates in-app (and lets a host close its drawer);
   // modifier/middle clicks fall through to the real href for a new tab/window.
-  // The current row no-ops — you are already here — like the switcher's chip.
+  // The current row no-ops — you are already here.
   const onClick = (event: MouseEvent) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey) return;
     event.preventDefault();

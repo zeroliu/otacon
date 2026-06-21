@@ -56,7 +56,7 @@ Every decision below was resolved deliberately; rationale follows in the relevan
 | 12  | Visuals v1        | Mermaid, code + before/after blocks, ASCII wireframes. Images deferred to v2                                                                                                      |
 | 13  | Storage           | Working state in `<repo>/.otacon/` (otacon manages no `.gitignore` — track or ignore it as you like); every approved plan archived to the home store `~/.otacon/sessions/<id>/` (permanent, never cleaned); on Save also copied into the repo under `plans.dir`                                  |
 | 14  | LLM cost          | Zero API spend invariant: daemon/CLI/UI never call a model; all intelligence runs in the user's interactive subscription-backed session. No Agent SDK anywhere                    |
-| 15  | Multi-session     | One daemon, many concurrent sessions; per-session event queues; UI session switcher                                                                                               |
+| 15  | Multi-session     | One daemon, many concurrent sessions; per-session event queues; UI session list (sidebar ≥960px, overflow-menu sheet below)                                                       |
 | 16  | Grilling          | grill-me discipline is a mandatory protocol phase before drafting; decisions must trace to grill answers (linted)                                                                 |
 | 17  | Name              | CLI `otacon`, daemon `otacond`. Future implementer: `snake` (suggestion, not locked)                                                                                              |
 | 18  | Storage format    | Plain JSON files, written atomically; SQLite rejected (native dep, opaque state)                                                                                                  |
@@ -110,8 +110,8 @@ reading column on desktop. Dev tooling is bun (installs, tests); the shipped art
 builds with `tsc` and runs on plain Node.
 
 Brand identity is the **OTACON wordmark** (`src/ui/otacon.svg`, the gear-as-O mark) — a
-flat single-color silhouette shown in the app shell sidebar header (and the interim
-mobile masthead), painted in the brand accent via CSS mask so it tracks light/dark and
+flat single-color silhouette shown in the app shell sidebar header (and the mobile
+mini top-bar), painted in the brand accent via CSS mask so it tracks light/dark and
 per-session hue rather than baking a color. The brand
 accent is a **lime green** (hue ~82°, the wordmark's own green) — the default for
 `var(--hue, 82)`; per-session accents still vary by hash (§7). Semantic state colors
@@ -592,8 +592,8 @@ comment gaining its resolution, an anchor re-anchoring or orphaning); a `grill` 
 `otacon ask`, or an entry gaining the user's answer; an `activity` frame carries one
 new progress note appended to the per-session activity log (the draft chip rides the
 `session` frame's `latestActivity` instead); a `removed` frame is terminal —
-the session left the registry (`otacon clean`): the index and the session switcher
-drop it live, an open review screen flips to a quiet "session cleaned" state and
+the session left the registry (`otacon clean`): the session list drops it live, an
+open review screen flips to a quiet "session cleaned" state and
 closes its stream (a reconnect against the deregistered id could only 404), and the
 daemon ends the per-session stream after the frame (nothing can be published for the
 session again, so a client that ignored the frame must not pin the connection; the
@@ -715,30 +715,23 @@ HTTP requests, no contention.
 **UI switching.** The **app shell sidebar** is the persistent session list (§10): one
 condensed row per active session — accent, title, repo/branch, status glyph, agent dot,
 unread badge — with approved (and implemented / implement_failed) sessions folded into a
-collapsed `approved (n)` disclosure below, the same split the switcher and the old index
-read. On desktop it's a fixed 240px column wrapping every route, so switching is one
-click from anywhere; `/` itself is a welcome pane, not the index. The review screen has
-one **sticky header** pinned
-to the top of the scroll: expanded it shows the full masthead (title, revision,
-repo/branch, status) plus the persistent session switcher, the clean⇄diff toggle, and
-Approve; scrolling down it compacts to a tight one-line bar and re-expands at the top
-(§10). The switcher is a dropdown on desktop and horizontally scrollable chips on phone:
-`auth-refactor ●2 │ search-index ✋awaiting │ miyo ⏳revising`. **The switcher lists only
-active sessions** — approved ones are hidden from both faces (chips and dropdown),
-including the one you are viewing: a finished plan shouldn't clutter the strip you switch
-through. The current session's chip leads the strip (the "you are here" anchor never
-scrolls out of reach) and never wears an unread badge — you are reading it; `●N` counts
-the revisions this device hasn't opened (unread state is device-local, §10). When the
-current session is absent from the strip — cleaned, or approved and opened from home —
-the dropdown shows a labeled placeholder (its title + state) instead of rendering blank,
-and the chip strip simply omits it. The switcher rides the index SSE stream, so chips
-appear, re-badge, and vanish live. `[`/`]` walk these same active sessions in this same
-activity order (wrapping at both ends), so a reviewer can sweep the queue from the
-keyboard; the shortcut mounts on the **app shell** (the one element present on every
-route), so it works from the welcome and settings panes too, not just the review screen.
-Each session gets a stable **accent color** used on
-the header, comment composer, and agent-question cards, so rapid phone switching can't
-post feedback to the wrong plan.
+collapsed `approved (n)` disclosure below, the same split the old index read. On desktop
+(≥960px) it's a fixed 240px column wrapping every route, so switching is one click from
+anywhere; `/` itself is a welcome pane, not the index. Below 960px the sidebar is hidden
+and the same list is reached through an **overflow menu** instead — a ☰ "show sessions"
+button opens a bottom-sheet `SessionList`, so switching is the same condensed rows, one
+tap away from every route (§8). The review screen has one **sticky header** pinned to the
+top of the scroll: expanded it shows the full masthead (title, revision, repo/branch,
+status), the clean⇄diff toggle, and Approve; scrolling down it compacts to a tight
+one-line bar and re-expands at the top (§10). The header carries the ☰ button at <960px
+(where the sidebar is hidden); at ≥960px it folds away, since the sidebar is already the
+list. `[`/`]` walk the active sessions in activity order (wrapping at both ends), so a
+reviewer can sweep the queue from the keyboard; the shortcut mounts on the **app shell**
+(the one element present on every route), so it works from the welcome and settings panes
+too, not just the review screen. `●N` on a row counts the revisions this device hasn't
+opened (unread state is device-local, §10); the row you are reading never wears one. Each
+session gets a stable **accent color** used on the row, the header, the comment composer,
+and agent-question cards, so rapid switching can't post feedback to the wrong plan.
 
 ---
 
@@ -832,9 +825,10 @@ the index now); `/s/:id` is the open session; `/settings` is the config screen (
 Project / Project · local scopes; reached from the sidebar gear or `otacon config`).
 On desktop (≥960px) the sidebar is a fixed 240px column, **collapsible** to a one-column
 content view with the choice persisted across reloads (a `»` handle reopens it); below
-960px the sidebar is hidden and the review header's switcher (§7) is the interim
-session-switching face. The shell chrome is accent-neutral — only an open review tints,
-via its own per-session accent. Config is
+960px the sidebar is hidden and the session list is reached through the ☰ overflow-menu
+sheet (§7) — from the review header on a plan, and from a slim shell mini top-bar on the
+welcome / settings panes, so it's one tap away on every route. The shell chrome is
+accent-neutral — only an open review tints, via its own per-session accent. Config is
 still file-backed (§16); the Settings screen is a web editor over those files. Sections
 render worktree → notifications → budgets → activity (the build-time and attention
 knobs lead; the line budgets are the long tail). The worktree heading carries both
@@ -912,20 +906,23 @@ primary "your turn" signal. The dot is live while the agent is parked in
 it stays in the list, not grouped away); approved (and implemented / implement_failed)
 ones fold into a collapsed `approved (n)` disclosure below it, one click to expand (the
 same disclosure idiom as the activity panel). Approved plans stay readable: opening an
-approved row shows its read-only plan, and that is the only entry point now the switcher
-(§7) no longer lists them.
+approved row shows its read-only plan — the disclosure is the only entry point now the
+list no longer keeps them in the active set.
 
 **Welcome pane.** With no session open, `/` shows a short welcome in the content track:
 when the registry is empty, the empty-state copy (run `otacon start` — the offline hint
-appears when the daemon link is down); otherwise a brief "pick a session from the
-sidebar" prompt. The sidebar carries the live index either way.
+appears when the daemon link is down); otherwise a brief "pick a session" prompt. The
+session list (sidebar ≥960px, the ☰ sheet below) carries the live index either way.
 
-**Mobile (below 960px), interim.** The sidebar is hidden, so the review header's switcher
-(§7) is the session-switching face — a dropdown / chip strip while a plan is open. `/`
-shows the welcome pane. A later phase adds a mobile entry into the shell sidebar (an
-overflow menu / drawer); until then, reaching the full list from a phone goes through the
-switcher on an open review. The status chip / agent dot / unread vocabulary above is what
-the switcher and (desktop) sidebar rows both render.
+**Mobile (below 960px).** The sidebar is hidden, so the session list is reached through
+the ☰ **overflow menu** (§7): the button sits in the review header on a plan, and in a
+slim shell mini top-bar (wordmark + ☰) on the welcome / settings panes, so the full list
+is one tap away on **every** route, not just an open review. Tapping it opens a
+bottom-sheet `SessionList` — the same condensed rows, scrim-backed, dismissed on a row
+tap, a scrim tap, Esc, or any route change. The status chip / agent dot / unread
+vocabulary above is what the sheet and (desktop) sidebar rows both render — one list,
+two presentations. At ≥960px the sheet is never opened; the `»` collapsed-sidebar handle
+is the equivalent "show sessions" control there.
 
 Every session carries a small delete control on its card — and one in the review
 screen header — to remove it from the index without dropping to the CLI. It opens a
@@ -960,8 +957,9 @@ returns to the index.
 ```
 
 - Sticky header: one always-present masthead pinned to the top — title, revision,
-  repo/branch, status, the agent-presence dot, plus the session switcher, the
-  clean⇄diff toggle, and Approve. It **compacts** to a tight one-line bar as the plan
+  repo/branch, status, the agent-presence dot, the clean⇄diff toggle, and Approve, plus
+  (only <960px, where the sidebar is hidden) the ☰ "show sessions" button that opens the
+  mobile session sheet (§7). It **compacts** to a tight one-line bar as the plan
   scrolls down and re-expands at the top; because it is a single element there is no
   second copy to keep in sync. The review page disables scroll anchoring so the header's
   compaction cannot perturb the scroll offset, which would otherwise re-cross the fold and
@@ -1032,7 +1030,7 @@ returns to the index.
   revision yet") leads with it open, since before a plan exists it is the main
   thing to watch. The header also carries the agent-presence dot.
 - Keyboard: `j/k` jump changed sections, `c` comment, `q` ask, `[`/`]` previous/next
-  session (walks the switcher's active sessions, §7). **No shortcut for
+  session (walks the active sessions in the session list, §7). **No shortcut for
   Approve, on purpose.** Approve warns on unresolved threads.
 
 ### Review screen — phone (one thumb, walking)
@@ -1058,10 +1056,10 @@ returns to the index.
   no exact quote; it survives revisions as long as the section does). The menu is
   always available — a popover on desktop, a bottom sheet in thumb range on phone —
   and long-press text selection still works for precision.
-- The sticky header stays lean on phone: title + switcher chips + the clean⇄diff
-  toggle. The revision and Approve are not in the phone header — Approve and the
-  question tally live in the bottom bar instead, never shown in two places; the
-  toggle stays so diff review is still reachable on a phone.
+- The sticky header stays lean on phone: title + the clean⇄diff toggle + the ☰
+  "show sessions" button (which opens the session sheet, §7). The revision and Approve
+  are not in the phone header — Approve and the question tally live in the bottom bar
+  instead, never shown in two places; the toggle stays so diff review is still reachable.
 - Threads open as bottom sheets. Sticky bar = whole control surface: pending
   questions ❓ (tap → the question queue), drawer + Send, Approve (confirm sheet:
   Save r4 to the project copy / Implement from the home archive — §6, §12). The
@@ -1184,9 +1182,10 @@ this file. Approve ends the session **logically** — `status: approved` exclude
 from implicit CLI resolution and every mutating verb refuses — while `.otacon/<id>/`
 stays on disk (the parked `wait` still drains the `approved` event from it) until
 `otacon clean` archives it. In the UI, the moment the session you're viewing flips to
-approved, the review screen navigates home (its switcher chip is gone, §7); this fires
-only on the live non-approved → approved transition, so opening an already-approved
-session from home does **not** redirect and the approved plan stays readable.
+approved, the review screen navigates home (the session list drops it from the active
+set, §7); this fires only on the live non-approved → approved transition, so opening an
+already-approved session from home does **not** redirect and the approved plan stays
+readable.
 
 Session status machine:
 `draft → in_review ⇄ revising → approved` (terminal), with the **Approve & Implement**

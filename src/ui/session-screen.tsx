@@ -845,7 +845,7 @@ export function SessionScreen({ id }: { id: string }) {
   // session left the registry — `otacon clean` archived an approved one, or it
   // was deleted from review while pending. The frame carries no reason, so the
   // copy covers both. A terminal state, not an error — the stream is closed, and
-  // the app shell (sidebar ≥960px, the review switcher below it) still offers
+  // the app shell (sidebar ≥960px, the ☰ session sheet below it) still offers
   // every live session.
   // Because the shell provides session switching + the home link on every route,
   // these closed/unknown/loading shells carry no topbar of their own — just the
@@ -887,7 +887,7 @@ export function SessionScreen({ id }: { id: string }) {
   return (
     <div className="page page-review" style={accentStyle(session.id)}>
       {/* ReviewHeader (rendered inside ReviewLoop) is the sticky masthead —
-          back + switcher + identity + controls — so there is no separate
+          back + identity + controls + the ☰ session-list menu — so there is no separate
           topbar here. The cleaned/missing/loading shells above carry no topbar
           either: no plan exists there, and the app shell already provides
           switching + home on every route. */}

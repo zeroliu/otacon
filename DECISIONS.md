@@ -2567,7 +2567,7 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 ## Session nav shortcut: `[`/`]` walk the active sessions (mounted on the app shell)
 
 - **Decision:** `[` steps to the previous session and `]` to the next, over the `active`
-  list (the activity-ordered, non-over set, i.e. the exact chips / dropdown / sidebar order,
+  list (the activity-ordered, non-over set, i.e. the exact sidebar / session-sheet order,
   §7), wrapping at both ends. The single `useSessionNav` mount lives on the **app shell**
   (`src/ui/shell.tsx`) — the one element present on every route — not on the switcher, so the
   shortcut is live everywhere (welcome / settings / review), not review-screen-only. The
@@ -2690,15 +2690,16 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 - **Decision:** The sidebar shows at `≥960px` and is hidden below it; the review grid's own
   one-column → two-column switch stays at its existing `721px`. So 721–959px is a band where
-  the review screen is two-column (main + rail) but the sidebar is still hidden and the
-  header switcher is the session-switching face.
+  the review screen is two-column (main + rail) but the sidebar is still hidden and the ☰
+  overflow-menu sheet is the session-switching face.
 - **Why:** A 240px sidebar plus the ~720px reading measure plus the rail needs more room than
   the rail alone — reusing 721px would have crushed the content the moment the sidebar
   appeared. 960px is the conventional "comfortable three-zone desktop" line and leaves the
-  reading measure intact once the sidebar lands. The interim header switcher already covers
-  the sub-960 band, so nothing is lost there until the planned mobile shell entry replaces it.
-- **Revisit when:** The mobile phase lands a sidebar entry for <960px (the switcher retires),
-  or the sidebar/content widths are tuned enough to move the threshold.
+  reading measure intact once the sidebar lands. The sub-960 band is covered by the ☰ sheet
+  (which replaced the interim header switcher — see "Retire the switcher…"), so nothing is lost
+  there.
+- **Revisit when:** The sidebar/content widths are tuned enough to move the threshold, or the
+  sheet ↔ sidebar handoff wants a different crossover than the chrome's 960px line.
 
 ## Collapsible sidebar, persisted in localStorage
 
@@ -2726,20 +2727,20 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   a second, divergent copy of the same list that only shows on `/` — exactly the kind of
   duplicate surface the shared `partitionByApproval` / `stateOf` split exists to prevent.
   Collapsing it to a thin welcome pane leaves one list implementation and a `/` that orients
-  rather than re-lists. Below 960px the sidebar is hidden, so the only session-switching face
-  there is the review header's (untouched) switcher — a known interim gap (no standalone
-  mobile list page) the planned mobile-shell phase fills.
+  rather than re-lists. Below 960px the sidebar is hidden; the welcome pane reaches the list
+  through the shell's ☰ overflow-menu sheet (see "Retire the switcher…"), so `/` is never a
+  dead end on a phone.
 - **Revisit when:** `/` should carry more than a welcome (a dashboard / activity overview), or
-  the mobile phase needs its own list surface distinct from the sidebar.
+  a mobile list surface distinct from the sidebar/sheet is wanted.
 
 ## Index stream is shared via a provider (one `/api/stream` per client)
 
 - **Decision:** A single `SessionsProvider` at the React root (`main.tsx`) owns the one
   `/api/stream` EventSource and the registry state; `useSessions()` is a context read that
   returns the same `{ sessions, connected }` shape it always did. Every face — the app shell,
-  the sidebar `SessionList`, the review switcher, the welcome pane, the settings repo picker —
-  reads that one stream. The hook throws if used outside the provider (a wiring bug, caught
-  loud at the root, not a silent fallback to a second stream).
+  the sidebar `SessionList`, the mobile session sheet's `SessionList`, the welcome pane, the
+  settings repo picker — reads that one stream. The hook throws if used outside the provider (a
+  wiring bug, caught loud at the root, not a silent fallback to a second stream).
 - **Why:** `useSessions()` used to open its own EventSource per call, so a single review route
   ran three concurrent index streams (shell + sidebar list + switcher) and the welcome route
   three (shell + sidebar list + welcome) — each one replays the full snapshot and gets every
@@ -2751,3 +2752,32 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** A consumer needs a *filtered* or differently-scoped registry view (it
   would select off the shared state, still one stream), or the provider's single state object
   causes spurious re-renders broad enough to warrant splitting `sessions` from `connected`.
+
+## Retire the switcher for one session list reached by an overflow-menu sheet (<960px)
+
+- **Decision:** `src/ui/switcher.tsx` is deleted. Below 960px the session list is no longer a
+  per-review header strip (a `<select>` + accent chips that only existed on an open plan) but
+  the same `SessionList` the sidebar uses, surfaced through an **overflow menu**: a ☰ "show
+  sessions" button opens a bottom-docked sheet (scrim, `useScrollLock`, `--kb-inset`, dismiss
+  on row tap / scrim tap / Esc / route change). The button lives in the review header on a
+  plan and in a slim shell mini top-bar (wordmark + ☰) on the welcome / settings panes, so the
+  list is reachable from **every** route, not just a review. The shell hosts the one sheet and
+  publishes its opener through `SessionSheetContext` (the review header is the shell's
+  `children`, so context beats threading a prop down); the open/close logic is a pure
+  `shouldCloseSheet` / `isDesktopWidth` unit (`session-sheet-state.ts`, tested) and the React
+  skin is `session-sheet.tsx`. At ≥960px the sheet is never opened — the sidebar is the list,
+  and the `»` collapsed-sidebar handle is the equivalent "show sessions" control, sharing the
+  affordance's intent so mobile and desktop read as the same control.
+- **Why:** The switcher and the sidebar were two divergent renderings of the same active-session
+  set — exactly the duplication the shared `partitionByApproval` / `stateOf` split exists to
+  kill — and the switcher only appeared on a review screen, so the welcome and settings panes
+  had **no** way to the list below 960px (a real gap, not just redundancy). Reusing the one
+  `SessionList` in a sheet collapses both surfaces to a single list implementation and closes
+  the gap on every route. A sheet (not the desktop sidebar slid in) keeps the mobile face a
+  thumb-range, scrim-backed surface consistent with the composer / section-menu / approve
+  sheets already in the review UI, and pulling the breakpoint/route-change decision into a pure
+  function lets the strand-open-across-resize and close-on-navigate rules be tested without a
+  render (the same split as `nextCompact` / `keyboardInset`).
+- **Revisit when:** The list grows a mobile-only affordance the sidebar lacks (search, sort,
+  multi-select) and the sheet needs its own list variant, or the sheet should become a fuller
+  navigation drawer (settings / docs links beside the sessions) rather than just the list.

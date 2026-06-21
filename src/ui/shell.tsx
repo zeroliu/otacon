@@ -3,17 +3,20 @@
 // every route, with the routed screen rendered in the content track beside it.
 // On desktop (≥960px) the sidebar is a fixed 240px column, collapsible with the
 // choice persisted across reloads (sidebar-state); below 960px it's hidden and
-// the review header's switcher stays the interim mobile face. The chrome is
-// accent-NEUTRAL — `--hue` is never set here, so `--accent` resolves to the
-// brand olive default; only an open review tints, via the page's own accent.
+// the session list is reached through a bottom-sheet overflow menu instead — a
+// menu button in the review header on a plan, and a slim shell top-bar (wordmark
+// + the same button) on the welcome / settings panes so the list is always one
+// tap away on every route. The chrome is accent-NEUTRAL — `--hue` is never set
+// here, so `--accent` resolves to the brand olive default; only an open review
+// tints, via the page's own accent.
 //
-// The `[` / `]` session shortcuts mount here, not in the switcher: the shell is
-// the one element present on every route, so the nav walks the active set from
-// the welcome and settings panes too, and there is exactly one mount (no
-// competing copies). It reads useSessions() for the active id list and the
-// link-state flag; that hook is now a context read off the single index stream
-// the root provider owns (DECISIONS "Index stream is shared via a provider"),
-// so the shell, the SessionList, and the switcher all share one EventSource.
+// The `[` / `]` session shortcuts mount here too: the shell is the one element
+// present on every route, so the nav walks the active set from the welcome and
+// settings panes, and there is exactly one mount (no competing copies). It reads
+// useSessions() for the active id list and the link-state flag; that hook is now
+// a context read off the single index stream the root provider owns (DECISIONS
+// "Index stream is shared via a provider"), so the shell, the sidebar
+// SessionList, and the mobile sheet's SessionList all share one EventSource.
 
 import type { CSSProperties, ReactNode } from "react";
 import { useSessions } from "./api";
@@ -22,6 +25,7 @@ import { linkClick, usePath } from "./router";
 import { useSessionNav } from "./review/session-nav";
 import { partitionByApproval } from "./session-filter";
 import { SessionList } from "./session-list";
+import { SessionMenuButton, SessionSheetProvider } from "./session-sheet";
 import { useSidebarCollapsed } from "./sidebar-state";
 import wordmarkUrl from "./otacon.svg";
 
@@ -35,16 +39,21 @@ export function AppShell({ children }: { children: ReactNode }) {
   const currentId = currentSessionId(path);
   const { sessions, connected } = useSessions();
   // `[` / `]` walk the active (non-over) set in activity order — the same set the
-  // sidebar list and switcher show — so the keyboard never stops on a hidden over
-  // session. Mounted unconditionally here (stable hook order) so it's live on
+  // sidebar list and the mobile session sheet show — so the keyboard never stops
+  // on a hidden over session. Mounted unconditionally here (stable hook order) so it's live on
   // every route, not just the review screen. partitionByApproval is the shared
   // split (session-filter), never reimplemented.
   const { active } = partitionByApproval(sessions);
   useSessionNav(active.map((s) => s.id), currentId ?? "");
 
   const [collapsed, toggleCollapsed] = useSidebarCollapsed();
+  // A review screen (`/s/:id`) carries the "show sessions" button in its own
+  // header, so the shell's mini top-bar is for the routes that have no header —
+  // the welcome and settings panes — where it is the only <960px way to the list.
+  const review = currentId !== undefined;
 
   return (
+    <SessionSheetProvider currentId={currentId}>
     <div className={collapsed ? "app-shell collapsed" : "app-shell"}>
       <aside className="app-sidebar" aria-label="sessions">
         <div className="app-sidebar-head">
@@ -88,7 +97,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </aside>
       <main className="app-content">
         {/* The expand handle: visible only when collapsed (CSS), ≥960px only —
-            below that the sidebar is already hidden behind the mobile face. */}
+            below that the sidebar is hidden and the session sheet is the face. */}
         {collapsed && (
           <button
             type="button"
@@ -100,8 +109,31 @@ export function AppShell({ children }: { children: ReactNode }) {
             »
           </button>
         )}
+        {/* The mobile mini top-bar (<960px, non-review routes only — CSS hides it
+            at ≥960px and on review screens, whose own header carries the button):
+            wordmark + the menu button, so the session list is reachable from the
+            welcome and settings panes too, not just an open plan. */}
+        {!review && (
+          <div className="app-topbar">
+            <a
+              className="app-topbar-home"
+              href="/"
+              aria-label="otacon — home"
+              title="otacon"
+              onClick={linkClick("/")}
+            >
+              <span
+                className="wordmark"
+                aria-hidden="true"
+                style={{ "--wordmark": `url(${wordmarkUrl})` } as CSSProperties}
+              />
+            </a>
+            <SessionMenuButton />
+          </div>
+        )}
         {children}
       </main>
     </div>
+    </SessionSheetProvider>
   );
 }
