@@ -2698,3 +2698,61 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   apart by more than recency (then `locate` needs a stronger key than cwd+mtime, e.g. a
   session id handshake), or transcript formats churn often enough that fail-soft skipping
   hides real capture gaps (then add a per-adapter health/coverage signal).
+
+## Live activity is an always-on now-playing bar, not a buried collapsible fold
+
+- **Decision:** The review screen surfaces the live-activity stream as a slim, always-on
+  "now-playing" bar pinned under the sticky header that expands into a full console. It
+  replaces the old `<section className="activity">` collapsible, which was default-closed,
+  rendered only once a plan existed, and easy to miss. The bar is shown whenever the agent
+  is active OR any stream event exists (so it appears during pre-plan research, not gated on
+  `hasPlan`); the console auto-expands during `draft`/`implementing` and collapses to the
+  bar in resting states, with a status crossing re-applying that default while a manual
+  toggle wins until the next crossing. The bar carries a `live`/`notes` **mode badge**,
+  reading `live` once any captured (tool/text/thinking) event exists and `notes` while only
+  `highlight` progress notes do, making the adapter-attached-vs-floor distinction (§10a)
+  visible.
+- **Why:** "What is the agent doing right now?" is the exact question a reviewer asks while
+  waiting through research and drafting, and the old fold answered it only if you knew to
+  open it. An always-visible one-liner answers at a glance with the firehose one click away;
+  pinning it under the header (sticky, just below z20) keeps it a fixed instrument while the
+  plan scrolls. Showing it pre-plan is the whole point: that is when the wait is longest and
+  the old fold (gated on a plan) showed nothing. The mode badge is cheap honesty: without it
+  a `notes`-only session looks identically "quiet" to a broken adapter, so the badge tells
+  the user whether rich capture is even attached. Thinking is hidden behind an off-by-default
+  toggle because it is the noisiest kind and would drown the concrete tool/text activity; the
+  Thinking *filter* force-shows it (selecting it is strong intent). Newest-at-the-bottom with
+  pin-aware auto-scroll matches a terminal's mental model and never yanks a user reading
+  history. Pairing a running event with its outcome and same-label run-collapsing ("Read ×5")
+  keep a dense captured stream legible instead of a thousand-row wall.
+- **Revisit when:** The bar's "latest meaningful event" heuristic misleads on some agent's
+  label vocabulary (then the now-playing selection needs per-kind weighting, not just
+  "skip trailing thinking"), the 500-event client cap proves too small for a long
+  `implementing` build's console (then window/virtualize the row list rather than render the
+  capped tail), or a future surface needs the stream off the review screen (then the
+  now-playing/console pair lifts out as a standalone component over the same `useSession`
+  field).
+
+## The console's fold/select logic is a pure module; its components are thin views
+
+- **Decision:** All non-trivial console behavior lives in `console-model.ts` as pure,
+  React-free functions: pairing a tool `running` event with its later `ok`/`error` outcome,
+  collapsing consecutive same-(kind,label,tool) runs into a counted row, the kind filter plus
+  thinking toggle, the `live`/`notes` mode, and the now-playing label/timer/dim selection.
+  They are exhaustively unit-tested in `live-console.test.tsx` with `bun:test`. The React
+  components (`now-playing.tsx`, `live-console.tsx`, `console-rows.tsx`) own only chrome,
+  toggles, and scroll behavior.
+- **Why:** This mirrors the existing `group.ts`/`group.test.ts` (rail grouping) and
+  `compact.ts` (header scroll state) split. The repo carries no React test renderer
+  (no `@testing-library`), and its DOM tests use happy-dom only for low-level Range work
+  (anchor.test.ts), never component rendering. Pushing the logic into a pure module makes the
+  required behavioral assertions testable directly and fast, with no rendering harness to add:
+  a running Bash call yields its label plus a running flag plus a timer, and a noisy
+  repeated-read-plus-thinking stream collapses the repeats, hides thinking, and narrows under
+  the filter. (Also: `src/ui/tsconfig.json`'s test exclude was widened from `**/*.test.ts` to
+  also cover `**/*.test.tsx`, since the new test is the repo's first `.tsx` test and
+  `bun:test` files must compile only under the bun-typed `tsconfig.test.json`.)
+- **Revisit when:** The components grow logic worth asserting through real rendering (then
+  add `@testing-library/react` plus a happy-dom register, and the pure split stays as the fast
+  inner layer), or a second surface needs the same fold so the model gains a non-UI consumer
+  (it already takes plain `StreamEvent[]`, so that is a lift, not a rewrite).

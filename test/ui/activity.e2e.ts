@@ -1,7 +1,9 @@
-// UI e2e for live agent activity (review loop and daemon API, review UI): a posted `otacon
-// progress` note drives the activity-driven draft chip, the live activity log,
-// and the agent-presence dot — over the real built daemon (see
-// playwright.config.ts). Sessions are seeded through the real HTTP API.
+// UI e2e for live agent activity (review loop and daemon API, the live-activity
+// stream §10a, review UI): a posted `otacon progress` note drives the
+// activity-driven draft chip, flows into the live-activity stream as a
+// `highlight` event (the now-playing bar + the live console below it), and bumps
+// the agent-presence dot, over the real built daemon (see playwright.config.ts).
+// Sessions are seeded through the real HTTP API.
 
 import type { APIRequestContext } from "@playwright/test";
 import { expect, test } from "@playwright/test";
@@ -16,7 +18,7 @@ async function postProgress(
   expect(res.status()).toBe(200);
 }
 
-test("a progress note drives the draft chip, the activity log, and the live dot", async ({
+test("a progress note drives the draft chip, the now-playing bar + console, and the live dot", async ({
   page,
   request,
 }) => {
@@ -27,10 +29,14 @@ test("a progress note drives the draft chip, the activity log, and the live dot"
   // The activity-driven draft chip reads the latest note (review UI, D3),
   // not a fixed "agent drafting".
   await expect(page.locator(".review-header .chip")).toHaveText("reading the auth module");
-  // The pre-plan placeholder leads with the activity log, open.
-  await expect(page.locator(".review-wait .activity .act-text")).toContainText(
+  // The always-on now-playing bar shows the latest event's label; in `draft`
+  // the console auto-expands and the progress note renders as a highlight row.
+  await expect(page.locator(".now-playing .np-label")).toContainText("reading the auth module");
+  await expect(page.locator(".live-console .lc-highlight-body")).toContainText(
     "reading the auth module",
   );
+  // A floor-only stream (only progress notes) reads "notes", not "live".
+  await expect(page.locator(".now-playing .np-mode")).toHaveText("notes");
   // Posting progress bumped last-contact, so the agent dot reads live; it is
   // distinct from the link dot (labelled "agent").
   await expect(page.locator(".review-header .agent-dot")).toHaveClass(/is-live/);
@@ -46,11 +52,15 @@ test("a progress note posted while watching appears live (SSE), no reload", asyn
   // No note yet: the draft chip falls back to "agent working".
   await expect(page.locator(".review-header .chip")).toHaveText("agent working");
   await expect(page.locator(".review-wait")).toBeVisible();
+  // The bar is present from the first second (the session is agent-active in
+  // `draft`), even before any stream event lands; it shows a resting line.
+  await expect(page.locator(".now-playing")).toBeVisible();
   await plantMarker(page);
 
   await postProgress(request, session.id, "drafting the plan");
   await expect(page.locator(".review-header .chip")).toHaveText("drafting the plan");
-  await expect(page.locator(".review-wait .activity .act-text")).toContainText(
+  await expect(page.locator(".now-playing .np-label")).toContainText("drafting the plan");
+  await expect(page.locator(".live-console .lc-highlight-body")).toContainText(
     "drafting the plan",
   );
   expect(await readMarker(page)).toBe(true); // SSE updated the screen, no navigation
@@ -65,7 +75,7 @@ test("the index card shows the latest note and a live agent dot", async ({ page,
   await expect(card.locator(".agent-dot")).toHaveClass(/is-live/);
 });
 
-test("the activity log keeps multiple notes; the chip shows the newest", async ({
+test("the console keeps multiple notes as distinct highlights; the chip shows the newest", async ({
   page,
   request,
 }) => {
@@ -74,6 +84,8 @@ test("the activity log keeps multiple notes; the chip shows the newest", async (
   await postProgress(request, session.id, "second note");
   await page.goto(`/s/${session.id}`);
 
-  await expect(page.locator(".review-wait .activity .act-entry")).toHaveCount(2);
+  // Each progress note is its own chapter divider (highlights never collapse),
+  // so two notes render two highlight rows; the draft chip rides the newest.
+  await expect(page.locator(".live-console .lc-highlight")).toHaveCount(2);
   await expect(page.locator(".review-header .chip")).toHaveText("second note");
 });

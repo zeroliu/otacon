@@ -1094,6 +1094,28 @@ the approved artifact and is never archived to the home store.
 `stream` frame (above) pushes new events live (newest last, coalesced/batched ok). The
 draft chip still rides `latestActivity` (the activity feed), not the stream.
 
+On the review screen the stream renders as an always-on **now-playing bar** pinned
+directly under the sticky header, which expands into a full **live console**. The bar is
+one mono line: the latest *meaningful* event's label (a trailing `thinking` shows
+dimmed/italic), a ticking elapsed timer while the newest tool call is still `running`, a
+live pulse dot whenever the session is agent-active (`draft`/`revising`/`finalizing`/
+`implementing`, calm otherwise), and a small **mode badge** reading `live` once any
+captured (tool/text/thinking) event exists (an adapter is attached) or `notes` while the
+stream holds only `highlight` progress notes (the floor). The bar is shown whenever the
+agent is active *or* any stream event exists, including pre-plan research, not gated on a
+plan existing, so the work is never buried (it replaces the old default-closed activity
+fold). The console below it is a terminal-feel list, newest at the bottom, that
+auto-scrolls to the latest only while the user is already pinned to the bottom; it
+auto-expands during `draft` and `implementing` and collapses to the bar in resting
+states (a status crossing re-applies that default). The console pairs each tool
+`running` event with its later `ok`/`error` outcome into one row carrying the final
+status, collapses consecutive same-label rows into one counted row ("Read ×5",
+expandable), renders `highlight` notes as emphasized chapter dividers, reveals a row's
+`detail` on expand, filters by kind (all / tools / text / thinking), and hides `thinking`
+behind an off-by-default toggle (the noisiest kind). The draft chip and the index card
+keep riding `latestActivity`: the bar and console are the firehose, while the chip stays
+the one-line summary.
+
 **Capture: the transcript tailer.** While a session is active the daemon runs a
 per-session *tailer* that watches the coding agent's own on-disk transcript and feeds
 new activity into the stream — no per-agent hook, no cooperation from the agent. It is
