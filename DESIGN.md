@@ -516,6 +516,13 @@ POST /api/sessions/:id/implement-done       end an `implementing` build (otacon
                                             `implement_failed` (failed:true), records
                                             `prUrl` on the summary; a session not
                                             `implementing` → 409 E_NOT_IMPLEMENTING
+POST /api/sessions/:id/reopen               reopen a finished (terminal) session for
+                                            another review round (a `/otacon` run from
+                                            inside the build worktree): flips it back to
+                                            `revising`, pins the diff baseline at the
+                                            approved revision (lastReviewedRevision =
+                                            revision), and keeps `prUrl` + `impl`; a
+                                            non-terminal session → 409 E_NOT_REOPENABLE
 POST /api/sessions/:id/reviewed             mark a revision reviewed ({revision},
                                             default: latest) — the diff baseline;
                                             monotonic, also set by a comment flush
@@ -1085,7 +1092,7 @@ Operational requirement: the Mac stays awake while a plan is in review
 | `~/.otacon/worktrees/<slug>/`                     | Implement build's git worktree on branch `otacon/impl-<slug>` (base dir is `worktree.dir`, default `~/.otacon/worktrees` — outside the repo)                    | n/a (global, outside the repo)             |
 | `~/.otacon/sessions/<id>/YYYY-MM-DD-<slug>.md`    | Canonical approved plan, every session (`status: approved` frontmatter + grill transcript)                     | n/a (global, permanent archive)            |
 | `<repo>/<plans.dir>/YYYY-MM-DD-<slug>.md`         | Save-time project copy (default `.otacon/plans`; set `plans.dir=docs/plans` to group with tracked plans)       | yours to commit (or not)                   |
-| `~/.otacon/registry.json`                         | Session registry: ID → repo, branch, title, status                                                             | n/a (global)                               |
+| `~/.otacon/registry.json`                         | Session registry: ID → repo, branch, title, status, `prUrl`, and `impl` (the build's worktree + branch, recorded at Implement-approve; see below)                                                             | n/a (global)                               |
 
 Every approved plan lands in the **home archive** keyed by its session id — the
 canonical copy a downstream implementer (or a future you, on any machine) can always
@@ -1167,18 +1174,33 @@ non-terminal — the agent's clean `submit` is what finalizes it — and a hung 
 is escapable: an `approve {force:true}` there commits the current revision and drops
 the still-open threads.
 
+Terminal is **not strictly one-way**: a finished session can be **reopened** back to
+`revising` via `POST /api/sessions/:id/reopen` (the reverse edge). This powers
+worktree-keyed amendment: a `/otacon` run from inside an Implement build's worktree
+reopens the *same* session to amend the approved plan in place instead of spawning a
+second worktree. Reopen pins the diff baseline at the approved revision and keeps
+`prUrl` + `impl` intact, so the next submit diffs against what was approved and the
+amendment still belongs to the same build. Detection rests on the **`impl`** field on
+the session record (`{worktree, branch}`, deterministic from the title slug +
+`worktree.dir`), written at Implement-approve in the same registry write that flips to
+`implementing` (recorded at approve time, not at build start, so detection survives an
+aborted build). Terminal therefore means "over until explicitly reopened", not "forever".
+
 ```
                                          ┌─ Approve ──────────────► approved (terminal)
 draft ─► in_review ⇄ revising ──────────┤  (Send to agent ─► finalizing ─► submit ─┘
-                                         │   or ─► implementing, per the variant)
-                                         └─ Approve & Implement ──► implementing
-                                                                       │
-                                                  implement-done       │
-                                            ┌──────────────────────────┤
-                                            ▼                          ▼
-                                       implemented              implement_failed
+            ▲                            │   or ─► implementing, per the variant)
+            │                            └─ Approve & Implement ──► implementing
+            │                                                          │
+            │ reopen (from any                  implement-done         │
+            │ terminal state)             ┌──────────────────────────┤
+            │                             ▼                          ▼
+            └──────────────────────  implemented              implement_failed
                                         (terminal)                 (terminal)
 ```
+
+Any **terminal** state has a `reopen` reverse edge back to `revising` (the dashed line
+above), used by worktree-keyed amendment (above).
 
 ### Implement: worktree, per-phase commits, PR
 

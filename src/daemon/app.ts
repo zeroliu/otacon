@@ -22,6 +22,7 @@ import {
 } from "../shared/config.js";
 import type { ScopeValues } from "../shared/config.js";
 import {
+  expandTilde,
   globalConfigPath,
   otaconPort,
   repoConfigPath,
@@ -53,6 +54,7 @@ import { createDesktopNotifier } from "./desktop-notify.js";
 import { validateDiagrams } from "./diagrams.js";
 import { diffPlans } from "./diff.js";
 import { lint } from "./linter/index.js";
+import { slugify } from "./linter/parse.js";
 import { Notifier } from "./notify.js";
 import { Presence } from "./presence.js";
 import type { ParkHandle } from "./queue.js";
@@ -374,8 +376,21 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       writeFileAtomic(join(session.repo, relPath), artifact);
       path = relPath;
     }
+    // On Implement, record the build's worktree + branch in the same write that
+    // flips to `implementing` (one registry write). Deterministic from the
+    // title slug + the configured worktree.dir, so a later `/otacon` run from
+    // inside that worktree can match it back to this session and reopen it.
+    let implPatch: { impl: { worktree: string; branch: string } } | Record<string, never> = {};
+    if (opts.implement) {
+      const slug = slugify(session.title) || "plan";
+      const wtDir = expandTilde(loadConfig(session.repo).worktree.dir);
+      const worktree = join(wtDir, slug);
+      const branch = `otacon/impl-${slug}`;
+      implPatch = { impl: { worktree, branch } };
+    }
     const updated = store.updateSession(session.id, {
       status: opts.implement ? "implementing" : "approved",
+      ...implPatch,
     });
     // Disarm after the flip: a crash between them leaves a stale flag on an
     // already-terminal/building session (harmless — no further submit finalizes),
@@ -780,6 +795,61 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     const lastReviewedRevision = store.markReviewed(session.id, revision);
     publishSession(session); // summary re-reads state, so the frame carries it
     return c.json({ ok: true, session: session.id, lastReviewedRevision });
+  });
+
+  // Reopen a finished (terminal) session for another review round
+  // (resurrect-plan-amend): a `/otacon` run from inside the build worktree flips
+  // the session back to `revising` so the agent amends the approved plan in
+  // place instead of spawning a second worktree. The baseline is pinned at the
+  // approved revision (markReviewed → lastReviewedRevision = revision), so the
+  // next submit diffs against what was approved. `prUrl` and `impl` are kept
+  // intact: the amendment still belongs to the same build. A non-terminal
+  // session is refused E_NOT_REOPENABLE (there is nothing finished to reopen).
+  app.post("/api/sessions/:id/reopen", (c) => {
+    const session = sessionFor(c);
+    if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    // Agent-driven verb (a `/otacon` run): bump liveness like its siblings so the
+    // reopened session reads live, not offline-until-next-call.
+    bumpContact(session.id);
+    if (!TERMINAL_STATUSES.includes(session.status)) {
+      return c.json(
+        {
+          error: {
+            code: "E_NOT_REOPENABLE",
+            message: `session ${session.id} is ${session.status}, not reopenable (must be a finished session)`,
+          },
+        },
+        409,
+      );
+    }
+    const state = store.readState(session.id);
+    const revision = state.revision;
+    if (revision === 0) {
+      // A terminal session always has an approved revision; guard anyway.
+      return c.json(
+        {
+          error: {
+            code: "E_NOT_REOPENABLE",
+            message: `session ${session.id} has no revisions to reopen`,
+          },
+        },
+        409,
+      );
+    }
+    // Pin the diff baseline at the approved revision (monotonic), so the next
+    // submit shows just the amendment.
+    store.markReviewed(session.id, revision);
+    const updated = store.updateSession(session.id, { status: "revising" });
+    publishSession(updated); // the index + an open tab move it back to active
+    return c.json({
+      ok: true,
+      session: session.id,
+      status: "revising",
+      revision,
+      lastReviewedRevision: revision,
+      impl: updated.impl ?? null,
+      prUrl: updated.prUrl ?? null,
+    });
   });
 
   // The review screen reports its visibility here (review loop and daemon API): {visible:true}

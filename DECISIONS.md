@@ -2045,6 +2045,12 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 ## A distinct terminal `implement_failed`, not folding abort back to `approved`
 
+> **Note (terminal is now reopenable):** See "Reopen a terminal session to amend
+> it, keyed on the build worktree" below: terminal states are no longer strictly
+> one-way. A finished session (`approved`/`implemented`/`implement_failed`) can be
+> reopened back to `revising`. This does not change the terminal *set* or the
+> open-verb guard; it only adds a reverse edge.
+
 - **Decision:** An aborted/failed build lands in its own terminal status
   `implement_failed` (via `otacon implement-done --failed`), distinct from `implemented`
   and from `approved`. The terminal *set* is `{approved, implemented, implement_failed}`;
@@ -2058,6 +2064,33 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** The terminal-state naming settles (it is flagged provisional in the
   plan's Open Questions) — e.g. if a single `done`/`closed` state with an outcome field
   proves cleaner than two sibling terminal statuses.
+
+## Reopen a terminal session to amend it, keyed on the build worktree
+
+- **Decision:** A finished (terminal) session can be **reopened** back to `revising`
+  via `POST /api/sessions/:id/reopen`, instead of terminal being strictly one-way. The
+  reopen pins the diff baseline at the approved revision (`lastReviewedRevision =
+  revision`) and keeps `prUrl` + `impl` intact. To make this discoverable, the session
+  records an **`impl` field** (`{worktree, branch}`, deterministic from the title slug +
+  `worktree.dir`) the moment it flips to `implementing`, in the same registry write as
+  the status flip. A later `/otacon` run from inside that worktree matches `impl.worktree`
+  and reopens the same session.
+- **Why:** After an Implement build, the user often needs to iterate on the implemented
+  plan (fix a phase, adjust scope) without spawning a *second* otacon session and a
+  second build worktree for what is the same piece of work. Reopening the same session in
+  place keeps the plan history, transcript, threads, and PR link as one continuous
+  record, and pinning the baseline at the approved revision means the next submit diffs as
+  a clean amendment rather than re-surfacing the whole plan. Recording `impl` at
+  **approve** time (not at build start) means detection survives an aborted build: even an
+  `implement_failed` session knows its worktree, so a `/otacon` from there still finds and
+  reopens it. The reverse edge is narrow (one explicit endpoint), so the terminal *set*
+  and the open-verb guard (`E_SESSION_OVER`) are unchanged: terminal still means "over"
+  for every implicit path; it just stops meaning "forever".
+- **Revisit when:** Worktree paths stop being deterministic from the slug (e.g. a
+  collision-suffixed worktree dir), or reopen needs to fan out to more than the
+  build-worktree trigger (a UI "reopen" button, reopening a Save-approved session from an
+  arbitrary checkout), at which point matching may need to persist more than `{worktree,
+  branch}`.
 
 ## Build layout: worktree under .otacon, one commit per green phase, PR vs default branch
 
