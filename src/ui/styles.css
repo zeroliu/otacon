@@ -4575,6 +4575,205 @@ code {
   }
 }
 
+/* ───────────────────────── sidebar session list ─────────────────────────
+ * The reusable list for the persistent sidebar (app shell): condensed,
+ * scannable rows — a denser sibling of the home .card, accent-aware, ruled off
+ * with the same hairline. Wired into nothing yet; ships as a component here. */
+
+.session-list {
+  display: flex;
+  flex-direction: column;
+}
+
+/* One row: a glyph rail, the title + repo/branch subline, then the agent dot,
+ * unread badge, and a hover-revealed delete — laid out like a tight .card-meta. */
+.sl-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  padding: 8px 6px;
+  border-top: 1px solid var(--line);
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+@media (hover: hover) {
+  .sl-row:hover {
+    background: color-mix(in srgb, var(--accent) 4%, transparent);
+    border-top-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  }
+}
+
+.sl-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The row you are viewing: a filled accent blade so the "you are here" anchor
+ * is unmistakable, the same cue the switcher's on-chip carries. */
+.sl-row.current {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-top-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+}
+
+.sl-row.current::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+}
+
+.sl-glyph {
+  flex: none;
+  width: 1.2em;
+  text-align: center;
+  color: var(--accent);
+  font: 13px/1 var(--mono);
+}
+
+/* Title over subline, both ellipsized so a long name or deep repo path can't
+ * widen the row; min-width:0 lets the flex child actually shrink to clip. */
+.sl-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sl-title {
+  font: 650 13px/1.25 var(--sans);
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sl-where {
+  font: 11px/1.3 var(--mono);
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sl-branch {
+  color: var(--ink-soft);
+}
+
+.sl-unread {
+  flex: none;
+  font: 700 10.5px/1 var(--mono);
+  color: var(--accent);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+/* The per-row delete: hidden until the row is hovered or the button itself is
+ * focused (keyboard reach is preserved), mirroring the home card's .card-delete. */
+.sl-delete {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--ink-soft);
+  font: 11px/1 var(--mono);
+  cursor: pointer;
+  opacity: 0.5;
+  transition: opacity 0.12s ease, color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+/* Where hover exists, keep the ✕ out of sight until the row is hovered or it
+ * holds focus — the list stays calm, the control stays one reveal away. */
+@media (hover: hover) {
+  .sl-delete {
+    opacity: 0;
+  }
+
+  .sl-row:hover .sl-delete,
+  .sl-delete:focus-visible {
+    opacity: 1;
+  }
+
+  .sl-delete:hover {
+    color: var(--chip-await-ink);
+    border-color: color-mix(in srgb, var(--chip-await-ink) 45%, transparent);
+    background: var(--chip-await-bg);
+  }
+}
+
+.sl-delete:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The collapsed approved disclosure, parallel to home's .approved-group but
+ * sized for the sidebar: the same button + count + caret idiom, holding the
+ * condensed over rows. */
+.sl-approved {
+  border-top: 1px solid var(--line);
+}
+
+.sl-approved-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 44px;
+  padding: 9px 6px;
+  border: none;
+  background: none;
+  color: var(--ink-soft);
+  font: 600 11px/1 var(--mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  cursor: pointer;
+  text-align: left;
+}
+
+.sl-approved-toggle:hover {
+  color: var(--ink);
+}
+
+.sl-approved-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.sl-approved-word {
+  flex: none;
+  color: var(--ink);
+}
+
+.sl-approved-count {
+  flex: none;
+  color: var(--accent);
+}
+
+.sl-approved-caret {
+  margin-left: auto;
+  flex: none;
+  color: var(--accent);
+}
+
+/* Drop the first row's top rule — the toggle already rules the section off, so
+ * a doubled hairline would read as a gap. */
+.sl-approved-rows .sl-row:first-child {
+  border-top: none;
+}
+
 /* ───────────────────────── motion preferences ───────────────────────── */
 
 @media (prefers-reduced-motion: reduce) {

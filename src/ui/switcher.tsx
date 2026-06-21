@@ -7,37 +7,15 @@
 
 import type { MouseEvent } from "react";
 import { accentStyle } from "./accent";
-import type { LiveSession, SessionStatus } from "./api";
+import type { LiveSession } from "./api";
 import { useSessions } from "./api";
-import { AgentDot, questionsPending } from "./chip";
+import { AgentDot } from "./chip";
 import { useSessionNav } from "./review/session-nav";
 import { navigate } from "./router";
 import { unreadCount } from "./seen";
 import { isOver, partitionByApproval } from "./session-filter";
+import { stateOf } from "./session-status";
 import { useNow } from "./tick";
-
-const GLYPHS: Record<SessionStatus, { glyph: string; word: string }> = {
-  draft: { glyph: "✎", word: "drafting" },
-  in_review: { glyph: "✋", word: "awaiting" },
-  revising: { glyph: "⏳", word: "revising" },
-  // comment & approve (approval and archive lifecycle): the agent is folding open comments in before commit.
-  finalizing: { glyph: "⏳", word: "finalizing" },
-  approved: { glyph: "✓", word: "approved" },
-  // The implement lifecycle (approval and archive lifecycle): a spinner-ish gear while the agent
-  // builds, the approved check once it lands, a cross when the build aborted.
-  implementing: { glyph: "⚙", word: "implementing" },
-  implemented: { glyph: "✔", word: "implemented" },
-  implement_failed: { glyph: "✕", word: "failed" },
-};
-
-function stateOf(session: LiveSession): { glyph: string; word: string } {
-  // questionsPending is the status chips' derivation — one source, so the
-  // index card and the switcher can never disagree about a session's state.
-  if (questionsPending(session.status, session.openQuestions)) {
-    return { glyph: "?", word: "questions" };
-  }
-  return GLYPHS[session.status];
-}
 
 export function SessionSwitcher({ current }: { current: string }) {
   const { sessions: byActivity } = useSessions();
