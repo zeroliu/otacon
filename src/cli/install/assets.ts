@@ -23,6 +23,28 @@ user reviews in a browser. Every \`${cmd}\`
 command prints exactly one JSON line on stdout. Exit 0 = proceed; exit 1 = a
 machine-readable error you can fix (read the JSON); exit 2 = you invoked it wrong.
 
+## Starting: resume an amendment, or plan fresh
+
+Before \`${cmd} start\`, check where you are: run \`${cmd} status\`. If its output
+carries a \`resumeCandidate\`, you are standing inside a build worktree otacon
+created for a finished plan: a chance to AMEND that plan in place instead of
+spawning a second worktree.
+
+- Read the candidate plan at \`resumeCandidate.plan\` and judge whether the user's
+  request is about THAT feature.
+  - **Clearly unrelated** (a different feature) → just \`${cmd} start\` a fresh
+    session and ignore the candidate.
+  - **Related, or you are unsure** → ask the user, here in the terminal, whether to
+    resume and amend the existing plan or start new. This is the ONE question that
+    does not go through \`${cmd} ask\` (no session is open yet); wait for the answer
+    before acting.
+- On **resume**: \`${cmd} resume\` (it auto-detects the session from this worktree,
+  reopens it to \`revising\`, and prints the \`plan\` path). SKIP research and grill,
+  since the plan exists. Edit that \`plan\` file into revision N+1 directly from the user's
+  request (grill only if it is genuinely ambiguous), \`${cmd} submit\`, then go to
+  the **Review loop** (step 5). The review diffs against the approved revision.
+- No \`resumeCandidate\` → the normal flow below.
+
 ## The loop
 
 1. \`${cmd} start --title <kebab-title>\` **first, before you research** — it mints
@@ -82,7 +104,8 @@ machine-readable error you can fix (read the JSON); exit 2 = you invoked it wron
 
 ## CLI quick reference
 
-- \`${cmd} start --title <t> [--quick]\` · \`${cmd} progress "<note>"\` ·
+- \`${cmd} start --title <t> [--quick]\` · \`${cmd} resume [--session <id>]\` ·
+  \`${cmd} progress "<note>"\` ·
   \`${cmd} ask ...\` · \`${cmd} wait --timeout 540\` · \`${cmd} submit [--resolutions f]\` ·
   \`${cmd} answer <q> --body "..."\` · \`${cmd} implement-done [--pr <url>] [--failed]\` ·
   \`${cmd} status\` · \`${cmd} open\` · \`${cmd} config [get <key>]\`
@@ -93,14 +116,20 @@ You are the **orchestrator**: you only coordinate and narrate
 (\`${cmd} progress\` at each checkpoint) — every phase's real work runs in a fresh
 native subagent (Task tool) so your own context stays lean.
 
-1. **Setup.** On Implement the plan lives only in the home archive at the event
-   \`path\` (read the phases from there). Branch off the repo's current default branch
-   HEAD: create the
-   worktree under the configured \`worktree.dir\`
-   (\`${cmd} config get worktree.dir\` — default \`~/.otacon/worktrees\`, outside the repo):
-   \`git worktree add <worktree.dir>/<slug> -b otacon/impl-<slug>\` (off the default
-   branch). \`${cmd} progress\` each checkpoint throughout.
-2. **Per phase, in order** (read the phases from the home plan at the event \`path\`):
+1. **Setup.** Read the plan from the home archive at the event \`path\`.
+   - **Amending** (you resumed this session, so its build worktree already exists
+     and you are standing in it): do NOT create a worktree. \`cd\` into
+     \`<worktree.dir>/<slug>\`, make sure you are on \`otacon/impl-<slug>\`, and build
+     on top of the existing commits. Pushing later updates the SAME PR.
+   - **Fresh** (no existing worktree): branch off the repo's default-branch HEAD and
+     create the worktree under \`worktree.dir\` (\`${cmd} config get worktree.dir\`,
+     default \`~/.otacon/worktrees\`, outside the repo):
+     \`git worktree add <worktree.dir>/<slug> -b otacon/impl-<slug>\` (off the default
+     branch).
+   \`${cmd} progress\` each checkpoint throughout.
+2. **Per phase, in order** (read the phases from the home plan at the event \`path\`;
+   on an amendment, implement only the phases this revision changed, using the
+   changelog and the diff to scope):
    - \`${cmd} progress "phase N — implementing"\`; spawn an **implement+test**
      subagent (Task tool) scoped to that phase's Goal/Files/Verification — it
      implements and runs the phase Verification plus the repo gates.
@@ -111,10 +140,12 @@ native subagent (Task tool) so your own context stays lean.
      review still flags, or a subagent is stuck) → on the FIRST blocker,
      \`${cmd} ask\` with options \`retry|skip|abort|guidance\`, park in \`${cmd} wait\`,
      and act on the answer. No auto-retry.
-3. **Finish.** On success, open a PR against the default branch with \`gh pr create\`
-   (PR body = the plan summary + the per-phase log; fall back to the local branch +
-   path when there is no remote), then \`${cmd} implement-done --pr <url>\`. On abort,
-   run \`${cmd} implement-done --failed\`.
+3. **Finish.** On a **fresh** build, open a PR against the default branch with
+   \`gh pr create\` (PR body = the plan summary + the per-phase log; fall back to the
+   local branch + path when there is no remote). On an **amendment**, the PR already
+   exists: push the branch and it updates, so reuse its URL (it is on the session;
+   \`${cmd} status\` reports \`prUrl\`). Either way finish with
+   \`${cmd} implement-done --pr <url>\`. On abort, run \`${cmd} implement-done --failed\`.
 
 While \`implementing\` the Stop hook still keeps you on the line — never end the turn
 until \`implement-done\`.
@@ -184,7 +215,8 @@ than a sentence — never as decoration.
 ## Rules
 
 - Never use native plan mode, AskUserQuestion, or any built-in question UI while
-  the session is open — every question goes through \`${cmd} ask\`.
+  the session is open: every question goes through \`${cmd} ask\`. The sole exception
+  is the resume-vs-new question at the very start, before any session exists.
 - Long review or build ahead? Remind the user to keep the Mac awake: \`caffeinate -i\`
   while the session runs.
 `;
@@ -194,7 +226,7 @@ than a sentence — never as decoration.
 export function skillMd(): string {
   return `---
 name: otacon
-description: Plan a feature through an otacon review session — grill interview, schema'd plan, phone review with anchored comments, approved plan saved to a home archive (and your project on Save). Use when the user asks to plan something with otacon, types /otacon, or wants a reviewed implementation plan before coding. Replaces native plan mode.
+description: Plan a feature through an otacon review session: grill interview, schema'd plan, phone review with anchored comments, approved plan saved to a home archive (and your project on Save). Use when the user asks to plan something with otacon, types /otacon, or wants a reviewed implementation plan before coding. Replaces native plan mode. Also resumes and amends an implemented plan when run from inside its build worktree.
 ---
 
 <!-- ${MANAGED_MARKER} — reinstall overwrites this file. -->
@@ -216,7 +248,7 @@ ${protocolCard('otacon')}`;
 export function dogfoodSkillMd(): string {
   return `---
 name: otacon
-description: Plan a feature for THIS repo through an otacon review session — grill interview, schema'd plan, browser/phone review with anchored comments, approved plan saved to a home archive (and your project on Save). Use when the user asks to plan something with otacon, types /otacon, or wants a reviewed implementation plan before coding. Replaces native plan mode. Dogfoods otacon on its own development.
+description: Plan a feature for THIS repo through an otacon review session: grill interview, schema'd plan, browser/phone review with anchored comments, approved plan saved to a home archive (and your project on Save). Use when the user asks to plan something with otacon, types /otacon, or wants a reviewed implementation plan before coding. Replaces native plan mode. Dogfoods otacon on its own development. Also resumes and amends an implemented plan when run from inside its build worktree.
 ---
 
 <!-- Generated from src/cli/install/assets.ts (dogfoodSkillMd) — do NOT hand-edit;

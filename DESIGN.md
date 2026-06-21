@@ -646,6 +646,12 @@ mirroring the budgets config. Off macOS the banner is a silent no-op.
    review URL *before* research, so the user can watch from the first second. The
    agent then researches the codebase, narrating at checkpoints with `otacon progress`
    — each note feeds the live activity log and the draft chip (UI-only; never an event).
+   The entry point can also **resume** a finished session: when the agent runs from
+   inside a build worktree otacon created (`otacon status` reports a `resumeCandidate`),
+   it judges whether the request is about that plan and, if related or unsure, asks the
+   user in the terminal whether to amend the existing plan or start new (the one
+   confirmation that precedes any session). On resume it skips research and grill,
+   edits the existing plan into the next revision, and re-enters the review loop.
 2. **Grill** (§8). Agent walks the design tree via `otacon ask` + `wait`, one question
    at a time. Skipped with `--quick`.
 3. **Draft.** Agent writes `plan.md`, runs `otacon submit`; loops on lint errors until clean.
@@ -687,6 +693,11 @@ mirroring the budgets config. Off macOS the banner is a silent no-op.
    `otacon implement-done --pr <url>` (or `--failed` on abort), which flips the session
    to `implemented` / `implement_failed`. All build work runs in native in-session
    subagents (subscription-covered, §13); the daemon never spawns a model.
+   On a **resumed** session the build amends in place: the worktree and
+   `otacon/impl-<slug>` branch already exist, so the agent does not open a second
+   worktree. It builds on top of the existing commits (scoping to the phases this
+   revision changed) and pushes the branch, which updates the **same** PR (its URL is
+   on the session, reported by `otacon status` as `prUrl`).
 
 ---
 
@@ -1406,6 +1417,9 @@ looked in, and — when in a repo — mentions `--project` as an install option.
 ### Daily flow
 
 1. In any agent session in the repo: *"plan \<feature\> with otacon"* (or `/otacon`).
+   Running `/otacon <request>` from inside a build worktree of a finished plan offers
+   to **resume and amend** that plan (the agent confirms relatedness with you in the
+   terminal), revising it and pushing the same PR instead of starting fresh.
 2. The agent researches, runs `otacon start`, and grills you one question at a time —
    answer the cards in the browser (`otacon open`) or on your phone via the tailnet URL.
 3. The agent drafts, passes the linter, submits. You review: questions fire instantly,

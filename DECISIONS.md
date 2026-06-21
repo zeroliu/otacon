@@ -2698,3 +2698,28 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Build worktrees can host more than one session at a time (the
   `worktreeOwners` length>1 refusal would need a smarter tiebreak), or `start` grows a flag
   that should also reopen (so the two verbs reconverge).
+
+## Resume bootstrap: agent-judged relatedness + a terminal confirm, and amend-in-place
+
+- **Decision:** The protocol card teaches the agent, before `otacon start`, to check
+  `otacon status` for a `resumeCandidate` and decide whether to amend the finished plan
+  or plan fresh. The decision is the agent's: it reads the candidate plan, and if the
+  request is clearly unrelated it just starts fresh; if related (or it is unsure) it asks
+  the user in the terminal whether to resume and amend or start new. That terminal
+  question is the single, explicit exception to the "every question goes through
+  `otacon ask`" rule. On resume the build **amends in place**: it reuses the existing
+  worktree and `otacon/impl-<slug>` branch, builds on top of the existing commits scoped
+  to the phases this revision changed, and pushes to update the SAME PR rather than
+  opening a second worktree, branch, and PR.
+- **Why:** Relatedness is a judgment the daemon cannot make (it would need to read the
+  request and the plan), so the card hands it to the agent, which already has both. A
+  silent auto-resume would risk amending the wrong plan from a stale cwd; a silent
+  auto-fresh would throw away the in-place amend whenever the user actually wanted it, so
+  a one-line terminal confirm (the only point with no session open to route an `ask`
+  through) splits the difference cheaply. Amend-in-place keeps a revised plan's code on
+  the branch the original PR tracks, so a reviewer sees one evolving PR instead of two
+  competing worktrees, branches, and PRs for the same feature, and the existing commits
+  stay as history.
+- **Revisit when:** The relatedness call wants tooling (an `otacon`-side hint or a
+  similarity check) instead of pure agent judgment, or amendments need to diverge onto a
+  new branch/PR (a large pivot that should not pile onto the original PR).
