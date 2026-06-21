@@ -749,7 +749,7 @@ first, free text) → answer via `wait`. **Grilling works from the phone, one th
 while walking.** An option question is never a trap: every card also takes a free-form
 custom answer — typed text alone (native-AskUserQuestion "Other" parity), or riding a
 chosen chip as a note. An answer is not final while the session is live: a settled card
-carries a **change** control that reopens the same form prefilled with the current
+carries an **undo** control that reopens the same form prefilled with the current
 answer, and submitting overwrites it (the overwrite is the `revised` answer event of §4).
 
 The transcript persists in `.otacon/<session>/transcript.json` — distinct from the
@@ -765,7 +765,7 @@ Structural integration:
 - **The transcript is part of the review UI**: a collapsible "Interview" panel shows
   the Q&A history; each decision deep-links to its originating answer ("why RS256?" —
   one tap, including what the user said at the time). While the session is live the
-  panel's answered entries carry the same **change** control as the settled card; once
+  panel's answered entries carry the same **undo** control as the settled card; once
   the session is read-only the archive is static.
 - **The transcript ships with the artifact**: archived with the approved plan so
   `snake` inherits not just decisions but their reasoning.

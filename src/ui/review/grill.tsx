@@ -89,7 +89,7 @@ function QuestionCard({
 
 /**
  * The answered card, settled in place: the one-glance confirmation. While the
- * session is live the answer is not final: a "change" control reopens the same
+ * session is live the answer is not final: an "undo" control reopens the same
  * AnswerForm prefilled with the current answer (single-choice chip lit, note
  * shown), and submitting overwrites it. The `editing` flag lives here and
  * survives the SSE re-render (same entry.id key), so onDone returns to the
@@ -134,10 +134,13 @@ function SettledCard({
           </p>
           <button
             type="button"
-            className="grill-note-toggle grill-change"
+            className="grill-undo"
             onClick={() => setEditing(true)}
           >
-            change
+            <span className="grill-undo-glyph" aria-hidden="true">
+              ↶
+            </span>
+            undo
           </button>
         </>
       )}

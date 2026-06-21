@@ -31,22 +31,22 @@ const answered = entry({
   answer: { answeredAt: AT, choice: "A" },
 });
 
-describe("InterviewPanel change affordance", () => {
-  test("an answered entry shows the change control while editable", () => {
-    expect(render([answered], true)).toContain("grill-change");
+describe("InterviewPanel undo affordance", () => {
+  test("an answered entry shows the undo control while editable", () => {
+    expect(render([answered], true)).toContain("grill-undo");
   });
 
-  test("a read-only session shows no change control", () => {
+  test("a read-only session shows no undo control", () => {
     const html = render([answered], false);
-    expect(html).not.toContain("grill-change");
+    expect(html).not.toContain("grill-undo");
     // the static answer block is still there — read-only is byte-for-byte today
     expect(html).toContain("iv-answer");
   });
 
-  test("an unanswered entry never shows the change control, even editable", () => {
+  test("an unanswered entry never shows the undo control, even editable", () => {
     const pending = entry({ options: ["A", "B"] });
     const html = render([pending], true);
-    expect(html).not.toContain("grill-change");
+    expect(html).not.toContain("grill-undo");
     expect(html).toContain("iv-awaiting");
   });
 });

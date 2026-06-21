@@ -154,10 +154,13 @@ function InterviewEntry({
             {editable && (
               <button
                 type="button"
-                className="grill-note-toggle grill-change"
+                className="grill-undo"
                 onClick={() => setEditing(true)}
               >
-                change
+                <span className="grill-undo-glyph" aria-hidden="true">
+                  ↶
+                </span>
+                undo
               </button>
             )}
           </>
