@@ -29,12 +29,16 @@ machine-readable error you can fix (read the JSON); exit 2 = you invoked it wron
    the session and prints the review URL. Tell the user to open it (\`${cmd} open\`
    launches it in their browser) so they can watch the whole thing from the first second.
    \`--quick\` skips the interview — only when the user explicitly asks.
-2. **Research the codebase**, narrating as you go with
-   \`${cmd} progress "<what you're doing>"\` — call it whenever you start a chunk of
-   work the user can't otherwise see (reading a module, drafting, revising). It is
-   a non-blocking one-liner that feeds the live activity log and the draft chip; no
-   answer comes back, so never park on it. Read enough to propose answers, not
-   collect questions.
+2. **Research the codebase.** On supported agents the daemon now auto-streams your
+   tool calls, text, and thinking to the reviewer's now-playing console, so it
+   already sees the routine work. Use \`${cmd} progress "<what you're doing>"\` for
+   OCCASIONAL highlights and chapter markers (a milestone, a phase boundary, "what
+   I'm about to do next"), not per-step narration. It is the universal floor: on an
+   agent with no auto-capture those notes are the ONLY thing keeping the now-playing
+   bar alive, so still drop one whenever you start a chunk of work the user can't
+   otherwise see. It is a non-blocking one-liner that feeds the live stream and the
+   draft chip; no answer comes back, so never park on it. Read enough to propose
+   answers, not collect questions.
 3. **Grill** (mandatory unless --quick): Interview me relentlessly about every
    aspect of this plan until we reach a shared understanding. Walk down each branch
    of the design tree, resolving dependencies between decisions one-by-one. For
@@ -82,16 +86,20 @@ machine-readable error you can fix (read the JSON); exit 2 = you invoked it wron
 
 ## CLI quick reference
 
-- \`${cmd} start --title <t> [--quick]\` · \`${cmd} progress "<note>"\` ·
+- \`${cmd} start --title <t> [--quick]\` ·
+  \`${cmd} progress "<note>"\` (occasional highlights / chapter markers; the activity
+  floor on agents without auto-capture) ·
   \`${cmd} ask ...\` · \`${cmd} wait --timeout 540\` · \`${cmd} submit [--resolutions f]\` ·
   \`${cmd} answer <q> --body "..."\` · \`${cmd} implement-done [--pr <url>] [--failed]\` ·
   \`${cmd} status\` · \`${cmd} open\` · \`${cmd} config [get <key>]\`
 
 ## Implement loop (on \`approved\` with \`implement:true\`)
 
-You are the **orchestrator**: you only coordinate and narrate
-(\`${cmd} progress\` at each checkpoint) — every phase's real work runs in a fresh
-native subagent (Task tool) so your own context stays lean.
+You are the **orchestrator**: you only coordinate and mark progress
+(\`${cmd} progress\` at phase boundaries, an occasional chapter marker rather than
+every action; on supported agents the now-playing console already streams the work).
+Every phase's real work runs in a fresh native subagent (Task tool) so your own
+context stays lean.
 
 1. **Setup.** On Implement the plan lives only in the home archive at the event
    \`path\` (read the phases from there). Branch off the repo's current default branch
@@ -99,9 +107,11 @@ native subagent (Task tool) so your own context stays lean.
    worktree under the configured \`worktree.dir\`
    (\`${cmd} config get worktree.dir\` — default \`~/.otacon/worktrees\`, outside the repo):
    \`git worktree add <worktree.dir>/<slug> -b otacon/impl-<slug>\` (off the default
-   branch). \`${cmd} progress\` each checkpoint throughout.
+   branch). Drop a \`${cmd} progress\` highlight at each phase boundary throughout,
+   not at every step.
 2. **Per phase, in order** (read the phases from the home plan at the event \`path\`):
-   - \`${cmd} progress "phase N — implementing"\`; spawn an **implement+test**
+   - \`${cmd} progress "phase N — implementing"\` (one marker per phase); spawn an
+     **implement+test**
      subagent (Task tool) scoped to that phase's Goal/Files/Verification — it
      implements and runs the phase Verification plus the repo gates.
    - spawn a **separate** \`/code-review --fix\` subagent on the phase's working

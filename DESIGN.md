@@ -643,8 +643,12 @@ mirroring the budgets config. Off macOS the banner is a silent no-op.
 
 1. **Start (first).** Skill triggers; `otacon start` mints the session and prints the
    review URL *before* research, so the user can watch from the first second. The
-   agent then researches the codebase, narrating at checkpoints with `otacon progress`
-   — each note feeds the live activity log and the draft chip (UI-only; never an event).
+   agent then researches the codebase. On a supported agent the live-activity stream
+   (§10a) auto-captures the agent's own tool calls, text, and thinking, so the routine
+   work streams to the now-playing console without narration; the agent drops an
+   `otacon progress` note only for occasional highlights and chapter markers. On an
+   agent with no transcript adapter that floor is the *only* activity signal, so the
+   notes still carry the bar there (UI-only; never an event).
 2. **Grill** (§8). Agent walks the design tree via `otacon ask` + `wait`, one question
    at a time. Skipped with `--quick`.
 3. **Draft.** Agent writes `plan.md`, runs `otacon submit`; loops on lint errors until clean.
@@ -997,11 +1001,12 @@ returns to the index.
 - Collapsed Details show size badges ("▸ 34 lines · 1 diagram · 2 code blocks") —
   skipping is a conscious choice. L6 warnings render here.
 - Collapsible "Interview" panel: grill transcript; decisions deep-link into it.
-- Collapsible "Activity" log: the agent's `otacon progress` narration as an
-  append-only feed (newest first), so work is visible during research + drafting.
-  Compact and collapsed on the review screen; the pre-plan placeholder ("no
-  revision yet") leads with it open, since before a plan exists it is the main
-  thing to watch. The header also carries the agent-presence dot.
+- Live activity rides the always-on **now-playing bar + console** (§10a), pinned under
+  the header: the automatic, cross-agent stream of the agent's tool calls, text, and
+  thinking, with `otacon progress` highlights inline as chapter markers. It is the
+  primary "what is the agent doing right now?" surface during research + drafting,
+  shown from the first second (it replaces the old default-closed Activity fold). The
+  header also carries the agent-presence dot.
 - Keyboard: `j/k` jump changed sections, `c` comment, `q` ask, `[`/`]` previous/next
   session (walks the switcher's active sessions, §7). **No shortcut for
   Approve, on purpose.** Approve warns on unresolved threads.

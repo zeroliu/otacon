@@ -1569,6 +1569,13 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 ## Live agent activity: explicit `otacon progress` narration, not inferred state
 
+> [!note] Reframed by "`otacon progress` stays as the universal floor + curated
+> highlights" below. `progress` is no longer the *only* live-activity signal: the
+> automatic transcript stream (§10a) now carries routine activity on supported agents,
+> so `progress` is asked for sparingly (highlights / chapter markers) and is the sole
+> signal only on agents with no transcript adapter. The verb, endpoint, and feed are
+> unchanged.
+
 - **Decision:** The agent reports what it's doing with a new `otacon progress
   "<note>"` verb (not the daemon inferring state from existing calls). Notes append
   to a capped (~20, config) `activity.json` feed, push as an `activity` SSE frame,
@@ -2756,3 +2763,33 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   add `@testing-library/react` plus a happy-dom register, and the pure split stays as the fast
   inner layer), or a second surface needs the same fold so the model gains a non-UI consumer
   (it already takes plain `StreamEvent[]`, so that is a lift, not a rewrite).
+
+## `otacon progress` stays as the universal floor + curated highlights
+
+- **Decision:** Now that the transcript tailer (§10a) auto-streams a supported agent's
+  tool calls, text, and thinking to the now-playing console, `otacon progress` is *not*
+  retired. It is reframed to two roles: (a) the **universal floor**, the one activity
+  signal that works on ANY agent, including the long tail with no transcript adapter
+  (hermes, pi, gemini-cli, and whatever ships next), where it is the *only* thing keeping
+  the now-playing bar alive; and (b) occasional **curated highlights / chapter markers**
+  (milestones, phase boundaries, "what I'm about to do next") that read as emphasized
+  dividers in the console. The managed wrapper (`assets.ts`) and DESIGN.md §6/§10 ask for
+  it SPARINGLY on supported agents (the firehose covers routine work) but still require it
+  on the floor. The verb, the `POST /progress` endpoint, the `highlight` stream event, and
+  the activity feed are all unchanged; this is a guidance reframe, not an API change.
+- **Why:** Auto-capture is per-agent and optional by construction (cwd+recency discovery,
+  one adapter per agent, `null` floor), so a signal that depends on it can never be
+  *universal*, and the floor is exactly what guarantees every agent shows *something*.
+  Retiring `progress` would strand every adapter-less agent on a dead bar and throw away a
+  cheap, zero-API, human-authored highlight track that no transcript can synthesize (the
+  agent saying "I'm about to do X" before it does). Reviewer noise from the firehose is the
+  real concern auto-capture introduced, but that is handled in the *display* (run-collapsing,
+  the thinking toggle, the now-playing "latest meaningful event" pick, §10a), not by
+  suppressing capture or leaning back on manual narration. Telling the agent to narrate
+  every step on top of the firehose would double-report routine work; telling it to stop
+  narrating entirely would blind the floor; "sparingly, but always on the floor" is the
+  only framing that holds for both the supported and the unsupported agent.
+- **Revisit when:** Every agent otacon targets has a transcript adapter (then the floor is
+  vestigial and `progress` could collapse to highlights-only), or auto-capture grows a
+  reliable cross-agent fallback (an API/hook handshake) that removes the adapter-less long
+  tail this floor exists for.
