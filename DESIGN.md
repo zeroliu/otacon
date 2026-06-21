@@ -764,7 +764,9 @@ Structural integration:
   (`D3 ← q7`) or wear `[assumed]`. No plan reaches review with silently-made decisions.
 - **The transcript is part of the review UI**: a collapsible "Interview" panel shows
   the Q&A history; each decision deep-links to its originating answer ("why RS256?" —
-  one tap, including what the user said at the time).
+  one tap, including what the user said at the time). While the session is live the
+  panel's answered entries carry the same **change** control as the settled card; once
+  the session is read-only the archive is static.
 - **The transcript ships with the artifact**: archived with the approved plan so
   `snake` inherits not just decisions but their reasoning.
 - Escape hatch: `otacon start --quick` skips the grill and downgrades L3 to a warning.
