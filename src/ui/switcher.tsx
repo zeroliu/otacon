@@ -10,6 +10,7 @@ import { accentStyle } from "./accent";
 import type { LiveSession, SessionStatus } from "./api";
 import { useSessions } from "./api";
 import { AgentDot, questionsPending } from "./chip";
+import { useSessionNav } from "./review/session-nav";
 import { navigate } from "./router";
 import { unreadCount } from "./seen";
 import { isOver, partitionByApproval } from "./session-filter";
@@ -55,6 +56,11 @@ export function SessionSwitcher({ current }: { current: string }) {
   // absent from `active` exactly when it's missing from the registry or over.
   const currentSession = byActivity.find((s) => s.id === current);
   const gone = !currentSession || isOver(currentSession.status);
+  // `[` / `]` walk `active` (the activity-ordered, non-over set, same order as
+  // the chips/dropdown). Mounted here because the switcher already owns the live
+  // session list, so the shortcut needs no second SSE stream. Above the early
+  // return so the hook runs unconditionally (stable hook order across renders).
+  useSessionNav(active.map((s) => s.id), current);
   // Render nothing only when the registry is genuinely empty. An all-over
   // registry still has a current to anchor: the placeholder must show, so the
   // switcher doesn't vanish out from under the one over session you opened from

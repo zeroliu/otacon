@@ -2563,3 +2563,26 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   and the source-checkout refusal need rethinking), or `otacon update` should also be able to
   restart the daemon in-place to the new version without waiting for the next command (e.g. by
   re-exec'ing the freshly-installed binary the way `maybeAutoUpdate` does).
+
+## Session nav shortcut: `[`/`]` walk the switcher's active sessions
+
+- **Decision:** On the review screen, `[` steps to the previous session and `]` to the next,
+  over the switcher's `active` list (the activity-ordered, non-over set, i.e. the exact
+  chips / dropdown order, §7), wrapping at both ends. The shortcut is review-screen-only and is
+  mounted on the `SessionSwitcher` (`useSessionNav`, above the `byActivity.length === 0`
+  early return so the hook order stays stable). The "don't steal keys from a focused text
+  field" rule is a single shared guard, `isTypingTarget` (`src/ui/review/session-nav.ts`),
+  which the session-screen keydown handler now also calls instead of its old inline
+  tag/contentEditable check.
+- **Why:** `[`/`]` were free (j/k jump changed sections, c/q comment/ask) and read as the
+  conventional prev/next pair, so they don't collide with the existing verbs or fight muscle
+  memory; modified chords are left alone so Cmd+[ / Cmd+] stay browser back/forward.
+  Navigating the switcher's `active` set (not the full registry) means the keyboard walks
+  exactly what the eyes see in the strip, in the same order, with no surprise stops on hidden
+  over sessions. Mounting on the switcher reuses the list it already streams, so the shortcut
+  needs no second index SSE subscription. Collapsing the two copies of the typing-guard onto
+  one `isTypingTarget` keeps the nav hook and the c/q/j/k handler from ever disagreeing about
+  what counts as "typing".
+- **Revisit when:** A second surface wants the shortcut (it would need its own session list,
+  or the hook lifts to a shared provider), the navigable set should differ from the visible
+  strip, or wrap-at-ends becomes more annoying than convenient (clamp instead).

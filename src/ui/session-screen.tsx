@@ -52,6 +52,7 @@ import { useKeyboardInset, useScrollLock } from "./review/keyboard";
 import { ThreadsRail } from "./review/rail";
 import type { SectionMenuState } from "./review/section-menu";
 import { SectionMenu } from "./review/section-menu";
+import { isTypingTarget } from "./review/session-nav";
 import { navigate } from "./router";
 import { markSeen } from "./seen";
 import { isOver } from "./session-filter";
@@ -411,15 +412,7 @@ function ReviewLoop({
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
-      const target = event.target as HTMLElement | null;
-      if (
-        target?.tagName === "INPUT" ||
-        target?.tagName === "TEXTAREA" ||
-        target?.tagName === "SELECT" ||
-        target?.isContentEditable
-      ) {
-        return;
-      }
+      if (isTypingTarget(event.target)) return;
       if (event.key === "Escape") {
         setComposer(null);
         return;
