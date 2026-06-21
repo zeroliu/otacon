@@ -1,0 +1,66 @@
+{
+  "_comment": "Synthetic OpenCode SQLite contents for the opencode adapter test. Mirrors the real `session`/`message`/`part` tables (storage migration 2): a session records its `directory` (cwd), messages link to it, and parts carry a JSON `data` blob whose `type` is text/reasoning/tool. No real content — all values are invented. The adapter test loads this and serves it through a fake read-only DB via __setOpenDb.",
+  "session": [
+    {
+      "id": "ses_synthmatch00000000000001",
+      "directory": "/Users/test/myrepo",
+      "time_created": 1782045400000,
+      "time_updated": 1782045421000
+    },
+    {
+      "id": "ses_synthother00000000000002",
+      "directory": "/Users/test/otherrepo",
+      "time_created": 1782045300000,
+      "time_updated": 1782045310000
+    }
+  ],
+  "message": [
+    {
+      "id": "msg_synth0000000000000000a",
+      "session_id": "ses_synthmatch00000000000001",
+      "time_created": 1782045410000,
+      "data": { "role": "assistant" }
+    }
+  ],
+  "part": [
+    {
+      "id": "prt_synth_reasoning_0000001",
+      "message_id": "msg_synth0000000000000000a",
+      "session_id": "ses_synthmatch00000000000001",
+      "time_created": 1782045410100,
+      "data": {
+        "type": "reasoning",
+        "text": "I should run the test suite before touching the retry helper.",
+        "time": { "start": 1782045410100, "end": 1782045410200 }
+      }
+    },
+    {
+      "id": "prt_synth_tool_bash_000002",
+      "message_id": "msg_synth0000000000000000a",
+      "session_id": "ses_synthmatch00000000000001",
+      "time_created": 1782045410500,
+      "data": {
+        "type": "tool",
+        "tool": "bash",
+        "callID": "call_synth_0001",
+        "state": {
+          "status": "completed",
+          "input": { "command": "bun test src/fetch.test.ts", "description": "Run the fetch tests" },
+          "output": "1 pass, 0 fail",
+          "title": "Run the fetch tests",
+          "time": { "start": 1782045410500, "end": 1782045410900 }
+        }
+      }
+    },
+    {
+      "id": "prt_synth_text_00000000003",
+      "message_id": "msg_synth0000000000000000a",
+      "session_id": "ses_synthmatch00000000000001",
+      "time_created": 1782045411000,
+      "data": {
+        "type": "text",
+        "text": "The baseline tests pass. I'll add the retry wrapper next."
+      }
+    }
+  ]
+}

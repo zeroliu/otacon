@@ -9,9 +9,10 @@
 import type { TranscriptAdapter, TranscriptHandle } from "./adapter.js";
 import { claudeAdapter } from "./claude.js";
 import { codexAdapter } from "./codex.js";
+import { opencodeAdapter } from "./opencode.js";
 
 /** Ordered adapters; the first whose `locate` matches wins. */
-export const ADAPTERS: readonly TranscriptAdapter[] = [claudeAdapter, codexAdapter];
+export const ADAPTERS: readonly TranscriptAdapter[] = [claudeAdapter, codexAdapter, opencodeAdapter];
 
 /**
  * The first adapter with a located transcript for `repoRoot`, or null when no

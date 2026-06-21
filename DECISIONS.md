@@ -2826,3 +2826,59 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   cache the meta-cwd scan), Codex moves the session cwd off the leading `session_meta` record,
   or a future Codex build encrypts assistant/tool content too (then capture needs an API or a
   decrypt path, not transcript reading).
+
+## OpenCode adapter: tail the local SQLite store read-only, not the `opencode serve` stream
+
+- **Decision:** The OpenCode `TranscriptAdapter` reads OpenCode's **local on-disk storage**,
+  not its `opencode serve` HTTP event stream. On a real install (storage migration 2) that
+  storage is a **SQLite database** at `$XDG_DATA_HOME/opencode/opencode.db` (default
+  `~/.local/share/opencode/`), *not* the documented `storage/{session,message,part}/*.json`
+  tree — most session data now lives in the DB and only `session_diff/*.json` remains as
+  loose files. `locate` opens the DB **read-only** (Node's built-in `node:sqlite`, zero new
+  npm deps) and runs `SELECT id FROM session WHERE directory = ? ORDER BY time_updated DESC`
+  to find the freshest session whose recorded cwd is the repo root, encoding the resolved
+  session id into the handle path as `<db>#<sessionId>` (the `TranscriptHandle` has only a
+  `path`). `parse` queries `part WHERE session_id = ? AND time_created >= watermark ORDER BY
+  time_created`, maps `data.type` `text` → text, `reasoning` → thinking, and `tool` → a
+  `running` event plus, when `state.status` is `completed`/`error`, a SEPARATE `ok`/`error`
+  outcome event. Tool labels mirror the Claude verbs over OpenCode's lowercase tool names
+  (`bash` → `Bash: …`, `read`/`edit`/`write` → `Read/Edit/Write <file>`, `grep`/`glob`,
+  etc.). The whole adapter is fail-soft: a missing `node:sqlite`, a locked/absent/corrupt DB,
+  or a torn `data` JSON is swallowed and the session falls to the floor.
+- **Why:** The HTTP stream would require otacon to spawn and own a long-lived `opencode
+  serve` process per repo — exactly the extra-process, cooperation-required coupling the
+  Claude/Codex adapters were designed to avoid (they read files the agent already writes,
+  no daemon of the agent's needed). Reading the same on-disk store the agent already
+  persists keeps the file-based, no-extra-process, read-only model uniform across all three
+  adapters and survives the agent not running a server at all. Inspecting a real install
+  showed the *current* OpenCode keeps that store in SQLite, not the older JSON-file tree, so
+  the adapter reads the DB directly rather than globbing a `part/` directory that no longer
+  exists. `node:sqlite` is a built-in (no dependency, no native build) and we open it
+  read-only so we never touch the agent's DB.
+- **Cursor — watermark, not byte offset.** The JSONL adapters advance a byte `offset` into a
+  growing file; a SQLite source has no such offset (rows are inserted and tool parts are
+  *mutated in place* as a tool settles). So the OpenCode cursor leaves `offset` unused and
+  carries a high-water `time_created` watermark plus the set of part ids emitted *at exactly*
+  that watermark. Each `parse` asks for `time_created >= watermark` (`>=`, not `>`, so a part
+  inserted in the same millisecond as the prior frontier is not missed), skips any id already
+  in the tie set, emits the rest in `time_created` order, then advances the watermark to the
+  newest time seen and resets the tie set to just the ids at that new frontier — bounded to
+  the frontier, never the whole session. The tailer round-trips this carry untouched, exactly
+  as it does the byte offset, so a dir/DB-tree adapter drops into the same poll loop with no
+  tailer change. A part re-surfaced by a later `time_updated` bump (its tool finishing) is
+  *not* re-read by this watermark — that is acceptable: a tool's outcome detail is a nicety,
+  not a correctness requirement, and re-emitting the running event would violate append-only.
+- **Freshest-by-`time_updated`.** `locate` returns the session with the newest
+  `time_updated` for the cwd, which is the one being actively worked — the right target for a
+  live tailer, even though a cwd with a long history can carry many *empty* abandoned
+  sessions whose `time_updated` is older. (Observed on a real install: the newest session for
+  a repo was an empty 0-part shell; the session with content was a few seconds older. That is
+  fine — an active session accrues parts as work happens and stays the freshest; a dormant
+  repo with only empty sessions has no activity to capture and runs on the floor regardless.)
+- **Revisit when:** OpenCode reverts to (or also writes) the loose JSON-file tree and we want
+  to support both shapes; or `node:sqlite` is unavailable on a runtime otacon must support
+  (it is Node-22+; under bun the test runner lacks it and the adapter degrades to the floor —
+  fine for the daemon, which ships as `node dist/daemon/main.js`, but it means OpenCode
+  capture needs a Node ≥ 22 daemon); or we decide the streamed tool *outcome* matters enough
+  to also watch `part.time_updated` (then the cursor needs an updated-watermark dimension and
+  a dedupe of the already-emitted running event).

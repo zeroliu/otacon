@@ -11,10 +11,20 @@ function fake(agent: string, locate: (repo: string) => TranscriptHandle | null):
 }
 
 describe("findAdapter", () => {
-  test("the default registry includes the Claude and Codex adapters", () => {
+  test("the default registry includes the Claude, Codex, and OpenCode adapters", () => {
     const agents = ADAPTERS.map((a) => a.agent);
     expect(agents).toContain("claude");
     expect(agents).toContain("codex");
+    expect(agents).toContain("opencode");
+  });
+
+  test("OpenCode wins when neither Claude nor Codex has a transcript but OpenCode does", () => {
+    const claude = fake("claude", () => null);
+    const codex = fake("codex", () => null);
+    const opencode = fake("opencode", (repo) => ({ agent: "opencode", path: `${repo}/opencode.db#ses_1` }));
+    const found = findAdapter("/repo", [claude, codex, opencode]);
+    expect(found?.adapter.agent).toBe("opencode");
+    expect(found?.handle.path).toBe("/repo/opencode.db#ses_1");
   });
 
   test("Codex wins when Claude has no transcript but Codex does", () => {

@@ -1146,13 +1146,24 @@ created a beat before the agent's transcript file appears.
   the offset before it so the next poll completes it; advance by bytes, not characters),
   and map each recognized record to a `RawStreamEvent` (`kind`/`label`/`detail`/`tool`/
   `status`). The `cursor` is opaque to the daemon: `offset` plus any per-adapter carry
-  (e.g. the resolved repo root), round-tripped untouched.
+  (e.g. the resolved repo root), round-tripped untouched. A non-JSONL source uses the carry
+  *instead of* the byte offset for incrementality — the OpenCode SQLite adapter leaves
+  `offset` unused and carries a high-water `time_created` watermark plus the part ids
+  emitted at exactly that watermark (the same-millisecond tie set), so each poll returns
+  only newer parts and never re-emits.
 - **Append-only outcomes.** The store never upserts. A tool's `running` event and its
   later `ok`/`error` outcome are **two separate appended events**, not one mutated row —
   an adapter emits the outcome as a follow-on event, never an edit to the earlier one.
 - **Fail-soft, always.** A malformed line, a vanished/rotated file, or any parse error is
   skipped, never thrown. The daemon catches a throwing `locate` as "no match". The worst
   case is the session running on the `otacon progress` floor for that tick.
+- **Supported agents.** Claude Code, Codex, and OpenCode ship adapters and are
+  auto-captured. Claude and Codex each tail one JSONL transcript; OpenCode keeps its
+  sessions in a local SQLite database (`$XDG_DATA_HOME/opencode/opencode.db`, default
+  `~/.local/share/opencode/`), so its adapter reads that DB *read-only* (Node's built-in
+  `node:sqlite`, no extra process) and walks the `session`/`message`/`part` tables, mapping
+  `part.data` of type `text`/`reasoning`/`tool` to text/thinking/tool events. Every other
+  agent degrades to the floor.
 - **The floor (graceful degradation).** When *no* adapter matches a repo's agent, the
   registry returns `null`, no tailer attaches, and the session streams only its manual
   `otacon progress` highlights. Every agent therefore gets at least the floor; an adapter
