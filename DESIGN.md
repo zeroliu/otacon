@@ -285,11 +285,20 @@ errors on stdout; the agent fixes and resubmits. Invalid revisions never reach t
 | L5   | Revision accompaniment: a submit must include a resolution reply for every open comment thread, and every revision ≥ 2 must carry a changelog    | error                                  |
 | L6   | Detail soft caps (>80 lines/section)                                                                                                             | warning, surfaced as a badge in the UI |
 | L7   | First-screen recommendation: a lead diagram (`mermaid`) near the top is strongly recommended (~90% of plans); a `<!-- no-lead-diagram -->` marker in Summary opts out | warning (nudge, never blocks) |
+| L8   | Diagram renderability: every `mermaid` fence parses headlessly (mermaid in a happy-dom DOM); a fence mermaid cannot parse is `E_DIAGRAM_UNRENDERABLE`, so an unrenderable diagram never reaches the reviewer | error (fails open: no headless setup → no check) |
 
 Budget numbers are config, expected to be tuned during the first week of real use.
 Known residual risk: vacuous summaries pass L2 (no deterministic fix without an LLM,
 which the zero-cost invariant forbids server-side) — mitigated by the human commenting
 "this says nothing," which is cheap.
+
+L8 parses **every** `mermaid` fence in the plan, not just the lead diagram, by running
+mermaid's own parser in a headless happy-dom DOM at submit time — the same parser the UI
+uses to render. A fence that fails to parse is a blocking `E_DIAGRAM_UNRENDERABLE` error
+the agent must fix and resubmit, so a "failed to render" card can never surface to the
+human reviewer. The check **fails open**: if the headless mermaid setup can't be stood up
+(bad import, missing DOM globals), L8 degrades to no check rather than wedge every submit
+on an infra problem.
 
 ---
 

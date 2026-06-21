@@ -2586,3 +2586,57 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** A second surface wants the shortcut (it would need its own session list,
   or the hook lifts to a shared provider), the navigable set should differ from the visible
   strip, or wrap-at-ends becomes more annoying than convenient (clamp instead).
+
+## L8 diagram check: headless render, not a heuristic
+
+- **Decision:** The submit-time diagram gate (L8, `src/daemon/diagrams.ts`) verifies each
+  `mermaid` fence by actually running mermaid's parser in a headless happy-dom DOM, not by
+  a pure string/syntax heuristic. `mermaid` and `happy-dom` are accepted as runtime
+  dependencies of the otherwise-thin CLI for this.
+- **Why:** A heuristic can only approximate what mermaid accepts; running mermaid itself is
+  faithful by construction — what passes L8 is exactly what the UI's renderer will accept,
+  because it is the same parser. The cost is dependency weight (mermaid + happy-dom, ~tens
+  of MB) on a CLI that otherwise carries almost nothing, which we accept because a
+  diagram that renders blank in front of the human reviewer is precisely the failure the
+  review loop exists to prevent.
+- **Revisit when:** The dependency weight starts to hurt install time or footprint enough
+  to matter, or a lighter mermaid-equivalent parser (no DOM) becomes available.
+
+## L8 uses `mermaid.parse()`, not `mermaid.render()`
+
+- **Decision:** The gate calls `mermaid.parse()` (syntax validation) rather than
+  `mermaid.render()` (full SVG layout).
+- **Why:** `parse()` needs no SVG layout, so it runs robustly headless. `render()` relies
+  on `getBBox()` for layout, which happy-dom stubs to 0 — that produces false failures on
+  diagrams that would render fine in a real browser. The tradeoff is that `parse()`
+  validates syntax, not layout: a syntactically valid diagram that lays out badly still
+  passes L8. The UI's own "failed to render" fallback remains the backstop for that
+  residual case.
+- **Revisit when:** A headless layout engine faithful enough to trust `render()` exists, or
+  layout failures (valid syntax, broken layout) show up often enough to need server-side
+  catching.
+
+## A broken diagram is a blocking submit error, not a warning
+
+- **Decision:** An unrenderable fence is an `error` (`E_DIAGRAM_UNRENDERABLE`) that 422s the
+  submit, merged into the same response shape as the structural linter — not a warning the
+  agent may ignore.
+- **Why:** It joins the existing fix-and-resubmit loop, which is the machinery that
+  guarantees nothing broken reaches review. A warning would let an unrenderable diagram
+  through to the human, which is the exact outcome the check exists to prevent. Running it
+  alongside `lint()` and merging errors means the agent gets structural + diagram failures
+  in one pass, fewer round-trips.
+- **Revisit when:** Diagram-render failures prove common enough on valid-looking input that
+  blocking is more annoying than the dead-diagram it prevents.
+
+## L8 fails open on headless-setup failure
+
+- **Decision:** If the headless mermaid setup itself can't be stood up (bad import, missing
+  DOM globals, init throw), `validateDiagrams` returns `[]` — no L8 errors — rather than
+  block the submit.
+- **Why:** A diagram that won't render is a nuisance; a linter that won't let anyone submit
+  is a brick wall. A mermaid- or DOM-side infra problem should degrade to today's behavior
+  (no diagram check), never wedge every submit in the repo. The setup promise is also
+  cleared on failure so a later submit can retry rather than being poisoned permanently.
+- **Revisit when:** A way exists to distinguish a transient setup blip from a permanent
+  break, so a hard break could be surfaced loudly instead of silently skipping the check.

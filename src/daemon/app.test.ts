@@ -221,6 +221,43 @@ describe("submit", () => {
     expect(store.getSession(session.id)?.status).toBe("in_review");
   });
 
+  test("an unrenderable mermaid fence is a blocking L8 422; a fixed resubmit passes", async () => {
+    const session = mintSession();
+    // Start from the otherwise-valid fixture (passes every L1/L2/L3/L5 rule) and
+    // swap only its mermaid fence body for a bogus diagram type. "notadiagram"
+    // deterministically fails mermaid.parse ("No diagram type detected…"), so the
+    // diagram is the ONLY error the submit can carry.
+    const valid = validPlanFor(session.id);
+    const broken = valid.replace("flowchart LR", "notadiagram");
+    expect(broken).not.toBe(valid); // guard the fixture still has the fence
+
+    const blocked = await app.request(`/api/sessions/${session.id}/submit`, {
+      method: "POST",
+      body: broken,
+    });
+    expect(blocked.status).toBe(422);
+    const body = (await blocked.json()) as {
+      ok: boolean;
+      errors: { rule: string; code: string }[];
+    };
+    expect(body.ok).toBe(false);
+    expect(
+      body.errors.some((e) => e.rule === "L8" && e.code === "E_DIAGRAM_UNRENDERABLE"),
+    ).toBe(true);
+    // A blocked submit stores nothing and leaves the session untouched.
+    expect(store.readState(session.id).revision).toBe(0);
+    expect(store.getSession(session.id)?.status).toBe("draft");
+
+    // The fix-and-resubmit loop: the valid plan (valid mermaid) now passes.
+    const fixed = await app.request(`/api/sessions/${session.id}/submit`, {
+      method: "POST",
+      body: valid,
+    });
+    expect(fixed.status).toBe(200);
+    expect((await fixed.json()) as { ok: boolean }).toMatchObject({ ok: true });
+    expect(store.getSession(session.id)?.status).toBe("in_review");
+  });
+
   test("accepts a JSON body carrying the plan, for the CLI's resolutions rider", async () => {
     const session = mintSession();
     const res = await postJson(`/api/sessions/${session.id}/submit`, {
