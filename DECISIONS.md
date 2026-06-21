@@ -2793,3 +2793,36 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   vestigial and `progress` could collapse to highlights-only), or auto-capture grows a
   reliable cross-agent fallback (an API/hook handshake) that removes the adapter-less long
   tail this floor exists for.
+
+## Codex adapter: walk the date-partitioned rollout tree; map the real `exec_command` shape
+
+- **Decision:** The Codex `TranscriptAdapter` locates by recursively walking
+  `$CODEX_HOME/sessions/` (default `~/.codex/sessions/`, CODEX_HOME-aware), collecting every
+  `rollout-*.jsonl`, sorting newest-first by mtime, and returning the first whose leading
+  `session_meta.payload.cwd` equals the repo root. It does **not** derive a per-repo
+  subdirectory the way the Claude adapter does. `parse` reads the envelope
+  `{ timestamp, type, payload }` and maps only `type:"response_item"` payloads: `reasoning`
+  → thinking (flattening `summary[].text`; encrypted-only reasoning yields nothing),
+  assistant `message` → text (user messages skipped), `function_call`/`custom_tool_call` →
+  a `running` tool event, `function_call_output`/`custom_tool_call_output` → its `ok`/`error`
+  outcome (error inferred from a non-zero exit code or `success:false` in a JSON output,
+  else ok). Shell tools (`exec_command` and the older `shell`) render as `Bash: <command>`,
+  pulling the command from `arguments.cmd` (a string) or a `command` array (unwrapping a
+  `bash -lc <script>`); `apply_patch` renders as `Edit <file>` when a path is recoverable.
+- **Why:** Codex's on-disk layout is date-partitioned by session start (`<YYYY>/<MM>/<DD>/`),
+  not keyed by cwd like Claude's dash-encoded project dirs, so there is no cheap directory to
+  jump to — the recorded `session_meta.cwd` is the only authoritative repo key, and reading it
+  per candidate (newest-first, short-circuiting on the first match) is the correct and still
+  cheap discovery. Inspecting real rollouts on disk showed the *current* Codex CLI diverges
+  from the older documented shape: the shell tool is `exec_command` with a string `arguments.cmd`
+  (not the `shell` tool with a `["bash","-lc",…]` array), reasoning is frequently
+  `encrypted_content`-only with an empty `summary`, and `function_call_output.output` is usually
+  plain text rather than a JSON envelope. The adapter handles both the documented and the
+  observed shapes defensively so it survives version churn, and emits nothing (not a noisy
+  empty event) for encrypted-only reasoning. Mapping the running call and its outcome as two
+  appended events preserves the append-only store invariant the pipeline already relies on.
+- **Revisit when:** Walking the whole sessions tree per `locate` becomes a hot path on a
+  machine with thousands of historical rollouts (then index by mtime/most-recent-day first, or
+  cache the meta-cwd scan), Codex moves the session cwd off the leading `session_meta` record,
+  or a future Codex build encrypts assistant/tool content too (then capture needs an API or a
+  decrypt path, not transcript reading).

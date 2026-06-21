@@ -11,8 +11,18 @@ function fake(agent: string, locate: (repo: string) => TranscriptHandle | null):
 }
 
 describe("findAdapter", () => {
-  test("the default registry includes the Claude adapter", () => {
-    expect(ADAPTERS.map((a) => a.agent)).toContain("claude");
+  test("the default registry includes the Claude and Codex adapters", () => {
+    const agents = ADAPTERS.map((a) => a.agent);
+    expect(agents).toContain("claude");
+    expect(agents).toContain("codex");
+  });
+
+  test("Codex wins when Claude has no transcript but Codex does", () => {
+    const claude = fake("claude", () => null);
+    const codex = fake("codex", (repo) => ({ agent: "codex", path: `${repo}/rollout.jsonl` }));
+    const found = findAdapter("/repo", [claude, codex]);
+    expect(found?.adapter.agent).toBe("codex");
+    expect(found?.handle.path).toBe("/repo/rollout.jsonl");
   });
 
   test("returns the first adapter whose locate matches", () => {
