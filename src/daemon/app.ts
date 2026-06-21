@@ -50,6 +50,8 @@ import { appendActivity, latestNote, readActivity } from "./activity.js";
 import type { ReviewNote } from "./approve.js";
 import { normalize } from "./capture/normalize.js";
 import { appendStreamEvents, readStream, StreamSeq } from "./capture/stream-store.js";
+import type { TailerDeps } from "./capture/tailer.js";
+import { Tailer } from "./capture/tailer.js";
 import { composeArtifact, localDate, pickHomePath, pickProjectRelPath } from "./approve.js";
 import type { DesktopNotifier } from "./desktop-notify.js";
 import { createDesktopNotifier } from "./desktop-notify.js";
@@ -90,6 +92,12 @@ export interface AppOptions {
   presence?: Presence;
   /** Test override: the desktop notify sink (default: the real macOS notifier, a no-op off darwin). */
   notify?: DesktopNotifier;
+  /**
+   * Test override: the per-session transcript tailer factory (default: the real
+   * `Tailer`, polling the agent's transcript). A test can return a stub so the
+   * suite never depends on real `~/.claude` contents or a live fs poll.
+   */
+  makeTailer?: (deps: TailerDeps) => { start(): void; stop(): void };
 }
 
 type AppContext = Context<{ Bindings: NodeBindings }>;
@@ -300,6 +308,42 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     return (repo ? loadConfig(repo) : loadConfig()).stream.cap;
   };
 
+  // Per-session transcript tailers (the automatic, cross-agent activity stream):
+  // while a session is active, its tailer watches the coding agent's own
+  // transcript and feeds new tool/text/thinking activity through the SAME Phase
+  // 1 pipeline the progress route uses — `nextStreamSeq` for the seq,
+  // `appendStreamEvents` (capped), and `publishStream` for the SSE frame — so a
+  // captured event and a manual `otacon progress` highlight are indistinguishable
+  // downstream. A repo whose agent has no adapter attaches no tailer and runs on
+  // the progress floor (the registry returns null). Tailers are injectable via
+  // options.makeTailer so a test can drive `tick()` without a real fs poll.
+  const tailers = new Map<string, { start(): void; stop(): void }>();
+  const makeTailer = options.makeTailer ?? ((deps: TailerDeps) => new Tailer(deps));
+  const startTailer = (session: RegistrySession): void => {
+    if (tailers.has(session.id)) return; // idempotent — already watching
+    if (TERMINAL_STATUSES.includes(session.status)) return; // over: nothing to tail
+    const tailer = makeTailer({
+      repoRoot: session.repo,
+      nextSeq: () => nextStreamSeq(session.id),
+      append: (events) => appendStreamEvents(store.streamPath(session.id), events, loadStreamCap(session.id)),
+      publish: (events) => publishStream(session.id, events),
+      config: () => loadConfig(session.repo).stream,
+    });
+    tailers.set(session.id, tailer);
+    tailer.start();
+  };
+  const stopTailer = (id: string): void => {
+    const tailer = tailers.get(id);
+    if (tailer === undefined) return;
+    tailer.stop();
+    tailers.delete(id);
+  };
+  // Re-attach tailers to sessions that were already active when the daemon
+  // started (a restart mid-build): the registry survives the restart, so the
+  // live transcript is still being written. New sessions wire their tailer at
+  // creation; terminal ones are skipped by startTailer's guard.
+  for (const session of store.listSessions()) startTailer(session);
+
   // Desktop attention banners (review loop and daemon API). Presence tracks which sessions
   // have a *visible* review open; the notify sink fires the native macOS banner
   // (a no-op off darwin). Both are injectable for tests.
@@ -404,6 +448,10 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     const updated = store.updateSession(session.id, {
       status: opts.implement ? "implementing" : "approved",
     });
+    // Save (approved) is terminal — the agent stops, so tear the tailer down.
+    // Implement keeps the session live (`implementing`), so the tailer keeps
+    // streaming the build's activity until implement-done flips it terminal.
+    if (!opts.implement) stopTailer(session.id);
     // Disarm after the flip: a crash between them leaves a stale flag on an
     // already-terminal/building session (harmless — no further submit finalizes),
     // never a finalizing session that lost its flag (which would re-open review).
@@ -532,6 +580,10 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       return badRequest(c, "quick must be a boolean");
     }
     const session = store.createSession({ title, repo, branch, quick });
+    // Attach the transcript tailer now: the agent is already working in `repo`,
+    // so its live transcript may already exist (and if not, the tailer re-locates
+    // until it appears). A repo whose agent has no adapter attaches nothing.
+    startTailer(session);
     publishSession(session);
     return c.json(session, 201);
   });
@@ -561,6 +613,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
     const queue = queueFor(session.id);
     const pendingEvents = queue.size;
+    stopTailer(session.id); // the session is going away — stop watching its transcript
     let archivedTo: string | null = null;
     if (TERMINAL_STATUSES.includes(session.status)) {
       // Deregister first — it can throw (registry flush), and an early queue
@@ -1439,6 +1492,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       status,
       ...(typeof pr === "string" ? { prUrl: pr } : {}),
     });
+    stopTailer(session.id); // build is over (both outcomes terminal): stop tailing
     publishSession(updated); // the chip flips + the PR link appears live
     return c.json({ ok: true, session: updated, status, prUrl: updated.prUrl });
   });

@@ -1059,10 +1059,10 @@ already watching that review.
 
 The live-activity stream is otacon's automatic, cross-agent record of what the agent
 is *doing* while it researches and drafts — a step beyond the manual-only `otacon
-progress` feed. It is a single normalized event stream the daemon owns; future capture
-sources (tailing an agent's transcript) append to it, and an `otacon progress` note
-flows into the *same* stream so a manual highlight sits inline with the captured
-activity.
+progress` feed. It is a single normalized event stream the daemon owns; capture sources
+(a per-session tailer reading the agent's own transcript, below) append to it, and an
+`otacon progress` note flows into the *same* stream so a manual highlight sits inline
+with the captured activity — both are indistinguishable downstream.
 
 **Event shape.** Each entry is a `StreamEvent`: a daemon-assigned monotonic `seq` (per
 session), an ISO `at`, a `kind` (`tool` · `text` · `thinking` · `highlight` —
@@ -1093,6 +1093,43 @@ the approved artifact and is never archived to the home store.
 **Surface.** The per-session SSE snapshot carries the newest `stream.cap` events; a
 `stream` frame (above) pushes new events live (newest last, coalesced/batched ok). The
 draft chip still rides `latestActivity` (the activity feed), not the stream.
+
+**Capture: the transcript tailer.** While a session is active the daemon runs a
+per-session *tailer* that watches the coding agent's own on-disk transcript and feeds
+new activity into the stream — no per-agent hook, no cooperation from the agent. It is
+bound to the session lifecycle: it starts when the session is created (or, after a
+daemon restart, for every still-active session) and stops the moment the session goes
+terminal (Save/approve, implement-done, or delete). An `implementing` session keeps its
+tailer so the build's activity keeps streaming. The tailer polls the transcript on a
+short interval (a plain poll loop, chosen over `fs.watch` for cross-platform
+reliability), so a burst of writes between two polls naturally coalesces into one append
+and one `stream` frame. It re-locates while no transcript is found yet — a session can be
+created a beat before the agent's transcript file appears.
+
+**Adapter authoring contract.** Each coding agent is supported by a small
+`TranscriptAdapter` (one per agent); the daemon holds an ordered registry of them.
+
+- **`locate(repoRoot) → handle | null`.** Find the *freshest* transcript whose recorded
+  working directory equals the session's repo root (cwd + recency), or `null` when this
+  agent has none for that repo. "Freshest" breaks ties by file mtime; the recorded cwd
+  (read from the transcript itself) is what authoritatively matches a transcript to a
+  repo — a dir-name encoding may only be a hint.
+- **`parse(handle, cursor) → { events, cursor }`.** Read incrementally from
+  `cursor.offset` to EOF, consume only *complete* lines (never a trailing partial — leave
+  the offset before it so the next poll completes it; advance by bytes, not characters),
+  and map each recognized record to a `RawStreamEvent` (`kind`/`label`/`detail`/`tool`/
+  `status`). The `cursor` is opaque to the daemon: `offset` plus any per-adapter carry
+  (e.g. the resolved repo root), round-tripped untouched.
+- **Append-only outcomes.** The store never upserts. A tool's `running` event and its
+  later `ok`/`error` outcome are **two separate appended events**, not one mutated row —
+  an adapter emits the outcome as a follow-on event, never an edit to the earlier one.
+- **Fail-soft, always.** A malformed line, a vanished/rotated file, or any parse error is
+  skipped, never thrown. The daemon catches a throwing `locate` as "no match". The worst
+  case is the session running on the `otacon progress` floor for that tick.
+- **The floor (graceful degradation).** When *no* adapter matches a repo's agent, the
+  registry returns `null`, no tailer attaches, and the session streams only its manual
+  `otacon progress` highlights. Every agent therefore gets at least the floor; an adapter
+  only ever *adds* automatic capture on top of it.
 
 ---
 

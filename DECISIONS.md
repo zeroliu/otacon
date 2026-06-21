@@ -2668,3 +2668,33 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   rewrite-on-overflow capping (then rotate by file segment), or the activity feed and the
   stream converge enough that the draft chip can read the stream directly and
   `activity.json` can be retired.
+
+## cwd+recency transcript discovery (no per-agent hook dependency)
+
+- **Decision:** The tailer discovers a coding agent's live transcript by *locating* it
+  on disk — the freshest transcript file whose recorded working directory equals the
+  session's repo root — not by any hook, env handshake, or cooperation from the agent.
+  Each agent's `TranscriptAdapter.locate(repoRoot)` owns the format-specific search
+  (e.g. the Claude adapter encodes `repoRoot` into `~/.claude/projects/<dash-encoded-cwd>/`,
+  picks the newest `.jsonl` there by mtime, and confirms the match by reading the file's
+  recorded `cwd`). The registry tries adapters in order; the first with a located handle
+  wins, and **no match returns `null`** — the session then runs only on the manual
+  `otacon progress` floor. Both `locate` and `parse` are fail-soft: a throwing `locate`
+  counts as no match, and a malformed/vanished transcript is skipped, never fatal.
+- **Why:** A hook or wrapper would require installing into every agent and would break the
+  moment an agent is launched outside otacon's wrapper (the common case — otacon is "drive
+  it from your Bash tool", not a launcher). The transcript already exists on disk for any
+  agent worth supporting, so reading it needs zero buy-in and works retroactively for a
+  session that started before otacon attached. Matching on the *recorded cwd* (not just the
+  dir-name encoding) is authoritative and tolerant: the encoding is lossy (a literal `-` in
+  a path is indistinguishable from a separator), so the recorded cwd disambiguates and
+  guards against a stale/foreign transcript in a colliding directory. Recency (mtime)
+  picks the *live* session when a repo has several historical transcripts. The hard `null`
+  floor is the graceful-degradation guarantee: an unsupported agent loses automatic capture
+  but never the manual progress feed, and a new agent is one adapter + one registry line
+  away — no change to the daemon, the pipeline, or the UI.
+- **Revisit when:** An agent has no on-disk transcript (then that adapter needs a different
+  capture path — a hook or an API), two live sessions share one repo root and must be told
+  apart by more than recency (then `locate` needs a stronger key than cwd+mtime, e.g. a
+  session id handshake), or transcript formats churn often enough that fail-soft skipping
+  hides real capture gaps (then add a per-adapter health/coverage signal).

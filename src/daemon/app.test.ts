@@ -1523,6 +1523,87 @@ describe("progress and live activity (live-agent-activity)", () => {
   });
 });
 
+describe("transcript tailer lifecycle (live-progress-activity-redesign)", () => {
+  // A stub tailer factory records start/stop per repo so the test observes the
+  // lifecycle wiring without a real fs poll or any ~/.claude dependency.
+  type Stub = { start(): void; stop(): void; started: number; stopped: number };
+  function tailedApp() {
+    const stubs: Stub[] = [];
+    const tailed = createApp({
+      store,
+      uiDir,
+      presence,
+      makeTailer: () => {
+        const stub: Stub = {
+          started: 0,
+          stopped: 0,
+          start() {
+            this.started += 1;
+          },
+          stop() {
+            this.stopped += 1;
+          },
+        };
+        stubs.push(stub);
+        return stub;
+      },
+    });
+    return { tailed, stubs };
+  }
+  const post = (a: Hono<{ Bindings: NodeBindings }>, path: string, body: unknown = {}) =>
+    a.request(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+  test("creating a session starts exactly one tailer", async () => {
+    const { tailed, stubs } = tailedApp();
+    const res = await post(tailed, "/api/sessions", { title: "tailed", repo });
+    expect(res.status).toBe(201);
+    expect(stubs).toHaveLength(1);
+    expect(stubs[0]?.started).toBe(1);
+    expect(stubs[0]?.stopped).toBe(0);
+  });
+
+  test("Save (approve) stops the tailer; the session is terminal", async () => {
+    const { tailed, stubs } = tailedApp();
+    const { id } = (await (await post(tailed, "/api/sessions", { title: "t", repo })).json()) as { id: string };
+    await tailed.request(`/api/sessions/${id}/submit`, { method: "POST", body: validPlanFor(id) });
+    const approved = await post(tailed, `/api/sessions/${id}/approve`, {});
+    expect(approved.status).toBe(200);
+    expect(stubs[0]?.stopped).toBe(1);
+  });
+
+  test("Implement keeps the tailer alive until implement-done", async () => {
+    const { tailed, stubs } = tailedApp();
+    const { id } = (await (await post(tailed, "/api/sessions", { title: "t", repo })).json()) as { id: string };
+    await tailed.request(`/api/sessions/${id}/submit`, { method: "POST", body: validPlanFor(id) });
+    await post(tailed, `/api/sessions/${id}/approve`, { implement: true });
+    expect(stubs[0]?.stopped).toBe(0); // still building → still tailing
+    await post(tailed, `/api/sessions/${id}/implement-done`, { pr: "https://example.com/pr/1" });
+    expect(stubs[0]?.stopped).toBe(1); // build over → tailer torn down
+  });
+
+  test("deleting a session stops the tailer", async () => {
+    const { tailed, stubs } = tailedApp();
+    const { id } = (await (await post(tailed, "/api/sessions", { title: "t", repo })).json()) as { id: string };
+    await tailed.request(`/api/sessions/${id}`, { method: "DELETE" });
+    expect(stubs[0]?.stopped).toBe(1);
+  });
+
+  test("FLOOR: with no adapter, no tailer activity occurs yet progress still streams", async () => {
+    // The default app (no makeTailer override) uses the real Tailer; the temp
+    // repo has no ~/.claude transcript, so findAdapter returns null and the
+    // tailer no-ops. The progress floor must be entirely unaffected.
+    const session = mintSession();
+    const res = await postJson(`/api/sessions/${session.id}/progress`, { note: "floor still flows" });
+    expect(res.status).toBe(200);
+    // The highlight landed in the stream snapshot — the floor is intact.
+    const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
+    const snapshot = await reader.next();
+    const stream = (snapshot.data as { stream: { kind: string; label: string }[] }).stream;
+    expect(stream.some((e) => e.kind === "highlight" && e.label === "floor still flows")).toBe(true);
+    await reader.cancel();
+  });
+});
+
 describe("approve and the status machine (M4)", () => {
   const submitValid = async (id: string) => {
     const res = await app.request(`/api/sessions/${id}/submit`, {
