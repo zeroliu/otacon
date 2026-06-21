@@ -2640,3 +2640,31 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   cleared on failure so a later submit can retry rather than being poisoned permanently.
 - **Revisit when:** A way exists to distinguish a transient setup blip from a permanent
   break, so a hard break could be surfaced loudly instead of silently skipping the check.
+
+## Live-activity stream: daemon-side, ephemeral, JSONL (not the JSON activity feed)
+
+- **Decision:** The automatic, cross-agent live-activity stream is a separate
+  append-only **JSONL** file (`.otacon/<id>/stream.jsonl`), distinct from the existing
+  `activity.json` feed. It holds normalized `StreamEvent`s (the daemon assigns a
+  monotonic per-session `seq`, redacts + truncates every event before storing), is
+  capped by rewriting to the newest N only when it overflows, tolerates corrupt lines by
+  skipping them (never quarantines the whole file), and is ephemeral working state —
+  never archived to the home store. `otacon progress` notes land in this stream as
+  `highlight` events *in addition to* the legacy `activity.json` feed.
+- **Why:** The stream is a high-frequency, append-heavy surface (future phases tail an
+  agent's transcript), so JSONL's cheap per-line append beats the whole-file
+  rewrite-on-every-write that the small `activity.json` feed uses — and a single torn or
+  hand-edited line should cost one line, not the whole stream (so line-skip, not the
+  JSON files' quarantine-the-file recovery). It stays a *separate* file from
+  `activity.json` because the draft chip still reads `latestActivity` from the feed (a
+  small, capped, human-shaped list) and changing that store's shape/cap would churn an
+  unrelated, load-bearing surface; routing `progress` into both keeps the chip working
+  while the new stream becomes the single normalized activity record. Daemon-side
+  normalization (redact + truncate + label) is mandatory and shared so no capture source
+  can leak a secret or a 5 KB body into a review screen. Ephemeral because it is live
+  telemetry about *how* a plan was built, not part of the approved artifact.
+- **Revisit when:** The stream needs to survive into the archived plan (then it must move
+  to the home store and gain a retention policy), the capture volume outgrows
+  rewrite-on-overflow capping (then rotate by file segment), or the activity feed and the
+  stream converge enough that the draft chip can read the stream directly and
+  `activity.json` can be retired.

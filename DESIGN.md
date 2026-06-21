@@ -476,8 +476,12 @@ POST /api/sessions/:id/progress             agent narration (otacon progress):
                                             note is trimmed to a configured max,
                                             appended to the capped activity feed,
                                             and pushed as an `activity` SSE frame
-                                            (+ a `session` frame for the chip). No
-                                            agent event is queued — UI-only telemetry
+                                            (+ a `session` frame for the chip). The
+                                            same note ALSO lands in the live-activity
+                                            stream (below) as a `highlight` event —
+                                            redacted, truncated, daemon-assigned seq —
+                                            pushed as a `stream` SSE frame. No agent
+                                            event is queued — UI-only telemetry
 POST /api/sessions/:id/answers              user's answer to an agent question:
                                             {question, choice|choices, text?} —
                                             validated against the question's options
@@ -572,17 +576,20 @@ finalize — and hand the agent an un-swept thread that wedges its L5 fold-in).
 `/` and `/s/:id` serve the SPA shell (static assets under `/assets/`); an unknown
 session id renders as a client-side not-found state. Each SSE stream opens with a
 `snapshot` frame (the per-session stream's snapshot carries the thread list, the
-grill transcript, and the activity feed; every snapshot — index and per-session —
+grill transcript, the activity feed, and the live-activity stream's newest events; every
+snapshot — index and per-session —
 also carries the daemon's `version`, which open tabs use to self-heal after an
 update, see §16), then pushes `session` / `revision` /
-`queue` / `thread` / `grill` / `activity` / `removed` frames as state changes — a
+`queue` / `thread` / `grill` / `activity` / `stream` / `removed` frames as state changes — a
 `revision` frame carries the revision number and its changelog; a `thread` frame is
 an upsert: a new comment/question thread (a follow-up question carries `replyTo`, the
 root it continues), or an existing thread changing (a question gaining its answer, a
 comment gaining its resolution, an anchor re-anchoring or orphaning); a `grill` frame is the transcript's upsert: a question asked via
 `otacon ask`, or an entry gaining the user's answer; an `activity` frame carries one
 new progress note appended to the per-session activity log (the draft chip rides the
-`session` frame's `latestActivity` instead); a `removed` frame is terminal —
+`session` frame's `latestActivity` instead); a `stream` frame carries one or more new
+normalized live-activity events (the live-activity stream, §10a), newest last and
+coalesced/batched ok, which the UI appends to its stream view by `seq`; a `removed` frame is terminal —
 the session left the registry (`otacon clean`): the index and the session switcher
 drop it live, an open review screen flips to a quiet "session cleaned" state and
 closes its stream (a reconnect against the deregistered id could only 404), and the
@@ -1048,6 +1055,45 @@ threads rail. The review screen reports its visibility to the daemon
 (`POST /presence`) so desktop attention banners (§6) fire only when you are not
 already watching that review.
 
+### 10a. Live-activity stream
+
+The live-activity stream is otacon's automatic, cross-agent record of what the agent
+is *doing* while it researches and drafts — a step beyond the manual-only `otacon
+progress` feed. It is a single normalized event stream the daemon owns; future capture
+sources (tailing an agent's transcript) append to it, and an `otacon progress` note
+flows into the *same* stream so a manual highlight sits inline with the captured
+activity.
+
+**Event shape.** Each entry is a `StreamEvent`: a daemon-assigned monotonic `seq` (per
+session), an ISO `at`, a `kind` (`tool` · `text` · `thinking` · `highlight` —
+`highlight` is an `otacon progress` note), a one-line `label` ("Read src/auth.ts" ·
+"Bash: bun test" · "thinking…"), an optional expandable `detail` (the truncated +
+redacted body), the raw `tool` name when `kind === "tool"`, and an optional `status`
+(`running` · `ok` · `error`).
+
+**Normalization (daemon-side, mandatory).** Every raw capture passes one normalizer
+before it is stored or pushed: secrets are redacted out of `detail` (API keys,
+bearer/`token=`/`password=` pairs, AWS `AKIA…` ids, PEM private-key blocks, `.env`-style
+`KEY=secret`) — best-effort, never a security boundary — then `detail` and `label` are
+truncated to their configured caps (`stream.detailMaxChars`, `stream.labelMaxChars`), so
+a high-frequency or large-bodied capture source can never bloat a payload or leak a key
+into a review screen. Redaction and truncation live in the shared normalize path, so no
+capture source can skip them.
+
+**Storage (`<repo>/.otacon/<id>/stream.jsonl`).** Append-only JSONL — one `StreamEvent`
+per line — so a frequent capture source pays a cheap append, not a whole-file rewrite,
+on the common path. The file is capped at `stream.cap` events: it is rewritten to the
+newest N only when it grows past the cap (older lines drop off the front). Reads are
+corrupt-line-tolerant: a torn final append or a hand-edit is skipped, never fatal — a
+JSONL stream's value is the lines that *did* parse, so a single bad line never
+quarantines the whole file (unlike the JSON state files, §13). The stream is ephemeral
+working state under `.otacon/`, like the activity feed and threads — it is not part of
+the approved artifact and is never archived to the home store.
+
+**Surface.** The per-session SSE snapshot carries the newest `stream.cap` events; a
+`stream` frame (above) pushes new events live (newest last, coalesced/batched ok). The
+draft chip still rides `latestActivity` (the activity feed), not the stream.
+
 ---
 
 ## 11. Remote access
@@ -1081,7 +1127,7 @@ Operational requirement: the Mac stays awake while a plan is in review
 
 | Location                                          | Contents                                                                                                       | Git                                        |
 | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `<repo>/.otacon/`                                 | Working state under `<id>/`: `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), threads (`threads.json`: comment + question threads with answers, resolutions, and anchor states inline), the grill transcript (`transcript.json`), the capped live-activity feed (`activity.json`: the newest ~N `otacon progress` notes), queues | the user's call — otacon manages no `.gitignore` |
+| `<repo>/.otacon/`                                 | Working state under `<id>/`: `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), threads (`threads.json`: comment + question threads with answers, resolutions, and anchor states inline), the grill transcript (`transcript.json`), the capped live-activity feed (`activity.json`: the newest ~N `otacon progress` notes), the live-activity stream (`stream.jsonl`: the normalized, capped, append-only event stream, §10a), queues | the user's call — otacon manages no `.gitignore` |
 | `~/.otacon/worktrees/<slug>/`                     | Implement build's git worktree on branch `otacon/impl-<slug>` (base dir is `worktree.dir`, default `~/.otacon/worktrees` — outside the repo)                    | n/a (global, outside the repo)             |
 | `~/.otacon/sessions/<id>/YYYY-MM-DD-<slug>.md`    | Canonical approved plan, every session (`status: approved` frontmatter + grill transcript)                     | n/a (global, permanent archive)            |
 | `<repo>/<plans.dir>/YYYY-MM-DD-<slug>.md`         | Save-time project copy (default `.otacon/plans`; set `plans.dir=docs/plans` to group with tracked plans)       | yours to commit (or not)                   |
@@ -1344,7 +1390,8 @@ Config is layered, mirroring Claude Code's `settings.json` + `settings.local.jso
 `~/.otacon/config.json` (user) ← `<repo>/.otacon/config.json` (project,
 **committed/team-shared**) ← `<repo>/.otacon/config.local.json` (project.local,
 **personal**) — closest wins. Every override file is optional. Tunables include
-budgets/lint caps, the activity feed (`activity.cap`, `activity.noteMaxChars`),
+budgets/lint caps, the activity feed (`activity.cap`, `activity.noteMaxChars`), the
+live-activity stream (`stream.cap`, `stream.detailMaxChars`, `stream.labelMaxChars`, §10a),
 `notifications.desktop`, `worktree.dir` (base dir for Implement build worktrees, default
 `~/.otacon/worktrees`, outside the repo), `plans.dir` (where **Save** writes the
 project copy of the approved plan, default `.otacon/plans`; set it to `docs/plans` to

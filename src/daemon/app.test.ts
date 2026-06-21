@@ -1395,16 +1395,27 @@ describe("progress and live activity (live-agent-activity)", () => {
     expect(detail.latestActivity?.text).toBe("reading the auth module");
   });
 
-  test("a progress note pushes an activity frame, then a session frame for the chip", async () => {
+  test("a progress note pushes an activity frame, a stream highlight, then a session frame for the chip", async () => {
     const session = mintSession();
     const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
     const snapshot = await reader.next();
     expect((snapshot.data as { activity: unknown[] }).activity).toEqual([]);
+    expect((snapshot.data as { stream: unknown[] }).stream).toEqual([]);
 
     await progress(session.id, "drafting plan");
     const activityFrame = await reader.next();
     expect(activityFrame.event).toBe("activity");
     expect((activityFrame.data as { note: { text: string } }).note.text).toBe("drafting plan");
+    // The same note flows into the new live-activity stream as a `highlight`
+    // (live-agent-activity), with a daemon-assigned seq.
+    const streamFrame = await reader.next();
+    expect(streamFrame.event).toBe("stream");
+    const events = (streamFrame.data as { events: { kind: string; label: string; seq: number }[] })
+      .events;
+    expect(events).toHaveLength(1);
+    expect(events[0]?.kind).toBe("highlight");
+    expect(events[0]?.label).toBe("drafting plan");
+    expect(events[0]?.seq).toBe(1);
     // The draft chip rides the session frame's latestActivity (review UI).
     const sessionFrame = await reader.next();
     expect(sessionFrame.event).toBe("session");
@@ -1413,6 +1424,39 @@ describe("progress and live activity (live-agent-activity)", () => {
     ).session;
     expect(summary.latestActivity?.text).toBe("drafting plan");
     expect(typeof summary.lastContactAt).toBe("number");
+    await reader.cancel();
+  });
+
+  test("progress highlights land in the per-session stream snapshot, oldest first, with monotonic seq", async () => {
+    const session = mintSession();
+    await progress(session.id, "one");
+    await progress(session.id, "two");
+    const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
+    const snapshot = await reader.next();
+    const stream = (snapshot.data as { stream: { kind: string; label: string; seq: number }[] })
+      .stream;
+    expect(stream.map((e) => e.label)).toEqual(["one", "two"]);
+    expect(stream.every((e) => e.kind === "highlight")).toBeTrue();
+    expect(stream.map((e) => e.seq)).toEqual([1, 2]);
+    await reader.cancel();
+  });
+
+  test("a progress note carrying an API key and a ~5 KB body: redacted + truncated in the stream detail", async () => {
+    const session = mintSession();
+    const secret = "sk-abcdEFGHijklMNOPqrstUVWX1234567890";
+    const note = `deploying with token=${secret} ` + "X".repeat(5000);
+    await progress(session.id, note);
+    const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
+    const snapshot = await reader.next();
+    const event = (
+      snapshot.data as { stream: { kind: string; detail?: string; label: string }[] }
+    ).stream[0];
+    expect(event?.kind).toBe("highlight");
+    const detail = event?.detail ?? "";
+    expect(detail).not.toContain(secret);
+    expect(detail).toContain("[redacted]");
+    // Truncated to the configured stream detail cap (default 600), not the 5 KB body.
+    expect(detail.length).toBeLessThanOrEqual(600);
     await reader.cancel();
   });
 

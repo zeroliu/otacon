@@ -114,6 +114,43 @@ export interface ActivityFile {
   notes: ActivityNote[];
 }
 
+/**
+ * The kind of a live-stream event (the automatic, cross-agent activity stream).
+ * `tool`, `text`, and `thinking` are what future transcript adapters emit;
+ * `highlight` is an `otacon progress` note, routed into the same stream so a
+ * manual narration sits inline with the captured activity.
+ */
+export type StreamKind = "tool" | "text" | "thinking" | "highlight";
+
+/**
+ * One normalized entry in a session's append-only live-activity stream
+ * (.otacon/<id>/stream.jsonl). The daemon assigns `seq` (monotonic per session)
+ * and stamps `at`; the normalizer redacts secrets out of `detail`, truncates it
+ * and `label` to the configured caps, so a high-frequency capture source can
+ * never bloat payloads or leak a key. `tool` carries the raw tool name when
+ * `kind === "tool"`; `status` tracks a tool call's lifecycle.
+ */
+export interface StreamEvent {
+  /** Daemon-assigned, monotonic per session. */
+  seq: number;
+  /** ISO timestamp the daemon stamped. */
+  at: string;
+  kind: StreamKind;
+  /** One-line, capped: "Read src/auth.ts" · "Bash: bun test" · "thinking…". */
+  label: string;
+  /** Truncated + redacted body, expandable in the UI; absent when there is none. */
+  detail?: string;
+  /** Raw tool name when `kind === "tool"`. */
+  tool?: string;
+  status?: "running" | "ok" | "error";
+}
+
+/** .otacon/<id>/stream.jsonl — the append-only, capped, newest-last live stream. */
+export interface StreamFile {
+  version: 1;
+  events: StreamEvent[];
+}
+
 /** W3C-annotation-style anchor; null anchor on an event item = whole-plan. */
 export interface Anchor {
   section: string;

@@ -41,12 +41,15 @@ import type {
   Resolutions,
   RevisionPayload,
   SessionSummary,
+  StreamEvent,
   Thread,
   TranscriptEntry,
 } from "../shared/types.js";
 import { VERSION } from "../shared/version.js";
 import { appendActivity, latestNote, readActivity } from "./activity.js";
 import type { ReviewNote } from "./approve.js";
+import { normalize } from "./capture/normalize.js";
+import { appendStreamEvents, readStream, StreamSeq } from "./capture/stream-store.js";
 import { composeArtifact, localDate, pickHomePath, pickProjectRelPath } from "./approve.js";
 import type { DesktopNotifier } from "./desktop-notify.js";
 import { createDesktopNotifier } from "./desktop-notify.js";
@@ -272,6 +275,30 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     notifier.publish({ type: "thread", session: id, data: { session: id, thread } });
   const publishGrill = (id: string, entry: TranscriptEntry): void =>
     notifier.publish({ type: "grill", session: id, data: { session: id, entry } });
+  const publishStream = (id: string, events: StreamEvent[]): void =>
+    notifier.publish({ type: "stream", session: id, data: { session: id, events } });
+
+  // Monotonic per-session seq source for the live-activity stream (the
+  // automatic, cross-agent activity stream): one StreamSeq per session id,
+  // seeded lazily from stream.jsonl's max seq so a daemon restart never re-mints
+  // a live seq, then incremented in memory. The daemon owns the single writer.
+  const streamSeqs = new Map<string, StreamSeq>();
+  const nextStreamSeq = (id: string): number => {
+    let seq = streamSeqs.get(id);
+    if (seq === undefined) {
+      seq = new StreamSeq();
+      streamSeqs.set(id, seq);
+    }
+    return seq.next(store.streamPath(id));
+  };
+  // How many newest stream events the per-session SSE snapshot serves: the
+  // session's configured cap (so a repo override applies). The store already
+  // bounds the file at the cap on append, so this is belt-and-suspenders — but
+  // it keeps the snapshot honest if the cap was lowered since the last trim.
+  const loadStreamCap = (id: string): number => {
+    const repo = store.getSession(id)?.repo;
+    return (repo ? loadConfig(repo) : loadConfig()).stream.cap;
+  };
 
   // Desktop attention banners (review loop and daemon API). Presence tracks which sessions
   // have a *visible* review open; the notify sink fires the native macOS banner
@@ -1181,9 +1208,13 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   // The agent's narration (`otacon progress`): a non-blocking
   // progress note appended to the capped activity feed and pushed to the UI as
   // an `activity` frame (the per-session log) plus a `session` frame (the
-  // chip's latestActivity). No agent event is queued — like `ask`, this is
-  // UI-only telemetry, never a wake-up. The note is trimmed to the configured
-  // max so long narration never fails or bloats payloads.
+  // chip's latestActivity). The same note is ALSO normalized into a `highlight`
+  // StreamEvent and appended to the live-activity stream (the automatic,
+  // cross-agent activity stream) so a manual narration sits inline with the
+  // captured activity; a `stream` frame pushes it to the UI. No agent event is
+  // queued — like `ask`, this is UI-only telemetry, never a wake-up. The note
+  // is trimmed to the configured max so long narration never fails or bloats
+  // payloads.
   app.post("/api/sessions/:id/progress", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
@@ -1193,20 +1224,28 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     if (typeof raw !== "string" || raw.trim() === "") {
       return badRequest(c, "note must be a non-empty string");
     }
-    const { activity } = loadConfig(session.repo);
+    const { activity, stream } = loadConfig(session.repo);
     const trimmed = raw.trim();
+    const at = new Date().toISOString();
     const text =
       trimmed.length > activity.noteMaxChars
         ? `${trimmed.slice(0, Math.max(1, activity.noteMaxChars - 1)).trimEnd()}…`
         : trimmed;
-    const note = appendActivity(
-      store.activityPath(session.id),
-      text,
-      activity.cap,
-      new Date().toISOString(),
+    const note = appendActivity(store.activityPath(session.id), text, activity.cap, at);
+    // The same note flows into the new stream as a `highlight` event: the
+    // normalizer redacts + truncates the body (its own caps), the daemon stamps
+    // seq and `at`. The activity-feed text above keeps its own (shorter) cap —
+    // the index draft chip still reads `latestActivity`.
+    const event = normalize(
+      { kind: "highlight", label: trimmed, detail: trimmed },
+      stream,
+      nextStreamSeq(session.id),
+      at,
     );
+    appendStreamEvents(store.streamPath(session.id), [event], stream.cap);
     bumpContact(session.id);
     notifier.publish({ type: "activity", session: session.id, data: { session: session.id, note } });
+    publishStream(session.id, [event]);
     publishSession(session); // latestActivity for the chip; fresh contact for the dot
     return c.json({ ok: true, session: session.id, note: text });
   });
@@ -1444,6 +1483,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     getThreads: (id) => readThreads(store.threadsPath(id)),
     getTranscript: (id) => readTranscript(store.transcriptPath(id)),
     getActivity: (id) => readActivity(store.activityPath(id)),
+    getStream: (id) => readStream(store.streamPath(id), loadStreamCap(id)),
     uiDir: options.uiDir,
     heartbeatMs: options.sseHeartbeatMs,
   });
