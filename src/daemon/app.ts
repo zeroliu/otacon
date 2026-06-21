@@ -50,6 +50,7 @@ import type { ReviewNote } from "./approve.js";
 import { composeArtifact, localDate, pickHomePath, pickProjectRelPath } from "./approve.js";
 import type { DesktopNotifier } from "./desktop-notify.js";
 import { createDesktopNotifier } from "./desktop-notify.js";
+import { validateDiagrams } from "./diagrams.js";
 import { diffPlans } from "./diff.js";
 import { lint } from "./linter/index.js";
 import { Notifier } from "./notify.js";
@@ -676,8 +677,13 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
         changelog: resolutions.changelog,
       },
     });
-    if (!result.ok) {
-      return c.json({ ok: false, errors: result.errors, warnings: result.warnings }, 422);
+    // L8 diagram render gate runs alongside the structural linter so the agent
+    // gets diagram + structural failures in one pass (fewer round-trips). It
+    // fails open, so it only ever adds errors — never blocks on its own infra.
+    const diagramErrors = await validateDiagrams(content);
+    const errors = [...result.errors, ...diagramErrors];
+    if (errors.length > 0) {
+      return c.json({ ok: false, errors, warnings: result.warnings }, 422);
     }
     const changelog = (resolutions.changelog ?? "").trim() === "" ? null : (resolutions.changelog as string);
     const revision = store.saveRevision(session.id, content, result.warnings, changelog ?? undefined);
