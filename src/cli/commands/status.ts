@@ -8,11 +8,11 @@
 
 import { sep } from "node:path";
 import { parseArgs } from "node:util";
-import { otaconPort } from "../../shared/paths.js";
+import { otaconPort, planPath } from "../../shared/paths.js";
 import type { RegistrySession } from "../../shared/types.js";
 import { api, ensureDaemon } from "../client.js";
 import { printJson } from "../output.js";
-import { realpathOr } from "../session.js";
+import { realpathOr, worktreeOwners } from "../session.js";
 
 function repoContains(repo: string, cwd: string): boolean {
   const root = realpathOr(repo);
@@ -40,10 +40,23 @@ export async function statusCommand(argv: string[]): Promise<number> {
     if (detail === undefined || detail.status !== 200) return [];
     return [detail.body];
   });
+
+  // The worktree owner is found over ALL sessions, not `relevant`: the owner's
+  // `.repo` is the MAIN repo (where planning happened), which does not contain
+  // this build-worktree cwd, so it would never appear in the repo-scoped list. A
+  // single owner surfaces as the resume candidate; ambiguity stays silent (let
+  // `otacon resume` refuse with the candidate list).
+  const owners = worktreeOwners(all, cwd);
+  const owner = owners.length === 1 ? owners[0] : undefined;
+  const resumeCandidate = owner
+    ? { id: owner.id, title: owner.title, status: owner.status, plan: planPath(owner.repo, owner.id) }
+    : undefined;
+
   printJson({
     ok: true,
     daemon: { version: daemon.version, pid: daemon.pid, port: otaconPort() },
     sessions,
+    ...(resumeCandidate ? { resumeCandidate } : {}),
   });
   return 0;
 }

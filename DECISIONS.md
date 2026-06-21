@@ -2673,3 +2673,28 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   cleared on failure so a later submit can retry rather than being poisoned permanently.
 - **Revisit when:** A way exists to distinguish a transient setup blip from a permanent
   break, so a hard break could be surfaced loudly instead of silently skipping the check.
+
+## Worktree-keyed resume: detect by stored `impl.worktree`, match in the resolver, own verb
+
+- **Decision:** A `/otacon <request>` run from inside an Implement build worktree reopens
+  the SAME finished session to amend it rather than starting a new one. Three coupled
+  choices make that work: (1) the owning session is found by the `impl.worktree` recorded
+  on the registry entry when the build was approved (not recomputed from the slug at
+  resume time); (2) `resolveSession`'s implicit default now matches an active session by
+  repo root OR build-worktree root, so once a session is reopened to `revising` every
+  command (submit, wait, ask, ...) resolves it from inside the worktree even though its
+  `.repo` is the main repo where planning happened (no per-command changes); (3) reopening
+  is its own verb, `otacon resume`, not an overload of `otacon start`.
+- **Why:** The stored worktree is authoritative: the agent stands in the worktree, but the
+  session's `.repo` is the main repo, so a repo-root match alone would always miss, and
+  recomputing the path from the slug would drift the moment the slug, worktree base, or
+  branch naming changes. Matching in the single resolver (one lever) keeps every verb
+  worktree-aware without touching submit/wait/ask, which already route through
+  `resolveSession`. `resume` stays separate because `start` mints + registers a brand-new
+  session: folding "reopen the old one" into it would make `start` guess from the cwd
+  whether the user meant fresh or amend, exactly the kind of unrecoverable wrong-plan guess
+  the resolver refuses elsewhere. `otacon status` surfaces the candidate (`resumeCandidate`)
+  over ALL sessions, not the repo-scoped list, for the same `.repo` ≠ worktree reason.
+- **Revisit when:** Build worktrees can host more than one session at a time (the
+  `worktreeOwners` length>1 refusal would need a smarter tiebreak), or `start` grows a flag
+  that should also reopen (so the two verbs reconverge).

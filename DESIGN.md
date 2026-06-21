@@ -345,7 +345,8 @@ the model is suspended — no inference, no token spend.
 | `otacon answer <question-id> (--body "…" \| --file f.md)`                   | Answer a user question; no revision                                           |
 | `otacon progress "<note>" [--session <id>]`                                 | Append a narration note to the live activity feed (UI-only; non-blocking, never parks, never an event) |
 | `otacon implement-done [--pr <url>] [--failed]`                             | End an `implementing` session: record the PR link and flip to `implemented`, or `--failed` → `implement_failed` (§12) |
-| `otacon status [--all]`                                                     | Session state + undelivered event count (crash/resume entry point)            |
+| `otacon resume [--session <id>]`                                            | Reopen a finished session for amendment (flip terminal → `revising`): auto-detects the session that owns the cwd build worktree (its recorded `impl.worktree`), or `--session` names one. Prints the daemon's reopen body plus `title`, `repo`, `plan` (the file to amend, under the session's main repo) (§12) |
+| `otacon status [--all]`                                                     | Session state + undelivered event count (crash/resume entry point); also surfaces `resumeCandidate` (id, title, status, plan) when the cwd is inside a known build worktree |
 | `otacon open [--session <id>]`                                              | Open the review URL in the browser, or the index URL when no session resolves; `OTACON_NO_BROWSER` prints it instead of launching |
 | `otacon config [open]`                                                      | Open the Settings web UI in the browser: `/settings?repo=<cwd repo root>` inside a repo (Project scope), bare `/settings` outside one (User scope); `OTACON_NO_BROWSER` prints the URL instead |
 | `otacon config get <key>`                                                   | Read-only: print the merged effective value of one dotted key (`worktree.dir`, `budgets.summaryLines`, …) from the config files; no daemon. Unknown key → exit 1 |
@@ -699,7 +700,10 @@ one daemon.
 the single source of truth — there is no local session pointer:
 
 - Commands default to the repo's single active session: the CLI reads the registry
-  and picks the one non-approved session whose repo is the cwd's git root. Different
+  and picks the one non-approved session matched by repo root **or** build-worktree
+  root. A session's `.repo` is the main repo where planning happened, so a reopened
+  session resolves implicitly even from inside its Implement build worktree (whose
+  root matches the recorded `impl.worktree`, not the repo). Different
   worktrees = different roots = parallel planning with zero flags.
 - `--session <id>` overrides everywhere, and is the only way to reach an approved
   (ended) session. If a repo has two or more active sessions, the CLI **refuses** the
