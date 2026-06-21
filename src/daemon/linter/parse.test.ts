@@ -342,6 +342,65 @@ describe("lead diagram + opt-out detection", () => {
   });
 });
 
+describe("mermaid diagram fence capture", () => {
+  test("captures each mermaid fence's body, start line, and section slug", () => {
+    const plan = parsePlan(
+      planWith(
+        "## Summary\n\n```mermaid\ngraph TD\n  A --> B\n```\n\n## Impact\n\n```mermaid\nsequenceDiagram\n  X->>Y: hi\n```\n",
+      ),
+    );
+    expect(plan.diagrams).toHaveLength(2);
+    expect(plan.diagrams[0]).toEqual({
+      code: "graph TD\n  A --> B",
+      startLine: 11,
+      section: "summary",
+    });
+    expect(plan.diagrams[1]).toEqual({
+      code: "sequenceDiagram\n  X->>Y: hi",
+      startLine: 18,
+      section: "impact",
+    });
+  });
+
+  test("the captured code is body-only and preserves inner newlines", () => {
+    const plan = parsePlan(
+      planWith("## Summary\n\n```mermaid\ngraph TD\n\n  A --> B\n```\n"),
+    );
+    expect(plan.diagrams).toHaveLength(1);
+    expect(plan.diagrams[0]!.code).toBe("graph TD\n\n  A --> B");
+    expect(plan.diagrams[0]!.code).not.toContain("```");
+  });
+
+  test("a tilde-fenced ~~~mermaid block is captured", () => {
+    const plan = parsePlan(planWith("## Summary\n\n~~~mermaid\ngraph TD\n  A --> B\n~~~\n"));
+    expect(plan.diagrams).toHaveLength(1);
+    expect(plan.diagrams[0]!.code).toBe("graph TD\n  A --> B");
+    expect(plan.diagrams[0]!.section).toBe("summary");
+  });
+
+  test("a mermaid fence with a trailing info token is still captured", () => {
+    const plan = parsePlan(planWith("## Summary\n\n```mermaid title here\ngraph TD\n  A --> B\n```\n"));
+    expect(plan.diagrams).toHaveLength(1);
+    expect(plan.diagrams[0]!.code).toBe("graph TD\n  A --> B");
+  });
+
+  test("a non-mermaid fence does not appear in diagrams", () => {
+    const plan = parsePlan(planWith("## Summary\n\n```ts\nconst x = 1;\n```\n"));
+    expect(plan.diagrams).toEqual([]);
+    expect(plan.sections[0]!.diagramCount).toBe(0);
+  });
+
+  test("a mermaid fence inside a phase Details block is not captured", () => {
+    const plan = parsePlan(
+      planWith(
+        "## Phases\n\n### Phase 1 — x\n\nGoal: g\n\n#### Details\n\n```mermaid\ngraph TD\n  A --> B\n```\n",
+      ),
+    );
+    expect(plan.diagrams).toEqual([]);
+    expect(plan.sections[0]!.phases![0]!.details!.lineCount).toBeGreaterThan(0);
+  });
+});
+
 describe("table (decision matrix) detection", () => {
   test("a GFM table is budget-exempt and counts as one visual", () => {
     const plan = parsePlan(

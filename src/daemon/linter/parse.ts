@@ -86,10 +86,24 @@ export interface Section {
   phases?: Phase[];
 }
 
+/**
+ * A ```mermaid fence's source, captured for a later phase that validates the
+ * diagram renders. `code` is the body between the open/close fences (no
+ * delimiter lines), `startLine` is the opening fence line, and `section` is the
+ * slug of the enclosing section. Captured at the same seam as
+ * `section.diagramCount`, so the count and the bodies can never disagree.
+ */
+export interface DiagramFence {
+  code: string;
+  startLine: number;
+  section: string;
+}
+
 export interface ParsedPlan {
   frontmatter: Record<string, string> | null;
   frontmatterEndLine: number;
   sections: Section[];
+  diagrams: DiagramFence[];
   parseErrors: LintIssue[];
 }
 
@@ -142,6 +156,7 @@ export function parsePlan(content: string): ParsedPlan {
   const lines = content.split("\n");
   const parseErrors: LintIssue[] = [];
   const sections: Section[] = [];
+  const diagrams: DiagramFence[] = [];
 
   let frontmatter: Record<string, string> | null = null;
   let frontmatterEndLine = 0;
@@ -187,6 +202,12 @@ export function parsePlan(content: string): ParsedPlan {
   let gwtStartLine = 0;
   let gwtField: PhaseFieldName | null = null;
   let gwtTarget: GwtBlock[] | null = null;
+  // When the open fence is a ```mermaid block in a section read path, buffer its
+  // body here and push a DiagramFence at the close — opened at the same seam as
+  // section.diagramCount++ so the count and the captured bodies never disagree.
+  let mermaidBody: string[] | null = null;
+  let mermaidStartLine = 0;
+  let mermaidSection = "";
   // Open blockquote run: a callout (budget-exempt, counts as one visual) or a
   // plain quote (ordinary budgeted prose). Reset by any structural boundary.
   let quote: { callout: boolean } | null = null;
@@ -239,10 +260,19 @@ export function parsePlan(content: string): ParsedPlan {
             scenarios: parseGwt(gwtBody.join("\n")).scenarios,
           });
         }
+        if (mermaidBody !== null) {
+          diagrams.push({
+            code: mermaidBody.join("\n"),
+            startLine: mermaidStartLine,
+            section: mermaidSection,
+          });
+        }
         gwtBody = null;
         gwtTarget = null;
-      } else if (gwtBody !== null) {
-        gwtBody.push(line);
+        mermaidBody = null;
+      } else {
+        if (gwtBody !== null) gwtBody.push(line);
+        if (mermaidBody !== null) mermaidBody.push(line);
       }
       continue;
     }
@@ -273,7 +303,14 @@ export function parsePlan(content: string): ParsedPlan {
         section.fenceCount++;
         // A mermaid fence in a section read path is a candidate lead diagram
         // (L7 reads Summary's count); it still spends the one-fence allowance.
-        if (lang === "mermaid") section.diagramCount++;
+        // Buffer its body at this same seam so diagrams[] and diagramCount stay
+        // in lockstep — a later phase validates each captured fence renders.
+        if (lang === "mermaid") {
+          section.diagramCount++;
+          mermaidBody = [];
+          mermaidStartLine = lineNo;
+          mermaidSection = section.id;
+        }
       }
       continue;
     }
@@ -441,5 +478,5 @@ export function parsePlan(content: string): ParsedPlan {
   }
   closeSection(lines.length);
 
-  return { frontmatter, frontmatterEndLine, sections, parseErrors };
+  return { frontmatter, frontmatterEndLine, sections, diagrams, parseErrors };
 }
