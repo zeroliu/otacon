@@ -19,6 +19,7 @@ import {
   postComments,
   postFollowup,
   postQuestion,
+  postResolve,
   postReviewed,
   useDiff,
   usePresence,
@@ -311,13 +312,21 @@ function ReviewLoop({
   // (null/quote-less) anchors are never lit — no text to paint (review UI).
   const litEntries = useMemo<LitThread[]>(() => {
     const lit: LitThread[] = [];
+    // Conversation roots the reviewer closed (Resolve lives on the root). A
+    // question turn keys on its root, so a resolved root clears the whole chain.
+    const resolvedRoots = new Set(threads.filter((t) => t.resolved).map((t) => t.id));
     for (const thread of threads) {
       if (thread.anchorState === "orphaned" || !thread.anchor?.exact) continue;
       if (thread.kind === "question") {
-        if (thread.answer === undefined) {
+        // A question's mark clears when its turn is answered OR when the reviewer
+        // resolves the conversation (a follow-up keys on its root's close).
+        const rootId = thread.replyTo ?? thread.id;
+        if (thread.answer === undefined && !resolvedRoots.has(rootId)) {
           lit.push({ id: thread.id, anchor: thread.anchor, kind: "question" });
         }
-      } else if (thread.resolution === undefined) {
+      } else if (thread.resolved === undefined) {
+        // A comment's mark clears only when the REVIEWER resolves it (a landed
+        // agent reply is a response, not a close — the mark stays lit).
         lit.push({ id: thread.id, anchor: thread.anchor, kind: "comment" });
       }
     }
@@ -528,6 +537,13 @@ function ReviewLoop({
     [session.id],
   );
 
+  // The reviewer's Resolve verb on a conversation root: close (`resolved:true`)
+  // or reopen (`false`); the close lands back over the `thread` SSE frame.
+  const resolve = useCallback(
+    (threadId: string, resolved: boolean): Promise<boolean> => postResolve(session.id, threadId, resolved),
+    [session.id],
+  );
+
   // Decision deep-links (interview questions) and the section ⋯ menus (review UI) are both
   // delegated here, so PlanView takes no callback props and its memo survives.
   // `← q7` citations render as `a.q-cite[data-q]`; the menu buttons as
@@ -707,6 +723,7 @@ function ReviewLoop({
             onJump={jump}
             focus={focusThread}
             onFollowup={readOnly ? undefined : followup}
+            onResolve={readOnly ? undefined : resolve}
           />
         )}
       </div>

@@ -3,15 +3,19 @@
 // question with no answer yet blinks the codec cursor until `otacon answer`
 // lands over SSE. A question and its follow-ups (threaded review and revision) render as one
 // conversation card — each turn with its answer — with a collapsed "Follow up"
-// reply box for the next question. M3 states: a resolved comment collapses to
-// its ✓ line (the review UI) and expands to the agent's reply + the revision
-// it landed in; a detached thread — whose quoted text no longer exists in the
-// current revision (plan structure, lint, and anchoring) — stays inline in the
-// same list as everything else. Its quote renders muted (no live text to flash,
-// so it is not clickable or jumpable) beside a subtle ⌀ icon whose hover tooltip
-// explains the quote changed in a later revision; a conversation keys on its
-// root, so a detached root keeps its whole chain inline too. Internally the
-// anchor still carries `anchorState:"orphaned"`; the UI just renders it inline.
+// reply box for the next question. Comment states: a comment the agent has
+// responded to shows its reply plus a **Resolve** button (the reviewer closes
+// it); a comment with no reply yet also gets a **Resolve** button (withdraw);
+// once the reviewer resolves, the card collapses to its ✓ line (keyed on the
+// reviewer close) and expands to the reply + the resolved revision. A question
+// conversation gets a Resolve button too. A detached thread — whose quoted text
+// no longer exists in the current revision (plan structure, lint, and anchoring)
+// — stays inline in the same list as everything else. Its quote renders muted
+// (no live text to flash, so it is not clickable or jumpable) beside a subtle ⌀
+// icon whose hover tooltip explains the quote changed in a later revision; a
+// conversation keys on its root, so a detached root keeps its whole chain inline
+// too. Internally the anchor still carries `anchorState:"orphaned"`; the UI just
+// renders it inline. Resolve buttons hide when the session is over (read-only).
 
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
@@ -25,6 +29,8 @@ type QuestionThread = Extract<Thread, { kind: "question" }>;
 type Jump = (anchor: Anchor) => void;
 /** Post a follow-up on conversation `rootId`; resolves false on failure (stay open). */
 type Followup = (rootId: string, body: string) => Promise<boolean>;
+/** Close/reopen conversation `threadId`; resolves false on failure (stay as-is). */
+type Resolve = (threadId: string, resolved: boolean) => Promise<boolean>;
 /** A tap on a lit plan span targets its rail thread; the nonce re-fires taps. */
 type FocusTarget = { id: string; nonce: number };
 const FOCUS_MS = 1600;
@@ -58,12 +64,15 @@ export const ThreadsRail = memo(function ThreadsRail({
   threads,
   onJump,
   onFollowup,
+  onResolve,
   focus,
 }: {
   threads: Thread[];
   onJump: Jump;
   /** Absent when the session is over: the reply box hides, the rest stays read-only. */
   onFollowup?: Followup;
+  /** Absent when the session is over: the Resolve buttons hide, cards stay read-only. */
+  onResolve?: Resolve;
   /** Tap-a-lit-span → focus its rail thread (review UI); null = no target. */
   focus?: FocusTarget | null;
 }) {
@@ -101,10 +110,13 @@ export const ThreadsRail = memo(function ThreadsRail({
         groups.map((group) => {
           const root = group.root;
           if (root.kind === "comment") {
-            return root.resolution ? (
-              <ResolvedCard key={root.id} thread={root} onJump={onJump} />
+            // Resolved (the reviewer closed it) → the collapsed ✓ card. Otherwise
+            // the open card carries a Resolve button (responded: shows the reply;
+            // un-replied: a withdraw) — it renders read-only when onResolve is absent.
+            return root.resolved ? (
+              <ResolvedCard key={root.id} thread={root} onJump={onJump} onResolve={onResolve} />
             ) : (
-              <ThreadCard key={root.id} thread={root} onJump={onJump} />
+              <ThreadCard key={root.id} thread={root} onJump={onJump} onResolve={onResolve} />
             );
           }
           return (
@@ -114,6 +126,7 @@ export const ThreadsRail = memo(function ThreadsRail({
               followups={group.followups}
               onJump={onJump}
               onFollowup={onFollowup}
+              onResolve={onResolve}
             />
           );
         })
@@ -122,9 +135,52 @@ export const ThreadsRail = memo(function ThreadsRail({
   );
 });
 
-/** An unresolved comment thread (review UI). */
-function ThreadCard({ thread, onJump }: { thread: CommentThread; onJump: Jump }) {
-  const { anchor } = thread;
+/**
+ * The reviewer's Resolve action: a button that closes the thread (and, on a
+ * comment with no reply, doubles as the withdraw). Posts {resolved:true} and
+ * relies on the `thread` SSE frame to fold the close back in; on failure it
+ * surfaces a retry hint inline. Absent `onResolve` (session over) renders nothing.
+ */
+function ResolveButton({ threadId, onResolve }: { threadId: string; onResolve?: Resolve }) {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  if (!onResolve) return null;
+  const resolve = () => {
+    if (busy) return;
+    setBusy(true);
+    setFailed(false);
+    void onResolve(threadId, true).then((ok) => {
+      setBusy(false);
+      if (!ok) setFailed(true);
+    });
+  };
+  return (
+    <div className="thread-resolve">
+      {failed && <span className="composer-hint composer-failed">resolve failed — is otacond up?</span>}
+      <button type="button" className="btn btn-ghost thread-resolve-btn" disabled={busy} onClick={resolve}>
+        {busy ? "resolving…" : "resolve"}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * An open comment thread (review UI): the reviewer hasn't closed it yet. When the
+ * agent has responded it shows the reply; either way it offers a **Resolve**
+ * button (an un-replied comment's Resolve doubles as withdraw). The card stays a
+ * jump target by its meta/quote; the Resolve button stops click propagation so a
+ * tap on it never also fires the jump.
+ */
+function ThreadCard({
+  thread,
+  onJump,
+  onResolve,
+}: {
+  thread: CommentThread;
+  onJump: Jump;
+  onResolve?: Resolve;
+}) {
+  const { anchor, reply } = thread;
   const detached = isDetached(thread);
   // A detached thread's quote can't be located, so it never jumps or flashes.
   const jump = anchor === null || detached ? undefined : () => onJump(anchor);
@@ -139,7 +195,7 @@ function ThreadCard({ thread, onJump }: { thread: CommentThread; onJump: Jump })
   return (
     <article
       data-thread={thread.id}
-      className={`thread thread-comment${jump ? " thread-anchored" : ""}`}
+      className={`thread thread-comment${jump ? " thread-anchored" : ""}${reply ? " thread-responded" : ""}`}
       onClick={jump}
       onKeyDown={onKeyDown}
       role={jump ? "button" : undefined}
@@ -159,6 +215,16 @@ function ThreadCard({ thread, onJump }: { thread: CommentThread; onJump: Jump })
           <blockquote className="thread-quote">{anchor.exact}</blockquote>
         ))}
       <p className="thread-body">{thread.body}</p>
+      {reply && (
+        <div className="thread-answer">
+          <span className="thread-answer-label">↳ agent · r{reply.revision}</span>
+          <p className="thread-answer-body">{reply.body}</p>
+        </div>
+      )}
+      {/* The Resolve button isn't part of the jump target — swallow its click. */}
+      <div onClick={(event) => event.stopPropagation()}>
+        <ResolveButton threadId={thread.id} onResolve={onResolve} />
+      </div>
     </article>
   );
 }
@@ -186,11 +252,13 @@ function ConversationCard({
   followups,
   onJump,
   onFollowup,
+  onResolve,
 }: {
   root: QuestionThread;
   followups: QuestionThread[];
   onJump: Jump;
   onFollowup?: Followup;
+  onResolve?: Resolve;
 }) {
   const { anchor } = root;
   const detached = isDetached(root);
@@ -245,10 +313,21 @@ function ConversationCard({
         </div>
       ))}
       {/* root.replyTo is set only on a degraded "root gone" card (groupThreads);
-          don't offer a reply box there — it would link to a missing root. */}
-      {onFollowup && root.replyTo === undefined && (
-        <FollowupBox rootId={root.id} onFollowup={onFollowup} />
-      )}
+          don't offer a reply box / Resolve there — they'd link to a missing root. */}
+      {root.replyTo === undefined &&
+        (root.resolved ? (
+          <p className="thread-resolved-mark">
+            <span className="resolved-check" aria-hidden="true">
+              ✓
+            </span>
+            resolved <span className="resolved-rev">r{root.resolved.revision}</span>
+          </p>
+        ) : (
+          <>
+            {onFollowup && <FollowupBox rootId={root.id} onFollowup={onFollowup} />}
+            <ResolveButton threadId={root.id} onResolve={onResolve} />
+          </>
+        ))}
     </article>
   );
 }
@@ -333,11 +412,26 @@ function FollowupBox({ rootId, onFollowup }: { rootId: string; onFollowup: Follo
   );
 }
 
-/** A resolved comment: collapsed to its ✓ line, per the review UI. */
-function ResolvedCard({ thread, onJump }: { thread: CommentThread; onJump: Jump }) {
-  const { anchor, resolution } = thread;
-  if (!resolution) return null; // callers only route resolved comments here
+/**
+ * A reviewer-resolved comment: collapsed to its ✓ line (keyed on the reviewer's
+ * close), expanding to the quote, the comment, and the agent's reply if one
+ * landed (a withdrawn comment with no reply just shows the comment). The ✓ line
+ * carries the resolved revision; an un-resolve offer (Reopen) rides the same
+ * Resolve seam, hidden read-only.
+ */
+function ResolvedCard({
+  thread,
+  onJump,
+  onResolve,
+}: {
+  thread: CommentThread;
+  onJump: Jump;
+  onResolve?: Resolve;
+}) {
+  const { anchor, reply, resolved } = thread;
+  if (!resolved) return null; // callers only route reviewer-resolved comments here
   const detached = isDetached(thread);
+  const reopen = () => void onResolve?.(thread.id, false);
   return (
     <details className="thread thread-comment thread-resolved">
       <summary className="resolved-summary">
@@ -346,7 +440,7 @@ function ResolvedCard({ thread, onJump }: { thread: CommentThread; onJump: Jump 
         </span>
         <span className="thread-id">{thread.id}</span>
         <span className="resolved-word">resolved</span>
-        <span className="resolved-rev">r{resolution.revision}</span>
+        <span className="resolved-rev">r{resolved.revision}</span>
         <span className="thread-where">{anchorLabel(anchor)}</span>
       </summary>
       <div className="resolved-detail">
@@ -363,10 +457,19 @@ function ResolvedCard({ thread, onJump }: { thread: CommentThread; onJump: Jump 
             </blockquote>
           ))}
         <p className="thread-body">{thread.body}</p>
-        <div className="thread-answer">
-          <span className="thread-answer-label">↳ agent · r{resolution.revision}</span>
-          <p className="thread-answer-body">{resolution.body}</p>
-        </div>
+        {reply && (
+          <div className="thread-answer">
+            <span className="thread-answer-label">↳ agent · r{reply.revision}</span>
+            <p className="thread-answer-body">{reply.body}</p>
+          </div>
+        )}
+        {onResolve && (
+          <div className="thread-resolve">
+            <button type="button" className="btn btn-ghost thread-resolve-btn" onClick={reopen}>
+              reopen
+            </button>
+          </div>
+        )}
       </div>
     </details>
   );

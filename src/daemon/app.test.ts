@@ -552,6 +552,78 @@ describe("threads", () => {
   });
 });
 
+describe("the reviewer Resolve route (POST .../threads/:tid/resolve)", () => {
+  const resolve = (id: string, tid: string, body: unknown) =>
+    postJson(`/api/sessions/${id}/threads/${tid}/resolve`, body);
+
+  test("a 202 + a `thread` SSE upsert carrying the reviewer close", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/submit`, { plan: validPlanFor(session.id) });
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ body: "a nit" }] }); // t1
+    const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
+    await reader.next(); // snapshot
+
+    const res = await resolve(session.id, "t1", { resolved: true });
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ ok: true });
+
+    const frame = await reader.next();
+    expect(frame.event).toBe("thread");
+    expect(frame.data).toMatchObject({
+      session: session.id,
+      thread: { id: "t1", kind: "comment", resolved: { revision: 1 } },
+    });
+
+    // It's durable: the close is on disk.
+    const threads = (await (await app.request(`/api/sessions/${session.id}/threads`)).json()) as {
+      threads: { id: string; resolved?: { revision: number } }[];
+    };
+    expect(threads.threads.find((t) => t.id === "t1")?.resolved?.revision).toBe(1);
+    await reader.cancel();
+  });
+
+  test("resolved:false reopens the thread", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/submit`, { plan: validPlanFor(session.id) });
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ body: "a nit" }] }); // t1
+    await resolve(session.id, "t1", { resolved: true });
+    const res = await resolve(session.id, "t1", { resolved: false });
+    expect(res.status).toBe(202);
+    const threads = (await (await app.request(`/api/sessions/${session.id}/threads`)).json()) as {
+      threads: { id: string; resolved?: unknown }[];
+    };
+    expect(threads.threads.find((t) => t.id === "t1")?.resolved).toBeUndefined();
+  });
+
+  test("an unknown thread id is a 404 E_UNKNOWN_THREAD", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/submit`, { plan: validPlanFor(session.id) });
+    const res = await resolve(session.id, "t9", { resolved: true });
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("E_UNKNOWN_THREAD");
+    const noSession = await resolve("otc_zzzzzz", "t1", { resolved: true });
+    expect(noSession.status).toBe(404);
+  });
+
+  test("a non-boolean `resolved` is a 400", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/submit`, { plan: validPlanFor(session.id) });
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ body: "a nit" }] }); // t1
+    expect((await resolve(session.id, "t1", {})).status).toBe(400);
+    expect((await resolve(session.id, "t1", { resolved: "yes" })).status).toBe(400);
+  });
+
+  test("Resolve refuses a terminal (approved) session with E_SESSION_OVER", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/submit`, { plan: validPlanFor(session.id) });
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ body: "a nit" }] }); // t1
+    expect((await postJson(`/api/sessions/${session.id}/approve`, { force: true })).status).toBe(200);
+    const res = await resolve(session.id, "t1", { resolved: true });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("E_SESSION_OVER");
+  });
+});
+
 describe("events long-poll", () => {
   test("fast path: a queued event is delivered without waiting and acked on disk", async () => {
     const session = mintSession();
@@ -981,9 +1053,9 @@ describe("the revise loop: L5, resolutions, changelog, re-anchoring (M3)", () =>
     expect(body.resolved).toEqual(["t1"]);
 
     const threads = (await (await app.request(`/api/sessions/${session.id}/threads`)).json()) as {
-      threads: { id: string; resolution?: { body: string; revision: number } }[];
+      threads: { id: string; reply?: { body: string; revision: number } }[];
     };
-    expect(threads.threads[0]?.resolution).toMatchObject({
+    expect(threads.threads[0]?.reply).toMatchObject({
       body: "RS256 verifiers only need the public key.",
       revision: 2,
     });
@@ -1559,6 +1631,56 @@ describe("approve and the status machine (M4)", () => {
     await submitValid(session.id);
     await postJson(`/api/sessions/${session.id}/questions`, { body: "open question" });
     await postJson(`/api/sessions/${session.id}/questions/q1/answer`, { body: "answered" });
+    expect((await approve(session.id)).status).toBe(200);
+  });
+
+  test("a responded-but-unresolved comment STILL counts unresolved (a reply is not a close)", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [{ anchor: { section: "phase-1", exact: "RS256 JWTs from the auth service" }, body: "why not ES256?" }],
+    });
+    // The agent replies on a clean r2 — a response, not a close.
+    await postJson(`/api/sessions/${session.id}/submit`, {
+      plan: validPlanFor(session.id),
+      resolutions: { changelog: "Explained the choice.", threads: { t1: "Kept RS256." } },
+    });
+    const refused = await approve(session.id);
+    expect(refused.status).toBe(409);
+    expect(((await refused.json()) as { unresolved: number }).unresolved).toBe(1);
+  });
+
+  test("a reviewer-Resolved comment does NOT count unresolved", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ body: "a nit" }] }); // t1
+    await postJson(`/api/sessions/${session.id}/threads/t1/resolve`, { resolved: true });
+    expect((await approve(session.id)).status).toBe(200);
+  });
+
+  test("an unanswered ask counts; an unanswered-but-Resolved ask does NOT", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await postJson(`/api/sessions/${session.id}/questions`, { body: "open question" }); // q1
+    const refused = await approve(session.id);
+    expect(refused.status).toBe(409);
+    expect(((await refused.json()) as { unresolved: number }).unresolved).toBe(1);
+    // The reviewer Resolves the ask instead of waiting for an answer.
+    await postJson(`/api/sessions/${session.id}/threads/q1/resolve`, { resolved: true });
+    expect((await approve(session.id)).status).toBe(200);
+  });
+
+  test("resolving a question root clears its unanswered follow-up too (count keys on the root)", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await postJson(`/api/sessions/${session.id}/questions`, { body: "root question" }); // q1
+    await postJson(`/api/sessions/${session.id}/questions`, { replyTo: "q1", body: "follow up" }); // q2
+    // Two unanswered turns in one conversation → counts as two open items.
+    const refused = await approve(session.id);
+    expect(refused.status).toBe(409);
+    expect(((await refused.json()) as { unresolved: number }).unresolved).toBe(2);
+    // Resolving the ROOT clears the whole chain — the follow-up keys on q1.
+    await postJson(`/api/sessions/${session.id}/threads/q1/resolve`, { resolved: true });
     expect((await approve(session.id)).status).toBe(200);
   });
 

@@ -66,6 +66,7 @@ import {
   commentThreadStates,
   openCommentThreads,
   readThreads,
+  resolveThread,
 } from "./threads.js";
 import { answerEntry, appendEntries, appendEntry, readTranscript } from "./transcript.js";
 import { registerUiRoutes } from "./ui.js";
@@ -722,7 +723,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
           thread: t.id,
           section: t.anchor?.section ?? null,
           body: t.body,
-          resolution: t.resolution?.body ?? "",
+          reply: t.reply?.body ?? "",
         }));
       const { path, home } = finalizeApproval(session, {
         revision,
@@ -1018,6 +1019,42 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     });
   });
 
+  // The reviewer's side of closing a thread (the Resolve verb): {resolved:true}
+  // stamps the close (carrying the session's current revision) on the conversation
+  // root, {resolved:false} reopens it. Resolve doubles as the comment-withdraw
+  // path — a resolved comment no longer owes a reply (L5 skips it) and no longer
+  // counts unresolved at approve. Refused on a terminal session (like the
+  // questions route); 404 on an unknown thread id.
+  app.post("/api/sessions/:id/threads/:tid/resolve", async (c) => {
+    const session = sessionFor(c);
+    if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    const body = (await readJsonBody(c)) ?? {};
+    if (sessionEnded(session.id)) return sessionOver(c, session.id);
+    if (typeof body.resolved !== "boolean") {
+      return badRequest(c, "resolved must be a boolean");
+    }
+    const tid = c.req.param("tid") ?? "";
+    const thread = resolveThread(
+      store.threadsPath(session.id),
+      tid,
+      body.resolved,
+      store.readState(session.id).revision,
+    );
+    if (!thread) {
+      return c.json(
+        {
+          error: {
+            code: "E_UNKNOWN_THREAD",
+            message: `session ${session.id} has no thread ${tid}`,
+          },
+        },
+        404,
+      );
+    }
+    publishThread(session.id, thread);
+    return c.json({ ok: true }, 202);
+  });
+
   app.get("/api/sessions/:id/threads", (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
@@ -1306,11 +1343,21 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
         : body.implement === true;
     const threads = readThreads(store.threadsPath(session.id));
     const openComments = openCommentThreads(threads);
-    // Unresolved = comment threads with no resolution + user questions with no
-    // answer — the same open items the rail shows.
-    const unresolved = threads.filter((t) =>
-      t.kind === "comment" ? t.resolution === undefined : t.answer === undefined,
-    ).length;
+    // Unresolved = anything the reviewer hasn't closed and the rail still shows
+    // as open. A conversation root the reviewer `resolved` is never counted
+    // (Resolve doubles as the close/withdraw verb). Otherwise: a **comment**
+    // counts (you must Resolve it — a landed reply is a response, not a close),
+    // and a **question** counts only when its turn has no answer (an
+    // unanswered-but-Resolved ask does NOT warn; a responded-but-unresolved
+    // comment STILL warns — both intended).
+    const resolvedRoots = new Set(threads.filter((t) => t.resolved).map((t) => t.id));
+    const unresolved = threads.filter((t) => {
+      // Only questions carry `replyTo` (a follow-up keys on its root); a comment
+      // is always its own root.
+      const rootId = t.kind === "question" ? (t.replyTo ?? t.id) : t.id;
+      if (resolvedRoots.has(rootId)) return false;
+      return t.kind === "comment" ? true : t.answer === undefined;
+    }).length;
 
     // Comment & approve: defer the finalize and hand the agent every open comment
     // thread for one solo fold-in pass — its next clean submit finalizes. Only

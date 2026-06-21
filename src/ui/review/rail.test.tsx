@@ -25,11 +25,22 @@ const question = (id: string, extra: Partial<Extract<Thread, { kind: "question" 
   ...extra,
 });
 
+const noop = async () => true;
+
 /** Render the rail to static markup (effects skipped — the focus effect
- *  early-returns without a focus target). */
-function render(threads: Thread[]): string {
+ *  early-returns without a focus target). `onResolve` defaults present (a live
+ *  session); pass `null` to drop it (the read-only/session-over case). */
+function render(
+  threads: Thread[],
+  opts: { onResolve?: typeof noop | null; onFollowup?: typeof noop } = {},
+): string {
   return renderToStaticMarkup(
-    createElement(ThreadsRail, { threads, onJump: () => undefined, onFollowup: undefined }),
+    createElement(ThreadsRail, {
+      threads,
+      onJump: () => undefined,
+      onFollowup: opts.onFollowup,
+      onResolve: opts.onResolve === null ? undefined : (opts.onResolve ?? noop),
+    }),
   );
 }
 
@@ -84,7 +95,8 @@ describe("ThreadsRail detached threads (anchorState orphaned)", () => {
     const html = render([
       comment("t1", {
         anchorState: "orphaned",
-        resolution: { body: "fixed it", revision: 2, resolvedAt: AT },
+        reply: { body: "fixed it", revision: 2, repliedAt: AT },
+        resolved: { revision: 3, at: AT }, // the reviewer's close keys the ✓ card
       }),
     ]);
     // It still collapses to its ✓ line and keeps the agent's reply…
@@ -109,5 +121,53 @@ describe("ThreadsRail detached threads (anchorState orphaned)", () => {
     // No muted/detached chrome appears on anchored threads.
     expect(html).not.toContain("thread-quote-muted");
     expect(html).not.toContain("thread-quote-detached");
+  });
+});
+
+describe("ThreadsRail reviewer-driven resolution (comments)", () => {
+  test("a responded comment renders the agent's reply plus a Resolve control", () => {
+    const html = render([
+      comment("t1", { reply: { body: "kept RS256 — public-key verify", revision: 2, repliedAt: AT } }),
+    ]);
+    // Still the open card (the reviewer hasn't closed it), tagged responded.
+    expect(html).toContain('data-thread="t1"');
+    expect(html).toContain("thread-responded");
+    expect(html).not.toContain("thread-resolved");
+    // The reply is shown…
+    expect(html).toContain("kept RS256 — public-key verify");
+    // …and a Resolve control is offered.
+    expect(html).toContain("thread-resolve-btn");
+    expect(html).toContain("resolve");
+  });
+
+  test("an un-replied open comment still offers a Resolve (withdraw) control", () => {
+    const html = render([comment("t1")]);
+    expect(html).toContain("thread-resolve-btn");
+    expect(html).not.toContain("thread-responded");
+  });
+
+  test("a reviewer-resolved comment collapses to the ✓ card (keyed on the close)", () => {
+    const html = render([
+      comment("t1", {
+        reply: { body: "addressed", revision: 2, repliedAt: AT },
+        resolved: { revision: 3, at: AT },
+      }),
+    ]);
+    // The collapsed ✓ resolved card, carrying the reviewer's resolved revision.
+    expect(html).toContain("thread-resolved");
+    expect(html).toContain("resolved-summary");
+    expect(html).toContain("r3");
+    // The agent's reply still expands inside.
+    expect(html).toContain("addressed");
+  });
+
+  test("the Resolve control is hidden when onResolve is absent (session over)", () => {
+    const html = render([comment("t1", { reply: { body: "done", revision: 2, repliedAt: AT } })], {
+      onResolve: null,
+    });
+    // The reply still renders read-only…
+    expect(html).toContain("done");
+    // …but no Resolve button.
+    expect(html).not.toContain("thread-resolve-btn");
   });
 });

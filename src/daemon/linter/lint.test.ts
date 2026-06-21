@@ -519,27 +519,50 @@ describe("L5 thread resolutions and changelog", () => {
     expect(run(doc()).ok).toBeTrue();
   });
 
-  test("every open comment thread needs a reply; resolved ones do not", () => {
+  test("every open comment thread needs a reply this submit doesn't carry", () => {
     const result = l5({
       changelog: "c",
       commentThreads: [
-        { id: "t1", resolved: false },
-        { id: "t2", resolved: true },
-        { id: "t3", resolved: false },
+        { id: "t1", replied: false, resolved: false }, // gets a reply below → ok
+        { id: "t2", replied: false, resolved: false }, // no reply → error
+        { id: "t3", replied: false, resolved: false }, // no reply → error
       ],
       replies: { t1: "moved to phase 2" },
     });
     expect(result.ok).toBeFalse();
     const unresolved = result.errors.filter((e) => e.code === "E_THREAD_UNRESOLVED");
-    expect(unresolved.map((e) => e.thread)).toEqual(["t3"]);
+    expect(unresolved.map((e) => e.thread)).toEqual(["t2", "t3"]);
     expect(unresolved[0]?.rule).toBe("L5");
+  });
+
+  test("a reviewer-resolved comment is skipped (no deadlock) but an un-replied one still demands a reply", () => {
+    const result = l5({
+      changelog: "c",
+      commentThreads: [
+        { id: "t1", replied: false, resolved: true }, // reviewer withdrew → skipped
+        { id: "t2", replied: false, resolved: false }, // open → still demands a reply
+      ],
+      replies: {},
+    });
+    expect(result.ok).toBeFalse();
+    const unresolved = result.errors.filter((e) => e.code === "E_THREAD_UNRESOLVED");
+    expect(unresolved.map((e) => e.thread)).toEqual(["t2"]);
+  });
+
+  test("an already-replied comment needs no fresh reply", () => {
+    const result = l5({
+      changelog: "c",
+      commentThreads: [{ id: "t1", replied: true, resolved: false }],
+      replies: {},
+    });
+    expect(result.ok).toBeTrue();
   });
 
   test("unknown thread ids and blank replies are errors", () => {
     const result = l5({
       changelog: "c",
-      commentThreads: [{ id: "t1", resolved: false }],
-      replies: { t1: "  ", t9: "ghost", q1: "questions are answered, not resolved" },
+      commentThreads: [{ id: "t1", replied: false, resolved: false }],
+      replies: { t1: "  ", t9: "ghost", q1: "questions are answered, not replied" },
     });
     expect(result.errors.map((e) => e.code).sort()).toEqual([
       "E_EMPTY_RESOLUTION",
@@ -548,10 +571,10 @@ describe("L5 thread resolutions and changelog", () => {
     ]);
   });
 
-  test("re-resolving an already-resolved thread is allowed (at-least-once)", () => {
+  test("re-replying to an already-replied thread is allowed (at-least-once)", () => {
     const result = l5({
       changelog: "c",
-      commentThreads: [{ id: "t1", resolved: true }],
+      commentThreads: [{ id: "t1", replied: true, resolved: false }],
       replies: { t1: "same reply, retried submit" },
     });
     expect(result.ok).toBeTrue();

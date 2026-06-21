@@ -828,23 +828,55 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Resolutions need per-thread structure beyond a reply string
   (e.g. disposition: accepted/rejected), or a second accompaniment field appears.
 
-## L5 scope: every unresolved comment thread at submit time
+## Reviewer-driven resolution: agent replies = response, reviewer Resolve = close
 
-- **Decision:** L5 requires a resolution reply for every comment thread that has no
-  stored resolution when the submit arrives — not just the latest batch. Unknown
+- **Decision:** A thread closes only when the **reviewer** acts. The agent's reply
+  (landed on resubmit, lint L5) is a *response* and is stored as `reply: {body,
+  revision, repliedAt}` on the comment; it does NOT close the thread. The reviewer
+  closes via a dedicated **Resolve** verb (`POST .../threads/:tid/resolve {resolved}`),
+  which stamps `resolved: {revision, at}` on the conversation root (comment or
+  question) — `{resolved:false}` reopens. Resolve doubles as **withdraw**: resolving a
+  comment with no reply tells the agent the comment is dropped, and L5 skips any
+  reviewer-resolved comment so an un-answerable thread never deadlocks a submit. The
+  rail's lit mark, the Approve unresolved count, and the comment & approve sweep all key
+  on `resolved`, not on `reply`. (Replaces the M3 field shape `resolution: {body,
+  revision, resolvedAt}`, which conflated "agent answered" with "thread closed"; a
+  pre-Phase-2 in-flight session's `resolution` is read-normalized to `reply` so it is
+  never quarantined.)
+- **Why:** Conflating reply with close gave the *agent* the power to dismiss feedback
+  the human never accepted — a reply auto-cleared the mark and dropped the thread from
+  the approve count, so a hand-wavy "done" looked identical to an accepted fix. Putting
+  the close on the reviewer keeps the human as the gate: the thread stays lit and
+  counted until they actively Resolve. Folding withdraw into the same verb (rather than
+  a separate `otacon`-side or reviewer-side "withdraw") means one button does both
+  "I accept your reply" and "never mind" — the only two ways a reviewer ends a comment —
+  and gives L5 a clean skip predicate (`replied || resolved`) instead of a special
+  withdraw state. The close carries the session's current revision so the ✓ card and
+  Review notes stay auditable.
+- **Revisit when:** Comments become multi-turn conversations (Phase 3) — "the agent
+  replied" stops being a single bit and Resolve has to reason about whose turn it is;
+  or reviewers want a disposition on the close (accepted vs won't-fix).
+
+## L5 scope: a reply for every un-replied, un-resolved comment thread at submit time
+
+- **Decision:** L5 requires a reply for every comment thread that has neither a stored
+  reply NOR a reviewer `resolved` close when the submit arrives — not just the latest
+  batch. A reviewer-resolved comment is skipped (that is the withdraw path). Unknown
   thread ids and question ids in `threads` are errors (questions are answered via
-  `otacon answer`, never resolved); blank replies are errors; re-resolving an
-  already-resolved thread is allowed and overwrites.
-- **Why:** Under normal operation the two scopes are identical — each accepted
-  revision resolves everything open, so what is open at the next submit is exactly
-  the batches delivered since the last accepted revision (DESIGN.md §9). The
-  "every open thread" formulation is what makes that invariant *self-healing*:
-  after a quarantine, a crash between writes, or a hand-edited threads.json, stray
-  open threads block the next submit instead of silently rotting. Overwrite-on-
-  re-resolve mirrors answerQuestion: at-least-once delivery makes duplicate submits
-  legitimate.
-- **Revisit when:** Threads gain a user-side "withdraw comment" verb (an open
-  thread the agent *cannot* resolve would deadlock submits).
+  `otacon answer`, never replied); blank replies are errors; re-replying to an
+  already-replied thread is allowed and overwrites.
+- **Why:** Under normal operation "every open thread" is the self-healing scope — each
+  submit must carry the agent's response to everything still owed one, so after a
+  quarantine, a crash between writes, or a hand-edited threads.json, stray open threads
+  block the next submit instead of silently rotting (DESIGN.md §9). Skipping
+  reviewer-resolved threads is what makes the **Resolve = withdraw** path safe: a
+  comment the agent cannot or should not answer (the reviewer dropped it) would
+  otherwise deadlock every submit. Overwrite-on-re-reply mirrors answerQuestion:
+  at-least-once delivery makes duplicate submits legitimate. (This is the
+  long-standing "withdraw verb" this entry once flagged as a revisit-when — Resolve
+  *is* that verb; see "Reviewer-driven resolution" above.)
+- **Revisit when:** Comment threads grow multi-turn conversations (Phase 3) — L5 would
+  then need to reason about whose turn it is, not just "has a reply".
 
 ## Changelog requirement is a lint error, not a 4xx
 
@@ -1047,27 +1079,34 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Decisions want richer provenance (multiple sources, comment
   citations), or quick-mode warnings prove too quiet to keep plans honest.
 
-## Approve: unresolved = open comments + unanswered questions; force bypasses
+## Approve: unresolved = comments the reviewer hasn't Resolved + asks with neither answer nor Resolve; force bypasses
 
-- **Decision:** POST /approve counts comment threads without a resolution plus
-  question threads without an answer; a non-zero count answers 409
-  `E_UNRESOLVED_THREADS` with `unresolved: n` unless the body is exactly
-  `{"force": true}` — the UI warns with the count and retries with force on
-  confirm. A session with no revisions answers 409 `E_NO_REVISION`. The artifact
-  is written before the status flips (write, flip, enqueue `approved`) so a crash
-  can leave an orphan file but never an approved session without its artifact.
-  After the flip, submit/comments/questions/question-answers/ask/answers/approve
-  all answer 409 `E_SESSION_OVER` — the daemon enforces the terminal state, not
-  just the CLI's pointer rules.
-- **Why:** §9 says Approve *warns* on unresolved threads — a hard refusal would
-  make the daemon override the human's judgment, and silence would make dangling
-  feedback invisible; 409-unless-force encodes "warn then allow" in one round
-  trip and leaves the count machine-readable for the confirm sheet. Unanswered
-  questions count because they are visibly open in the rail; approving past them
-  is the same conscious shrug as an open comment. Daemon-side enforcement exists
-  because curl/UI/--session callers never pass the CLI's pointer guard.
-- **Revisit when:** A "withdraw question" verb appears (open-question deadlock
-  stops being theoretical), or approve wants per-thread acknowledgment.
+- **Decision:** POST /approve counts every conversation root the reviewer has not
+  `resolved`, then: a **comment** always counts (a landed agent reply is a response,
+  not a close — only the reviewer's Resolve clears it), a **question** counts only
+  when its turn has no answer. A reviewer-resolved root (comment or question) is never
+  counted — Resolve doubles as the close/withdraw, so a responded-but-unresolved
+  comment STILL warns while an unanswered-but-resolved ask does NOT. A non-zero count
+  answers 409 `E_UNRESOLVED_THREADS` with `unresolved: n` unless the body is exactly
+  `{"force": true}` — the UI warns with the count and retries with force on confirm.
+  A session with no revisions answers 409 `E_NO_REVISION`. The artifact is written
+  before the status flips (write, flip, enqueue `approved`) so a crash can leave an
+  orphan file but never an approved session without its artifact. After the flip,
+  submit/comments/questions/question-answers/ask/answers/resolve/approve all answer
+  409 `E_SESSION_OVER` — the daemon enforces the terminal state, not just the CLI's
+  pointer rules.
+- **Why:** §9 says Approve *warns* on threads the reviewer hasn't closed — a hard
+  refusal would make the daemon override the human's judgment, and silence would make
+  dangling feedback invisible; 409-unless-force encodes "warn then allow" in one round
+  trip and leaves the count machine-readable for the confirm sheet. The count keys on
+  the reviewer's Resolve, not on the agent's reply, because closing a thread is the
+  reviewer's call — auto-clearing on a reply would let the agent dismiss feedback the
+  human never accepted. A reviewer can Resolve an open ask to clear it without waiting
+  for an answer, which is why Resolve (not just `answer`) suppresses a question.
+  Daemon-side enforcement exists because curl/UI/--session callers never pass the CLI's
+  pointer guard.
+- **Revisit when:** Approve wants per-thread acknowledgment finer than one
+  resolved/open bit, or a bulk "Resolve all" affordance.
 
 ## Comment & approve: a deferred-finalize hop, not a relabeled approve button
 
@@ -1080,14 +1119,15 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   still-open comment thread. The agent folds them in; the daemon detects
   `pendingApproval` on its next clean `submit` and finalizes then — composing the
   artifact (with a `## Review notes` section built from the swept threads' now-
-  landed resolutions), flipping to `approved`/`implementing`, and queuing the
+  landed replies), flipping to `approved`/`implementing`, and queuing the
   `approved` event — instead of returning to `in_review`. The mechanism **reuses
   the comments→revise→submit loop**: no new agent verb, and L5 already forces every
-  swept comment to carry a resolution before the finalize submit can pass. Only
-  open **comment** threads are swept (the foldable kind); open questions are not
-  (answered via `otacon answer`, never resolved — they still drop on approve as
-  before). The E_UNRESOLVED_THREADS 409 gains an `openComments` count so the UI
-  offers *Send to agent* only when there is something to fold in.
+  swept comment to carry a reply before the finalize submit can pass. Only
+  comment threads still **owed a response** are swept (the foldable kind: no reply
+  yet and not reviewer-resolved); open questions are not (answered via `otacon
+  answer`, never folded in — they still drop on approve as before). The
+  E_UNRESOLVED_THREADS 409 gains an `openComments` count so the UI offers *Send to
+  agent* only when there is something to fold in.
 - **Why:** Leaving a final nit shouldn't cost a full comment→revise→re-review→
   approve round trip — the reviewer is done the instant they click. A deferred hop
   reuses the entire revise loop (linter, resolutions, re-anchoring, SSE) rather

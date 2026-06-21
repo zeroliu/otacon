@@ -536,20 +536,27 @@ export function checkL3(plan: ParsedPlan, ctx: GrillContext): LintIssue[] {
 export interface ResolutionContext {
   /** This submit creates revision N (the daemon's count, not frontmatter's). */
   revision: number;
-  /** Comment threads existing at submit time, with their resolved state. */
-  commentThreads: { id: string; resolved: boolean }[];
-  /** thread id → resolution reply provided with this submit. */
+  /**
+   * Comment threads existing at submit time, with the two states that excuse a
+   * reply: `replied` (the agent already responded) and `resolved` (the reviewer
+   * closed/withdrew it — the withdraw path L5 must skip, or it deadlocks submits).
+   */
+  commentThreads: { id: string; replied: boolean; resolved: boolean }[];
+  /** thread id → reply (the agent's response) provided with this submit. */
   replies: Record<string, string>;
   /** The agent's changelog provided with this submit. */
   changelog?: string;
 }
 
 /**
- * L5: a resubmit must resolve every unresolved comment
- * thread, and every revision ≥ 2 must carry a changelog. Unknown thread ids
- * (typos, question ids — questions are answered via `otacon answer`, never
- * resolved) are errors; re-resolving an already-resolved thread is allowed
- * because at-least-once delivery makes duplicate submits legitimate.
+ * L5: a resubmit must include a response (reply) for every
+ * comment thread that has neither a reply yet NOR a reviewer close, and every
+ * revision ≥ 2 must carry a changelog. A reviewer-`resolved` comment is SKIPPED —
+ * that is the withdraw path; demanding a reply on a thread the agent cannot answer
+ * would deadlock submits. Unknown thread ids (typos, question ids — questions are
+ * answered via `otacon answer`, never replied) are errors; re-replying to an
+ * already-replied thread is allowed because at-least-once delivery makes duplicate
+ * submits legitimate.
  */
 export function checkL5(ctx: ResolutionContext): LintIssue[] {
   const issues: LintIssue[] = [];
@@ -557,16 +564,16 @@ export function checkL5(ctx: ResolutionContext): LintIssue[] {
   for (const [thread, reply] of Object.entries(ctx.replies)) {
     if (!known.has(thread)) {
       issues.push(
-        issue("L5", "E_UNKNOWN_THREAD", "error", `Resolution targets unknown comment thread "${thread}"`, { thread }),
+        issue("L5", "E_UNKNOWN_THREAD", "error", `Reply targets unknown comment thread "${thread}"`, { thread }),
       );
     } else if (reply.trim() === "") {
       issues.push(
-        issue("L5", "E_EMPTY_RESOLUTION", "error", `Resolution reply for thread "${thread}" is empty`, { thread }),
+        issue("L5", "E_EMPTY_RESOLUTION", "error", `Reply for thread "${thread}" is empty`, { thread }),
       );
     }
   }
-  for (const { id, resolved } of ctx.commentThreads) {
-    if (resolved) continue;
+  for (const { id, replied, resolved } of ctx.commentThreads) {
+    if (replied || resolved) continue; // already responded, or reviewer-withdrawn
     const reply = ctx.replies[id];
     if (reply === undefined) {
       issues.push(
@@ -574,7 +581,7 @@ export function checkL5(ctx: ResolutionContext): LintIssue[] {
           "L5",
           "E_THREAD_UNRESOLVED",
           "error",
-          `Comment thread "${id}" has no resolution reply — every open thread needs one (submit --resolutions)`,
+          `Comment thread "${id}" has no response — every open comment needs a reply (submit --resolutions)`,
           { thread: id },
         ),
       );

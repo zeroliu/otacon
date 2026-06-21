@@ -8,7 +8,9 @@ import {
   appendThreads,
   applyRevisionToThreads,
   commentThreadStates,
+  openCommentThreads,
   readThreads,
+  resolveThread,
 } from "./threads.js";
 
 let dir: string;
@@ -159,7 +161,7 @@ Verification: tests
 `;
 
 describe("applyRevisionToThreads", () => {
-  test("records resolutions on comment threads and reports them changed", () => {
+  test("records replies on comment threads and reports them changed", () => {
     appendThreads(path, [comment("t1"), comment("t2"), question("q1")]);
     const changed = applyRevisionToThreads(path, {
       plan: PLAN,
@@ -168,22 +170,24 @@ describe("applyRevisionToThreads", () => {
     });
     expect(changed.map((t) => t.id)).toContain("t1");
     const t1 = readThreads(path).find((t) => t.id === "t1");
-    expect(t1?.kind === "comment" && t1.resolution).toMatchObject({
+    expect(t1?.kind === "comment" && t1.reply).toMatchObject({
       body: "tightened the goal",
       revision: 2,
     });
+    // A reply is a response, not a close — the reviewer's `resolved` stays absent.
+    expect(t1?.kind === "comment" && t1.resolved).toBeUndefined();
     // t2 has no reply and its anchor still resolves — untouched on disk.
     const t2 = readThreads(path).find((t) => t.id === "t2");
-    expect(t2?.kind === "comment" && t2.resolution).toBeUndefined();
+    expect(t2?.kind === "comment" && t2.reply).toBeUndefined();
     expect(t2?.anchorState).toBeUndefined();
   });
 
-  test("re-resolving overwrites the reply (at-least-once duplicates)", () => {
+  test("re-replying overwrites the reply (at-least-once duplicates)", () => {
     appendThreads(path, [comment("t1")]);
     applyRevisionToThreads(path, { plan: PLAN, replies: { t1: "first" }, revision: 2 });
     applyRevisionToThreads(path, { plan: PLAN, replies: { t1: "second" }, revision: 3 });
     const t1 = readThreads(path).find((t) => t.id === "t1");
-    expect(t1?.kind === "comment" && t1.resolution).toMatchObject({ body: "second", revision: 3 });
+    expect(t1?.kind === "comment" && t1.reply).toMatchObject({ body: "second", revision: 3 });
   });
 
   test("a lost quote orphans the thread; a reappearing one recovers it", () => {
@@ -234,35 +238,135 @@ describe("applyRevisionToThreads", () => {
 });
 
 describe("commentThreadStates", () => {
-  test("lists comment threads with resolved flags; questions excluded", () => {
-    appendThreads(path, [comment("t1"), comment("t2"), question("q1")]);
+  test("lists comment threads with replied + resolved flags; questions excluded", () => {
+    appendThreads(path, [comment("t1"), comment("t2"), comment("t3"), question("q1")]);
     applyRevisionToThreads(path, { plan: PLAN, replies: { t2: "done" }, revision: 2 });
+    resolveThread(path, "t3", true, 2);
     expect(commentThreadStates(path)).toEqual([
-      { id: "t1", resolved: false },
-      { id: "t2", resolved: true },
+      { id: "t1", replied: false, resolved: false }, // open: owes a reply
+      { id: "t2", replied: true, resolved: false }, // agent responded, not closed
+      { id: "t3", replied: false, resolved: true }, // reviewer-withdrawn, no reply
     ]);
     expect(commentThreadStates(join(dir, "missing.json"))).toEqual([]);
   });
 });
 
-describe("thread validation of M3 fields", () => {
-  test("resolution and anchorState round-trip; bad shapes quarantine", () => {
-    const resolved: Thread = {
+describe("resolveThread", () => {
+  test("sets `resolved` (carrying the revision) and reports the thread changed", () => {
+    appendThreads(path, [comment("t1"), comment("t2")]);
+    const updated = resolveThread(path, "t1", true, 4);
+    expect(updated?.kind === "comment" && updated.resolved).toMatchObject({ revision: 4 });
+    expect(updated?.kind === "comment" && typeof updated.resolved?.at).toBe("string");
+    const onDisk = readThreads(path).find((t) => t.id === "t1");
+    expect(onDisk?.kind === "comment" && onDisk.resolved?.revision).toBe(4);
+    // t2 untouched.
+    expect(readThreads(path).find((t) => t.id === "t2")).toEqual(comment("t2"));
+  });
+
+  test("clears `resolved` on reopen (false)", () => {
+    appendThreads(path, [comment("t1")]);
+    resolveThread(path, "t1", true, 2);
+    const reopened = resolveThread(path, "t1", false, 3);
+    expect(reopened?.kind === "comment" && reopened.resolved).toBeUndefined();
+    expect(readThreads(path).find((t) => t.id === "t1")?.kind === "comment").toBe(true);
+    const onDisk = readThreads(path).find((t) => t.id === "t1");
+    expect(onDisk?.kind === "comment" && onDisk.resolved).toBeUndefined();
+  });
+
+  test("resolves a question conversation root too", () => {
+    appendThreads(path, [question("q1")]);
+    const updated = resolveThread(path, "q1", true, 2);
+    expect(updated?.kind === "question" && updated.resolved?.revision).toBe(2);
+  });
+
+  test("an unknown id returns undefined without writing", () => {
+    appendThreads(path, [comment("t1")]);
+    const before = readFileSync(path, "utf8");
+    expect(resolveThread(path, "t9", true, 2)).toBeUndefined();
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+});
+
+describe("openCommentThreads", () => {
+  test("excludes replied and reviewer-resolved comments; keeps the bare open ones", () => {
+    appendThreads(path, [comment("t1"), comment("t2"), comment("t3"), question("q1")]);
+    applyRevisionToThreads(path, { plan: PLAN, replies: { t2: "done" }, revision: 2 });
+    resolveThread(path, "t3", true, 2);
+    const open = openCommentThreads(readThreads(path));
+    expect(open.map((t) => t.id)).toEqual(["t1"]); // t2 replied, t3 resolved, q1 a question
+  });
+
+  test("a replied-then-resolved comment is also excluded", () => {
+    appendThreads(path, [comment("t1")]);
+    applyRevisionToThreads(path, { plan: PLAN, replies: { t1: "addressed" }, revision: 2 });
+    resolveThread(path, "t1", true, 2);
+    expect(openCommentThreads(readThreads(path))).toEqual([]);
+  });
+});
+
+describe("thread validation of comment fields", () => {
+  test("reply, resolved, and anchorState round-trip; bad shapes quarantine", () => {
+    const closed: Thread = {
       ...(comment("t1") as Extract<Thread, { kind: "comment" }>),
       anchorState: "orphaned",
-      resolution: { body: "done", revision: 2, resolvedAt: "2026-06-13T00:00:00.000Z" },
+      reply: { body: "done", revision: 2, repliedAt: "2026-06-13T00:00:00.000Z" },
+      resolved: { revision: 3, at: "2026-06-14T00:00:00.000Z" },
     };
-    writeFileSync(path, JSON.stringify({ version: 1, threads: [resolved] }));
-    expect(readThreads(path)).toEqual([resolved]);
+    writeFileSync(path, JSON.stringify({ version: 1, threads: [closed] }));
+    expect(readThreads(path)).toEqual([closed]);
 
     for (const bad of [
       { ...comment("t1"), anchorState: "lost" },
-      { ...comment("t1"), resolution: { body: "done" } },
-      { ...comment("t1"), resolution: { body: 7, revision: 2, resolvedAt: "x" } },
+      { ...comment("t1"), reply: { body: "done" } },
+      { ...comment("t1"), reply: { body: 7, revision: 2, repliedAt: "x" } },
+      { ...comment("t1"), resolved: { revision: 2 } }, // resolved needs `at`
+      { ...comment("t1"), resolved: { revision: "x", at: "y" } }, // revision must be a number
     ]) {
       writeFileSync(path, JSON.stringify({ version: 1, threads: [bad] }));
       expect(readThreads(path)).toEqual([]);
     }
+  });
+
+  test("a legacy `resolution` field loads (not quarantined) and reads back as `reply`", () => {
+    // A pre-Phase-2 session stored the agent's response as `resolution:
+    // {body, revision, resolvedAt}`. Read-normalization maps it onto `reply`.
+    const legacy = {
+      ...comment("t1"),
+      resolution: { body: "addressed it", revision: 2, resolvedAt: "2026-06-13T00:00:00.000Z" },
+    };
+    writeFileSync(path, JSON.stringify({ version: 1, threads: [legacy] }));
+    const t1 = readThreads(path).find((t) => t.id === "t1");
+    expect(t1?.kind === "comment" && t1.reply).toEqual({
+      body: "addressed it",
+      revision: 2,
+      repliedAt: "2026-06-13T00:00:00.000Z",
+    });
+    // The legacy field is dropped on the normalized read.
+    expect(t1 && "resolution" in t1).toBe(false);
+    // commentThreadStates sees the normalized reply (replied=true).
+    expect(commentThreadStates(path)).toEqual([{ id: "t1", replied: true, resolved: false }]);
+  });
+
+  test("a legacy `resolution` thread re-writes as `reply` on disk (no dangling legacy field)", () => {
+    // Any write-through path reads (and so normalizes) first, so the next atomic
+    // write must persist `reply` and leave NO `resolution` behind on disk.
+    const legacy = {
+      ...comment("t1"),
+      resolution: { body: "addressed it", revision: 2, resolvedAt: "2026-06-13T00:00:00.000Z" },
+    };
+    writeFileSync(path, JSON.stringify({ version: 1, threads: [legacy] }));
+    resolveThread(path, "t1", true, 3); // a reviewer close triggers the re-write
+    const onDisk = JSON.parse(readFileSync(path, "utf8")) as {
+      threads: Record<string, unknown>[];
+    };
+    const stored = onDisk.threads.find((t) => t.id === "t1");
+    expect(stored && "resolution" in stored).toBe(false);
+    expect(stored?.reply).toEqual({
+      body: "addressed it",
+      revision: 2,
+      repliedAt: "2026-06-13T00:00:00.000Z",
+    });
+    expect(stored?.resolved).toMatchObject({ revision: 3 });
   });
 
   test("a follow-up question's replyTo round-trips; a non-string replyTo quarantines", () => {

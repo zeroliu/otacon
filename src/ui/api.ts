@@ -329,6 +329,17 @@ export function postFollowup(id: string, rootId: string, body: string): Promise<
   return post202(`/api/sessions/${id}/questions`, { replyTo: rootId, body });
 }
 
+/**
+ * Close or reopen a thread (the reviewer's Resolve verb): POSTs the resolve route
+ * and resolves true on the 202 accept. `resolved:true` collapses the card to its ✓
+ * line and drops it from the approve unresolved count; `false` reopens it. Doubles
+ * as comment-withdraw — a resolved comment no longer owes the agent a reply (L5
+ * skips it). The close lands back over the `thread` SSE frame.
+ */
+export function postResolve(id: string, threadId: string, resolved: boolean): Promise<boolean> {
+  return post202(`/api/sessions/${id}/threads/${threadId}/resolve`, { resolved });
+}
+
 /** The user's side of a grill question (interview questions): chip choice(s) and/or text. */
 export interface AnswerDraft {
   question: string;
