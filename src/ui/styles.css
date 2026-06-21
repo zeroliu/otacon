@@ -2941,6 +2941,7 @@ code {
 .grill-foot {
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
   margin-top: 12px;
 }
 
@@ -2948,6 +2949,13 @@ code {
 .grill-send {
   min-height: 44px;
   padding: 9px 18px;
+}
+
+/* Edit-mode cancel: a quiet secondary beside send, same thumb height, so a
+ * reopened settled card can back out without changing the answer. */
+.grill-cancel {
+  min-height: 44px;
+  padding: 9px 16px;
 }
 
 .grill-failed {
@@ -2996,6 +3004,13 @@ code {
 
 .settled-choice {
   font-weight: 650;
+}
+
+/* "change" reopens a settled card into the editable form while the session is
+ * live. Styled like the note toggle (quiet mono affordance), nudged down to
+ * sit under the echoed answer. */
+.grill-change {
+  margin-top: 8px;
 }
 
 /* ───────────────────────── the interview panel ─────────────────────────

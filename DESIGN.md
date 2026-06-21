@@ -748,7 +748,9 @@ Transport is `otacon ask` → question card in the UI (option chips, recommended
 first, free text) → answer via `wait`. **Grilling works from the phone, one thumb,
 while walking.** An option question is never a trap: every card also takes a free-form
 custom answer — typed text alone (native-AskUserQuestion "Other" parity), or riding a
-chosen chip as a note.
+chosen chip as a note. An answer is not final while the session is live: a settled card
+carries a **change** control that reopens the same form prefilled with the current
+answer, and submitting overwrites it (the overwrite is the `revised` answer event of §4).
 
 The transcript persists in `.otacon/<session>/transcript.json` — distinct from the
 user-question threads in `threads.json` (different surface, different lifecycle: the
