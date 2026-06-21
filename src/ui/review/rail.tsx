@@ -5,10 +5,13 @@
 // conversation card — each turn with its answer — with a collapsed "Follow up"
 // reply box for the next question. M3 states: a resolved comment collapses to
 // its ✓ line (the review UI) and expands to the agent's reply + the revision
-// it landed in; orphaned threads — anchors whose quoted text no longer exists in
-// the current revision (plan structure, lint, and anchoring) — leave the list for the orphan tray at
-// the top of the rail, badge-counted, never silently dropped. A conversation
-// keys on its root, so an orphaned root takes its whole chain to the tray.
+// it landed in; a detached thread — whose quoted text no longer exists in the
+// current revision (plan structure, lint, and anchoring) — stays inline in the
+// same list as everything else. Its quote renders muted (no live text to flash,
+// so it is not clickable or jumpable) beside a subtle ⌀ icon whose hover tooltip
+// explains the quote changed in a later revision; a conversation keys on its
+// root, so a detached root keeps its whole chain inline too. Internally the
+// anchor still carries `anchorState:"orphaned"`; the UI just renders it inline.
 
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
@@ -26,6 +29,29 @@ type Followup = (rootId: string, body: string) => Promise<boolean>;
 type FocusTarget = { id: string; nonce: number };
 const FOCUS_MS = 1600;
 
+/** A thread whose quote can no longer be located in the current revision. Its
+ *  quote stays inline but muted — there is no live text to jump to or flash. */
+function isDetached(thread: Thread): boolean {
+  return thread.anchorState === "orphaned";
+}
+
+const DETACHED_TITLE = "this quoted text changed in a later revision and can no longer be located in the plan";
+
+/** The muted quote a detached thread shows in place of a jumpable one: no jump,
+ *  no flash, just the original text with a subtle icon explaining why (hover).
+ *  The title sits on the blockquote (not the decorative glyph) so the hover
+ *  tooltip covers the whole quote and stays in the accessibility tree. */
+function DetachedQuote({ exact }: { exact: string }) {
+  return (
+    <blockquote className="thread-quote thread-quote-muted" title={DETACHED_TITLE}>
+      <span className="thread-quote-detached" aria-hidden="true">
+        ⌀
+      </span>
+      {exact}
+    </blockquote>
+  );
+}
+
 // memo'd: the parent review loop re-renders per selection tick and drawer
 // keystroke, while `threads` only gets a new identity on an SSE frame.
 export const ThreadsRail = memo(function ThreadsRail({
@@ -42,7 +68,6 @@ export const ThreadsRail = memo(function ThreadsRail({
   focus?: FocusTarget | null;
 }) {
   const railRef = useRef<HTMLElement>(null);
-  const [trayOpen, setTrayOpen] = useState(false);
   // Scroll the tapped thread's card into view and pulse it. Re-fires on every
   // tap (focus is a fresh object per nonce), even repeats on the same thread.
   useEffect(() => {
@@ -57,57 +82,23 @@ export const ThreadsRail = memo(function ThreadsRail({
     const timer = setTimeout(() => card.classList.remove("thread-focus"), FOCUS_MS);
     return () => clearTimeout(timer);
   }, [focus]);
-  const { live, orphaned } = useMemo(() => {
-    const live: ThreadGroup[] = [];
-    const orphaned: ThreadGroup[] = [];
-    // Group first (fold follow-ups under their root), then split by the ROOT's
-    // anchor state so a whole conversation travels as a unit.
-    for (const group of groupThreads(threads)) {
-      (group.root.anchorState === "orphaned" ? orphaned : live).push(group);
-    }
-    return { live: live.reverse(), orphaned: orphaned.reverse() };
-  }, [threads]);
+  // Group (fold follow-ups under their root), then render newest-first as one
+  // inline list — detached and anchored threads share the list; the card itself
+  // decides whether its quote is jumpable or muted.
+  const groups = useMemo<ThreadGroup[]>(() => groupThreads(threads).reverse(), [threads]);
 
   return (
     <aside ref={railRef} className="rail" aria-label="threads">
       <div className="rail-top">
         <span>⊙ threads</span>
-        {/* Count conversations (cards), matching the orphan badge's unit — a
-            chain of turns is one card, not one tally each. */}
-        <span className="rail-count">{live.length + orphaned.length}</span>
+        {/* Count conversations (cards): a chain of turns is one card, not one
+            tally each. */}
+        <span className="rail-count">{groups.length}</span>
       </div>
-      {orphaned.length > 0 && (
-        <button
-          type="button"
-          className="orphan-toggle"
-          aria-expanded={trayOpen}
-          onClick={() => setTrayOpen((value) => !value)}
-        >
-          <span className="orphan-glyph" aria-hidden="true">
-            ⚠
-          </span>
-          orphaned
-          <span className="orphan-count">{orphaned.length}</span>
-          <span className="orphan-caret" aria-hidden="true">
-            {trayOpen ? "▾" : "▸"}
-          </span>
-        </button>
-      )}
-      {trayOpen && orphaned.length > 0 && (
-        <div className="orphan-tray" aria-label="orphaned threads">
-          <p className="orphan-note">
-            their quoted text is gone from the current revision — kept here, never dropped;
-            restored text re-anchors them automatically
-          </p>
-          {orphaned.map((group) => (
-            <OrphanCard key={group.root.id} group={group} />
-          ))}
-        </div>
-      )}
       {threads.length === 0 ? (
         <p className="rail-empty">no threads yet — select plan text to comment or ask</p>
       ) : (
-        live.map((group) => {
+        groups.map((group) => {
           const root = group.root;
           if (root.kind === "comment") {
             return root.resolution ? (
@@ -134,7 +125,9 @@ export const ThreadsRail = memo(function ThreadsRail({
 /** An unresolved comment thread (review UI). */
 function ThreadCard({ thread, onJump }: { thread: CommentThread; onJump: Jump }) {
   const { anchor } = thread;
-  const jump = anchor === null ? undefined : () => onJump(anchor);
+  const detached = isDetached(thread);
+  // A detached thread's quote can't be located, so it never jumps or flashes.
+  const jump = anchor === null || detached ? undefined : () => onJump(anchor);
   const onKeyDown =
     jump &&
     ((event: ReactKeyboardEvent) => {
@@ -159,7 +152,12 @@ function ThreadCard({ thread, onJump }: { thread: CommentThread; onJump: Jump })
         <span className="thread-id">{thread.id}</span>
         <span className="thread-where">{anchorLabel(anchor)}</span>
       </div>
-      {anchor?.exact !== undefined && <blockquote className="thread-quote">{anchor.exact}</blockquote>}
+      {anchor?.exact !== undefined &&
+        (detached ? (
+          <DetachedQuote exact={anchor.exact} />
+        ) : (
+          <blockquote className="thread-quote">{anchor.exact}</blockquote>
+        ))}
       <p className="thread-body">{thread.body}</p>
     </article>
   );
@@ -195,7 +193,9 @@ function ConversationCard({
   onFollowup?: Followup;
 }) {
   const { anchor } = root;
-  const jump = anchor === null ? undefined : () => onJump(anchor);
+  const detached = isDetached(root);
+  // A detached conversation's quote can't be located, so it never jumps/flashes.
+  const jump = anchor === null || detached ? undefined : () => onJump(anchor);
   const onKeyDown =
     jump &&
     ((event: ReactKeyboardEvent) => {
@@ -219,15 +219,18 @@ function ConversationCard({
         <span className="thread-id">{root.id}</span>
         <span className="thread-where">{anchorLabel(anchor)}</span>
       </div>
-      {anchor?.exact !== undefined && (
-        <blockquote
-          className={jump ? "thread-quote thread-quote-jump" : "thread-quote"}
-          title={jump ? "jump to the quoted text" : undefined}
-          onClick={jump}
-        >
-          {anchor.exact}
-        </blockquote>
-      )}
+      {anchor?.exact !== undefined &&
+        (detached ? (
+          <DetachedQuote exact={anchor.exact} />
+        ) : (
+          <blockquote
+            className={jump ? "thread-quote thread-quote-jump" : "thread-quote"}
+            title={jump ? "jump to the quoted text" : undefined}
+            onClick={jump}
+          >
+            {anchor.exact}
+          </blockquote>
+        ))}
       <p className="thread-body">{root.body}</p>
       <QuestionAnswer thread={root} />
       {followups.map((followup) => (
@@ -334,6 +337,7 @@ function FollowupBox({ rootId, onFollowup }: { rootId: string; onFollowup: Follo
 function ResolvedCard({ thread, onJump }: { thread: CommentThread; onJump: Jump }) {
   const { anchor, resolution } = thread;
   if (!resolution) return null; // callers only route resolved comments here
+  const detached = isDetached(thread);
   return (
     <details className="thread thread-comment thread-resolved">
       <summary className="resolved-summary">
@@ -346,15 +350,18 @@ function ResolvedCard({ thread, onJump }: { thread: CommentThread; onJump: Jump 
         <span className="thread-where">{anchorLabel(anchor)}</span>
       </summary>
       <div className="resolved-detail">
-        {anchor?.exact !== undefined && (
-          <blockquote
-            className="thread-quote thread-quote-jump"
-            title="jump to the quoted text"
-            onClick={() => onJump(anchor)}
-          >
-            {anchor.exact}
-          </blockquote>
-        )}
+        {anchor?.exact !== undefined &&
+          (detached ? (
+            <DetachedQuote exact={anchor.exact} />
+          ) : (
+            <blockquote
+              className="thread-quote thread-quote-jump"
+              title="jump to the quoted text"
+              onClick={() => onJump(anchor)}
+            >
+              {anchor.exact}
+            </blockquote>
+          ))}
         <p className="thread-body">{thread.body}</p>
         <div className="thread-answer">
           <span className="thread-answer-label">↳ agent · r{resolution.revision}</span>
@@ -362,71 +369,5 @@ function ResolvedCard({ thread, onJump }: { thread: CommentThread; onJump: Jump 
         </div>
       </div>
     </details>
-  );
-}
-
-/**
- * A tray entry: the dead quote is the headline (clamped); clicking the card
- * unclamps it to the full original anchor text and reveals the agent's reply
- * (a comment's resolution, or a question's answer) plus any follow-up turns —
- * an orphaned conversation travels whole, never silently dropped (plan structure, lint, and anchoring).
- */
-function OrphanCard({ group }: { group: ThreadGroup }) {
-  const [open, setOpen] = useState(false);
-  const { root, followups } = group;
-  const reply =
-    root.kind === "comment"
-      ? root.resolution && { label: `↳ agent · r${root.resolution.revision}`, body: root.resolution.body }
-      : root.answer && { label: "↳ agent", body: root.answer.body };
-  const toggle = () => setOpen((value) => !value);
-  return (
-    <article
-      className={open ? "orphan orphan-open" : "orphan"}
-      role="button"
-      tabIndex={0}
-      aria-expanded={open}
-      onClick={toggle}
-      onKeyDown={(event: ReactKeyboardEvent) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          toggle();
-        }
-      }}
-    >
-      <div className="thread-meta">
-        <span className="orphan-glyph" aria-hidden="true">
-          ⚠
-        </span>
-        <span className="thread-id">{root.id}</span>
-        <span className="thread-where orphan-where">{anchorLabel(root.anchor)}</span>
-      </div>
-      {root.anchor?.exact !== undefined && (
-        <blockquote className="thread-quote orphan-quote">{root.anchor.exact}</blockquote>
-      )}
-      <p className="thread-body">{root.body}</p>
-      {open && reply && (
-        <div className="thread-answer">
-          <span className="thread-answer-label">{reply.label}</span>
-          <p className="thread-answer-body">{reply.body}</p>
-        </div>
-      )}
-      {open &&
-        followups.map((followup) => (
-          <div className="thread-followup-turn" key={followup.id}>
-            <p className="thread-followup-q">
-              <span className="thread-followup-label" aria-hidden="true">
-                ↳ you
-              </span>
-              {followup.body}
-            </p>
-            {followup.answer && (
-              <div className="thread-answer">
-                <span className="thread-answer-label">↳ agent</span>
-                <p className="thread-answer-body">{followup.answer.body}</p>
-              </div>
-            )}
-          </div>
-        ))}
-    </article>
   );
 }

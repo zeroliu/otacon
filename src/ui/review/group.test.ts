@@ -57,10 +57,10 @@ describe("groupThreads", () => {
     expect(groups[0]?.followups.map((f) => f.id)).toEqual(["q2", "q3"]);
   });
 
-  test("a conversation stays one group so it travels (orphans) as a unit", () => {
-    // The rail splits live/orphaned by the ROOT's anchorState; grouping must
-    // keep the follow-up attached so an orphaned root takes its whole chain to
-    // the tray, regardless of the child's own anchor state.
+  test("a conversation stays one group so it travels (detaches) as a unit", () => {
+    // The rail renders a detached root (anchorState "orphaned") inline & muted;
+    // grouping must keep the follow-up attached so the whole chain stays
+    // together as one card, regardless of the child's own anchor state.
     const groups = groupThreads([
       question("q1", { anchorState: "orphaned" }),
       question("q2", { replyTo: "q1" }), // child not independently orphaned

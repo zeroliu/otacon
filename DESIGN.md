@@ -257,10 +257,11 @@ Fuzzy re-anchoring across revisions: on every accepted revision the daemon re-lo
 each thread's quote — exact match first, then prefix/suffix-disambiguated, then a
 normalized match (whitespace collapsed, markdown emphasis markers ignored) that
 rewrites the stored quote to the new revision's text. A unique match re-anchors
-(following moved text across sections); no match or an ambiguous one sets the thread's
-`anchorState` to **orphaned** and it lands in the **orphaned tray** — never silently
-dropped, and automatically recovered if a later revision restores the text. Whole-plan
-(non-anchored) comments are also supported and never orphan.
+(following moved text across sections); no match or an ambiguous one marks the anchor
+internally (`anchorState:"orphaned"`) and the thread **stays inline in the rail with its
+quote muted** — never silently dropped, and automatically recovered if a later revision
+restores the text. Whole-plan (non-anchored) comments are also supported and never lose
+their anchor.
 
 Open threads keep their anchored text **persistently lit** in the clean view — the
 steady counterpart to the click-flash, so which passages are under discussion is
@@ -977,9 +978,13 @@ returns to the index.
   card** — each turn with its answer (or the blinking "answering…" cursor) — with a
   collapsed **Follow up** button that reveals a reply box for the next question.
   Resolved comments collapse to their ✓ line (id, revision, section) and expand to the
-  agent's reply. Orphaned threads leave the list for the rail's badge-counted **orphan
-  tray**: an orphaned conversation travels as a unit, each entry keeping its dead quote
-  (section slug struck through) and expanding to the full original anchor text.
+  agent's reply. A **detached thread** — whose quoted text changed in a later revision
+  and can no longer be located — stays **inline in the same list** as every other
+  thread; its quote renders **muted** (no live text to jump to or flash, so it is not
+  clickable) beside a subtle icon whose hover tooltip explains the quote changed in a
+  later revision. A conversation keys on its root, so a detached root keeps its whole
+  chain inline too. (Internally the anchor still carries `anchorState:"orphaned"`; the
+  UI never surfaces that word or a revision number.)
 - Persistent thread marks (clean view): open threads and unsent drafts keep their
   anchored text lit — questions one ink (underlined), comments + drafts another — so
   the two read apart and stay legible without color; the click-flash still pops above
@@ -1055,8 +1060,9 @@ returns to the index.
 ### Cross-cutting
 
 UI updates over SSE (watch status flip from _revising_ to _new revision_, answers
-stream into threads). Mobile-first CSS. Orphaned-comment tray reachable from the
-threads rail. The review screen reports its visibility to the daemon
+stream into threads). Mobile-first CSS. A thread whose quote can no longer be
+located stays inline in the threads rail with its quote muted. The review screen
+reports its visibility to the daemon
 (`POST /presence`) so desktop attention banners (§6) fire only when you are not
 already watching that review.
 

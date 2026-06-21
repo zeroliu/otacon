@@ -905,6 +905,28 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   link syntax `[text](url)`), or orphan rates suggest the context scorer needs to
   become a real similarity metric (diff-match-patch style).
 
+## `anchorState:"orphaned"` is an internal-only marker — no UI tray, inline & muted
+
+- **Decision:** `anchorState:"orphaned"` stays the daemon's persisted marker for a
+  thread whose quote re-anchoring lost, but the rail no longer surfaces it as its
+  own concept. There is no orphan tray, no badge, no toggle, and the word
+  "orphaned" appears nowhere user-facing. A detached thread (and its whole
+  conversation chain) renders **inline in the same newest-first list** as every
+  other thread; its quote shows muted — not clickable, not jumpable, never lit —
+  beside a subtle ⌀ icon whose `title` tooltip explains the quote changed in a
+  later revision (no revision number, no ⚠).
+- **Why:** The tray made a recoverable, transient state (a later revision restoring
+  the text un-detaches it automatically) look like an error the reviewer must act
+  on, splitting one conversation's context across two places. Keeping the thread
+  inline preserves chronology and the agent's reply in situ; muting the quote and a
+  tooltip are enough to signal "this text moved on" without alarming chrome. The
+  marker stays internal so the daemon, the anchoring ladder, and the lit-mark
+  filter (which already skips it) are untouched — this is a pure presentation
+  change.
+- **Revisit when:** Reviewers miss detached threads in a long list (then: a quiet
+  in-list affordance like a filter or jump-to-next, still not a separate tray), or
+  the muted-quote treatment proves too subtle to notice.
+
 ## lastReviewedRevision is daemon state, set implicitly and explicitly, monotonic
 
 - **Decision:** `session.json` carries `lastReviewedRevision` (0 = never). It moves
