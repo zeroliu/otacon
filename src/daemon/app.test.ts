@@ -1286,6 +1286,47 @@ describe("the grill loop: ask, answers, transcript, L3 (M4)", () => {
     expect(listed.transcript[0]?.answer?.choice).toBe("B");
   });
 
+  test("a first answer omits revised and prior", async () => {
+    const session = mintSession();
+    await ask(session.id, { question: "algo?", options: ["A", "B"] });
+    await answers(session.id, { question: "q1", choice: "A" });
+
+    const event = (await (await app.request(`/api/sessions/${session.id}/events`)).json()) as Record<
+      string,
+      unknown
+    >;
+    expect(event).toEqual({
+      event: "answer",
+      session: session.id,
+      question: "q1",
+      choice: "A",
+    });
+    expect(event).not.toHaveProperty("revised");
+    expect(event).not.toHaveProperty("prior");
+  });
+
+  test("a re-answer stamps revised:true and prior with the previous answer's content", async () => {
+    const session = mintSession();
+    await ask(session.id, { question: "algo?", options: ["A", "B"] });
+    await answers(session.id, { question: "q1", choice: "A" });
+    // Drain the first answer event so the next /events returns the re-answer.
+    await app.request(`/api/sessions/${session.id}/events`);
+
+    await answers(session.id, { question: "q1", choice: "B" });
+    const event = (await (await app.request(`/api/sessions/${session.id}/events`)).json()) as Record<
+      string,
+      unknown
+    >;
+    expect(event).toEqual({
+      event: "answer",
+      session: session.id,
+      question: "q1",
+      choice: "B",
+      revised: true,
+      prior: { choice: "A" },
+    });
+  });
+
   test("L3: citing a q id missing from the transcript rejects 422; a real one passes", async () => {
     const session = mintSession();
     const cited = validPlanFor(session.id).replace(

@@ -650,10 +650,12 @@ function ReviewLoop({
           )}
           {!readOnly && <GrillQueue sessionId={session.id} transcript={transcript} />}
           <InterviewPanel
+            sessionId={session.id}
             transcript={transcript}
             open={interviewOpen}
             onToggle={toggleInterview}
             target={ivTarget}
+            editable={!readOnly}
           />
           {/* The review screen keeps the feed as a compact collapsible panel;
               the pre-plan placeholder leads with it open (below). */}

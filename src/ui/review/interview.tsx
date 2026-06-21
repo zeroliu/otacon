@@ -4,9 +4,10 @@
 // the panel opens, scrolls to the entry, and flashes it, answering "why?"
 // with what the user actually said at the time.
 
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { TranscriptEntry } from "../api";
 import { relativeTime } from "../format";
+import { AnswerForm, prefillFromAnswer } from "./answer-form";
 import { motionSafeScroll } from "./anchor";
 
 /** A deep-link request; `nonce` re-fires the flash on repeat clicks. */
@@ -20,15 +21,22 @@ const FLASH_MS = 1700;
 // memo'd like the rail: the review loop re-renders per selection tick, while
 // transcript/open/target only change on SSE frames or explicit interaction.
 export const InterviewPanel = memo(function InterviewPanel({
+  sessionId,
   transcript,
   open,
   onToggle,
   target,
+  editable,
 }: {
+  sessionId: string;
   transcript: TranscriptEntry[];
   open: boolean;
   onToggle: () => void;
   target: InterviewTarget | null;
+  // While the session is live an answered entry can be reopened and changed
+  // here (the same affordance as the grill settled card); once read-only the
+  // archive is byte-for-byte its old static self.
+  editable: boolean;
 }) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
@@ -71,7 +79,12 @@ export const InterviewPanel = memo(function InterviewPanel({
       {open && (
         <div className="interview-body" ref={bodyRef}>
           {transcript.map((entry) => (
-            <InterviewEntry key={entry.id} entry={entry} />
+            <InterviewEntry
+              key={entry.id}
+              sessionId={sessionId}
+              entry={entry}
+              editable={editable}
+            />
           ))}
         </div>
       )}
@@ -79,7 +92,20 @@ export const InterviewPanel = memo(function InterviewPanel({
   );
 });
 
-function InterviewEntry({ entry }: { entry: TranscriptEntry }) {
+function InterviewEntry({
+  sessionId,
+  entry,
+  editable,
+}: {
+  sessionId: string;
+  entry: TranscriptEntry;
+  editable: boolean;
+}) {
+  // Mirrors the grill settled card: while editable an answered entry reopens
+  // into the shared AnswerForm prefilled with the current answer, and the flag
+  // survives the SSE re-render (same entry.id key) so onDone returns to the
+  // static view now showing the answer the `grill` frame just upserted.
+  const [editing, setEditing] = useState(false);
   const answer = entry.answer;
   const chosen = new Set(answer?.choices ?? (answer?.choice !== undefined ? [answer.choice] : []));
   const echo = [answer?.choices?.join(", ") ?? answer?.choice, answer?.text]
@@ -111,10 +137,34 @@ function InterviewEntry({ entry }: { entry: TranscriptEntry }) {
         </div>
       )}
       {answer ? (
-        <div className="iv-answer">
-          <span className="iv-answer-label">↳ you · {relativeTime(answer.answeredAt)}</span>
-          {echo !== "" && <p className="iv-answer-body">{echo}</p>}
-        </div>
+        editing ? (
+          <AnswerForm
+            sessionId={sessionId}
+            entry={entry}
+            prefill={prefillFromAnswer(answer)}
+            onCancel={() => setEditing(false)}
+            onDone={() => setEditing(false)}
+          />
+        ) : (
+          <>
+            <div className="iv-answer">
+              <span className="iv-answer-label">↳ you · {relativeTime(answer.answeredAt)}</span>
+              {echo !== "" && <p className="iv-answer-body">{echo}</p>}
+            </div>
+            {editable && (
+              <button
+                type="button"
+                className="grill-undo"
+                onClick={() => setEditing(true)}
+              >
+                <span className="grill-undo-glyph" aria-hidden="true">
+                  ↶
+                </span>
+                undo
+              </button>
+            )}
+          </>
+        )
       ) : (
         <p className="iv-awaiting">awaiting your answer</p>
       )}
