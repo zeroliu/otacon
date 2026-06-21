@@ -466,7 +466,12 @@ DELETE /api/sessions/:id                    deregister a session, status-branche
                                             SSE frame; response carries `archivedTo`
 GET  /api/sessions/:id/events?wait=540      agent long-poll
 POST /api/sessions/:id/submit               lint; reject 422 with issues, or store revision N
-POST /api/sessions/:id/comments             flush a comment batch
+POST /api/sessions/:id/comments             flush a comment batch; a batch item may
+                                            carry {replyTo:"t<n>"} to post a follow-up
+                                            on that comment's conversation — it inherits
+                                            the root's anchor (a client anchor is
+                                            ignored), 404 E_UNKNOWN_COMMENT on a
+                                            non-comment id
 POST /api/sessions/:id/questions            user question (instant); optional
                                             {replyTo:"q<n>"} posts a follow-up on
                                             that question's conversation — it
@@ -603,9 +608,10 @@ also carries the daemon's `version`, which open tabs use to self-heal after an
 update, see §16), then pushes `session` / `revision` /
 `queue` / `thread` / `grill` / `activity` / `removed` frames as state changes — a
 `revision` frame carries the revision number and its changelog; a `thread` frame is
-an upsert: a new comment/question thread (a follow-up question carries `replyTo`, the
-root it continues), or an existing thread changing (a question gaining its answer, a
-comment gaining its resolution, an anchor re-anchoring or orphaning); a `grill` frame is the transcript's upsert: a question asked via
+an upsert: a new comment/question thread (a follow-up of either kind carries `replyTo`,
+the root it continues), or an existing thread changing (a question gaining its answer, a
+comment gaining the agent's reply or the reviewer's resolution, an anchor re-anchoring or
+orphaning); a `grill` frame is the transcript's upsert: a question asked via
 `otacon ask`, or an entry gaining the user's answer; an `activity` frame carries one
 new progress note appended to the per-session activity log (the draft chip rides the
 `session` frame's `latestActivity` instead); a `removed` frame is terminal —
@@ -804,20 +810,23 @@ Structural integration:
 | Type               | Default timing                                       | Effect                                                                                                             |
 | ------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | User **question**  | instant                                              | Agent answers in-thread (`otacon answer`); plan untouched. **Follow up** to keep the conversation going (a linked question, same anchor); one-tap **Promote to comment** after reading the answer |
-| User **comment**   | batched in a drawer; per-comment "send now" override | Flushed batch → exactly one revision, one changelog                                                                |
+| User **comment**   | batched in a drawer; per-comment "send now" override | Flushed batch → exactly one revision, one changelog. A comment is a conversation too — **Follow up** to add a linked comment turn (same anchor); the agent replies per turn on its next submit (L5) |
 | **Agent question** | instant (during grill or anytime)                    | Card in UI; user answers with chips/text                                                                           |
 
 **Mixed flush:** questions answered first (answers may inform further review), then all
 comments applied as one revision. Keeps revisions chunky — the agent never thrashes on
 every keystroke.
 
-**Follow-up questions:** a question thread is a conversation, not a one-shot. After the
-agent answers, a **Follow up** affordance on that card posts another question — one
-direction, you ask and the agent answers. A follow-up is its own `q<n>` thread linked to
-the root by `replyTo` (reusing the queue, `otacon answer`, and the shared q-id space),
-and it inherits the root's anchor, so the rail groups the whole chain into one card that
-jumps and orphans as a unit. Scope is question threads only; comment threads take one
-agent reply (a response), then wait on the reviewer's Resolve.
+**Follow-up conversations:** both comment and question threads are conversations, not
+one-shots — after the agent responds, a **Follow up** affordance on the card posts
+another turn. A follow-up is its own `t<n>`/`q<n>` thread linked to the root by `replyTo`
+and inherits the root's anchor, so the rail groups the whole chain into one card that
+jumps and orphans as a unit. The two kinds differ only in how the agent responds: a
+**question** follow-up rides the questions route and is answered out-of-band via `otacon
+answer` (plan untouched); a **comment** follow-up rides the comments route and is
+answered per turn through the revise/submit loop — the agent's next submit must reply to
+every un-replied comment turn (L5), so a comment conversation is revision-tied. Resolving
+the root withdraws every turn of the conversation at once.
 
 **Reviewer-driven resolution:** the agent's reply to a comment is a *response*, not a
 close — only the **reviewer** closes a thread, via the **Resolve** verb (on both comment
@@ -1004,15 +1013,20 @@ returns to the index.
   out of scope. Everything here is browser-only: the daemon never sees these drafts,
   so nothing in this gate touches the protocol.
 - Threads rail: clicking an anchored thread scrolls to its section and flashes the
-  quoted text in the plan. A question and its follow-ups render as one **conversation
-  card** — each turn with its answer (or the blinking "answering…" cursor) — with a
-  collapsed **Follow up** button that reveals a reply box for the next question, plus a
-  **Resolve** button to close the conversation. A comment card shows the agent's reply
-  once it lands and carries a **Resolve** button either way (an un-replied comment's
-  Resolve is a withdraw). Once the **reviewer** Resolves, the card collapses to its ✓
-  line (id, the reviewer's resolved revision, section) and expands to the agent's reply
-  if one landed, with a **Reopen** control. The ✓ card is keyed on the reviewer's close,
-  never on the mere presence of a reply. Resolve/Reopen/Follow up all hide read-only
+  quoted text in the plan. Both kinds render through one shared **conversation card** —
+  the root plus each follow-up turn, each turn paired with the agent's response (or the
+  blinking pending cursor: "answering…" for a question, "responding…" for a comment) —
+  with a collapsed **Follow up** button that reveals a reply box for the next turn, plus
+  a **Resolve** button to close the whole conversation. The two kinds differ only in the
+  agent's text and the follow-up route: a **question** turn shows its `answer` and a
+  follow-up posts to the questions route; a **comment** turn shows its `reply` (labelled
+  with the revision it landed on) and a follow-up posts to the comments route (an
+  un-replied comment's Resolve is a withdraw). When the **reviewer** Resolves: a question
+  conversation shows its inline ✓ mark with the resolved revision; a comment conversation
+  collapses to a ✓ line (id, the reviewer's resolved revision, section) that expands to
+  the whole conversation — every turn and its reply — with a **Reopen** control. The ✓
+  card is keyed on the reviewer's close, never on the mere presence of a reply.
+  Resolve/Reopen/Follow up all hide read-only
   (session over). A **detached thread** — whose quoted text changed in a later revision
   and can no longer be located — stays **inline in the same list** as every other
   thread; its quote renders **muted** (no live text to jump to or flash, so it is not

@@ -34,6 +34,11 @@ const comment = (id: string, batch = "b1"): Thread => ({
   createdAt: "2026-06-13T00:00:00.000Z",
 });
 
+const commentFollowup = (id: string, replyTo: string): Thread => ({
+  ...(comment(id) as Extract<Thread, { kind: "comment" }>),
+  replyTo,
+});
+
 const question = (id: string): Thread => ({
   id,
   kind: "question",
@@ -249,6 +254,26 @@ describe("commentThreadStates", () => {
     ]);
     expect(commentThreadStates(join(dir, "missing.json"))).toEqual([]);
   });
+
+  test("a follow-up turn with no reply in an unresolved conversation reports replied:false, resolved:false", () => {
+    appendThreads(path, [comment("t1"), commentFollowup("t2", "t1")]);
+    expect(commentThreadStates(path)).toEqual([
+      { id: "t1", replied: false, resolved: false },
+      { id: "t2", replied: false, resolved: false },
+    ]);
+  });
+
+  test("resolving the root flips resolved:true for ALL turns of the conversation", () => {
+    appendThreads(path, [comment("t1"), commentFollowup("t2", "t1"), commentFollowup("t3", "t1")]);
+    // Reply on the middle turn only — the root close still withdraws every turn.
+    applyRevisionToThreads(path, { plan: PLAN, replies: { t2: "noted" }, revision: 2 });
+    resolveThread(path, "t1", true, 2);
+    expect(commentThreadStates(path)).toEqual([
+      { id: "t1", replied: false, resolved: true },
+      { id: "t2", replied: true, resolved: true },
+      { id: "t3", replied: false, resolved: true },
+    ]);
+  });
 });
 
 describe("resolveThread", () => {
@@ -301,6 +326,19 @@ describe("openCommentThreads", () => {
     applyRevisionToThreads(path, { plan: PLAN, replies: { t1: "addressed" }, revision: 2 });
     resolveThread(path, "t1", true, 2);
     expect(openCommentThreads(readThreads(path))).toEqual([]);
+  });
+
+  test("includes un-replied turns of an unresolved conversation; excludes replied ones", () => {
+    appendThreads(path, [comment("t1"), commentFollowup("t2", "t1"), commentFollowup("t3", "t1")]);
+    applyRevisionToThreads(path, { plan: PLAN, replies: { t2: "done" }, revision: 2 });
+    const open = openCommentThreads(readThreads(path));
+    expect(open.map((t) => t.id)).toEqual(["t1", "t3"]); // t2 replied
+  });
+
+  test("excludes ALL turns once the conversation root is resolved", () => {
+    appendThreads(path, [comment("t1"), commentFollowup("t2", "t1")]);
+    resolveThread(path, "t1", true, 2); // resolve the root
+    expect(openCommentThreads(readThreads(path))).toEqual([]); // both turns withdrawn
   });
 });
 
@@ -375,6 +413,15 @@ describe("thread validation of comment fields", () => {
     expect(readThreads(path)).toEqual([question("q1"), followup]);
 
     writeFileSync(path, JSON.stringify({ version: 1, threads: [{ ...question("q2"), replyTo: 7 }] }));
+    expect(readThreads(path)).toEqual([]);
+  });
+
+  test("a follow-up comment's replyTo round-trips; a non-string replyTo quarantines", () => {
+    const followup = commentFollowup("t2", "t1");
+    writeFileSync(path, JSON.stringify({ version: 1, threads: [comment("t1"), followup] }));
+    expect(readThreads(path)).toEqual([comment("t1"), followup]);
+
+    writeFileSync(path, JSON.stringify({ version: 1, threads: [{ ...comment("t2"), replyTo: 7 }] }));
     expect(readThreads(path)).toEqual([]);
   });
 });

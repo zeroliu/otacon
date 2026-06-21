@@ -330,6 +330,18 @@ export function postFollowup(id: string, rootId: string, body: string): Promise<
 }
 
 /**
+ * Post a follow-up COMMENT on an existing comment conversation (threaded review
+ * and revision): a new linked comment that inherits the root's anchor, posted as a
+ * one-item comments batch with `replyTo`. Mirrors `postFollowup`, but rides the
+ * comments route — the agent responds to the new turn per the revise/submit loop
+ * (L5), not out-of-band like a question. The new turn folds in over the `thread`
+ * SSE frame.
+ */
+export function postCommentFollowup(id: string, rootId: string, body: string): Promise<boolean> {
+  return post202(`/api/sessions/${id}/comments`, { items: [{ replyTo: rootId, body }] });
+}
+
+/**
  * Close or reopen a thread (the reviewer's Resolve verb): POSTs the resolve route
  * and resolves true on the 202 accept. `resolved:true` collapses the card to its ✓
  * line and drops it from the approve unresolved count; `false` reopens it. Doubles

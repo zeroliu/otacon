@@ -1774,6 +1774,10 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 ## Follow-up questions: linked `replyTo` threads, not a `messages[]` rewrite
 
+> [!warning] The "question threads only / comment threads stay one-shot" scope is
+> superseded by "Comments are multi-turn conversations too" below. The `replyTo`
+> linked-thread mechanism itself stands — it is what comments now reuse.
+
 - **Decision:** A follow-up on a question thread is a brand-new `q<n>` thread carrying
   `replyTo` (the root question's id), not a turn appended to a `messages[]` array on the
   existing thread. The new thread inherits the **root's** anchor (a client anchor on a
@@ -1795,6 +1799,34 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Conversations need agent-initiated turns inside a thread, comment
   threads need follow-ups too, or per-turn metadata (edits, reactions) makes a first-
   class `messages[]` model worth the migration.
+
+## Comments are multi-turn conversations too, sharing the rail's conversation card
+
+- **Decision:** Comment threads are no longer one-shot. A comment follow-up is a
+  brand-new `t<n>` thread carrying `replyTo` (the root comment's id), inheriting the
+  root's anchor — exactly the `replyTo` linked-thread mechanism questions already use,
+  now extended to the comments route (`POST /comments` accepts `{items:[{replyTo,body}]}`
+  and 404s E_UNKNOWN_COMMENT on a non-comment id). The rail renders BOTH kinds through
+  one shared conversation card: a root + each follow-up turn, each turn paired with the
+  agent's response — a question turn's `answer` (answered out-of-band via `otacon answer`)
+  or a comment turn's `reply` (landed on the agent's resubmit, lint L5). `groupThreads`
+  registers both comment and question roots as attach targets (ids are unique across
+  kinds), and the one-shot comment card is folded into the conversation card. The reviewer
+  Resolves the root to close the whole conversation (a resolved comment conversation
+  collapses to the ✓ card); resolving the root withdraws every turn at once.
+- **Why:** The threaded-review backend (turn-aware L5, openComments, approve's
+  per-conversation unresolved count) and the `replyTo`/anchor-inheritance plumbing already
+  generalize to both kinds — the only thing pinning comments to one-shot was the UI
+  rendering them through a separate `ThreadCard`. Sharing one card removes that duplicate
+  surface, keeps questions rendering and behaving exactly as before, and matches the real
+  workflow: a reviewer often needs to refine a comment ("also handle rotation") before the
+  agent acts, not just fire one note and wait. The key difference from question follow-ups
+  is preserved and intentional — a comment follow-up is **revision-tied** (the agent
+  responds per turn through the revise/submit loop, L5), whereas a question follow-up is
+  answered out-of-band and never touches the plan.
+- **Revisit when:** Comment turns need their own per-turn Resolve (today only the root
+  closes), agent-initiated turns are wanted inside a thread, or per-turn metadata makes a
+  first-class `messages[]` model worth the migration.
 
 ## The switcher hides approved sessions on both faces, with no current-session anchor
 

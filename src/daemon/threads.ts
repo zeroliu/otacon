@@ -44,6 +44,7 @@ function isThread(raw: unknown): raw is Thread {
   if (thread.anchorState !== undefined && thread.anchorState !== "orphaned") return false;
   if (thread.kind === "comment") {
     if (typeof thread.batch !== "string") return false;
+    if (thread.replyTo !== undefined && typeof thread.replyTo !== "string") return false;
     if (!isResolved(thread.resolved)) return false;
     // A leftover legacy `resolution` (an old-code in-flight session, normalized
     // to `reply` in normalizeThread) is tolerated with the new `reply` shape.
@@ -221,30 +222,57 @@ export function resolveThread(
 }
 
 /**
- * Comment threads with the two states L5 needs to skip them — the daemon's L5
- * context input: `replied` (the agent has responded) and `resolved` (the reviewer
- * closed/withdrew it). L5 demands a reply only for a comment that is neither.
+ * The reviewer-resolved comment conversation ROOTS — a comment thread carrying
+ * `resolved` is a root (the Resolve verb lands on the root), so its id is what a
+ * follow-up turn keys on. Resolving the root withdraws every turn of the
+ * conversation at once.
+ */
+function resolvedCommentRoots(threads: Thread[]): Set<string> {
+  return new Set(
+    threads
+      .filter((t): t is CommentThread => t.kind === "comment" && t.resolved !== undefined)
+      .map((t) => t.id),
+  );
+}
+
+/**
+ * Per-comment-turn states L5 needs to skip a turn — the daemon's L5 context
+ * input, one entry per comment thread (root or follow-up): `replied` (this turn
+ * has an agent response) and `resolved` (the turn's CONVERSATION ROOT is
+ * reviewer-closed). Resolving the root withdraws all its turns from L5 at once,
+ * because a follow-up keys its `resolved` on `replyTo ?? id`. L5 demands a reply
+ * only for a turn that is neither replied nor (root-)resolved.
  */
 export function commentThreadStates(
   path: string,
 ): { id: string; replied: boolean; resolved: boolean }[] {
-  return readThreads(path)
+  const threads = readThreads(path);
+  const resolvedRootIds = resolvedCommentRoots(threads);
+  return threads
     .filter((t): t is CommentThread => t.kind === "comment")
-    .map((t) => ({ id: t.id, replied: t.reply !== undefined, resolved: t.resolved !== undefined }));
+    .map((t) => ({
+      id: t.id,
+      replied: t.reply !== undefined,
+      resolved: resolvedRootIds.has(t.replyTo ?? t.id),
+    }));
 }
 
 /**
- * The comment threads still owed a response — no agent `reply` yet AND not
- * reviewer-`resolved` (a resolved/withdrawn comment owes nothing). This is what a
- * **comment & approve** fold-in sweeps: each is re-delivered to the agent in the
- * `final:true` comments batch and replayed into the committed `## Review notes`.
- * Pure over an already-read thread list so the approve handler reads disk once.
- * Open *questions* are not swept — they are answered via `otacon answer`, never
- * folded into the plan, and an open one at approve still drops as today.
+ * The comment turns still owed a response — no agent `reply` on this turn AND the
+ * turn's conversation root is not reviewer-`resolved` (a resolved/withdrawn
+ * conversation owes nothing). This is what a **comment & approve** fold-in
+ * sweeps: each is re-delivered to the agent in the `final:true` comments batch
+ * and replayed into the committed `## Review notes`. Pure over an already-read
+ * thread list so the approve handler reads disk once. Open *questions* are not
+ * swept — they are answered via `otacon answer`, never folded into the plan, and
+ * an open one at approve still drops as today.
  */
 export function openCommentThreads(threads: Thread[]): CommentThread[] {
+  const resolvedRootIds = resolvedCommentRoots(threads);
   return threads.filter(
     (t): t is CommentThread =>
-      t.kind === "comment" && t.reply === undefined && t.resolved === undefined,
+      t.kind === "comment" &&
+      t.reply === undefined &&
+      !resolvedRootIds.has(t.replyTo ?? t.id),
   );
 }

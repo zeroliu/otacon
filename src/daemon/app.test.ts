@@ -387,6 +387,140 @@ describe("comments and questions", () => {
   });
 });
 
+describe("comment follow-ups (a comment becomes a conversation)", () => {
+  test("a follow-up links to the root, inherits its anchor/orphan, and the event carries replyTo", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [{ anchor: { section: "phase-1", exact: "RS256" }, body: "why RS256?" }], // t1
+    });
+    // Drain the root's comments event so the next /events returns the follow-up.
+    await app.request(`/api/sessions/${session.id}/events`);
+
+    const res = await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [
+        {
+          replyTo: "t1",
+          anchor: { section: "decisions", exact: "ignored" }, // ignored on a follow-up
+          body: "still unconvinced",
+        },
+      ],
+    });
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ ok: true, batch: "b2", threads: ["t2"], seq: 2 });
+    // A follow-up is still a revision request.
+    expect(store.getSession(session.id)?.status).toBe("revising");
+
+    const threads = (await (await app.request(`/api/sessions/${session.id}/threads`)).json()) as {
+      threads: { id: string; replyTo?: string; anchor: unknown }[];
+    };
+    const followup = threads.threads.find((t) => t.id === "t2");
+    expect(followup?.replyTo).toBe("t1");
+    // Inherited the root's anchor; the client-sent anchor was ignored.
+    expect(followup?.anchor).toEqual({ section: "phase-1", exact: "RS256" });
+
+    const event = await app.request(`/api/sessions/${session.id}/events`);
+    expect(await event.json()).toEqual({
+      event: "comments",
+      session: session.id,
+      batch: "b2",
+      items: [
+        {
+          thread: "t2",
+          anchor: { section: "phase-1", exact: "RS256" },
+          body: "still unconvinced",
+          replyTo: "t1",
+        },
+      ],
+    });
+  });
+
+  test("a follow-up on a follow-up collapses to the same root", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ anchor: null, body: "root" }] }); // t1
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ replyTo: "t1", body: "f1" }] }); // t2
+    const res = await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [{ replyTo: "t2", body: "f2" }], // t3 follows t2, keys on root t1
+    });
+    expect(res.status).toBe(202);
+    const threads = (await (await app.request(`/api/sessions/${session.id}/threads`)).json()) as {
+      threads: { id: string; replyTo?: string }[];
+    };
+    expect(threads.threads.find((t) => t.id === "t3")?.replyTo).toBe("t1");
+  });
+
+  test("a batch may mix a new comment and a follow-up", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [{ anchor: { section: "phase-1", exact: "RS256" }, body: "root" }], // t1
+    });
+    const res = await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [
+        { anchor: null, body: "a fresh nit" }, // t2: new root
+        { replyTo: "t1", body: "and on the first one" }, // t3: follow-up of t1
+      ],
+    });
+    expect(await res.json()).toEqual({ ok: true, batch: "b2", threads: ["t2", "t3"], seq: 2 });
+    const threads = (await (await app.request(`/api/sessions/${session.id}/threads`)).json()) as {
+      threads: { id: string; replyTo?: string; anchor: unknown }[];
+    };
+    const t2 = threads.threads.find((t) => t.id === "t2");
+    const t3 = threads.threads.find((t) => t.id === "t3");
+    expect(t2?.replyTo).toBeUndefined();
+    expect(t2?.anchor).toBeNull();
+    expect(t3?.replyTo).toBe("t1");
+    expect(t3?.anchor).toEqual({ section: "phase-1", exact: "RS256" });
+  });
+
+  test("replyTo to an unknown or non-comment id is a 404 E_UNKNOWN_COMMENT, no id burned", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ body: "c" }] }); // t1
+    await postJson(`/api/sessions/${session.id}/questions`, { body: "q" }); // q1
+
+    const unknown = await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [{ replyTo: "t9", body: "x" }],
+    });
+    expect(unknown.status).toBe(404);
+    expect(((await unknown.json()) as { error: { code: string } }).error.code).toBe(
+      "E_UNKNOWN_COMMENT",
+    );
+    // A question thread is not a comment — a comment follow-up can't link to it.
+    const question = await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [{ replyTo: "q1", body: "x" }],
+    });
+    expect(question.status).toBe(404);
+    const nonString = await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [{ replyTo: 7, body: "x" }],
+    });
+    expect(nonString.status).toBe(400);
+    const empty = await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [{ replyTo: "", body: "x" }],
+    });
+    expect(empty.status).toBe(400);
+
+    // A real root still mints the next id — no t was burned by the rejects.
+    const ok = await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [{ replyTo: "t1", body: "real" }],
+    });
+    expect(((await ok.json()) as { threads: string[] }).threads).toEqual(["t2"]);
+  });
+
+  test("a finalizing session refuses a follow-up too (E_ALREADY_FINALIZING)", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/submit`, { plan: validPlanFor(session.id) });
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ anchor: null, body: "open" }] }); // t1
+    await postJson(`/api/sessions/${session.id}/approve`, { sendOpenComments: true });
+    await app.request(`/api/sessions/${session.id}/events`); // drain the final batch
+
+    const res = await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [{ replyTo: "t1", body: "one more thought" }],
+    });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+      "E_ALREADY_FINALIZING",
+    );
+  });
+});
+
 describe("threads", () => {
   test("comments and questions persist threads, readable via GET /threads", async () => {
     const session = mintSession();
@@ -1675,12 +1809,31 @@ describe("approve and the status machine (M4)", () => {
     await submitValid(session.id);
     await postJson(`/api/sessions/${session.id}/questions`, { body: "root question" }); // q1
     await postJson(`/api/sessions/${session.id}/questions`, { replyTo: "q1", body: "follow up" }); // q2
-    // Two unanswered turns in one conversation → counts as two open items.
+    // Two unanswered turns in ONE conversation → counts once (per-conversation).
     const refused = await approve(session.id);
     expect(refused.status).toBe(409);
-    expect(((await refused.json()) as { unresolved: number }).unresolved).toBe(2);
+    expect(((await refused.json()) as { unresolved: number }).unresolved).toBe(1);
     // Resolving the ROOT clears the whole chain — the follow-up keys on q1.
     await postJson(`/api/sessions/${session.id}/threads/q1/resolve`, { resolved: true });
+    expect((await approve(session.id)).status).toBe(200);
+  });
+
+  test("a multi-turn comment conversation counts once; resolving the root drops it to 0", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ body: "root nit" }] }); // t1
+    await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [{ replyTo: "t1", body: "still wrong" }], // t2
+    });
+    await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [{ replyTo: "t2", body: "and again" }], // t3 → collapses to root t1
+    });
+    // Three turns, one conversation → exactly 1 unresolved.
+    const refused = await approve(session.id);
+    expect(refused.status).toBe(409);
+    expect(((await refused.json()) as { unresolved: number }).unresolved).toBe(1);
+    // Resolving the ROOT withdraws the whole conversation → approve passes.
+    await postJson(`/api/sessions/${session.id}/threads/t1/resolve`, { resolved: true });
     expect((await approve(session.id)).status).toBe(200);
   });
 

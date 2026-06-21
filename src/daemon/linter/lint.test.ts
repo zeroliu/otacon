@@ -580,6 +580,39 @@ describe("L5 thread resolutions and changelog", () => {
     expect(result.ok).toBeTrue();
   });
 
+  test("in a comment conversation, only un-replied turns are demanded (not re-demanded)", () => {
+    // A 3-turn conversation: t1 already replied, t2 un-replied, t3 un-replied —
+    // commentThreadStates flattens to one state per turn. L5 demands a reply only
+    // for the un-replied turns and never re-demands t1.
+    const result = l5({
+      changelog: "c",
+      commentThreads: [
+        { id: "t1", replied: true, resolved: false },
+        { id: "t2", replied: false, resolved: false },
+        { id: "t3", replied: false, resolved: false },
+      ],
+      replies: { t2: "fixed" }, // t2 answered this submit; t3 left open
+    });
+    expect(result.ok).toBeFalse();
+    const unresolved = result.errors.filter((e) => e.code === "E_THREAD_UNRESOLVED");
+    expect(unresolved.map((e) => e.thread)).toEqual(["t3"]);
+  });
+
+  test("resolving the root clears the whole comment conversation from L5 (no deadlock)", () => {
+    // Resolving the root sets resolved:true on every turn (commentThreadStates),
+    // so L5 demands a reply on none of them — the conversation submits clean.
+    const result = l5({
+      changelog: "c",
+      commentThreads: [
+        { id: "t1", replied: false, resolved: true },
+        { id: "t2", replied: false, resolved: true },
+        { id: "t3", replied: true, resolved: true },
+      ],
+      replies: {},
+    });
+    expect(result.ok).toBeTrue();
+  });
+
   test("revisions ≥ 2 need a changelog; r1 and whitespace-only do not pass it off", () => {
     expect(l5().errors.map((e) => e.code)).toEqual(["E_CHANGELOG_MISSING"]);
     expect(l5({ changelog: "  \n" }).errors.map((e) => e.code)).toEqual(["E_CHANGELOG_MISSING"]);

@@ -1,21 +1,25 @@
-// The threads rail (review UI): every comment and question thread, newest
-// first — anchored ones jump-and-flash their quoted text in the plan; a
-// question with no answer yet blinks the codec cursor until `otacon answer`
-// lands over SSE. A question and its follow-ups (threaded review and revision) render as one
-// conversation card — each turn with its answer — with a collapsed "Follow up"
-// reply box for the next question. Comment states: a comment the agent has
-// responded to shows its reply plus a **Resolve** button (the reviewer closes
-// it); a comment with no reply yet also gets a **Resolve** button (withdraw);
-// once the reviewer resolves, the card collapses to its ✓ line (keyed on the
-// reviewer close) and expands to the reply + the resolved revision. A question
-// conversation gets a Resolve button too. A detached thread — whose quoted text
-// no longer exists in the current revision (plan structure, lint, and anchoring)
-// — stays inline in the same list as everything else. Its quote renders muted
-// (no live text to flash, so it is not clickable or jumpable) beside a subtle ⌀
-// icon whose hover tooltip explains the quote changed in a later revision; a
-// conversation keys on its root, so a detached root keeps its whole chain inline
-// too. Internally the anchor still carries `anchorState:"orphaned"`; the UI just
-// renders it inline. Resolve buttons hide when the session is over (read-only).
+// The threads rail (review UI): every comment and question conversation, newest
+// first — anchored ones jump-and-flash their quoted text in the plan. Both kinds
+// render through ONE shared conversation card: a root plus its follow-up turns
+// (threaded review and revision), each turn paired with the agent's response.
+// For a question the agent text is `answer.body` (the codec cursor blinks
+// "answering…" until `otacon answer` lands over SSE) and a follow-up posts to the
+// questions route; for a comment the agent text is `reply.body` (landed on the
+// agent's resubmit, lint L5 — "responding…" until then) and a follow-up posts to
+// the comments route. Each open conversation carries a collapsed "Follow up"
+// reply box and a **Resolve** button (the reviewer closes the whole conversation;
+// an un-replied comment's Resolve doubles as withdraw). Once the reviewer
+// resolves: a question conversation shows its inline ✓ mark with the resolved
+// revision; a comment conversation collapses to a ✓ summary (keyed on the close)
+// that expands to its turns + replies. A detached conversation — whose quoted
+// text no longer exists in the current revision (plan structure, lint, and
+// anchoring) — stays inline in the same list as everything else. Its quote
+// renders muted (no live text to flash, so it is not clickable or jumpable)
+// beside a subtle ⌀ icon whose hover tooltip explains the quote changed in a
+// later revision; a conversation keys on its root, so a detached root keeps its
+// whole chain inline too. Internally the anchor still carries
+// `anchorState:"orphaned"`; the UI just renders it inline. Resolve buttons + the
+// follow-up box hide when the session is over (read-only).
 
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
@@ -24,10 +28,12 @@ import { anchorLabel, motionSafeScroll } from "./anchor";
 import type { ThreadGroup } from "./group";
 import { groupThreads } from "./group";
 
-type CommentThread = Extract<Thread, { kind: "comment" }>;
-type QuestionThread = Extract<Thread, { kind: "question" }>;
 type Jump = (anchor: Anchor) => void;
-/** Post a follow-up on conversation `rootId`; resolves false on failure (stay open). */
+/**
+ * Post a follow-up on conversation `rootId`; resolves false on failure (stay
+ * open). The rail doesn't know the route — session-screen looks up the root's
+ * kind and dispatches to the questions or comments endpoint (DECISIONS.md).
+ */
 type Followup = (rootId: string, body: string) => Promise<boolean>;
 /** Close/reopen conversation `threadId`; resolves false on failure (stay as-is). */
 type Resolve = (threadId: string, resolved: boolean) => Promise<boolean>;
@@ -108,15 +114,20 @@ export const ThreadsRail = memo(function ThreadsRail({
         <p className="rail-empty">no threads yet — select plan text to comment or ask</p>
       ) : (
         groups.map((group) => {
+          // A reviewer-resolved COMMENT conversation collapses to its ✓ summary
+          // card (keyed on the close), expanding to its turns + replies. Every
+          // other conversation — open comments, all questions — renders through
+          // the shared open conversation card.
           const root = group.root;
-          if (root.kind === "comment") {
-            // Resolved (the reviewer closed it) → the collapsed ✓ card. Otherwise
-            // the open card carries a Resolve button (responded: shows the reply;
-            // un-replied: a withdraw) — it renders read-only when onResolve is absent.
-            return root.resolved ? (
-              <ResolvedCard key={root.id} thread={root} onJump={onJump} onResolve={onResolve} />
-            ) : (
-              <ThreadCard key={root.id} thread={root} onJump={onJump} onResolve={onResolve} />
+          if (root.kind === "comment" && root.resolved) {
+            return (
+              <ResolvedCard
+                key={root.id}
+                root={root}
+                followups={group.followups}
+                onJump={onJump}
+                onResolve={onResolve}
+              />
             );
           }
           return (
@@ -165,104 +176,75 @@ function ResolveButton({ threadId, onResolve }: { threadId: string; onResolve?: 
 }
 
 /**
- * An open comment thread (review UI): the reviewer hasn't closed it yet. When the
- * agent has responded it shows the reply; either way it offers a **Resolve**
- * button (an un-replied comment's Resolve doubles as withdraw). The card stays a
- * jump target by its meta/quote; the Resolve button stops click propagation so a
- * tap on it never also fires the jump.
+ * The agent's response to one conversation turn, or the blinking pending cursor.
+ * A question turn's agent text is `answer.body` ("answering…" until it lands); a
+ * comment turn's is `reply.body` ("responding…" until the agent's resubmit lands
+ * it, lint L5), with the reply carrying the revision it landed on.
  */
-function ThreadCard({
-  thread,
-  onJump,
-  onResolve,
-}: {
-  thread: CommentThread;
-  onJump: Jump;
-  onResolve?: Resolve;
-}) {
-  const { anchor, reply } = thread;
-  const detached = isDetached(thread);
-  // A detached thread's quote can't be located, so it never jumps or flashes.
-  const jump = anchor === null || detached ? undefined : () => onJump(anchor);
-  const onKeyDown =
-    jump &&
-    ((event: ReactKeyboardEvent) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        jump();
-      }
-    });
-  return (
-    <article
-      data-thread={thread.id}
-      className={`thread thread-comment${jump ? " thread-anchored" : ""}${reply ? " thread-responded" : ""}`}
-      onClick={jump}
-      onKeyDown={onKeyDown}
-      role={jump ? "button" : undefined}
-      tabIndex={jump ? 0 : undefined}
-    >
-      <div className="thread-meta">
-        <span className="thread-glyph" aria-hidden="true">
-          ◆
-        </span>
-        <span className="thread-id">{thread.id}</span>
-        <span className="thread-where">{anchorLabel(anchor)}</span>
+function TurnResponse({ thread }: { thread: Thread }) {
+  if (thread.kind === "question") {
+    return thread.answer ? (
+      <div className="thread-answer">
+        <span className="thread-answer-label">↳ agent</span>
+        <p className="thread-answer-body">{thread.answer.body}</p>
       </div>
-      {anchor?.exact !== undefined &&
-        (detached ? (
-          <DetachedQuote exact={anchor.exact} />
-        ) : (
-          <blockquote className="thread-quote">{anchor.exact}</blockquote>
-        ))}
-      <p className="thread-body">{thread.body}</p>
-      {reply && (
-        <div className="thread-answer">
-          <span className="thread-answer-label">↳ agent · r{reply.revision}</span>
-          <p className="thread-answer-body">{reply.body}</p>
-        </div>
-      )}
-      {/* The Resolve button isn't part of the jump target — swallow its click. */}
-      <div onClick={(event) => event.stopPropagation()}>
-        <ResolveButton threadId={thread.id} onResolve={onResolve} />
-      </div>
-    </article>
+    ) : (
+      <p className="thread-answering">answering</p>
+    );
+  }
+  return thread.reply ? (
+    <div className="thread-answer">
+      <span className="thread-answer-label">↳ agent · r{thread.reply.revision}</span>
+      <p className="thread-answer-body">{thread.reply.body}</p>
+    </div>
+  ) : (
+    <p className="thread-answering">responding</p>
   );
 }
 
-/** The agent's reply to a question turn, or the blinking "answering…" cursor. */
-function QuestionAnswer({ thread }: { thread: QuestionThread }) {
-  return thread.answer ? (
-    <div className="thread-answer">
-      <span className="thread-answer-label">↳ agent</span>
-      <p className="thread-answer-body">{thread.answer.body}</p>
-    </div>
-  ) : (
-    <p className="thread-answering">answering</p>
+/** The "↳ you" line preceding a follow-up turn's body (the reviewer's turn). */
+function TurnPrompt({ body }: { body: string }) {
+  return (
+    <p className="thread-followup-q">
+      <span className="thread-followup-label" aria-hidden="true">
+        ↳ you
+      </span>
+      {body}
+    </p>
   );
 }
 
 /**
- * A question and its follow-ups as one conversation (threaded review and revision): the root
- * question + each follow-up turn, each with its answer, then a collapsed
- * "Follow up" reply box. The card itself isn't a jump button (it holds the
- * interactive reply box) — the meta row and the quote carry the jump instead.
+ * A conversation's quote — the jump target. A detached conversation's quote can't
+ * be located, so it renders muted and never jumps/flashes; an anchored one is the
+ * jumpable variant. Nothing renders for a quote-less (section-only/whole-plan)
+ * anchor. Shared by the open card's head and the resolved card's detail.
  */
-function ConversationCard({
-  root,
-  followups,
-  onJump,
-  onFollowup,
-  onResolve,
-}: {
-  root: QuestionThread;
-  followups: QuestionThread[];
-  onJump: Jump;
-  onFollowup?: Followup;
-  onResolve?: Resolve;
-}) {
+function ConversationQuote({ root, onJump }: { root: Thread; onJump: Jump }) {
+  const { anchor } = root;
+  if (anchor?.exact === undefined) return null;
+  if (isDetached(root)) return <DetachedQuote exact={anchor.exact} />;
+  if (anchor === null) return null;
+  return (
+    <blockquote
+      className="thread-quote thread-quote-jump"
+      title="jump to the quoted text"
+      onClick={() => onJump(anchor)}
+    >
+      {anchor.exact}
+    </blockquote>
+  );
+}
+
+/**
+ * The conversation's meta row (glyph + id + location) and its quote — the jump
+ * target on the open card. The card body holds the interactive reply box, so the
+ * card itself isn't a jump button; the meta row and the quote carry the jump
+ * instead. The glyph is `?` for a question, `◆` for a comment.
+ */
+function ConversationHead({ root, onJump }: { root: Thread; onJump: Jump }) {
   const { anchor } = root;
   const detached = isDetached(root);
-  // A detached conversation's quote can't be located, so it never jumps/flashes.
   const jump = anchor === null || detached ? undefined : () => onJump(anchor);
   const onKeyDown =
     jump &&
@@ -273,7 +255,7 @@ function ConversationCard({
       }
     });
   return (
-    <article data-thread={root.id} className="thread thread-question thread-conversation">
+    <>
       <div
         className={jump ? "thread-meta thread-meta-jump" : "thread-meta"}
         onClick={jump}
@@ -282,34 +264,49 @@ function ConversationCard({
         tabIndex={jump ? 0 : undefined}
       >
         <span className="thread-glyph" aria-hidden="true">
-          ?
+          {root.kind === "question" ? "?" : "◆"}
         </span>
         <span className="thread-id">{root.id}</span>
         <span className="thread-where">{anchorLabel(anchor)}</span>
       </div>
-      {anchor?.exact !== undefined &&
-        (detached ? (
-          <DetachedQuote exact={anchor.exact} />
-        ) : (
-          <blockquote
-            className={jump ? "thread-quote thread-quote-jump" : "thread-quote"}
-            title={jump ? "jump to the quoted text" : undefined}
-            onClick={jump}
-          >
-            {anchor.exact}
-          </blockquote>
-        ))}
+      <ConversationQuote root={root} onJump={onJump} />
+    </>
+  );
+}
+
+/**
+ * A conversation as one card (threaded review and revision): the root + each
+ * follow-up turn, each turn paired with the agent's response, then a collapsed
+ * "Follow up" reply box and a **Resolve** button. Shared by both kinds — a
+ * question (agent text = `answer.body`, follow-ups post to the questions route)
+ * and an open comment (agent text = `reply.body`, follow-ups post to the comments
+ * route); the routing is decided in session-screen by the root's kind. A
+ * reviewer-resolved QUESTION collapses to its inline ✓ mark here; a resolved
+ * COMMENT is routed to ResolvedCard before reaching this card.
+ */
+function ConversationCard({
+  root,
+  followups,
+  onJump,
+  onFollowup,
+  onResolve,
+}: {
+  root: Thread;
+  followups: Thread[];
+  onJump: Jump;
+  onFollowup?: Followup;
+  onResolve?: Resolve;
+}) {
+  const kindClass = root.kind === "question" ? "thread-question" : "thread-comment";
+  return (
+    <article data-thread={root.id} className={`thread ${kindClass} thread-conversation`}>
+      <ConversationHead root={root} onJump={onJump} />
       <p className="thread-body">{root.body}</p>
-      <QuestionAnswer thread={root} />
+      <TurnResponse thread={root} />
       {followups.map((followup) => (
         <div className="thread-followup-turn" key={followup.id}>
-          <p className="thread-followup-q">
-            <span className="thread-followup-label" aria-hidden="true">
-              ↳ you
-            </span>
-            {followup.body}
-          </p>
-          <QuestionAnswer thread={followup} />
+          <TurnPrompt body={followup.body} />
+          <TurnResponse thread={followup} />
         </div>
       ))}
       {/* root.replyTo is set only on a degraded "root gone" card (groupThreads);
@@ -324,7 +321,7 @@ function ConversationCard({
           </p>
         ) : (
           <>
-            {onFollowup && <FollowupBox rootId={root.id} onFollowup={onFollowup} />}
+            {onFollowup && <FollowupBox rootId={root.id} kind={root.kind} onFollowup={onFollowup} />}
             <ResolveButton threadId={root.id} onResolve={onResolve} />
           </>
         ))}
@@ -335,9 +332,19 @@ function ConversationCard({
 /**
  * The collapsed "Follow up" button → a reply box posting the next follow-up
  * (threaded review and revision). On success the new turn arrives over the `thread` SSE frame
- * and folds into the card, and the box collapses again.
+ * and folds into the card, and the box collapses again. The placeholder is
+ * kind-aware — a question conversation asks the next question; a comment
+ * conversation adds the next note — but both ride the same send protocol.
  */
-function FollowupBox({ rootId, onFollowup }: { rootId: string; onFollowup: Followup }) {
+function FollowupBox({
+  rootId,
+  kind,
+  onFollowup,
+}: {
+  rootId: string;
+  kind: Thread["kind"];
+  onFollowup: Followup;
+}) {
   const [open, setOpen] = useState(false);
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
@@ -384,7 +391,7 @@ function FollowupBox({ rootId, onFollowup }: { rootId: string; onFollowup: Follo
       <textarea
         ref={inputRef}
         className="thread-followup-input"
-        placeholder="ask a follow-up…"
+        placeholder={kind === "question" ? "ask a follow-up…" : "add a follow-up…"}
         value={body}
         onChange={(event) => setBody(event.target.value)}
         onKeyDown={(event) => {
@@ -404,7 +411,7 @@ function FollowupBox({ rootId, onFollowup }: { rootId: string; onFollowup: Follo
             cancel
           </button>
           <button type="button" className="btn btn-primary" disabled={!ready} onClick={send}>
-            {busy ? "asking…" : "ask"}
+            {kind === "question" ? (busy ? "asking…" : "ask") : busy ? "adding…" : "add"}
           </button>
         </div>
       </div>
@@ -413,56 +420,49 @@ function FollowupBox({ rootId, onFollowup }: { rootId: string; onFollowup: Follo
 }
 
 /**
- * A reviewer-resolved comment: collapsed to its ✓ line (keyed on the reviewer's
- * close), expanding to the quote, the comment, and the agent's reply if one
- * landed (a withdrawn comment with no reply just shows the comment). The ✓ line
- * carries the resolved revision; an un-resolve offer (Reopen) rides the same
- * Resolve seam, hidden read-only.
+ * A reviewer-resolved comment conversation: collapsed to its ✓ summary line
+ * (keyed on the reviewer's close), expanding to the whole conversation — the
+ * quote, the root note + the agent's reply, then each follow-up turn + its reply
+ * (a withdrawn comment with no reply just shows the note). The summary carries
+ * the resolved revision; an un-resolve offer (Reopen) rides the same Resolve
+ * seam, hidden read-only. Resolving the root withdraws every turn at once, so the
+ * whole chain lives under one ✓ card.
  */
 function ResolvedCard({
-  thread,
+  root,
+  followups,
   onJump,
   onResolve,
 }: {
-  thread: CommentThread;
+  root: Thread;
+  followups: Thread[];
   onJump: Jump;
   onResolve?: Resolve;
 }) {
-  const { anchor, reply, resolved } = thread;
-  if (!resolved) return null; // callers only route reviewer-resolved comments here
-  const detached = isDetached(thread);
-  const reopen = () => void onResolve?.(thread.id, false);
+  const { anchor, resolved } = root;
+  if (!resolved) return null; // callers only route reviewer-resolved conversations here
+  const reopen = () => void onResolve?.(root.id, false);
   return (
-    <details className="thread thread-comment thread-resolved">
+    <details className="thread thread-comment thread-resolved" data-thread={root.id}>
       <summary className="resolved-summary">
         <span className="resolved-check" aria-hidden="true">
           ✓
         </span>
-        <span className="thread-id">{thread.id}</span>
+        <span className="thread-id">{root.id}</span>
         <span className="resolved-word">resolved</span>
         <span className="resolved-rev">r{resolved.revision}</span>
         <span className="thread-where">{anchorLabel(anchor)}</span>
       </summary>
       <div className="resolved-detail">
-        {anchor?.exact !== undefined &&
-          (detached ? (
-            <DetachedQuote exact={anchor.exact} />
-          ) : (
-            <blockquote
-              className="thread-quote thread-quote-jump"
-              title="jump to the quoted text"
-              onClick={() => onJump(anchor)}
-            >
-              {anchor.exact}
-            </blockquote>
-          ))}
-        <p className="thread-body">{thread.body}</p>
-        {reply && (
-          <div className="thread-answer">
-            <span className="thread-answer-label">↳ agent · r{reply.revision}</span>
-            <p className="thread-answer-body">{reply.body}</p>
+        <ConversationQuote root={root} onJump={onJump} />
+        <p className="thread-body">{root.body}</p>
+        <TurnResponse thread={root} />
+        {followups.map((followup) => (
+          <div className="thread-followup-turn" key={followup.id}>
+            <TurnPrompt body={followup.body} />
+            <TurnResponse thread={followup} />
           </div>
-        )}
+        ))}
         {onResolve && (
           <div className="thread-resolve">
             <button type="button" className="btn btn-ghost thread-resolve-btn" onClick={reopen}>
