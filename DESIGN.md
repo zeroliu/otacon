@@ -709,7 +709,10 @@ the revisions this device hasn't opened (unread state is device-local, §10). Wh
 current session is absent from the strip — cleaned, or approved and opened from home —
 the dropdown shows a labeled placeholder (its title + state) instead of rendering blank,
 and the chip strip simply omits it. The switcher rides the index SSE stream, so chips
-appear, re-badge, and vanish live. Each session gets a stable **accent color** used on
+appear, re-badge, and vanish live. On the review screen, `[`/`]` walk these same active
+sessions in this same activity order (wrapping at both ends), so a reviewer can sweep the
+queue from the keyboard; the shortcut is mounted on the switcher since it already owns the
+live list. Each session gets a stable **accent color** used on
 the header, comment composer, and agent-question cards, so rapid phone switching can't
 post feedback to the wrong plan.
 
@@ -983,7 +986,8 @@ returns to the index.
   Compact and collapsed on the review screen; the pre-plan placeholder ("no
   revision yet") leads with it open, since before a plan exists it is the main
   thing to watch. The header also carries the agent-presence dot.
-- Keyboard: `j/k` jump changed sections, `c` comment, `q` ask. **No shortcut for
+- Keyboard: `j/k` jump changed sections, `c` comment, `q` ask, `[`/`]` previous/next
+  session (walks the switcher's active sessions, §7). **No shortcut for
   Approve, on purpose.** Approve warns on unresolved threads.
 
 ### Review screen — phone (one thumb, walking)
