@@ -1642,16 +1642,27 @@ describe("progress and live activity (live-agent-activity)", () => {
     expect(detail.latestActivity?.text).toBe("reading the auth module");
   });
 
-  test("a progress note pushes an activity frame, then a session frame for the chip", async () => {
+  test("a progress note pushes an activity frame, a stream highlight, then a session frame for the chip", async () => {
     const session = mintSession();
     const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
     const snapshot = await reader.next();
     expect((snapshot.data as { activity: unknown[] }).activity).toEqual([]);
+    expect((snapshot.data as { stream: unknown[] }).stream).toEqual([]);
 
     await progress(session.id, "drafting plan");
     const activityFrame = await reader.next();
     expect(activityFrame.event).toBe("activity");
     expect((activityFrame.data as { note: { text: string } }).note.text).toBe("drafting plan");
+    // The same note flows into the new live-activity stream as a `highlight`
+    // (live-agent-activity), with a daemon-assigned seq.
+    const streamFrame = await reader.next();
+    expect(streamFrame.event).toBe("stream");
+    const events = (streamFrame.data as { events: { kind: string; label: string; seq: number }[] })
+      .events;
+    expect(events).toHaveLength(1);
+    expect(events[0]?.kind).toBe("highlight");
+    expect(events[0]?.label).toBe("drafting plan");
+    expect(events[0]?.seq).toBe(1);
     // The draft chip rides the session frame's latestActivity (review UI).
     const sessionFrame = await reader.next();
     expect(sessionFrame.event).toBe("session");
@@ -1660,6 +1671,39 @@ describe("progress and live activity (live-agent-activity)", () => {
     ).session;
     expect(summary.latestActivity?.text).toBe("drafting plan");
     expect(typeof summary.lastContactAt).toBe("number");
+    await reader.cancel();
+  });
+
+  test("progress highlights land in the per-session stream snapshot, oldest first, with monotonic seq", async () => {
+    const session = mintSession();
+    await progress(session.id, "one");
+    await progress(session.id, "two");
+    const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
+    const snapshot = await reader.next();
+    const stream = (snapshot.data as { stream: { kind: string; label: string; seq: number }[] })
+      .stream;
+    expect(stream.map((e) => e.label)).toEqual(["one", "two"]);
+    expect(stream.every((e) => e.kind === "highlight")).toBeTrue();
+    expect(stream.map((e) => e.seq)).toEqual([1, 2]);
+    await reader.cancel();
+  });
+
+  test("a progress note carrying an API key and a ~5 KB body: redacted + truncated in the stream detail", async () => {
+    const session = mintSession();
+    const secret = "sk-abcdEFGHijklMNOPqrstUVWX1234567890";
+    const note = `deploying with token=${secret} ` + "X".repeat(5000);
+    await progress(session.id, note);
+    const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
+    const snapshot = await reader.next();
+    const event = (
+      snapshot.data as { stream: { kind: string; detail?: string; label: string }[] }
+    ).stream[0];
+    expect(event?.kind).toBe("highlight");
+    const detail = event?.detail ?? "";
+    expect(detail).not.toContain(secret);
+    expect(detail).toContain("[redacted]");
+    // Truncated to the configured stream detail cap (default 600), not the 5 KB body.
+    expect(detail.length).toBeLessThanOrEqual(600);
     await reader.cancel();
   });
 
@@ -1722,6 +1766,87 @@ describe("progress and live activity (live-agent-activity)", () => {
     // Wake it so the parked request resolves (and the test doesn't dangle).
     await postJson(`/api/sessions/${session.id}/comments`, { items: [{ body: "wake" }] });
     await parked;
+    await reader.cancel();
+  });
+});
+
+describe("transcript tailer lifecycle (live-progress-activity-redesign)", () => {
+  // A stub tailer factory records start/stop per repo so the test observes the
+  // lifecycle wiring without a real fs poll or any ~/.claude dependency.
+  type Stub = { start(): void; stop(): void; started: number; stopped: number };
+  function tailedApp() {
+    const stubs: Stub[] = [];
+    const tailed = createApp({
+      store,
+      uiDir,
+      presence,
+      makeTailer: () => {
+        const stub: Stub = {
+          started: 0,
+          stopped: 0,
+          start() {
+            this.started += 1;
+          },
+          stop() {
+            this.stopped += 1;
+          },
+        };
+        stubs.push(stub);
+        return stub;
+      },
+    });
+    return { tailed, stubs };
+  }
+  const post = (a: Hono<{ Bindings: NodeBindings }>, path: string, body: unknown = {}) =>
+    a.request(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+  test("creating a session starts exactly one tailer", async () => {
+    const { tailed, stubs } = tailedApp();
+    const res = await post(tailed, "/api/sessions", { title: "tailed", repo });
+    expect(res.status).toBe(201);
+    expect(stubs).toHaveLength(1);
+    expect(stubs[0]?.started).toBe(1);
+    expect(stubs[0]?.stopped).toBe(0);
+  });
+
+  test("Save (approve) stops the tailer; the session is terminal", async () => {
+    const { tailed, stubs } = tailedApp();
+    const { id } = (await (await post(tailed, "/api/sessions", { title: "t", repo })).json()) as { id: string };
+    await tailed.request(`/api/sessions/${id}/submit`, { method: "POST", body: validPlanFor(id) });
+    const approved = await post(tailed, `/api/sessions/${id}/approve`, {});
+    expect(approved.status).toBe(200);
+    expect(stubs[0]?.stopped).toBe(1);
+  });
+
+  test("Implement keeps the tailer alive until implement-done", async () => {
+    const { tailed, stubs } = tailedApp();
+    const { id } = (await (await post(tailed, "/api/sessions", { title: "t", repo })).json()) as { id: string };
+    await tailed.request(`/api/sessions/${id}/submit`, { method: "POST", body: validPlanFor(id) });
+    await post(tailed, `/api/sessions/${id}/approve`, { implement: true });
+    expect(stubs[0]?.stopped).toBe(0); // still building → still tailing
+    await post(tailed, `/api/sessions/${id}/implement-done`, { pr: "https://example.com/pr/1" });
+    expect(stubs[0]?.stopped).toBe(1); // build over → tailer torn down
+  });
+
+  test("deleting a session stops the tailer", async () => {
+    const { tailed, stubs } = tailedApp();
+    const { id } = (await (await post(tailed, "/api/sessions", { title: "t", repo })).json()) as { id: string };
+    await tailed.request(`/api/sessions/${id}`, { method: "DELETE" });
+    expect(stubs[0]?.stopped).toBe(1);
+  });
+
+  test("FLOOR: with no adapter, no tailer activity occurs yet progress still streams", async () => {
+    // The default app (no makeTailer override) uses the real Tailer; the temp
+    // repo has no ~/.claude transcript, so findAdapter returns null and the
+    // tailer no-ops. The progress floor must be entirely unaffected.
+    const session = mintSession();
+    const res = await postJson(`/api/sessions/${session.id}/progress`, { note: "floor still flows" });
+    expect(res.status).toBe(200);
+    // The highlight landed in the stream snapshot — the floor is intact.
+    const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
+    const snapshot = await reader.next();
+    const stream = (snapshot.data as { stream: { kind: string; label: string }[] }).stream;
+    expect(stream.some((e) => e.kind === "highlight" && e.label === "floor still flows")).toBe(true);
     await reader.cancel();
   });
 });

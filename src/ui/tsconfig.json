@@ -16,5 +16,6 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": ["."],
+  "//exclude": "Test files (.test.ts AND .test.tsx) are bun:test files needing bun's types; they compile under src/ui/tsconfig.test.json, never this DOM-app program (which carries no bun types).",
   "exclude": ["**/*.test.ts", "**/*.test.tsx"]
 }
