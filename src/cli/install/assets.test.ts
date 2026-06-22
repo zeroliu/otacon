@@ -11,14 +11,14 @@ const DOGFOOD_SKILL_PATH = join(
   "..",
   ".claude",
   "skills",
-  "otacon",
+  "otacon-dev",
   "SKILL.md",
 );
 
 describe("single-source wrappers (D7)", () => {
   test("the committed dogfood SKILL.md is exactly dogfoodSkillMd()", () => {
     // This is the drift guard: a protocol change that edits assets.ts but
-    // forgets to regenerate .claude/skills/otacon/SKILL.md fails right here.
+    // forgets to regenerate .claude/skills/otacon-dev/SKILL.md fails right here.
     const committed = readFileSync(DOGFOOD_SKILL_PATH, "utf8");
     expect(committed).toBe(dogfoodSkillMd());
   });
@@ -37,10 +37,31 @@ describe("single-source wrappers (D7)", () => {
     for (const text of [skillMd(), dogfoodSkillMd()]) {
       // start-first (D6): the start step leads, before research.
       expect(text).toContain("first, before you research");
-      expect(text).toMatch(/2\. \*\*Research the codebase\*\*/);
+      expect(text).toMatch(/2\. \*\*Research the codebase\.\*\*/);
       // the new narration verb (D1) appears in the loop and the rules.
       expect(text).toContain('progress "<what you\'re doing>"');
     }
+  });
+
+  test("the wrapper reframes progress as occasional highlights + the universal floor", () => {
+    // Phase 4: auto-capture covers routine work on supported agents, so the
+    // wrapper asks for OCCASIONAL highlights / chapter markers, not per-step
+    // narration — while still naming `progress` as the activity floor on agents
+    // with no auto-capture. The command itself must remain present (not removed).
+    for (const text of [skillMd(), dogfoodSkillMd()]) {
+      // It tells the agent to use progress sparingly, for highlights/markers.
+      expect(text).toMatch(/OCCASIONAL highlights and chapter markers/);
+      // It explains the auto-stream now covers routine activity.
+      expect(text).toMatch(/auto-stream/);
+      // It still keeps progress alive as the universal floor.
+      expect(text).toContain("universal floor");
+      // The command stays in the CLI quick reference.
+      expect(text).toMatch(/progress "<note>"/);
+    }
+    // The plain `otacon progress` command is still present (not removed); the
+    // dogfood variant carries its source-prefixed form.
+    expect(skillMd()).toContain("otacon progress");
+    expect(dogfoodSkillMd()).toContain("./bin/otacon progress");
   });
 
   test("every wrapper teaches the terminal `deleted` event (delete-pending-session)", () => {
@@ -49,6 +70,18 @@ describe("single-source wrappers (D7)", () => {
       // a pending session in the UI.
       expect(text).toContain("`deleted`");
       expect(text).toContain("deleted this session in the review UI");
+    }
+  });
+
+  test("every wrapper teaches the resume-from-worktree bootstrap and amend-in-place", () => {
+    for (const text of [skillMd(), dogfoodSkillMd()]) {
+      // The start bootstrap: a resumeCandidate from status means an amendment is
+      // possible, so judge relatedness, confirm in the terminal, then resume.
+      expect(text).toContain("resumeCandidate");
+      expect(text).toContain("resume and amend");
+      // Amend-in-place: build on the existing worktree/branch and push the same PR.
+      expect(text).toContain("Amending");
+      expect(text).toContain("updates the SAME PR");
     }
   });
 

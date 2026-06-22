@@ -1,6 +1,6 @@
 ---
-name: otacon
-description: Plan a feature for THIS repo through an otacon review session — grill interview, schema'd plan, browser/phone review with anchored comments, approved plan saved to a home archive (and your project on Save). Use when the user asks to plan something with otacon, types /otacon, or wants a reviewed implementation plan before coding. Replaces native plan mode. Dogfoods otacon on its own development.
+name: otacon-dev
+description: Plan a feature for THIS repo through an otacon review session: grill interview, schema'd plan, browser/phone review with anchored comments, approved plan saved to a home archive (and your project on Save). Use when the user asks to plan something with otacon, types /otacon, or wants a reviewed implementation plan before coding. Replaces native plan mode. Dogfoods otacon on its own development. Also resumes and amends an implemented plan when run from inside its build worktree.
 ---
 
 <!-- Generated from src/cli/install/assets.ts (dogfoodSkillMd) — do NOT hand-edit;
@@ -33,18 +33,44 @@ user reviews in a browser. Every `./bin/otacon`
 command prints exactly one JSON line on stdout. Exit 0 = proceed; exit 1 = a
 machine-readable error you can fix (read the JSON); exit 2 = you invoked it wrong.
 
+## Starting: resume an amendment, or plan fresh
+
+Before `./bin/otacon start`, check where you are: run `./bin/otacon status`. If its output
+carries a `resumeCandidate`, you are standing inside a build worktree otacon
+created for a finished plan: a chance to AMEND that plan in place instead of
+spawning a second worktree.
+
+- Read the candidate plan at `resumeCandidate.plan` and judge whether the user's
+  request is about THAT feature.
+  - **Clearly unrelated** (a different feature) → just `./bin/otacon start` a fresh
+    session and ignore the candidate.
+  - **Related, or you are unsure** → ask the user, here in the terminal, whether to
+    resume and amend the existing plan or start new. This is the ONE question that
+    does not go through `./bin/otacon ask` (no session is open yet); wait for the answer
+    before acting.
+- On **resume**: `./bin/otacon resume` (it auto-detects the session from this worktree,
+  reopens it to `revising`, and prints the `plan` path). SKIP research and grill,
+  since the plan exists. Edit that `plan` file into revision N+1 directly from the user's
+  request (grill only if it is genuinely ambiguous), `./bin/otacon submit`, then go to
+  the **Review loop** (step 5). The review diffs against the approved revision.
+- No `resumeCandidate` → the normal flow below.
+
 ## The loop
 
 1. `./bin/otacon start --title <kebab-title>` **first, before you research** — it mints
    the session and prints the review URL. Tell the user to open it (`./bin/otacon open`
    launches it in their browser) so they can watch the whole thing from the first second.
    `--quick` skips the interview — only when the user explicitly asks.
-2. **Research the codebase**, narrating as you go with
-   `./bin/otacon progress "<what you're doing>"` — call it whenever you start a chunk of
-   work the user can't otherwise see (reading a module, drafting, revising). It is
-   a non-blocking one-liner that feeds the live activity log and the draft chip; no
-   answer comes back, so never park on it. Read enough to propose answers, not
-   collect questions.
+2. **Research the codebase.** On supported agents the daemon now auto-streams your
+   tool calls, text, and thinking to the reviewer's now-playing console, so it
+   already sees the routine work. Use `./bin/otacon progress "<what you're doing>"` for
+   OCCASIONAL highlights and chapter markers (a milestone, a phase boundary, "what
+   I'm about to do next"), not per-step narration. It is the universal floor: on an
+   agent with no auto-capture those notes are the ONLY thing keeping the now-playing
+   bar alive, so still drop one whenever you start a chunk of work the user can't
+   otherwise see. It is a non-blocking one-liner that feeds the live stream and the
+   draft chip; no answer comes back, so never park on it. Read enough to propose
+   answers, not collect questions.
 3. **Grill** (mandatory unless --quick): Interview me relentlessly about every
    aspect of this plan until we reach a shared understanding. Walk down each branch
    of the design tree, resolving dependencies between decisions one-by-one. For
@@ -92,26 +118,38 @@ machine-readable error you can fix (read the JSON); exit 2 = you invoked it wron
 
 ## CLI quick reference
 
-- `./bin/otacon start --title <t> [--quick]` · `./bin/otacon progress "<note>"` ·
+- `./bin/otacon start --title <t> [--quick]` · `./bin/otacon resume [--session <id>]` ·
+  `./bin/otacon progress "<note>"` (occasional highlights / chapter markers; the activity
+  floor on agents without auto-capture) ·
   `./bin/otacon ask ...` · `./bin/otacon wait --timeout 540` · `./bin/otacon submit [--resolutions f]` ·
   `./bin/otacon answer <q> --body "..."` · `./bin/otacon implement-done [--pr <url>] [--failed]` ·
   `./bin/otacon status` · `./bin/otacon open` · `./bin/otacon config [get <key>]`
 
 ## Implement loop (on `approved` with `implement:true`)
 
-You are the **orchestrator**: you only coordinate and narrate
-(`./bin/otacon progress` at each checkpoint) — every phase's real work runs in a fresh
-native subagent (Task tool) so your own context stays lean.
+You are the **orchestrator**: you only coordinate and mark progress
+(`./bin/otacon progress` at phase boundaries, an occasional chapter marker rather than
+every action; on supported agents the now-playing console already streams the work).
+Every phase's real work runs in a fresh native subagent (Task tool) so your own
+context stays lean.
 
-1. **Setup.** On Implement the plan lives only in the home archive at the event
-   `path` (read the phases from there). Branch off the repo's current default branch
-   HEAD: create the
-   worktree under the configured `worktree.dir`
-   (`./bin/otacon config get worktree.dir` — default `~/.otacon/worktrees`, outside the repo):
-   `git worktree add <worktree.dir>/<slug> -b otacon/impl-<slug>` (off the default
-   branch). `./bin/otacon progress` each checkpoint throughout.
-2. **Per phase, in order** (read the phases from the home plan at the event `path`):
-   - `./bin/otacon progress "phase N — implementing"`; spawn an **implement+test**
+1. **Setup.** Read the plan from the home archive at the event `path`.
+   - **Amending** (you resumed this session, so its build worktree already exists
+     and you are standing in it): do NOT create a worktree. `cd` into
+     `<worktree.dir>/<slug>`, make sure you are on `otacon/impl-<slug>`, and build
+     on top of the existing commits. Pushing later updates the SAME PR.
+   - **Fresh** (no existing worktree): branch off the repo's default-branch HEAD and
+     create the worktree under `worktree.dir` (`./bin/otacon config get worktree.dir`,
+     default `~/.otacon/worktrees`, outside the repo):
+     `git worktree add <worktree.dir>/<slug> -b otacon/impl-<slug>` (off the default
+     branch).
+   Drop a `./bin/otacon progress` highlight at each phase boundary throughout, not at
+   every step.
+2. **Per phase, in order** (read the phases from the home plan at the event `path`;
+   on an amendment, implement only the phases this revision changed, using the
+   changelog and the diff to scope):
+   - `./bin/otacon progress "phase N — implementing"` (one marker per phase); spawn an
+     **implement+test**
      subagent (Task tool) scoped to that phase's Goal/Files/Verification — it
      implements and runs the phase Verification plus the repo gates.
    - spawn a **separate** `/code-review --fix` subagent on the phase's working
@@ -121,10 +159,12 @@ native subagent (Task tool) so your own context stays lean.
      review still flags, or a subagent is stuck) → on the FIRST blocker,
      `./bin/otacon ask` with options `retry|skip|abort|guidance`, park in `./bin/otacon wait`,
      and act on the answer. No auto-retry.
-3. **Finish.** On success, open a PR against the default branch with `gh pr create`
-   (PR body = the plan summary + the per-phase log; fall back to the local branch +
-   path when there is no remote), then `./bin/otacon implement-done --pr <url>`. On abort,
-   run `./bin/otacon implement-done --failed`.
+3. **Finish.** On a **fresh** build, open a PR against the default branch with
+   `gh pr create` (PR body = the plan summary + the per-phase log; fall back to the
+   local branch + path when there is no remote). On an **amendment**, the PR already
+   exists: push the branch and it updates, so reuse its URL (it is on the session;
+   `./bin/otacon status` reports `prUrl`). Either way finish with
+   `./bin/otacon implement-done --pr <url>`. On abort, run `./bin/otacon implement-done --failed`.
 
 While `implementing` the Stop hook still keeps you on the line — never end the turn
 until `implement-done`.
@@ -194,6 +234,7 @@ than a sentence — never as decoration.
 ## Rules
 
 - Never use native plan mode, AskUserQuestion, or any built-in question UI while
-  the session is open — every question goes through `./bin/otacon ask`.
+  the session is open: every question goes through `./bin/otacon ask`. The sole exception
+  is the resume-vs-new question at the very start, before any session exists.
 - Long review or build ahead? Remind the user to keep the Mac awake: `caffeinate -i`
   while the session runs.

@@ -18,6 +18,8 @@ import type {
   SectionDiff,
   SessionStatus,
   SessionSummary,
+  StreamEvent,
+  StreamKind,
   Thread,
   TranscriptEntry,
 } from "../shared/types";
@@ -35,6 +37,8 @@ export type {
   SectionDiff,
   SessionStatus,
   SessionSummary,
+  StreamEvent,
+  StreamKind,
   Thread,
   TranscriptEntry,
 };
@@ -45,6 +49,16 @@ export type {
  * generous client safety bound so a tuned-up server cap still renders in full.
  */
 const ACTIVITY_VIEW_CAP = 60;
+
+/**
+ * Newest live-activity stream events the client keeps live (the live-activity
+ * stream, §10a). The daemon caps the file at `stream.cap` and the snapshot
+ * reflects that; this client bound keeps a long, captured session's firehose
+ * from growing the in-memory view without limit (the console renders the tail).
+ * Larger than the activity cap because the captured stream is far denser than
+ * the manual progress feed.
+ */
+const STREAM_VIEW_CAP = 500;
 
 /** A summary plus the client-side "this card just changed" timestamp. */
 export interface LiveSession extends SessionSummary {
@@ -146,6 +160,14 @@ export interface SessionDetail {
   transcript: TranscriptEntry[];
   /** The live-activity feed, oldest first; live over `activity` frames (review loop and daemon API). */
   activity: ActivityNote[];
+  /**
+   * The normalized live-activity stream, oldest first (by `seq`); live over
+   * `stream` frames (the live-activity stream, §10a). Powers the now-playing bar
+   * and the live console. Distinct from `activity`: the stream is the automatic,
+   * captured firehose (tool/text/thinking) with manual `highlight` notes inline,
+   * while `activity` is the manual-only progress feed the chip still reads.
+   */
+  stream: StreamEvent[];
   missing: boolean;
   /** True once a `removed` frame lands: the session was cleaned/archived or deleted. */
   cleaned: boolean;
@@ -166,6 +188,7 @@ export function useSession(id: string): SessionDetail {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [activity, setActivity] = useState<ActivityNote[]>([]);
+  const [stream, setStream] = useState<StreamEvent[]>([]);
   const [missing, setMissing] = useState(false);
   const [cleaned, setCleaned] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -175,6 +198,7 @@ export function useSession(id: string): SessionDetail {
     setThreads([]);
     setTranscript([]);
     setActivity([]);
+    setStream([]);
     setMissing(false);
     setCleaned(false);
     setConnected(false);
@@ -209,6 +233,7 @@ export function useSession(id: string): SessionDetail {
             threads?: Thread[];
             transcript?: TranscriptEntry[];
             activity?: ActivityNote[];
+            stream?: StreamEvent[];
           }>(source, "snapshot", (data) => {
             // Self-heal on a daemon version change (install/update): a reconnect
             // after an update-restart re-delivers the version, reloading a stale
@@ -218,6 +243,7 @@ export function useSession(id: string): SessionDetail {
             setThreads(data.threads ?? []);
             setTranscript(data.transcript ?? []);
             setActivity(data.activity ?? []);
+            setStream(data.stream ?? []);
           });
           on<{ session: SessionSummary }>(source, "session", (data) =>
             setSession({ ...data.session, changedAt: Date.now() }),
@@ -238,6 +264,14 @@ export function useSession(id: string): SessionDetail {
           // can't grow it without bound (review loop and daemon API).
           on<{ session: string; note: ActivityNote }>(source, "activity", ({ note }) =>
             setActivity((prev) => [...prev, note].slice(-ACTIVITY_VIEW_CAP)),
+          );
+          // The live-activity stream (§10a): a `stream` frame carries one or
+          // more new normalized events, newest last and coalesced/batched ok.
+          // Append by seq order (the daemon already emits in order) and trim to
+          // the client view cap so a long captured session can't grow it without
+          // bound (the console renders the tail).
+          on<{ session: string; events: StreamEvent[] }>(source, "stream", ({ events }) =>
+            setStream((prev) => [...prev, ...events].slice(-STREAM_VIEW_CAP)),
           );
           // Terminal: this session left the registry (clean/archive or a delete).
           // Close the stream — a reconnect would 404-loop against the deregistered
@@ -261,7 +295,7 @@ export function useSession(id: string): SessionDetail {
     };
   }, [id]);
 
-  return { session, threads, transcript, activity, missing, cleaned, connected };
+  return { session, threads, transcript, activity, stream, missing, cleaned, connected };
 }
 
 const PRESENCE_HEARTBEAT_MS = 20_000;
@@ -357,6 +391,29 @@ export function postQuestion(id: string, anchor: Anchor | null, body: string): P
  */
 export function postFollowup(id: string, rootId: string, body: string): Promise<boolean> {
   return post202(`/api/sessions/${id}/questions`, { replyTo: rootId, body });
+}
+
+/**
+ * Post a follow-up COMMENT on an existing comment conversation (threaded review
+ * and revision): a new linked comment that inherits the root's anchor, posted as a
+ * one-item comments batch with `replyTo`. Mirrors `postFollowup`, but rides the
+ * comments route — the agent responds to the new turn per the revise/submit loop
+ * (L5), not out-of-band like a question. The new turn folds in over the `thread`
+ * SSE frame.
+ */
+export function postCommentFollowup(id: string, rootId: string, body: string): Promise<boolean> {
+  return post202(`/api/sessions/${id}/comments`, { items: [{ replyTo: rootId, body }] });
+}
+
+/**
+ * Close or reopen a thread (the reviewer's Resolve verb): POSTs the resolve route
+ * and resolves true on the 202 accept. `resolved:true` collapses the card to its ✓
+ * line and drops it from the approve unresolved count; `false` reopens it. Doubles
+ * as comment-withdraw — a resolved comment no longer owes the agent a reply (L5
+ * skips it). The close lands back over the `thread` SSE frame.
+ */
+export function postResolve(id: string, threadId: string, resolved: boolean): Promise<boolean> {
+  return post202(`/api/sessions/${id}/threads/${threadId}/resolve`, { resolved });
 }
 
 /** The user's side of a grill question (interview questions): chip choice(s) and/or text. */

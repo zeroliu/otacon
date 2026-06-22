@@ -74,6 +74,13 @@ export function repoLocalConfigPath(repoRoot: string): string {
   return join(otaconDir(repoRoot), "config.local.json");
 }
 
+/** Expand a leading `~`/`~/` to the OS home dir; leave other paths untouched. */
+export function expandTilde(p: string): string {
+  if (p === "~") return homedir();
+  if (p.startsWith("~/")) return join(homedir(), p.slice(2));
+  return p;
+}
+
 export function otaconDir(repoRoot: string): string {
   return join(repoRoot, ".otacon");
 }
@@ -107,6 +114,15 @@ export function transcriptPath(repoRoot: string, id: string): string {
 /** The append-only live-activity feed: `otacon progress` notes. */
 export function activityPath(repoRoot: string, id: string): string {
   return join(sessionDir(repoRoot, id), "activity.json");
+}
+
+/**
+ * The append-only normalized live-activity stream (JSONL): captured agent
+ * activity plus `otacon progress` highlights. Ephemeral, capped, one event per
+ * line — distinct from the legacy `activity.json` (the draft-chip feed).
+ */
+export function streamPath(repoRoot: string, id: string): string {
+  return join(sessionDir(repoRoot, id), "stream.jsonl");
 }
 
 export function revisionPath(repoRoot: string, id: string, n: number): string {

@@ -258,17 +258,21 @@ Fuzzy re-anchoring across revisions: on every accepted revision the daemon re-lo
 each thread's quote — exact match first, then prefix/suffix-disambiguated, then a
 normalized match (whitespace collapsed, markdown emphasis markers ignored) that
 rewrites the stored quote to the new revision's text. A unique match re-anchors
-(following moved text across sections); no match or an ambiguous one sets the thread's
-`anchorState` to **orphaned** and it lands in the **orphaned tray** — never silently
-dropped, and automatically recovered if a later revision restores the text. Whole-plan
-(non-anchored) comments are also supported and never orphan.
+(following moved text across sections); no match or an ambiguous one marks the anchor
+internally (`anchorState:"orphaned"`) and the thread **stays inline in the rail with its
+quote muted** — never silently dropped, and automatically recovered if a later revision
+restores the text. Whole-plan (non-anchored) comments are also supported and never lose
+their anchor.
 
 Open threads keep their anchored text **persistently lit** in the clean view — the
 steady counterpart to the click-flash, so which passages are under discussion is
 visible at a glance. Open questions, open comments, and unsent drawer drafts paint
-via the CSS Custom Highlight API (never by re-rendering the plan); a mark clears when
-its thread is answered or resolved, or when its quote orphans. Whole-plan and orphaned
-anchors are never lit — there is no re-locatable quote to paint.
+via the CSS Custom Highlight API (never by re-rendering the plan); a question's mark
+clears when it is answered or when the reviewer **resolves** the conversation (a
+follow-up keys on its root's close), a comment's mark clears when the reviewer
+**resolves** it (not merely when the agent replies — a reply is a response, the thread
+stays lit until the reviewer closes it), and any mark clears when its quote orphans.
+Whole-plan and orphaned anchors are never lit — there is no re-locatable quote to paint.
 
 ---
 
@@ -283,7 +287,7 @@ errors on stdout; the agent fixes and resubmits. Invalid revisions never reach t
 | L2   | Read-path budgets (Summary ≤5 lines, Goal ≤3, etc.)                                                                                              | error                                  |
 | L3   | Decision traceability: every `D<n>` cites a `q<n>` (`← q7` or `← q7, q9`; `<-` accepted) or `[assumed]`; cited ids must exist in the grill transcript | error (warning in `--quick` sessions)  |
 | L4   | Detail containment heuristics: file paths in Details must appear in that phase's Files; new dependency names in Details must appear in Decisions | warning                                |
-| L5   | Revision accompaniment: a submit must include a resolution reply for every open comment thread, and every revision ≥ 2 must carry a changelog    | error                                  |
+| L5   | Revision accompaniment: a submit must include a reply for every open comment thread that has none — a comment the reviewer has **resolved** (the close/withdraw verb) is skipped, never blocking the submit — and every revision ≥ 2 must carry a changelog | error                                  |
 | L6   | Detail soft caps (>80 lines/section)                                                                                                             | warning, surfaced as a badge in the UI |
 | L7   | First-screen recommendation: a lead diagram (`mermaid`) near the top is strongly recommended (~90% of plans); a `<!-- no-lead-diagram -->` marker in Summary opts out | warning (nudge, never blocks) |
 | L8   | Diagram renderability: every `mermaid` fence parses headlessly (mermaid in a happy-dom DOM); a fence mermaid cannot parse is `E_DIAGRAM_UNRENDERABLE`, so an unrenderable diagram never reaches the reviewer | error (fails open: no headless setup → no check) |
@@ -346,7 +350,8 @@ the model is suspended — no inference, no token spend.
 | `otacon answer <question-id> (--body "…" \| --file f.md)`                   | Answer a user question; no revision                                           |
 | `otacon progress "<note>" [--session <id>]`                                 | Append a narration note to the live activity feed (UI-only; non-blocking, never parks, never an event) |
 | `otacon implement-done [--pr <url>] [--failed]`                             | End an `implementing` session: record the PR link and flip to `implemented`, or `--failed` → `implement_failed` (§12) |
-| `otacon status [--all]`                                                     | Session state + undelivered event count (crash/resume entry point)            |
+| `otacon resume [--session <id>]`                                            | Reopen a finished session for amendment (flip terminal → `revising`): auto-detects the session that owns the cwd build worktree (its recorded `impl.worktree`), or `--session` names one. Prints the daemon's reopen body plus `title`, `repo`, `plan` (the file to amend, under the session's main repo) (§12) |
+| `otacon status [--all]`                                                     | Session state + undelivered event count (crash/resume entry point); also surfaces `resumeCandidate` (id, title, status, plan) when the cwd is inside a known build worktree |
 | `otacon open [--session <id>]`                                              | Open the review URL in the browser, or the index URL when no session resolves; `OTACON_NO_BROWSER` prints it instead of launching |
 | `otacon config [open]`                                                      | Open the Settings web UI in the browser: `/settings?repo=<cwd repo root>` inside a repo (Project scope), bare `/settings` outside one (User scope); `OTACON_NO_BROWSER` prints the URL instead |
 | `otacon config get <key>`                                                   | Read-only: print the merged effective value of one dotted key (`worktree.dir`, `budgets.summaryLines`, …) from the config files; no daemon. Unknown key → exit 1 |
@@ -362,9 +367,11 @@ The `--resolutions` file is the revision-accompaniment document:
 }
 ```
 
-`threads` maps comment-thread ids to resolution replies — lint L5 requires one per
-open comment thread; accepted replies land on the threads and mark them resolved
-(re-resolving overwrites). `changelog` is the agent's summary of the revision,
+`threads` maps comment-thread ids to the agent's replies — lint L5 requires one per
+open comment thread that has none; accepted replies land on the threads as the agent's
+*response* (re-replying overwrites). A reply is not a close: the thread stays open
+until the **reviewer** resolves it (§9), so a comment can carry a reply and still be
+open. `changelog` is the agent's summary of the revision,
 required on every revision ≥ 2, stored per revision, and shown in the UI's revision
 banner (§9). The CLI sends the file's content as the `resolutions` field of the
 submit JSON: `{"plan": "...", "resolutions": {...}}`; unknown keys or non-string
@@ -400,8 +407,9 @@ when it is a **follow-up** on an earlier question (§9) — the agent skims that
 prior turns for context and answers the new `q<n>` the usual way. A `comments` event
 carries `final:true` when it is the **comment & approve** fold-in batch (§12): the
 reviewer approved with comments still open and chose *Send to agent*, so the daemon
-re-delivers every still-open comment thread for one solo pass — the agent resolves them,
-and its next clean `submit` finalizes the plan (it then receives `approved`, which may
+re-delivers every comment thread still owed a response (no reply yet and not
+reviewer-resolved) for one solo pass — the agent replies to each, and its next clean
+`submit` finalizes the plan (it then receives `approved`, which may
 carry `implement:true`) instead of returning to in-review. Approval writes the plan file
 and the event reports where; the agent runs no git for it.
 `approved.home` is ALWAYS the absolute canonical copy in the home archive
@@ -460,7 +468,12 @@ DELETE /api/sessions/:id                    deregister a session, status-branche
                                             SSE frame; response carries `archivedTo`
 GET  /api/sessions/:id/events?wait=540      agent long-poll
 POST /api/sessions/:id/submit               lint; reject 422 with issues, or store revision N
-POST /api/sessions/:id/comments             flush a comment batch
+POST /api/sessions/:id/comments             flush a comment batch; a batch item may
+                                            carry {replyTo:"t<n>"} to post a follow-up
+                                            on that comment's conversation — it inherits
+                                            the root's anchor (a client anchor is
+                                            ignored), 404 E_UNKNOWN_COMMENT on a
+                                            non-comment id
 POST /api/sessions/:id/questions            user question (instant); optional
                                             {replyTo:"q<n>"} posts a follow-up on
                                             that question's conversation — it
@@ -470,6 +483,15 @@ POST /api/sessions/:id/questions            user question (instant); optional
 POST /api/sessions/:id/questions/:qid/answer  agent's answer to a user question
                                             (otacon answer); 404 E_UNKNOWN_QUESTION
                                             on ids that are not open questions
+POST /api/sessions/:id/threads/:tid/resolve   the reviewer's Resolve verb: {resolved}
+                                            stamps (or clears) the close on a comment or
+                                            question conversation root — {resolved:true}
+                                            carries the session's current revision, doubles
+                                            as the comment-withdraw path (a resolved comment
+                                            owes no reply, L5 skips it). → 202 + a `thread`
+                                            SSE upsert; 404 E_UNKNOWN_THREAD on a bad id;
+                                            non-boolean `resolved` → 400; refused on a
+                                            terminal session (E_SESSION_OVER)
 GET  /api/sessions/:id/threads              comment + question threads (the UI's rail)
 POST /api/sessions/:id/ask                  agent grill question (otacon ask):
                                             {question, options?, recommend?, multi?}
@@ -485,8 +507,12 @@ POST /api/sessions/:id/progress             agent narration (otacon progress):
                                             note is trimmed to a configured max,
                                             appended to the capped activity feed,
                                             and pushed as an `activity` SSE frame
-                                            (+ a `session` frame for the chip). No
-                                            agent event is queued — UI-only telemetry
+                                            (+ a `session` frame for the chip). The
+                                            same note ALSO lands in the live-activity
+                                            stream (below) as a `highlight` event —
+                                            redacted, truncated, daemon-assigned seq —
+                                            pushed as a `stream` SSE frame. No agent
+                                            event is queued — UI-only telemetry
 POST /api/sessions/:id/answers              user's answer to an agent question:
                                             {question, choice|choices, text?} —
                                             validated against the question's options
@@ -502,11 +528,13 @@ POST /api/sessions/:id/approve              approve: writes
                                             the home copy ONLY, flips to `implementing`
                                             (non-terminal), and queues `approved` with
                                             path=home, implement:true (§12).
-                                            Unresolved threads (comments without a
-                                            resolution + questions without an answer)
-                                            → 409 E_UNRESOLVED_THREADS carrying both
+                                            Unresolved threads (comments the reviewer
+                                            hasn't Resolved + questions with neither an
+                                            answer nor a Resolve) → 409
+                                            E_UNRESOLVED_THREADS carrying both
                                             `unresolved` (the total) and `openComments`
-                                            (the foldable count). The UI's warn stage
+                                            (the foldable count: comments still owed a
+                                            response). The UI's warn stage
                                             offers two ways past it: {"force":true}
                                             finalizes now and drops the open threads, or
                                             {"sendOpenComments":true} — comment & approve
@@ -525,6 +553,13 @@ POST /api/sessions/:id/implement-done       end an `implementing` build (otacon
                                             `implement_failed` (failed:true), records
                                             `prUrl` on the summary; a session not
                                             `implementing` → 409 E_NOT_IMPLEMENTING
+POST /api/sessions/:id/reopen               reopen a finished (terminal) session for
+                                            another review round (a `/otacon` run from
+                                            inside the build worktree): flips it back to
+                                            `revising`, pins the diff baseline at the
+                                            approved revision (lastReviewedRevision =
+                                            revision), and keeps `prUrl` + `impl`; a
+                                            non-terminal session → 409 E_NOT_REOPENABLE
 POST /api/sessions/:id/reviewed             mark a revision reviewed ({revision},
                                             default: latest) — the diff baseline;
                                             monotonic, also set by a comment flush
@@ -581,17 +616,21 @@ finalize — and hand the agent an un-swept thread that wedges its L5 fold-in).
 `/` and `/s/:id` serve the SPA shell (static assets under `/assets/`); an unknown
 session id renders as a client-side not-found state. Each SSE stream opens with a
 `snapshot` frame (the per-session stream's snapshot carries the thread list, the
-grill transcript, and the activity feed; every snapshot — index and per-session —
+grill transcript, the activity feed, and the live-activity stream's newest events; every
+snapshot — index and per-session —
 also carries the daemon's `version`, which open tabs use to self-heal after an
 update, see §16), then pushes `session` / `revision` /
-`queue` / `thread` / `grill` / `activity` / `removed` frames as state changes — a
+`queue` / `thread` / `grill` / `activity` / `stream` / `removed` frames as state changes — a
 `revision` frame carries the revision number and its changelog; a `thread` frame is
-an upsert: a new comment/question thread (a follow-up question carries `replyTo`, the
-root it continues), or an existing thread changing (a question gaining its answer, a
-comment gaining its resolution, an anchor re-anchoring or orphaning); a `grill` frame is the transcript's upsert: a question asked via
+an upsert: a new comment/question thread (a follow-up of either kind carries `replyTo`,
+the root it continues), or an existing thread changing (a question gaining its answer, a
+comment gaining the agent's reply or the reviewer's resolution, an anchor re-anchoring or
+orphaning); a `grill` frame is the transcript's upsert: a question asked via
 `otacon ask`, or an entry gaining the user's answer; an `activity` frame carries one
 new progress note appended to the per-session activity log (the draft chip rides the
-`session` frame's `latestActivity` instead); a `removed` frame is terminal —
+`session` frame's `latestActivity` instead); a `stream` frame carries one or more new
+normalized live-activity events (the live-activity stream, §10a), newest last and
+coalesced/batched ok, which the UI appends to its stream view by `seq`; a `removed` frame is terminal —
 the session left the registry (`otacon clean`): the session list drops it live, an
 open review screen flips to a quiet "session cleaned" state and
 closes its stream (a reconnect against the deregistered id could only 404), and the
@@ -645,19 +684,33 @@ mirroring the budgets config. Off macOS the banner is a silent no-op.
 
 1. **Start (first).** Skill triggers; `otacon start` mints the session and prints the
    review URL *before* research, so the user can watch from the first second. The
-   agent then researches the codebase, narrating at checkpoints with `otacon progress`
-   — each note feeds the live activity log and the draft chip (UI-only; never an event).
+   agent then researches the codebase. On a supported agent the live-activity stream
+   (§10a) auto-captures the agent's own tool calls, text, and thinking, so the routine
+   work streams to the now-playing console without narration; the agent drops an
+   `otacon progress` note only for occasional highlights and chapter markers. On an
+   agent with no transcript adapter that floor is the *only* activity signal, so the
+   notes still carry the bar there (UI-only; never an event).
+   The entry point can also **resume** a finished session: when the agent runs from
+   inside a build worktree otacon created (`otacon status` reports a `resumeCandidate`),
+   it judges whether the request is about that plan and, if related or unsure, asks the
+   user in the terminal whether to amend the existing plan or start new (the one
+   confirmation that precedes any session). On resume it skips research and grill,
+   edits the existing plan into the next revision, and re-enters the review loop.
 2. **Grill** (§8). Agent walks the design tree via `otacon ask` + `wait`, one question
    at a time. Skipped with `--quick`.
 3. **Draft.** Agent writes `plan.md`, runs `otacon submit`; loops on lint errors until clean.
 4. **Review.** Agent parks in `wait`. User reads, fires instant questions
    (agent answers via `otacon answer`, returns to `wait`), stacks comments, taps Send.
+   The reviewer **Resolves** a comment or question conversation when satisfied (the
+   close verb, which doubles as withdraw); a comment stays open — and lit — until then,
+   even after the agent replies.
 5. **Revise.** Agent edits `plan.md`, writes `resolutions.json` (changelog + thread →
-   reply), resubmits. Daemon resolves the threads, re-anchors every quote in the new
-   text (§4), computes diff vs the user's last-reviewed revision, pushes the
-   changelog banner. Repeat 4–5.
-6. **Approve = Save.** User taps **Save** (warned if unresolved threads exist — the
-   daemon answers 409 with the count until the UI confirms). The **daemon** composes
+   reply), resubmits. Daemon lands the replies on the threads as the agent's *response*
+   (not a close), re-anchors every quote in the new text (§4), computes diff vs the
+   user's last-reviewed revision, pushes the changelog banner. Repeat 4–5.
+6. **Approve = Save.** User taps **Save** (warned if unresolved threads exist —
+   comments the reviewer hasn't Resolved, plus asks with neither an answer nor a
+   Resolve — the daemon answers 409 with the count until the UI confirms). The **daemon** composes
    the artifact (`status: approved` + the grill transcript appended) and writes it to
    two places: ALWAYS the canonical home archive
    (`~/.otacon/sessions/<id>/YYYY-MM-DD-<slug>.md`), and ALSO a project copy under the
@@ -668,10 +721,11 @@ mirroring the budgets config. Off macOS the banner is a silent no-op.
    copy if you want it in git. Session over.
    On the unresolved-threads warning the reviewer has a second choice — **comment &
    approve** (*Send to agent*): instead of dropping the open comments, the daemon
-   defers the finalize (status `finalizing`) and hands the agent every open comment
-   thread in one `final:true` comments batch; the agent folds them in and its next
-   clean `submit` finalizes — writing the same artifact, now with a `## Review notes`
-   section recording what it changed (§12). The reviewer is done the instant they
+   defers the finalize (status `finalizing`) and hands the agent every comment thread
+   still owed a response (no reply yet and not reviewer-resolved) in one `final:true`
+   comments batch; the agent replies to them and its next clean `submit` finalizes —
+   writing the same artifact, now with a `## Review notes` section recording what it
+   changed (§12). The reviewer is done the instant they
    click; the chosen variant (Save vs Implement) carries through.
 7. **Approve = Implement** (optional, §12). The other approve action — **Implement** —
    finalizes the plan but writes it to the home archive ONLY (nothing into the
@@ -688,6 +742,11 @@ mirroring the budgets config. Off macOS the banner is a silent no-op.
    `otacon implement-done --pr <url>` (or `--failed` on abort), which flips the session
    to `implemented` / `implement_failed`. All build work runs in native in-session
    subagents (subscription-covered, §13); the daemon never spawns a model.
+   On a **resumed** session the build amends in place: the worktree and
+   `otacon/impl-<slug>` branch already exist, so the agent does not open a second
+   worktree. It builds on top of the existing commits (scoping to the phases this
+   revision changed) and pushes the branch, which updates the **same** PR (its URL is
+   on the session, reported by `otacon status` as `prUrl`).
 
 ---
 
@@ -701,7 +760,10 @@ one daemon.
 the single source of truth — there is no local session pointer:
 
 - Commands default to the repo's single active session: the CLI reads the registry
-  and picks the one non-approved session whose repo is the cwd's git root. Different
+  and picks the one non-approved session matched by repo root **or** build-worktree
+  root. A session's `.repo` is the main repo where planning happened, so a reopened
+  session resolves implicitly even from inside its Implement build worktree (whose
+  root matches the recorded `impl.worktree`, not the repo). Different
   worktrees = different roots = parallel planning with zero flags.
 - `--session <id>` overrides everywhere, and is the only way to reach an approved
   (ended) session. If a repo has two or more active sessions, the CLI **refuses** the
@@ -781,28 +843,39 @@ Structural integration:
 | Type               | Default timing                                       | Effect                                                                                                             |
 | ------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | User **question**  | instant                                              | Agent answers in-thread (`otacon answer`); plan untouched. **Follow up** to keep the conversation going (a linked question, same anchor); one-tap **Promote to comment** after reading the answer |
-| User **comment**   | batched in a drawer; per-comment "send now" override | Flushed batch → exactly one revision, one changelog                                                                |
+| User **comment**   | batched in a drawer; per-comment "send now" override | Flushed batch → exactly one revision, one changelog. A comment is a conversation too — **Follow up** to add a linked comment turn (same anchor); the agent replies per turn on its next submit (L5) |
 | **Agent question** | instant (during grill or anytime)                    | Card in UI; user answers with chips/text                                                                           |
 
 **Mixed flush:** questions answered first (answers may inform further review), then all
 comments applied as one revision. Keeps revisions chunky — the agent never thrashes on
 every keystroke.
 
-**Follow-up questions:** a question thread is a conversation, not a one-shot. After the
-agent answers, a **Follow up** affordance on that card posts another question — one
-direction, you ask and the agent answers. A follow-up is its own `q<n>` thread linked to
-the root by `replyTo` (reusing the queue, `otacon answer`, and the shared q-id space),
-and it inherits the root's anchor, so the rail groups the whole chain into one card that
-jumps and orphans as a unit. Scope is question threads only; comment threads stay
-one-shot resolutions.
+**Follow-up conversations:** both comment and question threads are conversations, not
+one-shots — after the agent responds, a **Follow up** affordance on the card posts
+another turn. A follow-up is its own `t<n>`/`q<n>` thread linked to the root by `replyTo`
+and inherits the root's anchor, so the rail groups the whole chain into one card that
+jumps and orphans as a unit. The two kinds differ only in how the agent responds: a
+**question** follow-up rides the questions route and is answered out-of-band via `otacon
+answer` (plan untouched); a **comment** follow-up rides the comments route and is
+answered per turn through the revise/submit loop — the agent's next submit must reply to
+every un-replied comment turn (L5), so a comment conversation is revision-tied. Resolving
+the root withdraws every turn of the conversation at once.
+
+**Reviewer-driven resolution:** the agent's reply to a comment is a *response*, not a
+close — only the **reviewer** closes a thread, via the **Resolve** verb (on both comment
+and question conversation roots). Resolve doubles as **withdraw**: resolving a comment
+that has no reply tells the agent it is dropped (L5 then skips it, so it can never
+deadlock a submit). A resolved thread leaves the lit set and the Approve unresolved
+count; Reopen (`resolved:false`) puts it back.
 
 **Re-review (3 layers):**
 
 1. **Changelog** — agent-written summary at the top of each revision banner. Submitted
    in the resolutions document (§6), required on every revision ≥ 2 (lint L5), stored
    per revision.
-2. **Threads** — every comment becomes a thread the agent MUST resolve with a reply
-   (lint L5); unresolved threads are visible at a glance and warned on Approve.
+2. **Threads** — every comment becomes a thread the agent MUST reply to (lint L5),
+   then the reviewer Resolves to close it; threads not yet Resolved are visible at a
+   glance and warned on Approve.
 3. **Diff** — toggle between clean-latest and inline diff **vs the revision the user
    last actually reviewed** (not merely the previous one; baseline selectable). Changed
    sections carry gutter markers even in clean view, so unprompted changes to sections
@@ -1000,13 +1073,28 @@ returns to the index.
   out of scope. Everything here is browser-only: the daemon never sees these drafts,
   so nothing in this gate touches the protocol.
 - Threads rail: clicking an anchored thread scrolls to its section and flashes the
-  quoted text in the plan. A question and its follow-ups render as one **conversation
-  card** — each turn with its answer (or the blinking "answering…" cursor) — with a
-  collapsed **Follow up** button that reveals a reply box for the next question.
-  Resolved comments collapse to their ✓ line (id, revision, section) and expand to the
-  agent's reply. Orphaned threads leave the list for the rail's badge-counted **orphan
-  tray**: an orphaned conversation travels as a unit, each entry keeping its dead quote
-  (section slug struck through) and expanding to the full original anchor text.
+  quoted text in the plan. Both kinds render through one shared **conversation card** —
+  the root plus each follow-up turn, each turn paired with the agent's response (or the
+  blinking pending cursor: "answering…" for a question, "responding…" for a comment) —
+  with a collapsed **Follow up** button that reveals a reply box for the next turn, plus
+  a **Resolve** button to close the whole conversation. The two kinds differ only in the
+  agent's text and the follow-up route: a **question** turn shows its `answer` and a
+  follow-up posts to the questions route; a **comment** turn shows its `reply` (labelled
+  with the revision it landed on) and a follow-up posts to the comments route (an
+  un-replied comment's Resolve is a withdraw). When the **reviewer** Resolves: a question
+  conversation shows its inline ✓ mark with the resolved revision; a comment conversation
+  collapses to a ✓ line (id, the reviewer's resolved revision, section) that expands to
+  the whole conversation — every turn and its reply. Either kind then offers a **Reopen**
+  control that re-opens the resolved conversation (`resolved:false`). The ✓
+  card is keyed on the reviewer's close, never on the mere presence of a reply.
+  Resolve/Reopen/Follow up all hide read-only
+  (session over). A **detached thread** — whose quoted text changed in a later revision
+  and can no longer be located — stays **inline in the same list** as every other
+  thread; its quote renders **muted** (no live text to jump to or flash, so it is not
+  clickable) beside a subtle icon whose hover tooltip explains the quote changed in a
+  later revision. A conversation keys on its root, so a detached root keeps its whole
+  chain inline too. (Internally the anchor still carries `anchorState:"orphaned"`; the
+  UI never surfaces that word or a revision number.)
 - Persistent thread marks (clean view): open threads and unsent drafts keep their
   anchored text lit — questions one ink (underlined), comments + drafts another — so
   the two read apart and stay legible without color; the click-flash still pops above
@@ -1029,11 +1117,12 @@ returns to the index.
 - Collapsed Details show size badges ("▸ 34 lines · 1 diagram · 2 code blocks") —
   skipping is a conscious choice. L6 warnings render here.
 - Collapsible "Interview" panel: grill transcript; decisions deep-link into it.
-- Collapsible "Activity" log: the agent's `otacon progress` narration as an
-  append-only feed (newest first), so work is visible during research + drafting.
-  Compact and collapsed on the review screen; the pre-plan placeholder ("no
-  revision yet") leads with it open, since before a plan exists it is the main
-  thing to watch. The header also carries the agent-presence dot.
+- Live activity rides the always-on **now-playing bar + console** (§10a), pinned under
+  the header: the automatic, cross-agent stream of the agent's tool calls, text, and
+  thinking, with `otacon progress` highlights inline as chapter markers. It is the
+  primary "what is the agent doing right now?" surface during research + drafting,
+  shown from the first second (it replaces the old default-closed Activity fold). The
+  header also carries the agent-presence dot.
 - Keyboard: `j/k` jump changed sections, `c` comment, `q` ask, `[`/`]` previous/next
   session (walks the active sessions in the session list, §7). **No shortcut for
   Approve, on purpose.** Approve warns on unresolved threads.
@@ -1082,10 +1171,120 @@ returns to the index.
 ### Cross-cutting
 
 UI updates over SSE (watch status flip from _revising_ to _new revision_, answers
-stream into threads). Mobile-first CSS. Orphaned-comment tray reachable from the
-threads rail. The review screen reports its visibility to the daemon
+stream into threads). Mobile-first CSS. A thread whose quote can no longer be
+located stays inline in the threads rail with its quote muted. The review screen
+reports its visibility to the daemon
 (`POST /presence`) so desktop attention banners (§6) fire only when you are not
 already watching that review.
+
+### 10a. Live-activity stream
+
+The live-activity stream is otacon's automatic, cross-agent record of what the agent
+is *doing* while it researches and drafts — a step beyond the manual-only `otacon
+progress` feed. It is a single normalized event stream the daemon owns; capture sources
+(a per-session tailer reading the agent's own transcript, below) append to it, and an
+`otacon progress` note flows into the *same* stream so a manual highlight sits inline
+with the captured activity — both are indistinguishable downstream.
+
+**Event shape.** Each entry is a `StreamEvent`: a daemon-assigned monotonic `seq` (per
+session), an ISO `at`, a `kind` (`tool` · `text` · `thinking` · `highlight` —
+`highlight` is an `otacon progress` note), a one-line `label` ("Read src/auth.ts" ·
+"Bash: bun test" · "thinking…"), an optional expandable `detail` (the truncated +
+redacted body), the raw `tool` name when `kind === "tool"`, and an optional `status`
+(`running` · `ok` · `error`).
+
+**Normalization (daemon-side, mandatory).** Every raw capture passes one normalizer
+before it is stored or pushed: secrets are redacted out of `detail` (API keys,
+bearer/`token=`/`password=` pairs, AWS `AKIA…` ids, PEM private-key blocks, `.env`-style
+`KEY=secret`) — best-effort, never a security boundary — then `detail` and `label` are
+truncated to their configured caps (`stream.detailMaxChars`, `stream.labelMaxChars`), so
+a high-frequency or large-bodied capture source can never bloat a payload or leak a key
+into a review screen. Redaction and truncation live in the shared normalize path, so no
+capture source can skip them.
+
+**Storage (`<repo>/.otacon/<id>/stream.jsonl`).** Append-only JSONL — one `StreamEvent`
+per line — so a frequent capture source pays a cheap append, not a whole-file rewrite,
+on the common path. The file is capped at `stream.cap` events: it is rewritten to the
+newest N only when it grows past the cap (older lines drop off the front). Reads are
+corrupt-line-tolerant: a torn final append or a hand-edit is skipped, never fatal — a
+JSONL stream's value is the lines that *did* parse, so a single bad line never
+quarantines the whole file (unlike the JSON state files, §13). The stream is ephemeral
+working state under `.otacon/`, like the activity feed and threads — it is not part of
+the approved artifact and is never archived to the home store.
+
+**Surface.** The per-session SSE snapshot carries the newest `stream.cap` events; a
+`stream` frame (above) pushes new events live (newest last, coalesced/batched ok). The
+draft chip still rides `latestActivity` (the activity feed), not the stream.
+
+On the review screen the stream renders as an always-on **now-playing bar** pinned
+directly under the sticky header, which expands into a full **live console**. The bar is
+one mono line: the latest *meaningful* event's label (a trailing `thinking` shows
+dimmed/italic), a ticking elapsed timer while the newest tool call is still `running`, a
+live pulse dot whenever the session is agent-active (`draft`/`revising`/`finalizing`/
+`implementing`, calm otherwise), and a small **mode badge** reading `live` once any
+captured (tool/text/thinking) event exists (an adapter is attached) or `notes` while the
+stream holds only `highlight` progress notes (the floor). The bar is shown whenever the
+agent is active *or* any stream event exists, including pre-plan research, not gated on a
+plan existing, so the work is never buried (it replaces the old default-closed activity
+fold). The console below it is a terminal-feel list, newest at the bottom, that
+auto-scrolls to the latest only while the user is already pinned to the bottom; it
+auto-expands during `draft` and `implementing` and collapses to the bar in resting
+states (a status crossing re-applies that default). The console pairs each tool
+`running` event with its later `ok`/`error` outcome into one row carrying the final
+status, collapses consecutive same-label rows into one counted row ("Read ×5",
+expandable), renders `highlight` notes as emphasized chapter dividers, reveals a row's
+`detail` on expand, filters by kind (all / tools / text / thinking), and hides `thinking`
+behind an off-by-default toggle (the noisiest kind). The draft chip and the index card
+keep riding `latestActivity`: the bar and console are the firehose, while the chip stays
+the one-line summary.
+
+**Capture: the transcript tailer.** While a session is active the daemon runs a
+per-session *tailer* that watches the coding agent's own on-disk transcript and feeds
+new activity into the stream — no per-agent hook, no cooperation from the agent. It is
+bound to the session lifecycle: it starts when the session is created (or, after a
+daemon restart, for every still-active session) and stops the moment the session goes
+terminal (Save/approve, implement-done, or delete). An `implementing` session keeps its
+tailer so the build's activity keeps streaming. The tailer polls the transcript on a
+short interval (a plain poll loop, chosen over `fs.watch` for cross-platform
+reliability), so a burst of writes between two polls naturally coalesces into one append
+and one `stream` frame. It re-locates while no transcript is found yet — a session can be
+created a beat before the agent's transcript file appears.
+
+**Adapter authoring contract.** Each coding agent is supported by a small
+`TranscriptAdapter` (one per agent); the daemon holds an ordered registry of them.
+
+- **`locate(repoRoot) → handle | null`.** Find the *freshest* transcript whose recorded
+  working directory equals the session's repo root (cwd + recency), or `null` when this
+  agent has none for that repo. "Freshest" breaks ties by file mtime; the recorded cwd
+  (read from the transcript itself) is what authoritatively matches a transcript to a
+  repo — a dir-name encoding may only be a hint.
+- **`parse(handle, cursor) → { events, cursor }`.** Read incrementally from
+  `cursor.offset` to EOF, consume only *complete* lines (never a trailing partial — leave
+  the offset before it so the next poll completes it; advance by bytes, not characters),
+  and map each recognized record to a `RawStreamEvent` (`kind`/`label`/`detail`/`tool`/
+  `status`). The `cursor` is opaque to the daemon: `offset` plus any per-adapter carry
+  (e.g. the resolved repo root), round-tripped untouched. A non-JSONL source uses the carry
+  *instead of* the byte offset for incrementality — the OpenCode SQLite adapter leaves
+  `offset` unused and carries a high-water `time_created` watermark plus the part ids
+  emitted at exactly that watermark (the same-millisecond tie set), so each poll returns
+  only newer parts and never re-emits.
+- **Append-only outcomes.** The store never upserts. A tool's `running` event and its
+  later `ok`/`error` outcome are **two separate appended events**, not one mutated row —
+  an adapter emits the outcome as a follow-on event, never an edit to the earlier one.
+- **Fail-soft, always.** A malformed line, a vanished/rotated file, or any parse error is
+  skipped, never thrown. The daemon catches a throwing `locate` as "no match". The worst
+  case is the session running on the `otacon progress` floor for that tick.
+- **Supported agents.** Claude Code, Codex, and OpenCode ship adapters and are
+  auto-captured. Claude and Codex each tail one JSONL transcript; OpenCode keeps its
+  sessions in a local SQLite database (`$XDG_DATA_HOME/opencode/opencode.db`, default
+  `~/.local/share/opencode/`), so its adapter reads that DB *read-only* (Node's built-in
+  `node:sqlite`, no extra process) and walks the `session`/`message`/`part` tables, mapping
+  `part.data` of type `text`/`reasoning`/`tool` to text/thinking/tool events. Every other
+  agent degrades to the floor.
+- **The floor (graceful degradation).** When *no* adapter matches a repo's agent, the
+  registry returns `null`, no tailer attaches, and the session streams only its manual
+  `otacon progress` highlights. Every agent therefore gets at least the floor; an adapter
+  only ever *adds* automatic capture on top of it.
 
 ---
 
@@ -1120,11 +1319,11 @@ Operational requirement: the Mac stays awake while a plan is in review
 
 | Location                                          | Contents                                                                                                       | Git                                        |
 | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `<repo>/.otacon/`                                 | Working state under `<id>/`: `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), threads (`threads.json`: comment + question threads with answers, resolutions, and anchor states inline), the grill transcript (`transcript.json`), the capped live-activity feed (`activity.json`: the newest ~N `otacon progress` notes), queues | the user's call — otacon manages no `.gitignore` |
+| `<repo>/.otacon/`                                 | Working state under `<id>/`: `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), threads (`threads.json`: comment + question threads with answers, agent replies, reviewer-resolve closes, and anchor states inline), the grill transcript (`transcript.json`), the capped live-activity feed (`activity.json`: the newest ~N `otacon progress` notes), the live-activity stream (`stream.jsonl`: the normalized, capped, append-only event stream, §10a), queues | the user's call — otacon manages no `.gitignore` |
 | `~/.otacon/worktrees/<slug>/`                     | Implement build's git worktree on branch `otacon/impl-<slug>` (base dir is `worktree.dir`, default `~/.otacon/worktrees` — outside the repo)                    | n/a (global, outside the repo)             |
 | `~/.otacon/sessions/<id>/YYYY-MM-DD-<slug>.md`    | Canonical approved plan, every session (`status: approved` frontmatter + grill transcript)                     | n/a (global, permanent archive)            |
 | `<repo>/<plans.dir>/YYYY-MM-DD-<slug>.md`         | Save-time project copy (default `.otacon/plans`; set `plans.dir=docs/plans` to group with tracked plans)       | yours to commit (or not)                   |
-| `~/.otacon/registry.json`                         | Session registry: ID → repo, branch, title, status                                                             | n/a (global)                               |
+| `~/.otacon/registry.json`                         | Session registry: ID → repo, branch, title, status, `prUrl`, and `impl` (the build's worktree + branch, recorded at Implement-approve; see below)                                                             | n/a (global)                               |
 
 Every approved plan lands in the **home archive** keyed by its session id — the
 canonical copy a downstream implementer (or a future you, on any machine) can always
@@ -1171,8 +1370,9 @@ line (`choice`/comma-joined `choices`, ` — text` appended when both were given
 `_unanswered_` when the question was never answered). A `--quick` session's empty
 transcript appends no section. When the approval went through **comment & approve**
 (§6), a `## Review notes` section follows the Interview — one `### t<n> — <section>`
-per comment the agent folded in unreviewed, the reviewer's comment as a blockquote
-and the agent's resolution beneath it — so the trusted fold-in stays auditable
+per comment the agent folded in unreviewed (the response-owed comments: no reply yet and
+not reviewer-resolved), the reviewer's comment as a blockquote and the agent's reply
+beneath it — so the trusted fold-in stays auditable
 (a plain or *commit-anyway* approve folds nothing in, so the section is omitted).
 The reviewer reaches this same fold-in in one click even from browser-only drafts the
 daemon never received: picking an approve variant with unsent drawer comments opens the
@@ -1207,18 +1407,33 @@ non-terminal — the agent's clean `submit` is what finalizes it — and a hung 
 is escapable: an `approve {force:true}` there commits the current revision and drops
 the still-open threads.
 
+Terminal is **not strictly one-way**: a finished session can be **reopened** back to
+`revising` via `POST /api/sessions/:id/reopen` (the reverse edge). This powers
+worktree-keyed amendment: a `/otacon` run from inside an Implement build's worktree
+reopens the *same* session to amend the approved plan in place instead of spawning a
+second worktree. Reopen pins the diff baseline at the approved revision and keeps
+`prUrl` + `impl` intact, so the next submit diffs against what was approved and the
+amendment still belongs to the same build. Detection rests on the **`impl`** field on
+the session record (`{worktree, branch}`, deterministic from the title slug +
+`worktree.dir`), written at Implement-approve in the same registry write that flips to
+`implementing` (recorded at approve time, not at build start, so detection survives an
+aborted build). Terminal therefore means "over until explicitly reopened", not "forever".
+
 ```
                                          ┌─ Approve ──────────────► approved (terminal)
 draft ─► in_review ⇄ revising ──────────┤  (Send to agent ─► finalizing ─► submit ─┘
-                                         │   or ─► implementing, per the variant)
-                                         └─ Approve & Implement ──► implementing
-                                                                       │
-                                                  implement-done       │
-                                            ┌──────────────────────────┤
-                                            ▼                          ▼
-                                       implemented              implement_failed
+            ▲                            │   or ─► implementing, per the variant)
+            │                            └─ Approve & Implement ──► implementing
+            │                                                          │
+            │ reopen (from any                  implement-done         │
+            │ terminal state)             ┌──────────────────────────┤
+            │                             ▼                          ▼
+            └──────────────────────  implemented              implement_failed
                                         (terminal)                 (terminal)
 ```
+
+Any **terminal** state has a `reopen` reverse edge back to `revising` (the dashed line
+above), used by worktree-keyed amendment (above).
 
 ### Implement: worktree, per-phase commits, PR
 
@@ -1355,8 +1570,11 @@ on every call).
 **Single source for the protocol card.** The card text is built once, parametrized
 only by command prefix (`protocolCard(cmd)` in `src/cli/install/assets.ts`): the
 installed wrappers use `otacon`, while this repo's own committed dogfood wrapper
-(`.claude/skills/otacon/SKILL.md`) uses the run-from-source `./bin/otacon` prefix and
-prepends a repo preamble. The dogfood file is **generated** from `dogfoodSkillMd()`,
+(`.claude/skills/otacon-dev/SKILL.md`) uses the run-from-source `./bin/otacon` prefix and
+prepends a repo preamble. The dogfood wrapper is named `otacon-dev`, not `otacon`, so it
+never collides with the installed product skill when developing otacon itself: in this
+repo `/otacon` stays the real product and `/otacon-dev` is the source-mode wrapper. The
+dogfood file is **generated** from `dogfoodSkillMd()`,
 not hand-edited, and a test (`assets.test.ts`) asserts the committed file equals that
 output — so a protocol change can never silently drift between what `otacon install`
 writes elsewhere and what this repo runs.
@@ -1384,7 +1602,8 @@ Config is layered, mirroring Claude Code's `settings.json` + `settings.local.jso
 `~/.otacon/config.json` (user) ← `<repo>/.otacon/config.json` (project,
 **committed/team-shared**) ← `<repo>/.otacon/config.local.json` (project.local,
 **personal**) — closest wins. Every override file is optional. Tunables include
-budgets/lint caps, the activity feed (`activity.cap`, `activity.noteMaxChars`),
+budgets/lint caps, the activity feed (`activity.cap`, `activity.noteMaxChars`), the
+live-activity stream (`stream.cap`, `stream.detailMaxChars`, `stream.labelMaxChars`, §10a),
 `notifications.desktop`, `worktree.dir` (base dir for Implement build worktrees, default
 `~/.otacon/worktrees`, outside the repo), `plans.dir` (where **Save** writes the
 project copy of the approved plan, default `.otacon/plans`; set it to `docs/plans` to
@@ -1420,6 +1639,9 @@ looked in, and — when in a repo — mentions `--project` as an install option.
 ### Daily flow
 
 1. In any agent session in the repo: *"plan \<feature\> with otacon"* (or `/otacon`).
+   Running `/otacon <request>` from inside a build worktree of a finished plan offers
+   to **resume and amend** that plan (the agent confirms relatedness with you in the
+   terminal), revising it and pushing the same PR instead of starting fresh.
 2. The agent researches, runs `otacon start`, and grills you one question at a time —
    answer the cards in the browser (`otacon open`) or on your phone via the tailnet URL.
 3. The agent drafts, passes the linter, submits. You review: questions fire instantly,

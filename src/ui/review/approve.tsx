@@ -274,19 +274,19 @@ export function ApproveDialog({
           <>
             <p className="approve-copy">
               <strong>{stage.unresolved}</strong> unresolved{" "}
-              {stage.unresolved === 1 ? "thread" : "threads"} — comments without a resolution,
-              or questions still unanswered.
+              {stage.unresolved === 1 ? "thread" : "threads"} — comments you haven't
+              Resolved, plus asks with neither an answer nor a Resolve.
             </p>
             <p className="approve-sub">
               {canSend && (
                 <>
                   <strong>Send to agent</strong> hands{" "}
                   {stage.openComments === 1
-                    ? "the open comment"
-                    : `the ${stage.openComments} open comments`}{" "}
+                    ? "the comment still owed a response"
+                    : `the ${stage.openComments} comments still owed a response`}{" "}
                   back for one fold-in pass, then{" "}
                   {pendingImplement ? "saves and starts the build" : "saves the plan"} — you're done the
-                  moment you click, and the agent's resolutions land in the plan's Review notes.{" "}
+                  moment you click, and the agent's replies land in the plan's Review notes.{" "}
                 </>
               )}
               {pendingImplement

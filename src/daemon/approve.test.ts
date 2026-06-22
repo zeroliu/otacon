@@ -72,13 +72,13 @@ describe("composeArtifact", () => {
     expect(out).toContain("### q1 — line one line two?");
   });
 
-  test("comment & approve appends a ## Review notes section with comment + resolution", () => {
+  test("comment & approve appends a ## Review notes section with comment + reply", () => {
     const out = composeArtifact(PLAN, {
       revision: 2,
       entries: [],
       reviewNotes: [
-        { thread: "t3", section: "phase-2", body: "rename this helper", resolution: "renamed to parseAnchor" },
-        { thread: "t5", section: null, body: "whole-plan nit\nsecond line", resolution: "fixed throughout" },
+        { thread: "t3", section: "phase-2", body: "rename this helper", reply: "renamed to parseAnchor" },
+        { thread: "t5", section: null, body: "whole-plan nit\nsecond line", reply: "fixed throughout" },
       ],
     });
     expect(out).toContain("## Review notes");
@@ -103,7 +103,7 @@ describe("composeArtifact", () => {
     const out = composeArtifact(PLAN, {
       revision: 2,
       entries: [q("q1", { answer: { text: "yes", answeredAt: "t" } })],
-      reviewNotes: [{ thread: "t1", section: "summary", body: "tighten", resolution: "done" }],
+      reviewNotes: [{ thread: "t1", section: "summary", body: "tighten", reply: "done" }],
     });
     expect(out.indexOf("## Interview")).toBeGreaterThan(-1);
     expect(out.indexOf("## Review notes")).toBeGreaterThan(out.indexOf("## Interview"));

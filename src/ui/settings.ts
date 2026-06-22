@@ -23,7 +23,7 @@ const SECTION_GROUPS: ReadonlyArray<{ title: string; sections: ReadonlyArray<key
   { title: "update", sections: ["update"] },
   { title: "notifications", sections: ["notifications"] },
   { title: "budgets", sections: ["budgets"] },
-  { title: "activity", sections: ["activity"] },
+  { title: "activity", sections: ["activity", "stream"] },
 ];
 
 /**

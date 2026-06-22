@@ -828,23 +828,55 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Resolutions need per-thread structure beyond a reply string
   (e.g. disposition: accepted/rejected), or a second accompaniment field appears.
 
-## L5 scope: every unresolved comment thread at submit time
+## Reviewer-driven resolution: agent replies = response, reviewer Resolve = close
 
-- **Decision:** L5 requires a resolution reply for every comment thread that has no
-  stored resolution when the submit arrives — not just the latest batch. Unknown
+- **Decision:** A thread closes only when the **reviewer** acts. The agent's reply
+  (landed on resubmit, lint L5) is a *response* and is stored as `reply: {body,
+  revision, repliedAt}` on the comment; it does NOT close the thread. The reviewer
+  closes via a dedicated **Resolve** verb (`POST .../threads/:tid/resolve {resolved}`),
+  which stamps `resolved: {revision, at}` on the conversation root (comment or
+  question) — `{resolved:false}` reopens. Resolve doubles as **withdraw**: resolving a
+  comment with no reply tells the agent the comment is dropped, and L5 skips any
+  reviewer-resolved comment so an un-answerable thread never deadlocks a submit. The
+  rail's lit mark, the Approve unresolved count, and the comment & approve sweep all key
+  on `resolved`, not on `reply`. (Replaces the M3 field shape `resolution: {body,
+  revision, resolvedAt}`, which conflated "agent answered" with "thread closed"; a
+  pre-Phase-2 in-flight session's `resolution` is read-normalized to `reply` so it is
+  never quarantined.)
+- **Why:** Conflating reply with close gave the *agent* the power to dismiss feedback
+  the human never accepted — a reply auto-cleared the mark and dropped the thread from
+  the approve count, so a hand-wavy "done" looked identical to an accepted fix. Putting
+  the close on the reviewer keeps the human as the gate: the thread stays lit and
+  counted until they actively Resolve. Folding withdraw into the same verb (rather than
+  a separate `otacon`-side or reviewer-side "withdraw") means one button does both
+  "I accept your reply" and "never mind" — the only two ways a reviewer ends a comment —
+  and gives L5 a clean skip predicate (`replied || resolved`) instead of a special
+  withdraw state. The close carries the session's current revision so the ✓ card and
+  Review notes stay auditable.
+- **Revisit when:** Comments become multi-turn conversations (Phase 3) — "the agent
+  replied" stops being a single bit and Resolve has to reason about whose turn it is;
+  or reviewers want a disposition on the close (accepted vs won't-fix).
+
+## L5 scope: a reply for every un-replied, un-resolved comment thread at submit time
+
+- **Decision:** L5 requires a reply for every comment thread that has neither a stored
+  reply NOR a reviewer `resolved` close when the submit arrives — not just the latest
+  batch. A reviewer-resolved comment is skipped (that is the withdraw path). Unknown
   thread ids and question ids in `threads` are errors (questions are answered via
-  `otacon answer`, never resolved); blank replies are errors; re-resolving an
-  already-resolved thread is allowed and overwrites.
-- **Why:** Under normal operation the two scopes are identical — each accepted
-  revision resolves everything open, so what is open at the next submit is exactly
-  the batches delivered since the last accepted revision (DESIGN.md §9). The
-  "every open thread" formulation is what makes that invariant *self-healing*:
-  after a quarantine, a crash between writes, or a hand-edited threads.json, stray
-  open threads block the next submit instead of silently rotting. Overwrite-on-
-  re-resolve mirrors answerQuestion: at-least-once delivery makes duplicate submits
-  legitimate.
-- **Revisit when:** Threads gain a user-side "withdraw comment" verb (an open
-  thread the agent *cannot* resolve would deadlock submits).
+  `otacon answer`, never replied); blank replies are errors; re-replying to an
+  already-replied thread is allowed and overwrites.
+- **Why:** Under normal operation "every open thread" is the self-healing scope — each
+  submit must carry the agent's response to everything still owed one, so after a
+  quarantine, a crash between writes, or a hand-edited threads.json, stray open threads
+  block the next submit instead of silently rotting (DESIGN.md §9). Skipping
+  reviewer-resolved threads is what makes the **Resolve = withdraw** path safe: a
+  comment the agent cannot or should not answer (the reviewer dropped it) would
+  otherwise deadlock every submit. Overwrite-on-re-reply mirrors answerQuestion:
+  at-least-once delivery makes duplicate submits legitimate. (This is the
+  long-standing "withdraw verb" this entry once flagged as a revisit-when — Resolve
+  *is* that verb; see "Reviewer-driven resolution" above.)
+- **Revisit when:** Comment threads grow multi-turn conversations (Phase 3) — L5 would
+  then need to reason about whose turn it is, not just "has a reply".
 
 ## Changelog requirement is a lint error, not a 4xx
 
@@ -904,6 +936,28 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Real plans show systematic mismatches the ladder misses (e.g.
   link syntax `[text](url)`), or orphan rates suggest the context scorer needs to
   become a real similarity metric (diff-match-patch style).
+
+## `anchorState:"orphaned"` is an internal-only marker — no UI tray, inline & muted
+
+- **Decision:** `anchorState:"orphaned"` stays the daemon's persisted marker for a
+  thread whose quote re-anchoring lost, but the rail no longer surfaces it as its
+  own concept. There is no orphan tray, no badge, no toggle, and the word
+  "orphaned" appears nowhere user-facing. A detached thread (and its whole
+  conversation chain) renders **inline in the same newest-first list** as every
+  other thread; its quote shows muted — not clickable, not jumpable, never lit —
+  beside a subtle ⌀ icon whose `title` tooltip explains the quote changed in a
+  later revision (no revision number, no ⚠).
+- **Why:** The tray made a recoverable, transient state (a later revision restoring
+  the text un-detaches it automatically) look like an error the reviewer must act
+  on, splitting one conversation's context across two places. Keeping the thread
+  inline preserves chronology and the agent's reply in situ; muting the quote and a
+  tooltip are enough to signal "this text moved on" without alarming chrome. The
+  marker stays internal so the daemon, the anchoring ladder, and the lit-mark
+  filter (which already skips it) are untouched — this is a pure presentation
+  change.
+- **Revisit when:** Reviewers miss detached threads in a long list (then: a quiet
+  in-list affordance like a filter or jump-to-next, still not a separate tray), or
+  the muted-quote treatment proves too subtle to notice.
 
 ## lastReviewedRevision is daemon state, set implicitly and explicitly, monotonic
 
@@ -1025,27 +1079,34 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Decisions want richer provenance (multiple sources, comment
   citations), or quick-mode warnings prove too quiet to keep plans honest.
 
-## Approve: unresolved = open comments + unanswered questions; force bypasses
+## Approve: unresolved = comments the reviewer hasn't Resolved + asks with neither answer nor Resolve; force bypasses
 
-- **Decision:** POST /approve counts comment threads without a resolution plus
-  question threads without an answer; a non-zero count answers 409
-  `E_UNRESOLVED_THREADS` with `unresolved: n` unless the body is exactly
-  `{"force": true}` — the UI warns with the count and retries with force on
-  confirm. A session with no revisions answers 409 `E_NO_REVISION`. The artifact
-  is written before the status flips (write, flip, enqueue `approved`) so a crash
-  can leave an orphan file but never an approved session without its artifact.
-  After the flip, submit/comments/questions/question-answers/ask/answers/approve
-  all answer 409 `E_SESSION_OVER` — the daemon enforces the terminal state, not
-  just the CLI's pointer rules.
-- **Why:** §9 says Approve *warns* on unresolved threads — a hard refusal would
-  make the daemon override the human's judgment, and silence would make dangling
-  feedback invisible; 409-unless-force encodes "warn then allow" in one round
-  trip and leaves the count machine-readable for the confirm sheet. Unanswered
-  questions count because they are visibly open in the rail; approving past them
-  is the same conscious shrug as an open comment. Daemon-side enforcement exists
-  because curl/UI/--session callers never pass the CLI's pointer guard.
-- **Revisit when:** A "withdraw question" verb appears (open-question deadlock
-  stops being theoretical), or approve wants per-thread acknowledgment.
+- **Decision:** POST /approve counts every conversation root the reviewer has not
+  `resolved`, then: a **comment** always counts (a landed agent reply is a response,
+  not a close — only the reviewer's Resolve clears it), a **question** counts only
+  when its turn has no answer. A reviewer-resolved root (comment or question) is never
+  counted — Resolve doubles as the close/withdraw, so a responded-but-unresolved
+  comment STILL warns while an unanswered-but-resolved ask does NOT. A non-zero count
+  answers 409 `E_UNRESOLVED_THREADS` with `unresolved: n` unless the body is exactly
+  `{"force": true}` — the UI warns with the count and retries with force on confirm.
+  A session with no revisions answers 409 `E_NO_REVISION`. The artifact is written
+  before the status flips (write, flip, enqueue `approved`) so a crash can leave an
+  orphan file but never an approved session without its artifact. After the flip,
+  submit/comments/questions/question-answers/ask/answers/resolve/approve all answer
+  409 `E_SESSION_OVER` — the daemon enforces the terminal state, not just the CLI's
+  pointer rules.
+- **Why:** §9 says Approve *warns* on threads the reviewer hasn't closed — a hard
+  refusal would make the daemon override the human's judgment, and silence would make
+  dangling feedback invisible; 409-unless-force encodes "warn then allow" in one round
+  trip and leaves the count machine-readable for the confirm sheet. The count keys on
+  the reviewer's Resolve, not on the agent's reply, because closing a thread is the
+  reviewer's call — auto-clearing on a reply would let the agent dismiss feedback the
+  human never accepted. A reviewer can Resolve an open ask to clear it without waiting
+  for an answer, which is why Resolve (not just `answer`) suppresses a question.
+  Daemon-side enforcement exists because curl/UI/--session callers never pass the CLI's
+  pointer guard.
+- **Revisit when:** Approve wants per-thread acknowledgment finer than one
+  resolved/open bit, or a bulk "Resolve all" affordance.
 
 ## Comment & approve: a deferred-finalize hop, not a relabeled approve button
 
@@ -1058,14 +1119,15 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   still-open comment thread. The agent folds them in; the daemon detects
   `pendingApproval` on its next clean `submit` and finalizes then — composing the
   artifact (with a `## Review notes` section built from the swept threads' now-
-  landed resolutions), flipping to `approved`/`implementing`, and queuing the
+  landed replies), flipping to `approved`/`implementing`, and queuing the
   `approved` event — instead of returning to `in_review`. The mechanism **reuses
   the comments→revise→submit loop**: no new agent verb, and L5 already forces every
-  swept comment to carry a resolution before the finalize submit can pass. Only
-  open **comment** threads are swept (the foldable kind); open questions are not
-  (answered via `otacon answer`, never resolved — they still drop on approve as
-  before). The E_UNRESOLVED_THREADS 409 gains an `openComments` count so the UI
-  offers *Send to agent* only when there is something to fold in.
+  swept comment to carry a reply before the finalize submit can pass. Only
+  comment threads still **owed a response** are swept (the foldable kind: no reply
+  yet and not reviewer-resolved); open questions are not (answered via `otacon
+  answer`, never folded in — they still drop on approve as before). The
+  E_UNRESOLVED_THREADS 409 gains an `openComments` count so the UI offers *Send to
+  agent* only when there is something to fold in.
 - **Why:** Leaving a final nit shouldn't cost a full comment→revise→re-review→
   approve round trip — the reviewer is done the instant they click. A deferred hop
   reuses the entire revise loop (linter, resolutions, re-anchoring, SSE) rather
@@ -1569,6 +1631,13 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 ## Live agent activity: explicit `otacon progress` narration, not inferred state
 
+> [!note] Reframed by "`otacon progress` stays as the universal floor + curated
+> highlights" below. `progress` is no longer the *only* live-activity signal: the
+> automatic transcript stream (§10a) now carries routine activity on supported agents,
+> so `progress` is asked for sparingly (highlights / chapter markers) and is the sole
+> signal only on agents with no transcript adapter. The verb, endpoint, and feed are
+> unchanged.
+
 - **Decision:** The agent reports what it's doing with a new `otacon progress
   "<note>"` verb (not the daemon inferring state from existing calls). Notes append
   to a capped (~20, config) `activity.json` feed, push as an `activity` SSE frame,
@@ -1616,8 +1685,11 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   so the review UI exists from the first second. The protocol card is built once by
   `protocolCard(cmd)`, parametrized only by command prefix: the installed wrapper
   (`skillMd`, shared by all three agents) uses `otacon`; this repo's committed dogfood wrapper
-  (`dogfoodSkillMd`, written to `.claude/skills/otacon/SKILL.md`) uses `./bin/otacon`
-  and prepends a repo preamble. The dogfood file is generated, never hand-edited, and
+  (`dogfoodSkillMd`, written to `.claude/skills/otacon-dev/SKILL.md`) uses `./bin/otacon`
+  and prepends a repo preamble. The dogfood wrapper is **named `otacon-dev`, not `otacon`**,
+  so it never collides with the installed product skill (`otacon`) when developing otacon
+  itself — `/otacon` invokes the real product, `/otacon-dev` the source-mode wrapper. The
+  dogfood file is generated, never hand-edited, and
   `assets.test.ts` asserts the committed file equals `dogfoodSkillMd()`.
 - **Why:** Start-first is the whole point of live activity — minting the session only
   after research wastes the watch window the feature exists to provide. Single-source
@@ -1626,10 +1698,17 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   edit could silently update one and not the other. The equality test turns that drift
   into a CI failure. `otacon install` into other repos is unchanged — it writes the
   plain-`otacon` wrapper, which already works anywhere; only this repo needs the
-  source-mode variant, so no project-scoped install path is added.
+  source-mode variant, so no project-scoped install path is added. The dogfood wrapper is
+  named `otacon-dev` because an otacon developer almost always also has the installed
+  `otacon` product skill present; two skills both named `otacon` make `/otacon` ambiguous
+  and the harness silently picks one (in practice the product wrapper, which talks to the
+  shared `:4747` daemon, not this checkout's isolated worktree daemon). A distinct name
+  keeps the choice explicit: `/otacon-dev` always exercises this checkout's source.
 - **Revisit when:** A second repo needs a source-mode wrapper (then generation should
-  be a real CLI subcommand, not a test-guarded committed file), or the two wrappers
-  need to diverge by more than the command prefix + preamble.
+  be a real CLI subcommand, not a test-guarded committed file), the two wrappers
+  need to diverge by more than the command prefix + preamble, or `otacon install
+  --project` in this repo starts writing an `otacon` wrapper that re-introduces the
+  collision the rename avoided.
 
 ## Attention notifications: native macOS banner, not Web Push, for desktop
 
@@ -1712,6 +1791,10 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 ## Follow-up questions: linked `replyTo` threads, not a `messages[]` rewrite
 
+> [!warning] The "question threads only / comment threads stay one-shot" scope is
+> superseded by "Comments are multi-turn conversations too" below. The `replyTo`
+> linked-thread mechanism itself stands — it is what comments now reuse.
+
 - **Decision:** A follow-up on a question thread is a brand-new `q<n>` thread carrying
   `replyTo` (the root question's id), not a turn appended to a `messages[]` array on the
   existing thread. The new thread inherits the **root's** anchor (a client anchor on a
@@ -1733,6 +1816,34 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Conversations need agent-initiated turns inside a thread, comment
   threads need follow-ups too, or per-turn metadata (edits, reactions) makes a first-
   class `messages[]` model worth the migration.
+
+## Comments are multi-turn conversations too, sharing the rail's conversation card
+
+- **Decision:** Comment threads are no longer one-shot. A comment follow-up is a
+  brand-new `t<n>` thread carrying `replyTo` (the root comment's id), inheriting the
+  root's anchor — exactly the `replyTo` linked-thread mechanism questions already use,
+  now extended to the comments route (`POST /comments` accepts `{items:[{replyTo,body}]}`
+  and 404s E_UNKNOWN_COMMENT on a non-comment id). The rail renders BOTH kinds through
+  one shared conversation card: a root + each follow-up turn, each turn paired with the
+  agent's response — a question turn's `answer` (answered out-of-band via `otacon answer`)
+  or a comment turn's `reply` (landed on the agent's resubmit, lint L5). `groupThreads`
+  registers both comment and question roots as attach targets (ids are unique across
+  kinds), and the one-shot comment card is folded into the conversation card. The reviewer
+  Resolves the root to close the whole conversation (a resolved comment conversation
+  collapses to the ✓ card); resolving the root withdraws every turn at once.
+- **Why:** The threaded-review backend (turn-aware L5, openComments, approve's
+  per-conversation unresolved count) and the `replyTo`/anchor-inheritance plumbing already
+  generalize to both kinds — the only thing pinning comments to one-shot was the UI
+  rendering them through a separate `ThreadCard`. Sharing one card removes that duplicate
+  surface, keeps questions rendering and behaving exactly as before, and matches the real
+  workflow: a reviewer often needs to refine a comment ("also handle rotation") before the
+  agent acts, not just fire one note and wait. The key difference from question follow-ups
+  is preserved and intentional — a comment follow-up is **revision-tied** (the agent
+  responds per turn through the revise/submit loop, L5), whereas a question follow-up is
+  answered out-of-band and never touches the plan.
+- **Revisit when:** Comment turns need their own per-turn Resolve (today only the root
+  closes), agent-initiated turns are wanted inside a thread, or per-turn metadata makes a
+  first-class `messages[]` model worth the migration.
 
 ## The switcher hides approved sessions on both faces, with no current-session anchor
 
@@ -2045,6 +2156,12 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 ## A distinct terminal `implement_failed`, not folding abort back to `approved`
 
+> **Note (terminal is now reopenable):** See "Reopen a terminal session to amend
+> it, keyed on the build worktree" below: terminal states are no longer strictly
+> one-way. A finished session (`approved`/`implemented`/`implement_failed`) can be
+> reopened back to `revising`. This does not change the terminal *set* or the
+> open-verb guard; it only adds a reverse edge.
+
 - **Decision:** An aborted/failed build lands in its own terminal status
   `implement_failed` (via `otacon implement-done --failed`), distinct from `implemented`
   and from `approved`. The terminal *set* is `{approved, implemented, implement_failed}`;
@@ -2058,6 +2175,33 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** The terminal-state naming settles (it is flagged provisional in the
   plan's Open Questions) — e.g. if a single `done`/`closed` state with an outcome field
   proves cleaner than two sibling terminal statuses.
+
+## Reopen a terminal session to amend it, keyed on the build worktree
+
+- **Decision:** A finished (terminal) session can be **reopened** back to `revising`
+  via `POST /api/sessions/:id/reopen`, instead of terminal being strictly one-way. The
+  reopen pins the diff baseline at the approved revision (`lastReviewedRevision =
+  revision`) and keeps `prUrl` + `impl` intact. To make this discoverable, the session
+  records an **`impl` field** (`{worktree, branch}`, deterministic from the title slug +
+  `worktree.dir`) the moment it flips to `implementing`, in the same registry write as
+  the status flip. A later `/otacon` run from inside that worktree matches `impl.worktree`
+  and reopens the same session.
+- **Why:** After an Implement build, the user often needs to iterate on the implemented
+  plan (fix a phase, adjust scope) without spawning a *second* otacon session and a
+  second build worktree for what is the same piece of work. Reopening the same session in
+  place keeps the plan history, transcript, threads, and PR link as one continuous
+  record, and pinning the baseline at the approved revision means the next submit diffs as
+  a clean amendment rather than re-surfacing the whole plan. Recording `impl` at
+  **approve** time (not at build start) means detection survives an aborted build: even an
+  `implement_failed` session knows its worktree, so a `/otacon` from there still finds and
+  reopens it. The reverse edge is narrow (one explicit endpoint), so the terminal *set*
+  and the open-verb guard (`E_SESSION_OVER`) are unchanged: terminal still means "over"
+  for every implicit path; it just stops meaning "forever".
+- **Revisit when:** Worktree paths stop being deterministic from the slug (e.g. a
+  collision-suffixed worktree dir), or reopen needs to fan out to more than the
+  build-worktree trigger (a UI "reopen" button, reopening a Save-approved session from an
+  arbitrary checkout), at which point matching may need to persist more than `{worktree,
+  branch}`.
 
 ## Build layout: worktree under .otacon, one commit per green phase, PR vs default branch
 
@@ -2640,6 +2784,291 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   cleared on failure so a later submit can retry rather than being poisoned permanently.
 - **Revisit when:** A way exists to distinguish a transient setup blip from a permanent
   break, so a hard break could be surfaced loudly instead of silently skipping the check.
+
+## Worktree-keyed resume: detect by stored `impl.worktree`, match in the resolver, own verb
+
+- **Decision:** A `/otacon <request>` run from inside an Implement build worktree reopens
+  the SAME finished session to amend it rather than starting a new one. Three coupled
+  choices make that work: (1) the owning session is found by the `impl.worktree` recorded
+  on the registry entry when the build was approved (not recomputed from the slug at
+  resume time); (2) `resolveSession`'s implicit default now matches an active session by
+  repo root OR build-worktree root, so once a session is reopened to `revising` every
+  command (submit, wait, ask, ...) resolves it from inside the worktree even though its
+  `.repo` is the main repo where planning happened (no per-command changes); (3) reopening
+  is its own verb, `otacon resume`, not an overload of `otacon start`.
+- **Why:** The stored worktree is authoritative: the agent stands in the worktree, but the
+  session's `.repo` is the main repo, so a repo-root match alone would always miss, and
+  recomputing the path from the slug would drift the moment the slug, worktree base, or
+  branch naming changes. Matching in the single resolver (one lever) keeps every verb
+  worktree-aware without touching submit/wait/ask, which already route through
+  `resolveSession`. `resume` stays separate because `start` mints + registers a brand-new
+  session: folding "reopen the old one" into it would make `start` guess from the cwd
+  whether the user meant fresh or amend, exactly the kind of unrecoverable wrong-plan guess
+  the resolver refuses elsewhere. `otacon status` surfaces the candidate (`resumeCandidate`)
+  over ALL sessions, not the repo-scoped list, for the same `.repo` ≠ worktree reason.
+- **Revisit when:** Build worktrees can host more than one session at a time (the
+  `worktreeOwners` length>1 refusal would need a smarter tiebreak), or `start` grows a flag
+  that should also reopen (so the two verbs reconverge).
+
+## Resume bootstrap: agent-judged relatedness + a terminal confirm, and amend-in-place
+
+- **Decision:** The protocol card teaches the agent, before `otacon start`, to check
+  `otacon status` for a `resumeCandidate` and decide whether to amend the finished plan
+  or plan fresh. The decision is the agent's: it reads the candidate plan, and if the
+  request is clearly unrelated it just starts fresh; if related (or it is unsure) it asks
+  the user in the terminal whether to resume and amend or start new. That terminal
+  question is the single, explicit exception to the "every question goes through
+  `otacon ask`" rule. On resume the build **amends in place**: it reuses the existing
+  worktree and `otacon/impl-<slug>` branch, builds on top of the existing commits scoped
+  to the phases this revision changed, and pushes to update the SAME PR rather than
+  opening a second worktree, branch, and PR.
+- **Why:** Relatedness is a judgment the daemon cannot make (it would need to read the
+  request and the plan), so the card hands it to the agent, which already has both. A
+  silent auto-resume would risk amending the wrong plan from a stale cwd; a silent
+  auto-fresh would throw away the in-place amend whenever the user actually wanted it, so
+  a one-line terminal confirm (the only point with no session open to route an `ask`
+  through) splits the difference cheaply. Amend-in-place keeps a revised plan's code on
+  the branch the original PR tracks, so a reviewer sees one evolving PR instead of two
+  competing worktrees, branches, and PRs for the same feature, and the existing commits
+  stay as history.
+- **Revisit when:** The relatedness call wants tooling (an `otacon`-side hint or a
+  similarity check) instead of pure agent judgment, or amendments need to diverge onto a
+  new branch/PR (a large pivot that should not pile onto the original PR).
+
+## Live-activity stream: daemon-side, ephemeral, JSONL (not the JSON activity feed)
+
+- **Decision:** The automatic, cross-agent live-activity stream is a separate
+  append-only **JSONL** file (`.otacon/<id>/stream.jsonl`), distinct from the existing
+  `activity.json` feed. It holds normalized `StreamEvent`s (the daemon assigns a
+  monotonic per-session `seq`, redacts + truncates every event before storing), is
+  capped by rewriting to the newest N only when it overflows, tolerates corrupt lines by
+  skipping them (never quarantines the whole file), and is ephemeral working state —
+  never archived to the home store. `otacon progress` notes land in this stream as
+  `highlight` events *in addition to* the legacy `activity.json` feed.
+- **Why:** The stream is a high-frequency, append-heavy surface (future phases tail an
+  agent's transcript), so JSONL's cheap per-line append beats the whole-file
+  rewrite-on-every-write that the small `activity.json` feed uses — and a single torn or
+  hand-edited line should cost one line, not the whole stream (so line-skip, not the
+  JSON files' quarantine-the-file recovery). It stays a *separate* file from
+  `activity.json` because the draft chip still reads `latestActivity` from the feed (a
+  small, capped, human-shaped list) and changing that store's shape/cap would churn an
+  unrelated, load-bearing surface; routing `progress` into both keeps the chip working
+  while the new stream becomes the single normalized activity record. Daemon-side
+  normalization (redact + truncate + label) is mandatory and shared so no capture source
+  can leak a secret or a 5 KB body into a review screen. Ephemeral because it is live
+  telemetry about *how* a plan was built, not part of the approved artifact.
+- **Revisit when:** The stream needs to survive into the archived plan (then it must move
+  to the home store and gain a retention policy), the capture volume outgrows
+  rewrite-on-overflow capping (then rotate by file segment), or the activity feed and the
+  stream converge enough that the draft chip can read the stream directly and
+  `activity.json` can be retired.
+
+## cwd+recency transcript discovery (no per-agent hook dependency)
+
+- **Decision:** The tailer discovers a coding agent's live transcript by *locating* it
+  on disk — the freshest transcript file whose recorded working directory equals the
+  session's repo root — not by any hook, env handshake, or cooperation from the agent.
+  Each agent's `TranscriptAdapter.locate(repoRoot)` owns the format-specific search
+  (e.g. the Claude adapter encodes `repoRoot` into `~/.claude/projects/<dash-encoded-cwd>/`,
+  picks the newest `.jsonl` there by mtime, and confirms the match by reading the file's
+  recorded `cwd`). The registry tries adapters in order; the first with a located handle
+  wins, and **no match returns `null`** — the session then runs only on the manual
+  `otacon progress` floor. Both `locate` and `parse` are fail-soft: a throwing `locate`
+  counts as no match, and a malformed/vanished transcript is skipped, never fatal.
+- **Why:** A hook or wrapper would require installing into every agent and would break the
+  moment an agent is launched outside otacon's wrapper (the common case — otacon is "drive
+  it from your Bash tool", not a launcher). The transcript already exists on disk for any
+  agent worth supporting, so reading it needs zero buy-in and works retroactively for a
+  session that started before otacon attached. Matching on the *recorded cwd* (not just the
+  dir-name encoding) is authoritative and tolerant: the encoding is lossy (a literal `-` in
+  a path is indistinguishable from a separator), so the recorded cwd disambiguates and
+  guards against a stale/foreign transcript in a colliding directory. Recency (mtime)
+  picks the *live* session when a repo has several historical transcripts. The hard `null`
+  floor is the graceful-degradation guarantee: an unsupported agent loses automatic capture
+  but never the manual progress feed, and a new agent is one adapter + one registry line
+  away — no change to the daemon, the pipeline, or the UI.
+- **Revisit when:** An agent has no on-disk transcript (then that adapter needs a different
+  capture path — a hook or an API), two live sessions share one repo root and must be told
+  apart by more than recency (then `locate` needs a stronger key than cwd+mtime, e.g. a
+  session id handshake), or transcript formats churn often enough that fail-soft skipping
+  hides real capture gaps (then add a per-adapter health/coverage signal).
+
+## Live activity is an always-on now-playing bar, not a buried collapsible fold
+
+- **Decision:** The review screen surfaces the live-activity stream as a slim, always-on
+  "now-playing" bar pinned under the sticky header that expands into a full console. It
+  replaces the old `<section className="activity">` collapsible, which was default-closed,
+  rendered only once a plan existed, and easy to miss. The bar is shown whenever the agent
+  is active OR any stream event exists (so it appears during pre-plan research, not gated on
+  `hasPlan`); the console auto-expands during `draft`/`implementing` and collapses to the
+  bar in resting states, with a status crossing re-applying that default while a manual
+  toggle wins until the next crossing. The bar carries a `live`/`notes` **mode badge**,
+  reading `live` once any captured (tool/text/thinking) event exists and `notes` while only
+  `highlight` progress notes do, making the adapter-attached-vs-floor distinction (§10a)
+  visible.
+- **Why:** "What is the agent doing right now?" is the exact question a reviewer asks while
+  waiting through research and drafting, and the old fold answered it only if you knew to
+  open it. An always-visible one-liner answers at a glance with the firehose one click away;
+  pinning it under the header (sticky, just below z20) keeps it a fixed instrument while the
+  plan scrolls. Showing it pre-plan is the whole point: that is when the wait is longest and
+  the old fold (gated on a plan) showed nothing. The mode badge is cheap honesty: without it
+  a `notes`-only session looks identically "quiet" to a broken adapter, so the badge tells
+  the user whether rich capture is even attached. Thinking is hidden behind an off-by-default
+  toggle because it is the noisiest kind and would drown the concrete tool/text activity; the
+  Thinking *filter* force-shows it (selecting it is strong intent). Newest-at-the-bottom with
+  pin-aware auto-scroll matches a terminal's mental model and never yanks a user reading
+  history. Pairing a running event with its outcome and same-label run-collapsing ("Read ×5")
+  keep a dense captured stream legible instead of a thousand-row wall.
+- **Revisit when:** The bar's "latest meaningful event" heuristic misleads on some agent's
+  label vocabulary (then the now-playing selection needs per-kind weighting, not just
+  "skip trailing thinking"), the 500-event client cap proves too small for a long
+  `implementing` build's console (then window/virtualize the row list rather than render the
+  capped tail), or a future surface needs the stream off the review screen (then the
+  now-playing/console pair lifts out as a standalone component over the same `useSession`
+  field).
+
+## The console's fold/select logic is a pure module; its components are thin views
+
+- **Decision:** All non-trivial console behavior lives in `console-model.ts` as pure,
+  React-free functions: pairing a tool `running` event with its later `ok`/`error` outcome,
+  collapsing consecutive same-(kind,label,tool) runs into a counted row, the kind filter plus
+  thinking toggle, the `live`/`notes` mode, and the now-playing label/timer/dim selection.
+  They are exhaustively unit-tested in `live-console.test.tsx` with `bun:test`. The React
+  components (`now-playing.tsx`, `live-console.tsx`, `console-rows.tsx`) own only chrome,
+  toggles, and scroll behavior.
+- **Why:** This mirrors the existing `group.ts`/`group.test.ts` (rail grouping) and
+  `compact.ts` (header scroll state) split. The repo carries no React test renderer
+  (no `@testing-library`), and its DOM tests use happy-dom only for low-level Range work
+  (anchor.test.ts), never component rendering. Pushing the logic into a pure module makes the
+  required behavioral assertions testable directly and fast, with no rendering harness to add:
+  a running Bash call yields its label plus a running flag plus a timer, and a noisy
+  repeated-read-plus-thinking stream collapses the repeats, hides thinking, and narrows under
+  the filter. (Also: `src/ui/tsconfig.json`'s test exclude was widened from `**/*.test.ts` to
+  also cover `**/*.test.tsx`, since the new test is the repo's first `.tsx` test and
+  `bun:test` files must compile only under the bun-typed `tsconfig.test.json`.)
+- **Revisit when:** The components grow logic worth asserting through real rendering (then
+  add `@testing-library/react` plus a happy-dom register, and the pure split stays as the fast
+  inner layer), or a second surface needs the same fold so the model gains a non-UI consumer
+  (it already takes plain `StreamEvent[]`, so that is a lift, not a rewrite).
+
+## `otacon progress` stays as the universal floor + curated highlights
+
+- **Decision:** Now that the transcript tailer (§10a) auto-streams a supported agent's
+  tool calls, text, and thinking to the now-playing console, `otacon progress` is *not*
+  retired. It is reframed to two roles: (a) the **universal floor**, the one activity
+  signal that works on ANY agent, including the long tail with no transcript adapter
+  (hermes, pi, gemini-cli, and whatever ships next), where it is the *only* thing keeping
+  the now-playing bar alive; and (b) occasional **curated highlights / chapter markers**
+  (milestones, phase boundaries, "what I'm about to do next") that read as emphasized
+  dividers in the console. The managed wrapper (`assets.ts`) and DESIGN.md §6/§10 ask for
+  it SPARINGLY on supported agents (the firehose covers routine work) but still require it
+  on the floor. The verb, the `POST /progress` endpoint, the `highlight` stream event, and
+  the activity feed are all unchanged; this is a guidance reframe, not an API change.
+- **Why:** Auto-capture is per-agent and optional by construction (cwd+recency discovery,
+  one adapter per agent, `null` floor), so a signal that depends on it can never be
+  *universal*, and the floor is exactly what guarantees every agent shows *something*.
+  Retiring `progress` would strand every adapter-less agent on a dead bar and throw away a
+  cheap, zero-API, human-authored highlight track that no transcript can synthesize (the
+  agent saying "I'm about to do X" before it does). Reviewer noise from the firehose is the
+  real concern auto-capture introduced, but that is handled in the *display* (run-collapsing,
+  the thinking toggle, the now-playing "latest meaningful event" pick, §10a), not by
+  suppressing capture or leaning back on manual narration. Telling the agent to narrate
+  every step on top of the firehose would double-report routine work; telling it to stop
+  narrating entirely would blind the floor; "sparingly, but always on the floor" is the
+  only framing that holds for both the supported and the unsupported agent.
+- **Revisit when:** Every agent otacon targets has a transcript adapter (then the floor is
+  vestigial and `progress` could collapse to highlights-only), or auto-capture grows a
+  reliable cross-agent fallback (an API/hook handshake) that removes the adapter-less long
+  tail this floor exists for.
+
+## Codex adapter: walk the date-partitioned rollout tree; map the real `exec_command` shape
+
+- **Decision:** The Codex `TranscriptAdapter` locates by recursively walking
+  `$CODEX_HOME/sessions/` (default `~/.codex/sessions/`, CODEX_HOME-aware), collecting every
+  `rollout-*.jsonl`, sorting newest-first by mtime, and returning the first whose leading
+  `session_meta.payload.cwd` equals the repo root. It does **not** derive a per-repo
+  subdirectory the way the Claude adapter does. `parse` reads the envelope
+  `{ timestamp, type, payload }` and maps only `type:"response_item"` payloads: `reasoning`
+  → thinking (flattening `summary[].text`; encrypted-only reasoning yields nothing),
+  assistant `message` → text (user messages skipped), `function_call`/`custom_tool_call` →
+  a `running` tool event, `function_call_output`/`custom_tool_call_output` → its `ok`/`error`
+  outcome (error inferred from a non-zero exit code or `success:false` in a JSON output,
+  else ok). Shell tools (`exec_command` and the older `shell`) render as `Bash: <command>`,
+  pulling the command from `arguments.cmd` (a string) or a `command` array (unwrapping a
+  `bash -lc <script>`); `apply_patch` renders as `Edit <file>` when a path is recoverable.
+- **Why:** Codex's on-disk layout is date-partitioned by session start (`<YYYY>/<MM>/<DD>/`),
+  not keyed by cwd like Claude's dash-encoded project dirs, so there is no cheap directory to
+  jump to — the recorded `session_meta.cwd` is the only authoritative repo key, and reading it
+  per candidate (newest-first, short-circuiting on the first match) is the correct and still
+  cheap discovery. Inspecting real rollouts on disk showed the *current* Codex CLI diverges
+  from the older documented shape: the shell tool is `exec_command` with a string `arguments.cmd`
+  (not the `shell` tool with a `["bash","-lc",…]` array), reasoning is frequently
+  `encrypted_content`-only with an empty `summary`, and `function_call_output.output` is usually
+  plain text rather than a JSON envelope. The adapter handles both the documented and the
+  observed shapes defensively so it survives version churn, and emits nothing (not a noisy
+  empty event) for encrypted-only reasoning. Mapping the running call and its outcome as two
+  appended events preserves the append-only store invariant the pipeline already relies on.
+- **Revisit when:** Walking the whole sessions tree per `locate` becomes a hot path on a
+  machine with thousands of historical rollouts (then index by mtime/most-recent-day first, or
+  cache the meta-cwd scan), Codex moves the session cwd off the leading `session_meta` record,
+  or a future Codex build encrypts assistant/tool content too (then capture needs an API or a
+  decrypt path, not transcript reading).
+
+## OpenCode adapter: tail the local SQLite store read-only, not the `opencode serve` stream
+
+- **Decision:** The OpenCode `TranscriptAdapter` reads OpenCode's **local on-disk storage**,
+  not its `opencode serve` HTTP event stream. On a real install (storage migration 2) that
+  storage is a **SQLite database** at `$XDG_DATA_HOME/opencode/opencode.db` (default
+  `~/.local/share/opencode/`), *not* the documented `storage/{session,message,part}/*.json`
+  tree — most session data now lives in the DB and only `session_diff/*.json` remains as
+  loose files. `locate` opens the DB **read-only** (Node's built-in `node:sqlite`, zero new
+  npm deps) and runs `SELECT id FROM session WHERE directory = ? ORDER BY time_updated DESC`
+  to find the freshest session whose recorded cwd is the repo root, encoding the resolved
+  session id into the handle path as `<db>#<sessionId>` (the `TranscriptHandle` has only a
+  `path`). `parse` queries `part WHERE session_id = ? AND time_created >= watermark ORDER BY
+  time_created`, maps `data.type` `text` → text, `reasoning` → thinking, and `tool` → a
+  `running` event plus, when `state.status` is `completed`/`error`, a SEPARATE `ok`/`error`
+  outcome event. Tool labels mirror the Claude verbs over OpenCode's lowercase tool names
+  (`bash` → `Bash: …`, `read`/`edit`/`write` → `Read/Edit/Write <file>`, `grep`/`glob`,
+  etc.). The whole adapter is fail-soft: a missing `node:sqlite`, a locked/absent/corrupt DB,
+  or a torn `data` JSON is swallowed and the session falls to the floor.
+- **Why:** The HTTP stream would require otacon to spawn and own a long-lived `opencode
+  serve` process per repo — exactly the extra-process, cooperation-required coupling the
+  Claude/Codex adapters were designed to avoid (they read files the agent already writes,
+  no daemon of the agent's needed). Reading the same on-disk store the agent already
+  persists keeps the file-based, no-extra-process, read-only model uniform across all three
+  adapters and survives the agent not running a server at all. Inspecting a real install
+  showed the *current* OpenCode keeps that store in SQLite, not the older JSON-file tree, so
+  the adapter reads the DB directly rather than globbing a `part/` directory that no longer
+  exists. `node:sqlite` is a built-in (no dependency, no native build) and we open it
+  read-only so we never touch the agent's DB.
+- **Cursor — watermark, not byte offset.** The JSONL adapters advance a byte `offset` into a
+  growing file; a SQLite source has no such offset (rows are inserted and tool parts are
+  *mutated in place* as a tool settles). So the OpenCode cursor leaves `offset` unused and
+  carries a high-water `time_created` watermark plus the set of part ids emitted *at exactly*
+  that watermark. Each `parse` asks for `time_created >= watermark` (`>=`, not `>`, so a part
+  inserted in the same millisecond as the prior frontier is not missed), skips any id already
+  in the tie set, emits the rest in `time_created` order, then advances the watermark to the
+  newest time seen and resets the tie set to just the ids at that new frontier — bounded to
+  the frontier, never the whole session. The tailer round-trips this carry untouched, exactly
+  as it does the byte offset, so a dir/DB-tree adapter drops into the same poll loop with no
+  tailer change. A part re-surfaced by a later `time_updated` bump (its tool finishing) is
+  *not* re-read by this watermark — that is acceptable: a tool's outcome detail is a nicety,
+  not a correctness requirement, and re-emitting the running event would violate append-only.
+- **Freshest-by-`time_updated`.** `locate` returns the session with the newest
+  `time_updated` for the cwd, which is the one being actively worked — the right target for a
+  live tailer, even though a cwd with a long history can carry many *empty* abandoned
+  sessions whose `time_updated` is older. (Observed on a real install: the newest session for
+  a repo was an empty 0-part shell; the session with content was a few seconds older. That is
+  fine — an active session accrues parts as work happens and stays the freshest; a dormant
+  repo with only empty sessions has no activity to capture and runs on the floor regardless.)
+- **Revisit when:** OpenCode reverts to (or also writes) the loose JSON-file tree and we want
+  to support both shapes; or `node:sqlite` is unavailable on a runtime otacon must support
+  (it is Node-22+; under bun the test runner lacks it and the adapter degrades to the floor —
+  fine for the daemon, which ships as `node dist/daemon/main.js`, but it means OpenCode
+  capture needs a Node ≥ 22 daemon); or we decide the streamed tool *outcome* matters enough
+  to also watch `part.time_updated` (then the cursor needs an updated-watermark dimension and
+  a dedupe of the already-emitted running event).
 
 ## `revised`/`prior` on re-answer events
 

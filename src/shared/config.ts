@@ -32,6 +32,20 @@ export interface ActivityConfig {
   noteMaxChars: number;
 }
 
+/**
+ * Live-activity stream tuning (the automatic, cross-agent activity stream).
+ * `cap` is how many newest normalized events `stream.jsonl` keeps (and the
+ * snapshot serves); `detailMaxChars` and `labelMaxChars` bound a single event's
+ * redacted body and one-line label, so a high-frequency capture source can
+ * never bloat payloads. First-week tuning guesses, same posture as
+ * `ActivityConfig`.
+ */
+export interface StreamConfig {
+  cap: number;
+  detailMaxChars: number;
+  labelMaxChars: number;
+}
+
 /** Attention notifications (review loop and daemon API). Desktop = a native macOS banner. */
 export interface Notifications {
   desktop: boolean;
@@ -72,6 +86,7 @@ export interface UpdateConfig {
 export interface OtaconConfig {
   budgets: Budgets;
   activity: ActivityConfig;
+  stream: StreamConfig;
   notifications: Notifications;
   worktree: WorktreeConfig;
   plans: PlansConfig;
@@ -96,6 +111,11 @@ export const DEFAULT_CONFIG: OtaconConfig = {
   activity: {
     cap: 20,
     noteMaxChars: 200,
+  },
+  stream: {
+    cap: 2000,
+    detailMaxChars: 600,
+    labelMaxChars: 120,
   },
   notifications: { desktop: true },
   worktree: { dir: "~/.otacon/worktrees" },
@@ -253,6 +273,34 @@ export const CONFIG_SCHEMA: ConfigField[] = [
     default: DEFAULT_CONFIG.activity.noteMaxChars,
     min: 1,
   },
+  // stream — normalized live-activity stream tuning (the automatic, cross-agent activity stream)
+  {
+    section: "stream",
+    key: "cap",
+    label: "Activity stream cap",
+    description: "How many newest normalized stream events stream.jsonl keeps.",
+    type: "int",
+    default: DEFAULT_CONFIG.stream.cap,
+    min: 1,
+  },
+  {
+    section: "stream",
+    key: "detailMaxChars",
+    label: "Stream detail max characters",
+    description: "Server-side truncation length for a stream event's redacted detail body.",
+    type: "int",
+    default: DEFAULT_CONFIG.stream.detailMaxChars,
+    min: 1,
+  },
+  {
+    section: "stream",
+    key: "labelMaxChars",
+    label: "Stream label max characters",
+    description: "Server-side cap for a stream event's one-line label.",
+    type: "int",
+    default: DEFAULT_CONFIG.stream.labelMaxChars,
+    min: 1,
+  },
   // notifications — attention banners (review loop and daemon API)
   {
     section: "notifications",
@@ -371,6 +419,7 @@ function overlayConfig(base: OtaconConfig, raw: unknown, source: string): Otacon
   const merged: OtaconConfig = {
     budgets: { ...base.budgets },
     activity: { ...base.activity },
+    stream: { ...base.stream },
     notifications: { ...base.notifications },
     worktree: { ...base.worktree },
     plans: { ...base.plans },
@@ -396,8 +445,8 @@ function overlayConfig(base: OtaconConfig, raw: unknown, source: string): Otacon
  * (`<repo>/.otacon/config.json`, team-shared) ← project.local
  * (`<repo>/.otacon/config.local.json`, personal). Closest wins. Loaded fresh
  * on every use so tuning takes effect immediately. Each file is overlaid field
- * by field against CONFIG_SCHEMA (budgets, activity, notifications, worktree,
- * plans, update).
+ * by field against CONFIG_SCHEMA (budgets, activity, stream, notifications,
+ * worktree, plans, update).
  */
 export function loadConfig(repoRoot?: string): OtaconConfig {
   const overlay = (source: string, into: OtaconConfig): OtaconConfig =>

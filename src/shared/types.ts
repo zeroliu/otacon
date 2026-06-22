@@ -35,7 +35,11 @@ export const SESSION_STATUSES: readonly SessionStatus[] = [
  * defers the finalize while the agent folds the open comments in, so its next
  * `submit` must still mutate the session. The single source of truth — the app
  * guard and the CLI resolver both derive from this, so they can never disagree
- * about what "over" means.
+ * about what "over" means. Terminal is no longer strictly one-way: a finished
+ * session can be REOPENED back to `revising` via `POST /api/sessions/:id/reopen`
+ * (a later `/otacon` run from inside the build worktree amends it in place
+ * instead of spawning a second worktree). Terminal means "over until explicitly
+ * reopened", not "forever".
  */
 export const TERMINAL_STATUSES: readonly SessionStatus[] = [
   "approved",
@@ -61,6 +65,13 @@ export interface RegistrySession {
    * to SessionSummary so the home card can surface the link (approval and archive lifecycle).
    */
   prUrl?: string;
+  /**
+   * The Implement build's worktree + branch, recorded when the session flips to
+   * `implementing` (deterministic from slug + worktree.dir). Lets a later
+   * `/otacon` run from inside that worktree reopen this same session to amend it
+   * in place. Absent until a build is approved.
+   */
+  impl?: { worktree: string; branch: string };
 }
 
 export interface RegistryFile {
@@ -114,6 +125,43 @@ export interface ActivityFile {
   notes: ActivityNote[];
 }
 
+/**
+ * The kind of a live-stream event (the automatic, cross-agent activity stream).
+ * `tool`, `text`, and `thinking` are what future transcript adapters emit;
+ * `highlight` is an `otacon progress` note, routed into the same stream so a
+ * manual narration sits inline with the captured activity.
+ */
+export type StreamKind = "tool" | "text" | "thinking" | "highlight";
+
+/**
+ * One normalized entry in a session's append-only live-activity stream
+ * (.otacon/<id>/stream.jsonl). The daemon assigns `seq` (monotonic per session)
+ * and stamps `at`; the normalizer redacts secrets out of `detail`, truncates it
+ * and `label` to the configured caps, so a high-frequency capture source can
+ * never bloat payloads or leak a key. `tool` carries the raw tool name when
+ * `kind === "tool"`; `status` tracks a tool call's lifecycle.
+ */
+export interface StreamEvent {
+  /** Daemon-assigned, monotonic per session. */
+  seq: number;
+  /** ISO timestamp the daemon stamped. */
+  at: string;
+  kind: StreamKind;
+  /** One-line, capped: "Read src/auth.ts" · "Bash: bun test" · "thinking…". */
+  label: string;
+  /** Truncated + redacted body, expandable in the UI; absent when there is none. */
+  detail?: string;
+  /** Raw tool name when `kind === "tool"`. */
+  tool?: string;
+  status?: "running" | "ok" | "error";
+}
+
+/** .otacon/<id>/stream.jsonl — the append-only, capped, newest-last live stream. */
+export interface StreamFile {
+  version: 1;
+  events: StreamEvent[];
+}
+
 /** W3C-annotation-style anchor; null anchor on an event item = whole-plan. */
 export interface Anchor {
   section: string;
@@ -126,6 +174,8 @@ export interface CommentItem {
   thread: string;
   anchor: Anchor | null;
   body: string;
+  /** Root comment thread this follows up on (threaded review and revision); absent on a root comment. */
+  replyTo?: string;
 }
 
 export type EventPayload =
@@ -171,13 +221,19 @@ export type EventPayload =
 
 /**
  * One review thread, persisted in .otacon/<id>/threads.json (threaded review and revision).
- * Comment threads come from comment batches (one per item) and gain a
- * `resolution` from the agent's resolutions on resubmit (lint L5); question
- * threads gain an `answer` when the agent runs `otacon answer`. A follow-up
- * question is its own thread linked to the root by `replyTo` (threaded review and revision):
- * it inherits the root's anchor, so a whole conversation groups, jumps, and
- * orphans as one unit. `anchorState` "orphaned" means re-anchoring lost the
- * quote in the current revision; absent = anchored.
+ * Comment threads come from comment batches (one per item) and gain a `reply`
+ * from the agent's resolutions on resubmit (lint L5) — that reply is a *response*,
+ * not a close; question threads gain an `answer` when the agent runs `otacon
+ * answer`. A conversation root closes only when the **reviewer** sets `resolved`
+ * (the new Resolve verb), which doubles as the comment-withdraw path: a resolved
+ * comment no longer owes a reply (L5 skips it) and no longer counts unresolved at
+ * approve. A follow-up — comment OR question — is its own thread linked to the
+ * root by `replyTo` (threaded review and revision): it inherits the root's anchor,
+ * so a whole conversation groups, jumps, and orphans as one unit. A follow-up
+ * comment turns a one-shot comment into a conversation; L5 demands a reply per
+ * un-replied turn, and resolving the root withdraws every turn at once.
+ * `anchorState` "orphaned" means re-anchoring lost the quote in the current
+ * revision; absent = anchored.
  */
 export type Thread =
   | {
@@ -188,7 +244,12 @@ export type Thread =
       anchorState?: "orphaned";
       body: string;
       createdAt: string;
-      resolution?: { body: string; revision: number; resolvedAt: string };
+      /** Root comment id this follows up on; absent on a root comment. */
+      replyTo?: string;
+      /** The agent's response, landed on resubmit (lint L5); not a close. */
+      reply?: { body: string; revision: number; repliedAt: string };
+      /** The reviewer closed this conversation (Resolve verb); lives on the root. */
+      resolved?: { revision: number; at: string };
     }
   | {
       id: string; // q<n>
@@ -200,12 +261,14 @@ export type Thread =
       /** Root question id this follows up on; absent on a root question. */
       replyTo?: string;
       answer?: { body: string; answeredAt: string };
+      /** The reviewer closed this conversation (Resolve verb); lives on the root. */
+      resolved?: { revision: number; at: string };
     };
 
 /**
  * The agent-written revision-accompaniment document (resolutions.json,
- * submitted with a revision: `threads` maps comment-thread ids to resolution replies
- * (lint L5); `changelog` is the agent's summary of the revision (required on
+ * submitted with a revision: `threads` maps comment-thread ids to the agent's
+ * replies (lint L5); `changelog` is the agent's summary of the revision (required on
  * revisions ≥ 2, threaded review and revision layer 1).
  */
 export interface Resolutions {

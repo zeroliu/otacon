@@ -387,6 +387,140 @@ describe("comments and questions", () => {
   });
 });
 
+describe("comment follow-ups (a comment becomes a conversation)", () => {
+  test("a follow-up links to the root, inherits its anchor/orphan, and the event carries replyTo", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [{ anchor: { section: "phase-1", exact: "RS256" }, body: "why RS256?" }], // t1
+    });
+    // Drain the root's comments event so the next /events returns the follow-up.
+    await app.request(`/api/sessions/${session.id}/events`);
+
+    const res = await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [
+        {
+          replyTo: "t1",
+          anchor: { section: "decisions", exact: "ignored" }, // ignored on a follow-up
+          body: "still unconvinced",
+        },
+      ],
+    });
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ ok: true, batch: "b2", threads: ["t2"], seq: 2 });
+    // A follow-up is still a revision request.
+    expect(store.getSession(session.id)?.status).toBe("revising");
+
+    const threads = (await (await app.request(`/api/sessions/${session.id}/threads`)).json()) as {
+      threads: { id: string; replyTo?: string; anchor: unknown }[];
+    };
+    const followup = threads.threads.find((t) => t.id === "t2");
+    expect(followup?.replyTo).toBe("t1");
+    // Inherited the root's anchor; the client-sent anchor was ignored.
+    expect(followup?.anchor).toEqual({ section: "phase-1", exact: "RS256" });
+
+    const event = await app.request(`/api/sessions/${session.id}/events`);
+    expect(await event.json()).toEqual({
+      event: "comments",
+      session: session.id,
+      batch: "b2",
+      items: [
+        {
+          thread: "t2",
+          anchor: { section: "phase-1", exact: "RS256" },
+          body: "still unconvinced",
+          replyTo: "t1",
+        },
+      ],
+    });
+  });
+
+  test("a follow-up on a follow-up collapses to the same root", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ anchor: null, body: "root" }] }); // t1
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ replyTo: "t1", body: "f1" }] }); // t2
+    const res = await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [{ replyTo: "t2", body: "f2" }], // t3 follows t2, keys on root t1
+    });
+    expect(res.status).toBe(202);
+    const threads = (await (await app.request(`/api/sessions/${session.id}/threads`)).json()) as {
+      threads: { id: string; replyTo?: string }[];
+    };
+    expect(threads.threads.find((t) => t.id === "t3")?.replyTo).toBe("t1");
+  });
+
+  test("a batch may mix a new comment and a follow-up", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [{ anchor: { section: "phase-1", exact: "RS256" }, body: "root" }], // t1
+    });
+    const res = await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [
+        { anchor: null, body: "a fresh nit" }, // t2: new root
+        { replyTo: "t1", body: "and on the first one" }, // t3: follow-up of t1
+      ],
+    });
+    expect(await res.json()).toEqual({ ok: true, batch: "b2", threads: ["t2", "t3"], seq: 2 });
+    const threads = (await (await app.request(`/api/sessions/${session.id}/threads`)).json()) as {
+      threads: { id: string; replyTo?: string; anchor: unknown }[];
+    };
+    const t2 = threads.threads.find((t) => t.id === "t2");
+    const t3 = threads.threads.find((t) => t.id === "t3");
+    expect(t2?.replyTo).toBeUndefined();
+    expect(t2?.anchor).toBeNull();
+    expect(t3?.replyTo).toBe("t1");
+    expect(t3?.anchor).toEqual({ section: "phase-1", exact: "RS256" });
+  });
+
+  test("replyTo to an unknown or non-comment id is a 404 E_UNKNOWN_COMMENT, no id burned", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ body: "c" }] }); // t1
+    await postJson(`/api/sessions/${session.id}/questions`, { body: "q" }); // q1
+
+    const unknown = await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [{ replyTo: "t9", body: "x" }],
+    });
+    expect(unknown.status).toBe(404);
+    expect(((await unknown.json()) as { error: { code: string } }).error.code).toBe(
+      "E_UNKNOWN_COMMENT",
+    );
+    // A question thread is not a comment — a comment follow-up can't link to it.
+    const question = await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [{ replyTo: "q1", body: "x" }],
+    });
+    expect(question.status).toBe(404);
+    const nonString = await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [{ replyTo: 7, body: "x" }],
+    });
+    expect(nonString.status).toBe(400);
+    const empty = await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [{ replyTo: "", body: "x" }],
+    });
+    expect(empty.status).toBe(400);
+
+    // A real root still mints the next id — no t was burned by the rejects.
+    const ok = await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [{ replyTo: "t1", body: "real" }],
+    });
+    expect(((await ok.json()) as { threads: string[] }).threads).toEqual(["t2"]);
+  });
+
+  test("a finalizing session refuses a follow-up too (E_ALREADY_FINALIZING)", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/submit`, { plan: validPlanFor(session.id) });
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ anchor: null, body: "open" }] }); // t1
+    await postJson(`/api/sessions/${session.id}/approve`, { sendOpenComments: true });
+    await app.request(`/api/sessions/${session.id}/events`); // drain the final batch
+
+    const res = await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [{ replyTo: "t1", body: "one more thought" }],
+    });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+      "E_ALREADY_FINALIZING",
+    );
+  });
+});
+
 describe("threads", () => {
   test("comments and questions persist threads, readable via GET /threads", async () => {
     const session = mintSession();
@@ -549,6 +683,78 @@ describe("threads", () => {
     // A real root still mints the next id — no q was burned by the rejects.
     const ok = await postJson(`/api/sessions/${session.id}/questions`, { replyTo: "q1", body: "real" });
     expect(((await ok.json()) as { id: string }).id).toBe("q2");
+  });
+});
+
+describe("the reviewer Resolve route (POST .../threads/:tid/resolve)", () => {
+  const resolve = (id: string, tid: string, body: unknown) =>
+    postJson(`/api/sessions/${id}/threads/${tid}/resolve`, body);
+
+  test("a 202 + a `thread` SSE upsert carrying the reviewer close", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/submit`, { plan: validPlanFor(session.id) });
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ body: "a nit" }] }); // t1
+    const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
+    await reader.next(); // snapshot
+
+    const res = await resolve(session.id, "t1", { resolved: true });
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ ok: true });
+
+    const frame = await reader.next();
+    expect(frame.event).toBe("thread");
+    expect(frame.data).toMatchObject({
+      session: session.id,
+      thread: { id: "t1", kind: "comment", resolved: { revision: 1 } },
+    });
+
+    // It's durable: the close is on disk.
+    const threads = (await (await app.request(`/api/sessions/${session.id}/threads`)).json()) as {
+      threads: { id: string; resolved?: { revision: number } }[];
+    };
+    expect(threads.threads.find((t) => t.id === "t1")?.resolved?.revision).toBe(1);
+    await reader.cancel();
+  });
+
+  test("resolved:false reopens the thread", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/submit`, { plan: validPlanFor(session.id) });
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ body: "a nit" }] }); // t1
+    await resolve(session.id, "t1", { resolved: true });
+    const res = await resolve(session.id, "t1", { resolved: false });
+    expect(res.status).toBe(202);
+    const threads = (await (await app.request(`/api/sessions/${session.id}/threads`)).json()) as {
+      threads: { id: string; resolved?: unknown }[];
+    };
+    expect(threads.threads.find((t) => t.id === "t1")?.resolved).toBeUndefined();
+  });
+
+  test("an unknown thread id is a 404 E_UNKNOWN_THREAD", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/submit`, { plan: validPlanFor(session.id) });
+    const res = await resolve(session.id, "t9", { resolved: true });
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("E_UNKNOWN_THREAD");
+    const noSession = await resolve("otc_zzzzzz", "t1", { resolved: true });
+    expect(noSession.status).toBe(404);
+  });
+
+  test("a non-boolean `resolved` is a 400", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/submit`, { plan: validPlanFor(session.id) });
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ body: "a nit" }] }); // t1
+    expect((await resolve(session.id, "t1", {})).status).toBe(400);
+    expect((await resolve(session.id, "t1", { resolved: "yes" })).status).toBe(400);
+  });
+
+  test("Resolve refuses a terminal (approved) session with E_SESSION_OVER", async () => {
+    const session = mintSession();
+    await postJson(`/api/sessions/${session.id}/submit`, { plan: validPlanFor(session.id) });
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ body: "a nit" }] }); // t1
+    expect((await postJson(`/api/sessions/${session.id}/approve`, { force: true })).status).toBe(200);
+    const res = await resolve(session.id, "t1", { resolved: true });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("E_SESSION_OVER");
   });
 });
 
@@ -981,9 +1187,9 @@ describe("the revise loop: L5, resolutions, changelog, re-anchoring (M3)", () =>
     expect(body.resolved).toEqual(["t1"]);
 
     const threads = (await (await app.request(`/api/sessions/${session.id}/threads`)).json()) as {
-      threads: { id: string; resolution?: { body: string; revision: number } }[];
+      threads: { id: string; reply?: { body: string; revision: number } }[];
     };
-    expect(threads.threads[0]?.resolution).toMatchObject({
+    expect(threads.threads[0]?.reply).toMatchObject({
       body: "RS256 verifiers only need the public key.",
       revision: 2,
     });
@@ -1436,16 +1642,27 @@ describe("progress and live activity (live-agent-activity)", () => {
     expect(detail.latestActivity?.text).toBe("reading the auth module");
   });
 
-  test("a progress note pushes an activity frame, then a session frame for the chip", async () => {
+  test("a progress note pushes an activity frame, a stream highlight, then a session frame for the chip", async () => {
     const session = mintSession();
     const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
     const snapshot = await reader.next();
     expect((snapshot.data as { activity: unknown[] }).activity).toEqual([]);
+    expect((snapshot.data as { stream: unknown[] }).stream).toEqual([]);
 
     await progress(session.id, "drafting plan");
     const activityFrame = await reader.next();
     expect(activityFrame.event).toBe("activity");
     expect((activityFrame.data as { note: { text: string } }).note.text).toBe("drafting plan");
+    // The same note flows into the new live-activity stream as a `highlight`
+    // (live-agent-activity), with a daemon-assigned seq.
+    const streamFrame = await reader.next();
+    expect(streamFrame.event).toBe("stream");
+    const events = (streamFrame.data as { events: { kind: string; label: string; seq: number }[] })
+      .events;
+    expect(events).toHaveLength(1);
+    expect(events[0]?.kind).toBe("highlight");
+    expect(events[0]?.label).toBe("drafting plan");
+    expect(events[0]?.seq).toBe(1);
     // The draft chip rides the session frame's latestActivity (review UI).
     const sessionFrame = await reader.next();
     expect(sessionFrame.event).toBe("session");
@@ -1454,6 +1671,39 @@ describe("progress and live activity (live-agent-activity)", () => {
     ).session;
     expect(summary.latestActivity?.text).toBe("drafting plan");
     expect(typeof summary.lastContactAt).toBe("number");
+    await reader.cancel();
+  });
+
+  test("progress highlights land in the per-session stream snapshot, oldest first, with monotonic seq", async () => {
+    const session = mintSession();
+    await progress(session.id, "one");
+    await progress(session.id, "two");
+    const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
+    const snapshot = await reader.next();
+    const stream = (snapshot.data as { stream: { kind: string; label: string; seq: number }[] })
+      .stream;
+    expect(stream.map((e) => e.label)).toEqual(["one", "two"]);
+    expect(stream.every((e) => e.kind === "highlight")).toBeTrue();
+    expect(stream.map((e) => e.seq)).toEqual([1, 2]);
+    await reader.cancel();
+  });
+
+  test("a progress note carrying an API key and a ~5 KB body: redacted + truncated in the stream detail", async () => {
+    const session = mintSession();
+    const secret = "sk-abcdEFGHijklMNOPqrstUVWX1234567890";
+    const note = `deploying with token=${secret} ` + "X".repeat(5000);
+    await progress(session.id, note);
+    const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
+    const snapshot = await reader.next();
+    const event = (
+      snapshot.data as { stream: { kind: string; detail?: string; label: string }[] }
+    ).stream[0];
+    expect(event?.kind).toBe("highlight");
+    const detail = event?.detail ?? "";
+    expect(detail).not.toContain(secret);
+    expect(detail).toContain("[redacted]");
+    // Truncated to the configured stream detail cap (default 600), not the 5 KB body.
+    expect(detail.length).toBeLessThanOrEqual(600);
     await reader.cancel();
   });
 
@@ -1520,6 +1770,87 @@ describe("progress and live activity (live-agent-activity)", () => {
   });
 });
 
+describe("transcript tailer lifecycle (live-progress-activity-redesign)", () => {
+  // A stub tailer factory records start/stop per repo so the test observes the
+  // lifecycle wiring without a real fs poll or any ~/.claude dependency.
+  type Stub = { start(): void; stop(): void; started: number; stopped: number };
+  function tailedApp() {
+    const stubs: Stub[] = [];
+    const tailed = createApp({
+      store,
+      uiDir,
+      presence,
+      makeTailer: () => {
+        const stub: Stub = {
+          started: 0,
+          stopped: 0,
+          start() {
+            this.started += 1;
+          },
+          stop() {
+            this.stopped += 1;
+          },
+        };
+        stubs.push(stub);
+        return stub;
+      },
+    });
+    return { tailed, stubs };
+  }
+  const post = (a: Hono<{ Bindings: NodeBindings }>, path: string, body: unknown = {}) =>
+    a.request(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+  test("creating a session starts exactly one tailer", async () => {
+    const { tailed, stubs } = tailedApp();
+    const res = await post(tailed, "/api/sessions", { title: "tailed", repo });
+    expect(res.status).toBe(201);
+    expect(stubs).toHaveLength(1);
+    expect(stubs[0]?.started).toBe(1);
+    expect(stubs[0]?.stopped).toBe(0);
+  });
+
+  test("Save (approve) stops the tailer; the session is terminal", async () => {
+    const { tailed, stubs } = tailedApp();
+    const { id } = (await (await post(tailed, "/api/sessions", { title: "t", repo })).json()) as { id: string };
+    await tailed.request(`/api/sessions/${id}/submit`, { method: "POST", body: validPlanFor(id) });
+    const approved = await post(tailed, `/api/sessions/${id}/approve`, {});
+    expect(approved.status).toBe(200);
+    expect(stubs[0]?.stopped).toBe(1);
+  });
+
+  test("Implement keeps the tailer alive until implement-done", async () => {
+    const { tailed, stubs } = tailedApp();
+    const { id } = (await (await post(tailed, "/api/sessions", { title: "t", repo })).json()) as { id: string };
+    await tailed.request(`/api/sessions/${id}/submit`, { method: "POST", body: validPlanFor(id) });
+    await post(tailed, `/api/sessions/${id}/approve`, { implement: true });
+    expect(stubs[0]?.stopped).toBe(0); // still building → still tailing
+    await post(tailed, `/api/sessions/${id}/implement-done`, { pr: "https://example.com/pr/1" });
+    expect(stubs[0]?.stopped).toBe(1); // build over → tailer torn down
+  });
+
+  test("deleting a session stops the tailer", async () => {
+    const { tailed, stubs } = tailedApp();
+    const { id } = (await (await post(tailed, "/api/sessions", { title: "t", repo })).json()) as { id: string };
+    await tailed.request(`/api/sessions/${id}`, { method: "DELETE" });
+    expect(stubs[0]?.stopped).toBe(1);
+  });
+
+  test("FLOOR: with no adapter, no tailer activity occurs yet progress still streams", async () => {
+    // The default app (no makeTailer override) uses the real Tailer; the temp
+    // repo has no ~/.claude transcript, so findAdapter returns null and the
+    // tailer no-ops. The progress floor must be entirely unaffected.
+    const session = mintSession();
+    const res = await postJson(`/api/sessions/${session.id}/progress`, { note: "floor still flows" });
+    expect(res.status).toBe(200);
+    // The highlight landed in the stream snapshot — the floor is intact.
+    const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
+    const snapshot = await reader.next();
+    const stream = (snapshot.data as { stream: { kind: string; label: string }[] }).stream;
+    expect(stream.some((e) => e.kind === "highlight" && e.label === "floor still flows")).toBe(true);
+    await reader.cancel();
+  });
+});
+
 describe("approve and the status machine (M4)", () => {
   const submitValid = async (id: string) => {
     const res = await app.request(`/api/sessions/${id}/submit`, {
@@ -1559,6 +1890,75 @@ describe("approve and the status machine (M4)", () => {
     await submitValid(session.id);
     await postJson(`/api/sessions/${session.id}/questions`, { body: "open question" });
     await postJson(`/api/sessions/${session.id}/questions/q1/answer`, { body: "answered" });
+    expect((await approve(session.id)).status).toBe(200);
+  });
+
+  test("a responded-but-unresolved comment STILL counts unresolved (a reply is not a close)", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [{ anchor: { section: "phase-1", exact: "RS256 JWTs from the auth service" }, body: "why not ES256?" }],
+    });
+    // The agent replies on a clean r2 — a response, not a close.
+    await postJson(`/api/sessions/${session.id}/submit`, {
+      plan: validPlanFor(session.id),
+      resolutions: { changelog: "Explained the choice.", threads: { t1: "Kept RS256." } },
+    });
+    const refused = await approve(session.id);
+    expect(refused.status).toBe(409);
+    expect(((await refused.json()) as { unresolved: number }).unresolved).toBe(1);
+  });
+
+  test("a reviewer-Resolved comment does NOT count unresolved", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ body: "a nit" }] }); // t1
+    await postJson(`/api/sessions/${session.id}/threads/t1/resolve`, { resolved: true });
+    expect((await approve(session.id)).status).toBe(200);
+  });
+
+  test("an unanswered ask counts; an unanswered-but-Resolved ask does NOT", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await postJson(`/api/sessions/${session.id}/questions`, { body: "open question" }); // q1
+    const refused = await approve(session.id);
+    expect(refused.status).toBe(409);
+    expect(((await refused.json()) as { unresolved: number }).unresolved).toBe(1);
+    // The reviewer Resolves the ask instead of waiting for an answer.
+    await postJson(`/api/sessions/${session.id}/threads/q1/resolve`, { resolved: true });
+    expect((await approve(session.id)).status).toBe(200);
+  });
+
+  test("resolving a question root clears its unanswered follow-up too (count keys on the root)", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await postJson(`/api/sessions/${session.id}/questions`, { body: "root question" }); // q1
+    await postJson(`/api/sessions/${session.id}/questions`, { replyTo: "q1", body: "follow up" }); // q2
+    // Two unanswered turns in ONE conversation → counts once (per-conversation).
+    const refused = await approve(session.id);
+    expect(refused.status).toBe(409);
+    expect(((await refused.json()) as { unresolved: number }).unresolved).toBe(1);
+    // Resolving the ROOT clears the whole chain — the follow-up keys on q1.
+    await postJson(`/api/sessions/${session.id}/threads/q1/resolve`, { resolved: true });
+    expect((await approve(session.id)).status).toBe(200);
+  });
+
+  test("a multi-turn comment conversation counts once; resolving the root drops it to 0", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await postJson(`/api/sessions/${session.id}/comments`, { items: [{ body: "root nit" }] }); // t1
+    await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [{ replyTo: "t1", body: "still wrong" }], // t2
+    });
+    await postJson(`/api/sessions/${session.id}/comments`, {
+      items: [{ replyTo: "t2", body: "and again" }], // t3 → collapses to root t1
+    });
+    // Three turns, one conversation → exactly 1 unresolved.
+    const refused = await approve(session.id);
+    expect(refused.status).toBe(409);
+    expect(((await refused.json()) as { unresolved: number }).unresolved).toBe(1);
+    // Resolving the ROOT withdraws the whole conversation → approve passes.
+    await postJson(`/api/sessions/${session.id}/threads/t1/resolve`, { resolved: true });
     expect((await approve(session.id)).status).toBe(200);
   });
 
@@ -1943,6 +2343,126 @@ describe("Approve & Implement and the implement lifecycle (implement-approved-pl
     expect((await implementDone(session.id, { failed: "yes" })).status).toBe(400);
     // The session is still implementing — a rejected report changed nothing.
     expect(await statusOf(session.id)).toBe("implementing");
+  });
+
+  test("approve {implement:true} records the build worktree + branch on the session", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await approve(session.id, { implement: true });
+
+    // slugify("e2e plan") === "e2e-plan"; the worktree dir defaults to
+    // ~/.otacon/worktrees, so the recorded path ends in the slug and the
+    // branch follows otacon/impl-<slug>.
+    const impl = store.getSession(session.id)?.impl;
+    expect(impl).toBeDefined();
+    expect(impl?.worktree.endsWith("e2e-plan")).toBeTrue();
+    expect(impl?.branch).toBe("otacon/impl-e2e-plan");
+
+    // It surfaces on the detail route too.
+    const detail = (await (await app.request(`/api/sessions/${session.id}`)).json()) as {
+      impl?: { worktree: string; branch: string };
+    };
+    expect(detail.impl?.branch).toBe("otacon/impl-e2e-plan");
+  });
+
+  test("a plain approve (Save) records no impl", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await approve(session.id);
+    expect(store.getSession(session.id)?.impl).toBeUndefined();
+  });
+});
+
+describe("reopen a terminal session (resurrect-plan-amend)", () => {
+  const submitValid = async (id: string) => {
+    const res = await app.request(`/api/sessions/${id}/submit`, {
+      method: "POST",
+      body: validPlanFor(id),
+    });
+    expect(res.status).toBe(200);
+  };
+  const approve = (id: string, body: unknown = {}) =>
+    postJson(`/api/sessions/${id}/approve`, body);
+  const implementDone = (id: string, body: unknown = {}) =>
+    postJson(`/api/sessions/${id}/implement-done`, body);
+  const reopen = (id: string) => postJson(`/api/sessions/${id}/reopen`, {});
+  const statusOf = async (id: string): Promise<string> =>
+    ((await (await app.request(`/api/sessions/${id}`)).json()) as { status: string }).status;
+
+  test("reopen flips an implemented session back to revising and keeps impl", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await approve(session.id, { implement: true });
+    await implementDone(session.id, { pr: "https://example.test/pr/7" });
+    expect(await statusOf(session.id)).toBe("implemented");
+
+    const revisionBefore = store.readState(session.id).revision;
+    const res = await reopen(session.id);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      status: string;
+      revision: number;
+      lastReviewedRevision: number;
+      impl: { worktree: string; branch: string } | null;
+      prUrl: string | null;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.status).toBe("revising");
+    // Revision is unchanged; the baseline is pinned at the approved revision.
+    expect(body.revision).toBe(revisionBefore);
+    expect(body.lastReviewedRevision).toBe(revisionBefore);
+    expect(store.readState(session.id).lastReviewedRevision).toBe(revisionBefore);
+    expect(store.readState(session.id).revision).toBe(revisionBefore);
+    // impl survives the reopen.
+    expect(body.impl?.branch).toBe("otacon/impl-e2e-plan");
+    expect(store.getSession(session.id)?.impl?.branch).toBe("otacon/impl-e2e-plan");
+    // The session is back to active (revising), mutating verbs re-open.
+    expect(await statusOf(session.id)).toBe("revising");
+  });
+
+  test("reopen preserves prUrl set at implement-done", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await approve(session.id, { implement: true });
+    await implementDone(session.id, { pr: "https://example.test/pr/99" });
+    expect(store.getSession(session.id)?.prUrl).toBe("https://example.test/pr/99");
+
+    const res = await reopen(session.id);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { prUrl: string | null };
+    expect(body.prUrl).toBe("https://example.test/pr/99");
+    // It is still on the registry session after the flip.
+    expect(store.getSession(session.id)?.prUrl).toBe("https://example.test/pr/99");
+  });
+
+  test("reopen works on a plain-approved (terminal, Save) session too", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await approve(session.id);
+    expect(await statusOf(session.id)).toBe("approved");
+    const res = await reopen(session.id);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { status: string }).status).toBe("revising");
+    expect(await statusOf(session.id)).toBe("revising");
+  });
+
+  test("reopen refuses a non-terminal session with E_NOT_REOPENABLE", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    // in_review (the default after a first submit) is non-terminal.
+    expect(await statusOf(session.id)).toBe("in_review");
+    const res = await reopen(session.id);
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+      "E_NOT_REOPENABLE",
+    );
+    // Unchanged: the refusal mutated nothing.
+    expect(await statusOf(session.id)).toBe("in_review");
+  });
+
+  test("reopen 404s an unknown session", async () => {
+    expect((await reopen("otc_zzzzzz")).status).toBe(404);
   });
 });
 

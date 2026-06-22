@@ -14,18 +14,19 @@
 import type { MouseEvent, ReactNode, RefObject } from "react";
 import { Component, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { accentStyle } from "./accent";
-import type { ActivityNote, Anchor, CommentDraft, LiveSession, Thread, TranscriptEntry } from "./api";
+import type { Anchor, CommentDraft, LiveSession, StreamEvent, Thread, TranscriptEntry } from "./api";
 import {
+  postCommentFollowup,
   postComments,
   postFollowup,
   postQuestion,
+  postResolve,
   postReviewed,
   useDiff,
   usePresence,
   useRevision,
   useSession,
 } from "./api";
-import { ActivityLog } from "./review/activity";
 import {
   captureSelection,
   clearThreadHighlights,
@@ -49,6 +50,9 @@ import { ReviewHeader } from "./review/header";
 import type { InterviewTarget } from "./review/interview";
 import { InterviewPanel } from "./review/interview";
 import { useKeyboardInset, useScrollLock } from "./review/keyboard";
+import { isAgentActive } from "./review/console-model";
+import { LiveConsole } from "./review/live-console";
+import { NowPlaying } from "./review/now-playing";
 import { ThreadsRail } from "./review/rail";
 import type { SectionMenuState } from "./review/section-menu";
 import { SectionMenu } from "./review/section-menu";
@@ -131,19 +135,20 @@ const COMPOSER_GUESS_HEIGHT = 240;
 // opened a desktop popover anchored off-thumb would otherwise sit at 560–639px.
 const SHEET_VIEWPORT = 640;
 
-/** The review loop: plan + rail + grill + interview + activity + approve + composer + drawer. */
+/** The review loop: plan + rail + grill + interview + now-playing/console + approve + composer + drawer. */
 function ReviewLoop({
   session,
   threads,
   transcript,
-  activity,
+  stream,
   connected,
   now,
 }: {
   session: LiveSession;
   threads: Thread[];
   transcript: TranscriptEntry[];
-  activity: ActivityNote[];
+  /** The normalized live-activity stream (§10a) powering the bar + console. */
+  stream: StreamEvent[];
   connected: boolean;
   /** A ticking clock for the presence dot + activity timestamps. */
   now: number;
@@ -194,6 +199,28 @@ function ReviewLoop({
   // off the per-keystroke `litEntries` identity (updated in the paint effect).
   const litRef = useRef<LitThread[]>([]);
   const hasPlan = session.revision > 0;
+  // The now-playing bar is always present while the agent is active OR any
+  // stream event exists, including pre-plan research, exactly when the user is
+  // waiting and the old buried fold hid the work. Only a truly idle session with
+  // an empty stream (e.g. an over session that never captured anything) drops it.
+  const agentActive = isAgentActive(session.status);
+  const showNowPlaying = agentActive || stream.length > 0;
+  // The console auto-expands while the agent is actively producing the firehose
+  // worth watching, namely `draft` (pre-plan research + drafting) and
+  // `implementing` (building the approved plan), and collapses to the bar in
+  // `in_review` and other resting states. The user can toggle freely; a status
+  // *crossing* re-applies the auto decision (draft to in_review collapses; a
+  // later implementing re-opens), so the console follows the work without
+  // trapping a manual choice across a phase change.
+  const autoOpen = session.status === "draft" || session.status === "implementing";
+  const [consoleOpen, setConsoleOpen] = useState(autoOpen);
+  const lastAutoOpen = useRef(autoOpen);
+  useEffect(() => {
+    if (autoOpen !== lastAutoOpen.current) {
+      lastAutoOpen.current = autoOpen;
+      setConsoleOpen(autoOpen);
+    }
+  }, [autoOpen]);
   // Over = the session reached a terminal state (approval and archive lifecycle: approved /
   // implemented / implement_failed): the whole screen goes read-only — no
   // selection anchoring, no composer, no drawer, no cards. `implementing` is NOT
@@ -310,13 +337,31 @@ function ReviewLoop({
   // (null/quote-less) anchors are never lit — no text to paint (review UI).
   const litEntries = useMemo<LitThread[]>(() => {
     const lit: LitThread[] = [];
+    // Conversation roots the reviewer closed (Resolve lives on the root). A
+    // follow-up turn keys on its root, so a resolved root clears the whole chain.
+    const resolvedRoots = new Set(threads.filter((t) => t.resolved).map((t) => t.id));
+    // Mark is carried by the conversation ROOT, lit once per conversation (not
+    // once per turn — every turn shares the root's anchor). A question root with
+    // an unanswered follow-up still owes an answer, so owe-status spans all turns.
+    const owesAnswer = new Set(
+      threads
+        .filter((t) => t.kind === "question" && t.answer === undefined)
+        .map((t) => t.replyTo ?? t.id),
+    );
     for (const thread of threads) {
       if (thread.anchorState === "orphaned" || !thread.anchor?.exact) continue;
+      // Only roots carry the mark; a follow-up turn inherits the root's anchor and
+      // would just re-light the same quote, so skip it (the root covers the chain).
+      if (thread.replyTo !== undefined) continue;
+      if (resolvedRoots.has(thread.id)) continue; // reviewer closed the whole conversation
       if (thread.kind === "question") {
-        if (thread.answer === undefined) {
+        // A question conversation's mark clears once every turn is answered.
+        if (owesAnswer.has(thread.id)) {
           lit.push({ id: thread.id, anchor: thread.anchor, kind: "question" });
         }
-      } else if (thread.resolution === undefined) {
+      } else {
+        // A comment conversation's mark clears only when the REVIEWER resolves it
+        // (a landed agent reply is a response, not a close — the mark stays lit).
         lit.push({ id: thread.id, anchor: thread.anchor, kind: "comment" });
       }
     }
@@ -520,10 +565,27 @@ function ReviewLoop({
     if (planRef.current) flashAnchor(planRef.current, anchor);
   }, []);
 
-  // A follow-up question on an existing conversation (threaded review and revision): inherits
-  // the root's anchor server-side, so the rail only passes the root id + body.
+  // A follow-up on an existing conversation (threaded review and revision):
+  // inherits the root's anchor server-side, so the rail only passes the root id +
+  // body. The rail is kind-agnostic; route by the root thread's kind — a comment
+  // root's follow-up rides the comments route (revision-tied, answered via the
+  // agent's revise/submit loop), a question root's rides the questions route
+  // (answered out-of-band via `otacon answer`). A missing root (a degraded card
+  // never offers the box) falls back to the question route.
   const followup = useCallback(
-    (rootId: string, body: string): Promise<boolean> => postFollowup(session.id, rootId, body),
+    (rootId: string, body: string): Promise<boolean> => {
+      const root = threads.find((t) => t.id === rootId);
+      return root?.kind === "comment"
+        ? postCommentFollowup(session.id, rootId, body)
+        : postFollowup(session.id, rootId, body);
+    },
+    [session.id, threads],
+  );
+
+  // The reviewer's Resolve verb on a conversation root: close (`resolved:true`)
+  // or reopen (`false`); the close lands back over the `thread` SSE frame.
+  const resolve = useCallback(
+    (threadId: string, resolved: boolean): Promise<boolean> => postResolve(session.id, threadId, resolved),
     [session.id],
   );
 
@@ -606,6 +668,20 @@ function ReviewLoop({
         onApprove={canApprove ? () => setApproveOpen(true) : undefined}
         onDelete={() => setDeleteOpen(true)}
       />
+      {/* The always-on now-playing bar + the console it expands (§10a), pinned
+          directly under the header, shown during pre-plan research too (not
+          gated on hasPlan), since that is exactly when the user is waiting. */}
+      {showNowPlaying && (
+        <div className={consoleOpen ? "now-playing-dock is-open" : "now-playing-dock"}>
+          <NowPlaying
+            stream={stream}
+            status={session.status}
+            open={consoleOpen}
+            onToggle={() => setConsoleOpen((value) => !value)}
+          />
+          {consoleOpen && <LiveConsole stream={stream} now={now} />}
+        </div>
+      )}
       <div className="review-layout">
         <div className="review-main">
           {over && <ApprovedNote path={approvedPath} home={approvedHome} />}
@@ -656,9 +732,6 @@ function ReviewLoop({
             target={ivTarget}
             editable={!readOnly}
           />
-          {/* The review screen keeps the feed as a compact collapsible panel;
-              the pre-plan placeholder leads with it open (below). */}
-          {hasPlan && <ActivityLog activity={activity} now={now} />}
           {hasPlan ? (
             <main
               className={readOnly ? "review review-over" : "review"}
@@ -689,9 +762,9 @@ function ReviewLoop({
           ) : (
             <main className="review-wait">
               <p className="wait-line">// no revision yet</p>
-              {/* During research + drafting the activity log is the main thing
-                  to watch, so the placeholder leads with it open (review UI). */}
-              <ActivityLog activity={activity} now={now} defaultOpen />
+              {/* During research + drafting the live console above is the main
+                  thing to watch: it leads open while the agent is in `draft`
+                  (auto-expand), so the placeholder no longer carries its own. */}
               <p>
                 The agent interviews before it drafts — questions land above as cards, one at a
                 time. The plan renders here the moment revision 1 passes the linter; this screen
@@ -706,6 +779,7 @@ function ReviewLoop({
             onJump={jump}
             focus={focusThread}
             onFollowup={readOnly ? undefined : followup}
+            onResolve={readOnly ? undefined : resolve}
           />
         )}
       </div>
@@ -799,7 +873,7 @@ function ReviewLoop({
 }
 
 export function SessionScreen({ id }: { id: string }) {
-  const { session, threads, transcript, activity, missing, cleaned, connected } = useSession(id);
+  const { session, threads, transcript, stream, missing, cleaned, connected } = useSession(id);
   // One ticking clock for the presence dot + activity/relative timestamps, so
   // they stay honest while the screen idles between SSE frames.
   const now = useNow(30_000);
@@ -896,7 +970,7 @@ export function SessionScreen({ id }: { id: string }) {
         session={session}
         threads={threads}
         transcript={transcript}
-        activity={activity}
+        stream={stream}
         connected={connected}
         now={now}
       />

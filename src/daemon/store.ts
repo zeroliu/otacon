@@ -252,7 +252,7 @@ export class Store {
 
   updateSession(
     id: string,
-    patch: Partial<Pick<RegistrySession, "title" | "status" | "prUrl">>,
+    patch: Partial<Pick<RegistrySession, "title" | "status" | "prUrl" | "impl">>,
   ): RegistrySession {
     const session = this.require(id);
     Object.assign(session, patch);
@@ -459,6 +459,11 @@ export class Store {
   /** Where this session's live-activity feed persists (src/daemon/activity.ts). */
   activityPath(id: string): string {
     return paths.activityPath(this.require(id).repo, id);
+  }
+
+  /** Where this session's normalized live-activity stream persists (src/daemon/capture/stream-store.ts). */
+  streamPath(id: string): string {
+    return paths.streamPath(this.require(id).repo, id);
   }
 
   private require(id: string): RegistrySession {

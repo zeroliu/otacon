@@ -51,6 +51,16 @@ export async function listSessions(): Promise<RegistrySession[]> {
   return (response.body.sessions ?? []) as RegistrySession[];
 }
 
+/**
+ * Sessions whose recorded Implement worktree IS the cwd's git worktree root.
+ * The key that lets `/otacon` run inside a build worktree find the session
+ * that created it (its .repo is the main repo, so the repo-root match misses).
+ */
+export function worktreeOwners(sessions: RegistrySession[], cwd: string): RegistrySession[] {
+  const root = findRepoRoot(cwd) ?? realpathOr(cwd);
+  return sessions.filter((s) => s.impl !== undefined && realpathOr(s.impl.worktree) === root);
+}
+
 // Exactly the terminal states are inactive (the single source of truth in
 // shared/types.ts): `implementing` resolves as the active session so the agent
 // can keep narrating/asking mid-build and `otacon resume` re-adopts it, while
@@ -71,13 +81,17 @@ export function resolveSession(
   }
 
   // No local pointer: the repo's single active (non-terminal) session is the
-  // implicit default. A terminal session is over (review loop and daemon API) — approved, or
-  // a finished build (implemented/implement_failed) — so it never counts;
-  // reaching it needs an explicit --session. Two or more active sessions refuse
-  // with the candidate list rather than guess: cross-posting feedback to the
-  // wrong plan is unrecoverable confusion.
+  // implicit default, matched by repo root OR build-worktree root (so a resumed
+  // session resolves from inside its worktree, whose .repo is the main repo). A
+  // terminal session is over (review loop and daemon API): approved, or a
+  // finished build (implemented/implement_failed), so it never counts; reaching
+  // it needs an explicit --session. Two or more active sessions refuse with the
+  // candidate list rather than guess: cross-posting feedback to the wrong plan
+  // is unrecoverable confusion.
   const root = findRepoRoot(cwd) ?? realpathOr(cwd);
-  const here = sessions.filter((s) => isActive(s) && realpathOr(s.repo) === root);
+  const here = sessions.filter(
+    (s) => isActive(s) && (realpathOr(s.repo) === root || (s.impl !== undefined && realpathOr(s.impl.worktree) === root)),
+  );
   if (here.length === 1) return here[0] as RegistrySession;
   if (here.length === 0) {
     fail(

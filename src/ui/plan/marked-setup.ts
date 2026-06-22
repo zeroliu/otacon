@@ -21,7 +21,8 @@ const CHOSEN_CELL_RE = /^\s*<td[^>]*>\s*✓/;
 // tag, converted to its own span before parse (plan-view.tsx), never a pill.
 // The pill renders its keyword without the brackets, so — like inline emphasis
 // — a comment whose quote spans a pill may not survive a cross-revision
-// re-anchor; it orphans gracefully (plan structure, lint, and anchoring orphan tray).
+// re-anchor; its anchor is marked internally and the thread stays inline & muted
+// in the rail (plan structure, lint, and anchoring).
 const PILL_RE = /^\[(new|breaking|risky|deletes)\](?![([])/;
 
 marked.use({

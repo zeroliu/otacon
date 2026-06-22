@@ -22,6 +22,7 @@ import {
 } from "../shared/config.js";
 import type { ScopeValues } from "../shared/config.js";
 import {
+  expandTilde,
   globalConfigPath,
   otaconPort,
   repoConfigPath,
@@ -41,18 +42,24 @@ import type {
   Resolutions,
   RevisionPayload,
   SessionSummary,
+  StreamEvent,
   Thread,
   TranscriptEntry,
 } from "../shared/types.js";
 import { VERSION } from "../shared/version.js";
 import { appendActivity, latestNote, readActivity } from "./activity.js";
 import type { ReviewNote } from "./approve.js";
+import { normalize } from "./capture/normalize.js";
+import { appendStreamEvents, readStream, StreamSeq } from "./capture/stream-store.js";
+import type { TailerDeps } from "./capture/tailer.js";
+import { Tailer } from "./capture/tailer.js";
 import { composeArtifact, localDate, pickHomePath, pickProjectRelPath } from "./approve.js";
 import type { DesktopNotifier } from "./desktop-notify.js";
 import { createDesktopNotifier } from "./desktop-notify.js";
 import { validateDiagrams } from "./diagrams.js";
 import { diffPlans } from "./diff.js";
 import { lint } from "./linter/index.js";
+import { slugify } from "./linter/parse.js";
 import { Notifier } from "./notify.js";
 import { Presence } from "./presence.js";
 import type { ParkHandle } from "./queue.js";
@@ -66,6 +73,7 @@ import {
   commentThreadStates,
   openCommentThreads,
   readThreads,
+  resolveThread,
 } from "./threads.js";
 import { answerEntry, appendEntries, appendEntry, readTranscript } from "./transcript.js";
 import { registerUiRoutes } from "./ui.js";
@@ -87,6 +95,12 @@ export interface AppOptions {
   presence?: Presence;
   /** Test override: the desktop notify sink (default: the real macOS notifier, a no-op off darwin). */
   notify?: DesktopNotifier;
+  /**
+   * Test override: the per-session transcript tailer factory (default: the real
+   * `Tailer`, polling the agent's transcript). A test can return a stub so the
+   * suite never depends on real `~/.claude` contents or a live fs poll.
+   */
+  makeTailer?: (deps: TailerDeps) => { start(): void; stop(): void };
 }
 
 type AppContext = Context<{ Bindings: NodeBindings }>;
@@ -272,6 +286,66 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     notifier.publish({ type: "thread", session: id, data: { session: id, thread } });
   const publishGrill = (id: string, entry: TranscriptEntry): void =>
     notifier.publish({ type: "grill", session: id, data: { session: id, entry } });
+  const publishStream = (id: string, events: StreamEvent[]): void =>
+    notifier.publish({ type: "stream", session: id, data: { session: id, events } });
+
+  // Monotonic per-session seq source for the live-activity stream (the
+  // automatic, cross-agent activity stream): one StreamSeq per session id,
+  // seeded lazily from stream.jsonl's max seq so a daemon restart never re-mints
+  // a live seq, then incremented in memory. The daemon owns the single writer.
+  const streamSeqs = new Map<string, StreamSeq>();
+  const nextStreamSeq = (id: string): number => {
+    let seq = streamSeqs.get(id);
+    if (seq === undefined) {
+      seq = new StreamSeq();
+      streamSeqs.set(id, seq);
+    }
+    return seq.next(store.streamPath(id));
+  };
+  // How many newest stream events the per-session SSE snapshot serves: the
+  // session's configured cap (so a repo override applies). The store already
+  // bounds the file at the cap on append, so this is belt-and-suspenders — but
+  // it keeps the snapshot honest if the cap was lowered since the last trim.
+  const loadStreamCap = (id: string): number => {
+    const repo = store.getSession(id)?.repo;
+    return (repo ? loadConfig(repo) : loadConfig()).stream.cap;
+  };
+
+  // Per-session transcript tailers (the automatic, cross-agent activity stream):
+  // while a session is active, its tailer watches the coding agent's own
+  // transcript and feeds new tool/text/thinking activity through the SAME Phase
+  // 1 pipeline the progress route uses — `nextStreamSeq` for the seq,
+  // `appendStreamEvents` (capped), and `publishStream` for the SSE frame — so a
+  // captured event and a manual `otacon progress` highlight are indistinguishable
+  // downstream. A repo whose agent has no adapter attaches no tailer and runs on
+  // the progress floor (the registry returns null). Tailers are injectable via
+  // options.makeTailer so a test can drive `tick()` without a real fs poll.
+  const tailers = new Map<string, { start(): void; stop(): void }>();
+  const makeTailer = options.makeTailer ?? ((deps: TailerDeps) => new Tailer(deps));
+  const startTailer = (session: RegistrySession): void => {
+    if (tailers.has(session.id)) return; // idempotent — already watching
+    if (TERMINAL_STATUSES.includes(session.status)) return; // over: nothing to tail
+    const tailer = makeTailer({
+      repoRoot: session.repo,
+      nextSeq: () => nextStreamSeq(session.id),
+      append: (events) => appendStreamEvents(store.streamPath(session.id), events, loadStreamCap(session.id)),
+      publish: (events) => publishStream(session.id, events),
+      config: () => loadConfig(session.repo).stream,
+    });
+    tailers.set(session.id, tailer);
+    tailer.start();
+  };
+  const stopTailer = (id: string): void => {
+    const tailer = tailers.get(id);
+    if (tailer === undefined) return;
+    tailer.stop();
+    tailers.delete(id);
+  };
+  // Re-attach tailers to sessions that were already active when the daemon
+  // started (a restart mid-build): the registry survives the restart, so the
+  // live transcript is still being written. New sessions wire their tailer at
+  // creation; terminal ones are skipped by startTailer's guard.
+  for (const session of store.listSessions()) startTailer(session);
 
   // Desktop attention banners (review loop and daemon API). Presence tracks which sessions
   // have a *visible* review open; the notify sink fires the native macOS banner
@@ -374,9 +448,26 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       writeFileAtomic(join(session.repo, relPath), artifact);
       path = relPath;
     }
+    // On Implement, record the build's worktree + branch in the same write that
+    // flips to `implementing` (one registry write). Deterministic from the
+    // title slug + the configured worktree.dir, so a later `/otacon` run from
+    // inside that worktree can match it back to this session and reopen it.
+    let implPatch: { impl: { worktree: string; branch: string } } | Record<string, never> = {};
+    if (opts.implement) {
+      const slug = slugify(session.title) || "plan";
+      const wtDir = expandTilde(loadConfig(session.repo).worktree.dir);
+      const worktree = join(wtDir, slug);
+      const branch = `otacon/impl-${slug}`;
+      implPatch = { impl: { worktree, branch } };
+    }
     const updated = store.updateSession(session.id, {
       status: opts.implement ? "implementing" : "approved",
+      ...implPatch,
     });
+    // Save (approved) is terminal — the agent stops, so tear the tailer down.
+    // Implement keeps the session live (`implementing`), so the tailer keeps
+    // streaming the build's activity until implement-done flips it terminal.
+    if (!opts.implement) stopTailer(session.id);
     // Disarm after the flip: a crash between them leaves a stale flag on an
     // already-terminal/building session (harmless — no further submit finalizes),
     // never a finalizing session that lost its flag (which would re-open review).
@@ -505,6 +596,10 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       return badRequest(c, "quick must be a boolean");
     }
     const session = store.createSession({ title, repo, branch, quick });
+    // Attach the transcript tailer now: the agent is already working in `repo`,
+    // so its live transcript may already exist (and if not, the tailer re-locates
+    // until it appears). A repo whose agent has no adapter attaches nothing.
+    startTailer(session);
     publishSession(session);
     return c.json(session, 201);
   });
@@ -534,6 +629,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
     const queue = queueFor(session.id);
     const pendingEvents = queue.size;
+    stopTailer(session.id); // the session is going away — stop watching its transcript
     let archivedTo: string | null = null;
     if (TERMINAL_STATUSES.includes(session.status)) {
       // Deregister first — it can throw (registry flush), and an early queue
@@ -722,7 +818,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
           thread: t.id,
           section: t.anchor?.section ?? null,
           body: t.body,
-          resolution: t.resolution?.body ?? "",
+          reply: t.reply?.body ?? "",
         }));
       const { path, home } = finalizeApproval(session, {
         revision,
@@ -780,6 +876,61 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     const lastReviewedRevision = store.markReviewed(session.id, revision);
     publishSession(session); // summary re-reads state, so the frame carries it
     return c.json({ ok: true, session: session.id, lastReviewedRevision });
+  });
+
+  // Reopen a finished (terminal) session for another review round
+  // (resurrect-plan-amend): a `/otacon` run from inside the build worktree flips
+  // the session back to `revising` so the agent amends the approved plan in
+  // place instead of spawning a second worktree. The baseline is pinned at the
+  // approved revision (markReviewed → lastReviewedRevision = revision), so the
+  // next submit diffs against what was approved. `prUrl` and `impl` are kept
+  // intact: the amendment still belongs to the same build. A non-terminal
+  // session is refused E_NOT_REOPENABLE (there is nothing finished to reopen).
+  app.post("/api/sessions/:id/reopen", (c) => {
+    const session = sessionFor(c);
+    if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    // Agent-driven verb (a `/otacon` run): bump liveness like its siblings so the
+    // reopened session reads live, not offline-until-next-call.
+    bumpContact(session.id);
+    if (!TERMINAL_STATUSES.includes(session.status)) {
+      return c.json(
+        {
+          error: {
+            code: "E_NOT_REOPENABLE",
+            message: `session ${session.id} is ${session.status}, not reopenable (must be a finished session)`,
+          },
+        },
+        409,
+      );
+    }
+    const state = store.readState(session.id);
+    const revision = state.revision;
+    if (revision === 0) {
+      // A terminal session always has an approved revision; guard anyway.
+      return c.json(
+        {
+          error: {
+            code: "E_NOT_REOPENABLE",
+            message: `session ${session.id} has no revisions to reopen`,
+          },
+        },
+        409,
+      );
+    }
+    // Pin the diff baseline at the approved revision (monotonic), so the next
+    // submit shows just the amendment.
+    store.markReviewed(session.id, revision);
+    const updated = store.updateSession(session.id, { status: "revising" });
+    publishSession(updated); // the index + an open tab move it back to active
+    return c.json({
+      ok: true,
+      session: session.id,
+      status: "revising",
+      revision,
+      lastReviewedRevision: revision,
+      impl: updated.impl ?? null,
+      prUrl: updated.prUrl ?? null,
+    });
   });
 
   // The review screen reports its visibility here (review loop and daemon API): {visible:true}
@@ -852,13 +1003,63 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     if (!Array.isArray(rawItems) || rawItems.length === 0) {
       return badRequest(c, "items must be a non-empty array");
     }
-    const drafts: { anchor: Anchor | null; body: string }[] = [];
+    // A batch may mix new comments and follow-ups: an item with `replyTo` (a
+    // comment thread id) continues that conversation INSTEAD of carrying its own
+    // anchor — it inherits the root's anchor and orphan state, and a client
+    // anchor on it is ignored; an item without `replyTo` parses its own anchor.
+    const existing = readThreads(store.threadsPath(session.id));
+    const drafts: {
+      anchor: Anchor | null;
+      anchorState?: "orphaned";
+      replyTo?: string;
+      body: string;
+    }[] = [];
     for (const raw of rawItems as Record<string, unknown>[]) {
-      const anchor = parseAnchor(raw?.anchor);
-      if (typeof raw?.body !== "string" || raw.body.trim() === "" || anchor === undefined) {
+      if (typeof raw?.body !== "string" || raw.body.trim() === "") {
         return badRequest(c, "each item needs a non-empty body and a valid anchor (or null)");
       }
-      drafts.push({ anchor, body: raw.body });
+      const replyToRaw = raw.replyTo;
+      if (replyToRaw === undefined) {
+        const anchor = parseAnchor(raw.anchor);
+        if (anchor === undefined) {
+          return badRequest(c, "each item needs a non-empty body and a valid anchor (or null)");
+        }
+        drafts.push({ anchor, body: raw.body });
+        continue;
+      }
+      if (typeof replyToRaw !== "string" || replyToRaw === "") {
+        return badRequest(c, "replyTo must name a comment thread id (t<n>)");
+      }
+      const parent = existing.find(
+        (t): t is Extract<Thread, { kind: "comment" }> =>
+          t.id === replyToRaw && t.kind === "comment",
+      );
+      if (!parent) {
+        return c.json(
+          {
+            error: {
+              code: "E_UNKNOWN_COMMENT",
+              message: `session ${session.id} has no comment ${replyToRaw}`,
+            },
+          },
+          404,
+        );
+      }
+      // Resolve the root so a whole chain shares one key — "follow up on a
+      // follow-up" collapses to the same root, whose anchor (and orphan state)
+      // the new turn inherits and travels with.
+      const rootId = parent.replyTo ?? parent.id;
+      const root = existing.find(
+        (t): t is Extract<Thread, { kind: "comment" }> =>
+          t.id === rootId && t.kind === "comment",
+      );
+      const source = root ?? parent;
+      drafts.push({
+        anchor: source.anchor,
+        ...(source.anchorState === "orphaned" ? { anchorState: "orphaned" as const } : {}),
+        replyTo: rootId,
+        body: raw.body,
+      });
     }
     // Ids are minted only after the whole batch validates, in one counter
     // write — a rejected batch burns neither ids nor disk writes.
@@ -870,19 +1071,23 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     const firstThread = counters.thread - drafts.length;
     const items: CommentItem[] = drafts.map((draft, i) => ({
       thread: `t${firstThread + i + 1}`,
-      ...draft,
+      anchor: draft.anchor,
+      body: draft.body,
+      ...(draft.replyTo !== undefined ? { replyTo: draft.replyTo } : {}),
     }));
     const batch = `b${counters.batch}`;
     // Each item becomes a persistent thread (threaded review and revision) — the rail's
     // source of truth; the queued event is only the agent's wake-up copy.
     const createdAt = new Date().toISOString();
-    const threads: Thread[] = items.map((item) => ({
-      id: item.thread,
+    const threads: Thread[] = drafts.map((draft, i) => ({
+      id: `t${firstThread + i + 1}`,
       kind: "comment",
       batch,
-      anchor: item.anchor,
-      body: item.body,
+      anchor: draft.anchor,
+      ...(draft.anchorState === "orphaned" ? { anchorState: "orphaned" as const } : {}),
+      body: draft.body,
       createdAt,
+      ...(draft.replyTo !== undefined ? { replyTo: draft.replyTo } : {}),
     }));
     appendThreads(store.threadsPath(session.id), threads);
     // Flushing a batch is the implicit "I reviewed this revision" signal
@@ -1016,6 +1221,42 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       question: qid,
       answeredAt: thread.answer.answeredAt,
     });
+  });
+
+  // The reviewer's side of closing a thread (the Resolve verb): {resolved:true}
+  // stamps the close (carrying the session's current revision) on the conversation
+  // root, {resolved:false} reopens it. Resolve doubles as the comment-withdraw
+  // path — a resolved comment no longer owes a reply (L5 skips it) and no longer
+  // counts unresolved at approve. Refused on a terminal session (like the
+  // questions route); 404 on an unknown thread id.
+  app.post("/api/sessions/:id/threads/:tid/resolve", async (c) => {
+    const session = sessionFor(c);
+    if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    const body = (await readJsonBody(c)) ?? {};
+    if (sessionEnded(session.id)) return sessionOver(c, session.id);
+    if (typeof body.resolved !== "boolean") {
+      return badRequest(c, "resolved must be a boolean");
+    }
+    const tid = c.req.param("tid") ?? "";
+    const thread = resolveThread(
+      store.threadsPath(session.id),
+      tid,
+      body.resolved,
+      store.readState(session.id).revision,
+    );
+    if (!thread) {
+      return c.json(
+        {
+          error: {
+            code: "E_UNKNOWN_THREAD",
+            message: `session ${session.id} has no thread ${tid}`,
+          },
+        },
+        404,
+      );
+    }
+    publishThread(session.id, thread);
+    return c.json({ ok: true }, 202);
   });
 
   app.get("/api/sessions/:id/threads", (c) => {
@@ -1195,9 +1436,13 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   // The agent's narration (`otacon progress`): a non-blocking
   // progress note appended to the capped activity feed and pushed to the UI as
   // an `activity` frame (the per-session log) plus a `session` frame (the
-  // chip's latestActivity). No agent event is queued — like `ask`, this is
-  // UI-only telemetry, never a wake-up. The note is trimmed to the configured
-  // max so long narration never fails or bloats payloads.
+  // chip's latestActivity). The same note is ALSO normalized into a `highlight`
+  // StreamEvent and appended to the live-activity stream (the automatic,
+  // cross-agent activity stream) so a manual narration sits inline with the
+  // captured activity; a `stream` frame pushes it to the UI. No agent event is
+  // queued — like `ask`, this is UI-only telemetry, never a wake-up. The note
+  // is trimmed to the configured max so long narration never fails or bloats
+  // payloads.
   app.post("/api/sessions/:id/progress", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
@@ -1207,20 +1452,28 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     if (typeof raw !== "string" || raw.trim() === "") {
       return badRequest(c, "note must be a non-empty string");
     }
-    const { activity } = loadConfig(session.repo);
+    const { activity, stream } = loadConfig(session.repo);
     const trimmed = raw.trim();
+    const at = new Date().toISOString();
     const text =
       trimmed.length > activity.noteMaxChars
         ? `${trimmed.slice(0, Math.max(1, activity.noteMaxChars - 1)).trimEnd()}…`
         : trimmed;
-    const note = appendActivity(
-      store.activityPath(session.id),
-      text,
-      activity.cap,
-      new Date().toISOString(),
+    const note = appendActivity(store.activityPath(session.id), text, activity.cap, at);
+    // The same note flows into the new stream as a `highlight` event: the
+    // normalizer redacts + truncates the body (its own caps), the daemon stamps
+    // seq and `at`. The activity-feed text above keeps its own (shorter) cap —
+    // the index draft chip still reads `latestActivity`.
+    const event = normalize(
+      { kind: "highlight", label: trimmed, detail: trimmed },
+      stream,
+      nextStreamSeq(session.id),
+      at,
     );
+    appendStreamEvents(store.streamPath(session.id), [event], stream.cap);
     bumpContact(session.id);
     notifier.publish({ type: "activity", session: session.id, data: { session: session.id, note } });
+    publishStream(session.id, [event]);
     publishSession(session); // latestActivity for the chip; fresh contact for the dot
     return c.json({ ok: true, session: session.id, note: text });
   });
@@ -1306,11 +1559,28 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
         : body.implement === true;
     const threads = readThreads(store.threadsPath(session.id));
     const openComments = openCommentThreads(threads);
-    // Unresolved = comment threads with no resolution + user questions with no
-    // answer — the same open items the rail shows.
-    const unresolved = threads.filter((t) =>
-      t.kind === "comment" ? t.resolution === undefined : t.answer === undefined,
-    ).length;
+    // Unresolved is counted **per conversation**, not per turn: a multi-turn
+    // comment or question conversation contributes at most 1. Both kinds carry
+    // `replyTo` (a follow-up keys on its root). A conversation is unresolved when
+    // its root is not reviewer-`resolved` AND it still owes attention — a
+    // **comment** conversation always owes it (you must Resolve it; a landed
+    // reply is a response, not a close), a **question** conversation owes it only
+    // while some turn is unanswered. So: a responded-but-unresolved comment
+    // conversation counts (once); a reviewer-resolved one does not; an unanswered
+    // ask counts; an unanswered-but-resolved ask does not.
+    const resolvedRoots = new Set(threads.filter((t) => t.resolved).map((t) => t.id));
+    const rootOf = (t: Thread): string => t.replyTo ?? t.id;
+    const roots = new Set(threads.map(rootOf));
+    let unresolved = 0;
+    for (const root of roots) {
+      if (resolvedRoots.has(root)) continue;
+      const turns = threads.filter((t) => rootOf(t) === root);
+      const isComment = turns.some((t) => t.kind === "comment");
+      const owesAttention = isComment
+        ? true
+        : turns.some((t) => t.kind === "question" && t.answer === undefined);
+      if (owesAttention) unresolved += 1;
+    }
 
     // Comment & approve: defer the finalize and hand the agent every open comment
     // thread for one solo fold-in pass — its next clean submit finalizes. Only
@@ -1414,6 +1684,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       status,
       ...(typeof pr === "string" ? { prUrl: pr } : {}),
     });
+    stopTailer(session.id); // build is over (both outcomes terminal): stop tailing
     publishSession(updated); // the chip flips + the PR link appears live
     return c.json({ ok: true, session: updated, status, prUrl: updated.prUrl });
   });
@@ -1458,6 +1729,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     getThreads: (id) => readThreads(store.threadsPath(id)),
     getTranscript: (id) => readTranscript(store.transcriptPath(id)),
     getActivity: (id) => readActivity(store.activityPath(id)),
+    getStream: (id) => readStream(store.streamPath(id), loadStreamCap(id)),
     uiDir: options.uiDir,
     heartbeatMs: options.sseHeartbeatMs,
   });
