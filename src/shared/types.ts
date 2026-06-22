@@ -35,7 +35,11 @@ export const SESSION_STATUSES: readonly SessionStatus[] = [
  * defers the finalize while the agent folds the open comments in, so its next
  * `submit` must still mutate the session. The single source of truth — the app
  * guard and the CLI resolver both derive from this, so they can never disagree
- * about what "over" means.
+ * about what "over" means. Terminal is no longer strictly one-way: a finished
+ * session can be REOPENED back to `revising` via `POST /api/sessions/:id/reopen`
+ * (a later `/otacon` run from inside the build worktree amends it in place
+ * instead of spawning a second worktree). Terminal means "over until explicitly
+ * reopened", not "forever".
  */
 export const TERMINAL_STATUSES: readonly SessionStatus[] = [
   "approved",
@@ -61,6 +65,13 @@ export interface RegistrySession {
    * to SessionSummary so the home card can surface the link (approval and archive lifecycle).
    */
   prUrl?: string;
+  /**
+   * The Implement build's worktree + branch, recorded when the session flips to
+   * `implementing` (deterministic from slug + worktree.dir). Lets a later
+   * `/otacon` run from inside that worktree reopen this same session to amend it
+   * in place. Absent until a build is approved.
+   */
+  impl?: { worktree: string; branch: string };
 }
 
 export interface RegistryFile {

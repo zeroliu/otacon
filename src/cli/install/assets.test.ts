@@ -73,6 +73,18 @@ describe("single-source wrappers (D7)", () => {
     }
   });
 
+  test("every wrapper teaches the resume-from-worktree bootstrap and amend-in-place", () => {
+    for (const text of [skillMd(), dogfoodSkillMd()]) {
+      // The start bootstrap: a resumeCandidate from status means an amendment is
+      // possible, so judge relatedness, confirm in the terminal, then resume.
+      expect(text).toContain("resumeCandidate");
+      expect(text).toContain("resume and amend");
+      // Amend-in-place: build on the existing worktree/branch and push the same PR.
+      expect(text).toContain("Amending");
+      expect(text).toContain("updates the SAME PR");
+    }
+  });
+
   test("every wrapper teaches the comment & approve fold-in batch (final:true)", () => {
     for (const text of [skillMd(), dogfoodSkillMd()]) {
       // A `final:true` comments batch ends the review: the next clean submit

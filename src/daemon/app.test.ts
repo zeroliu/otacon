@@ -2069,6 +2069,126 @@ describe("Approve & Implement and the implement lifecycle (implement-approved-pl
     // The session is still implementing — a rejected report changed nothing.
     expect(await statusOf(session.id)).toBe("implementing");
   });
+
+  test("approve {implement:true} records the build worktree + branch on the session", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await approve(session.id, { implement: true });
+
+    // slugify("e2e plan") === "e2e-plan"; the worktree dir defaults to
+    // ~/.otacon/worktrees, so the recorded path ends in the slug and the
+    // branch follows otacon/impl-<slug>.
+    const impl = store.getSession(session.id)?.impl;
+    expect(impl).toBeDefined();
+    expect(impl?.worktree.endsWith("e2e-plan")).toBeTrue();
+    expect(impl?.branch).toBe("otacon/impl-e2e-plan");
+
+    // It surfaces on the detail route too.
+    const detail = (await (await app.request(`/api/sessions/${session.id}`)).json()) as {
+      impl?: { worktree: string; branch: string };
+    };
+    expect(detail.impl?.branch).toBe("otacon/impl-e2e-plan");
+  });
+
+  test("a plain approve (Save) records no impl", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await approve(session.id);
+    expect(store.getSession(session.id)?.impl).toBeUndefined();
+  });
+});
+
+describe("reopen a terminal session (resurrect-plan-amend)", () => {
+  const submitValid = async (id: string) => {
+    const res = await app.request(`/api/sessions/${id}/submit`, {
+      method: "POST",
+      body: validPlanFor(id),
+    });
+    expect(res.status).toBe(200);
+  };
+  const approve = (id: string, body: unknown = {}) =>
+    postJson(`/api/sessions/${id}/approve`, body);
+  const implementDone = (id: string, body: unknown = {}) =>
+    postJson(`/api/sessions/${id}/implement-done`, body);
+  const reopen = (id: string) => postJson(`/api/sessions/${id}/reopen`, {});
+  const statusOf = async (id: string): Promise<string> =>
+    ((await (await app.request(`/api/sessions/${id}`)).json()) as { status: string }).status;
+
+  test("reopen flips an implemented session back to revising and keeps impl", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await approve(session.id, { implement: true });
+    await implementDone(session.id, { pr: "https://example.test/pr/7" });
+    expect(await statusOf(session.id)).toBe("implemented");
+
+    const revisionBefore = store.readState(session.id).revision;
+    const res = await reopen(session.id);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      status: string;
+      revision: number;
+      lastReviewedRevision: number;
+      impl: { worktree: string; branch: string } | null;
+      prUrl: string | null;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.status).toBe("revising");
+    // Revision is unchanged; the baseline is pinned at the approved revision.
+    expect(body.revision).toBe(revisionBefore);
+    expect(body.lastReviewedRevision).toBe(revisionBefore);
+    expect(store.readState(session.id).lastReviewedRevision).toBe(revisionBefore);
+    expect(store.readState(session.id).revision).toBe(revisionBefore);
+    // impl survives the reopen.
+    expect(body.impl?.branch).toBe("otacon/impl-e2e-plan");
+    expect(store.getSession(session.id)?.impl?.branch).toBe("otacon/impl-e2e-plan");
+    // The session is back to active (revising), mutating verbs re-open.
+    expect(await statusOf(session.id)).toBe("revising");
+  });
+
+  test("reopen preserves prUrl set at implement-done", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await approve(session.id, { implement: true });
+    await implementDone(session.id, { pr: "https://example.test/pr/99" });
+    expect(store.getSession(session.id)?.prUrl).toBe("https://example.test/pr/99");
+
+    const res = await reopen(session.id);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { prUrl: string | null };
+    expect(body.prUrl).toBe("https://example.test/pr/99");
+    // It is still on the registry session after the flip.
+    expect(store.getSession(session.id)?.prUrl).toBe("https://example.test/pr/99");
+  });
+
+  test("reopen works on a plain-approved (terminal, Save) session too", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    await approve(session.id);
+    expect(await statusOf(session.id)).toBe("approved");
+    const res = await reopen(session.id);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { status: string }).status).toBe("revising");
+    expect(await statusOf(session.id)).toBe("revising");
+  });
+
+  test("reopen refuses a non-terminal session with E_NOT_REOPENABLE", async () => {
+    const session = mintSession();
+    await submitValid(session.id);
+    // in_review (the default after a first submit) is non-terminal.
+    expect(await statusOf(session.id)).toBe("in_review");
+    const res = await reopen(session.id);
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+      "E_NOT_REOPENABLE",
+    );
+    // Unchanged: the refusal mutated nothing.
+    expect(await statusOf(session.id)).toBe("in_review");
+  });
+
+  test("reopen 404s an unknown session", async () => {
+    expect((await reopen("otc_zzzzzz")).status).toBe(404);
+  });
 });
 
 describe("comment & approve: send-to-agent deferred finalize (comment-and-approve)", () => {

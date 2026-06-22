@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { homedir } from "node:os";
 import { join } from "node:path";
-import { homeSessionDir, homeSessionsDir, updateCachePath } from "./paths.js";
+import { expandTilde, homeSessionDir, homeSessionsDir, updateCachePath } from "./paths.js";
 
 let savedHome: string | undefined;
 
@@ -29,6 +30,25 @@ describe("home plan archive paths", () => {
     process.env.OTACON_HOME = "/tmp/otacon-other";
     expect(homeSessionsDir()).toBe(join("/tmp/otacon-other", "sessions"));
     expect(homeSessionDir("otc_zzz")).toBe(join("/tmp/otacon-other", "sessions", "otc_zzz"));
+  });
+});
+
+describe("expandTilde", () => {
+  test("bare ~ expands to the home dir", () => {
+    expect(expandTilde("~")).toBe(homedir());
+  });
+
+  test("~/x joins the rest onto the home dir", () => {
+    expect(expandTilde("~/.otacon/worktrees")).toBe(join(homedir(), ".otacon", "worktrees"));
+  });
+
+  test("an absolute path is returned unchanged", () => {
+    expect(expandTilde("/var/tmp/build")).toBe("/var/tmp/build");
+  });
+
+  test("a path with ~ not at the start is left alone", () => {
+    expect(expandTilde("/home/~user")).toBe("/home/~user");
+    expect(expandTilde("relative/path")).toBe("relative/path");
   });
 });
 

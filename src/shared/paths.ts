@@ -74,6 +74,13 @@ export function repoLocalConfigPath(repoRoot: string): string {
   return join(otaconDir(repoRoot), "config.local.json");
 }
 
+/** Expand a leading `~`/`~/` to the OS home dir; leave other paths untouched. */
+export function expandTilde(p: string): string {
+  if (p === "~") return homedir();
+  if (p.startsWith("~/")) return join(homedir(), p.slice(2));
+  return p;
+}
+
 export function otaconDir(repoRoot: string): string {
   return join(repoRoot, ".otacon");
 }

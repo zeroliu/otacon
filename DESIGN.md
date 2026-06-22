@@ -345,7 +345,8 @@ the model is suspended — no inference, no token spend.
 | `otacon answer <question-id> (--body "…" \| --file f.md)`                   | Answer a user question; no revision                                           |
 | `otacon progress "<note>" [--session <id>]`                                 | Append a narration note to the live activity feed (UI-only; non-blocking, never parks, never an event) |
 | `otacon implement-done [--pr <url>] [--failed]`                             | End an `implementing` session: record the PR link and flip to `implemented`, or `--failed` → `implement_failed` (§12) |
-| `otacon status [--all]`                                                     | Session state + undelivered event count (crash/resume entry point)            |
+| `otacon resume [--session <id>]`                                            | Reopen a finished session for amendment (flip terminal → `revising`): auto-detects the session that owns the cwd build worktree (its recorded `impl.worktree`), or `--session` names one. Prints the daemon's reopen body plus `title`, `repo`, `plan` (the file to amend, under the session's main repo) (§12) |
+| `otacon status [--all]`                                                     | Session state + undelivered event count (crash/resume entry point); also surfaces `resumeCandidate` (id, title, status, plan) when the cwd is inside a known build worktree |
 | `otacon open [--session <id>]`                                              | Open the review URL in the browser, or the index URL when no session resolves; `OTACON_NO_BROWSER` prints it instead of launching |
 | `otacon config [open]`                                                      | Open the Settings web UI in the browser: `/settings?repo=<cwd repo root>` inside a repo (Project scope), bare `/settings` outside one (User scope); `OTACON_NO_BROWSER` prints the URL instead |
 | `otacon config get <key>`                                                   | Read-only: print the merged effective value of one dotted key (`worktree.dir`, `budgets.summaryLines`, …) from the config files; no daemon. Unknown key → exit 1 |
@@ -528,6 +529,13 @@ POST /api/sessions/:id/implement-done       end an `implementing` build (otacon
                                             `implement_failed` (failed:true), records
                                             `prUrl` on the summary; a session not
                                             `implementing` → 409 E_NOT_IMPLEMENTING
+POST /api/sessions/:id/reopen               reopen a finished (terminal) session for
+                                            another review round (a `/otacon` run from
+                                            inside the build worktree): flips it back to
+                                            `revising`, pins the diff baseline at the
+                                            approved revision (lastReviewedRevision =
+                                            revision), and keeps `prUrl` + `impl`; a
+                                            non-terminal session → 409 E_NOT_REOPENABLE
 POST /api/sessions/:id/reviewed             mark a revision reviewed ({revision},
                                             default: latest) — the diff baseline;
                                             monotonic, also set by a comment flush
@@ -657,6 +665,12 @@ mirroring the budgets config. Off macOS the banner is a silent no-op.
    `otacon progress` note only for occasional highlights and chapter markers. On an
    agent with no transcript adapter that floor is the *only* activity signal, so the
    notes still carry the bar there (UI-only; never an event).
+   The entry point can also **resume** a finished session: when the agent runs from
+   inside a build worktree otacon created (`otacon status` reports a `resumeCandidate`),
+   it judges whether the request is about that plan and, if related or unsure, asks the
+   user in the terminal whether to amend the existing plan or start new (the one
+   confirmation that precedes any session). On resume it skips research and grill,
+   edits the existing plan into the next revision, and re-enters the review loop.
 2. **Grill** (§8). Agent walks the design tree via `otacon ask` + `wait`, one question
    at a time. Skipped with `--quick`.
 3. **Draft.** Agent writes `plan.md`, runs `otacon submit`; loops on lint errors until clean.
@@ -698,6 +712,11 @@ mirroring the budgets config. Off macOS the banner is a silent no-op.
    `otacon implement-done --pr <url>` (or `--failed` on abort), which flips the session
    to `implemented` / `implement_failed`. All build work runs in native in-session
    subagents (subscription-covered, §13); the daemon never spawns a model.
+   On a **resumed** session the build amends in place: the worktree and
+   `otacon/impl-<slug>` branch already exist, so the agent does not open a second
+   worktree. It builds on top of the existing commits (scoping to the phases this
+   revision changed) and pushes the branch, which updates the **same** PR (its URL is
+   on the session, reported by `otacon status` as `prUrl`).
 
 ---
 
@@ -711,7 +730,10 @@ one daemon.
 the single source of truth — there is no local session pointer:
 
 - Commands default to the repo's single active session: the CLI reads the registry
-  and picks the one non-approved session whose repo is the cwd's git root. Different
+  and picks the one non-approved session matched by repo root **or** build-worktree
+  root. A session's `.repo` is the main repo where planning happened, so a reopened
+  session resolves implicitly even from inside its Implement build worktree (whose
+  root matches the recorded `impl.worktree`, not the repo). Different
   worktrees = different roots = parallel planning with zero flags.
 - `--session <id>` overrides everywhere, and is the only way to reach an approved
   (ended) session. If a repo has two or more active sessions, the CLI **refuses** the
@@ -1218,7 +1240,7 @@ Operational requirement: the Mac stays awake while a plan is in review
 | `~/.otacon/worktrees/<slug>/`                     | Implement build's git worktree on branch `otacon/impl-<slug>` (base dir is `worktree.dir`, default `~/.otacon/worktrees` — outside the repo)                    | n/a (global, outside the repo)             |
 | `~/.otacon/sessions/<id>/YYYY-MM-DD-<slug>.md`    | Canonical approved plan, every session (`status: approved` frontmatter + grill transcript)                     | n/a (global, permanent archive)            |
 | `<repo>/<plans.dir>/YYYY-MM-DD-<slug>.md`         | Save-time project copy (default `.otacon/plans`; set `plans.dir=docs/plans` to group with tracked plans)       | yours to commit (or not)                   |
-| `~/.otacon/registry.json`                         | Session registry: ID → repo, branch, title, status                                                             | n/a (global)                               |
+| `~/.otacon/registry.json`                         | Session registry: ID → repo, branch, title, status, `prUrl`, and `impl` (the build's worktree + branch, recorded at Implement-approve; see below)                                                             | n/a (global)                               |
 
 Every approved plan lands in the **home archive** keyed by its session id — the
 canonical copy a downstream implementer (or a future you, on any machine) can always
@@ -1300,18 +1322,33 @@ non-terminal — the agent's clean `submit` is what finalizes it — and a hung 
 is escapable: an `approve {force:true}` there commits the current revision and drops
 the still-open threads.
 
+Terminal is **not strictly one-way**: a finished session can be **reopened** back to
+`revising` via `POST /api/sessions/:id/reopen` (the reverse edge). This powers
+worktree-keyed amendment: a `/otacon` run from inside an Implement build's worktree
+reopens the *same* session to amend the approved plan in place instead of spawning a
+second worktree. Reopen pins the diff baseline at the approved revision and keeps
+`prUrl` + `impl` intact, so the next submit diffs against what was approved and the
+amendment still belongs to the same build. Detection rests on the **`impl`** field on
+the session record (`{worktree, branch}`, deterministic from the title slug +
+`worktree.dir`), written at Implement-approve in the same registry write that flips to
+`implementing` (recorded at approve time, not at build start, so detection survives an
+aborted build). Terminal therefore means "over until explicitly reopened", not "forever".
+
 ```
                                          ┌─ Approve ──────────────► approved (terminal)
 draft ─► in_review ⇄ revising ──────────┤  (Send to agent ─► finalizing ─► submit ─┘
-                                         │   or ─► implementing, per the variant)
-                                         └─ Approve & Implement ──► implementing
-                                                                       │
-                                                  implement-done       │
-                                            ┌──────────────────────────┤
-                                            ▼                          ▼
-                                       implemented              implement_failed
+            ▲                            │   or ─► implementing, per the variant)
+            │                            └─ Approve & Implement ──► implementing
+            │                                                          │
+            │ reopen (from any                  implement-done         │
+            │ terminal state)             ┌──────────────────────────┤
+            │                             ▼                          ▼
+            └──────────────────────  implemented              implement_failed
                                         (terminal)                 (terminal)
 ```
+
+Any **terminal** state has a `reopen` reverse edge back to `revising` (the dashed line
+above), used by worktree-keyed amendment (above).
 
 ### Implement: worktree, per-phase commits, PR
 
@@ -1517,6 +1554,9 @@ looked in, and — when in a repo — mentions `--project` as an install option.
 ### Daily flow
 
 1. In any agent session in the repo: *"plan \<feature\> with otacon"* (or `/otacon`).
+   Running `/otacon <request>` from inside a build worktree of a finished plan offers
+   to **resume and amend** that plan (the agent confirms relatedness with you in the
+   terminal), revising it and pushing the same PR instead of starting fresh.
 2. The agent researches, runs `otacon start`, and grills you one question at a time —
    answer the cards in the browser (`otacon open`) or on your phone via the tailnet URL.
 3. The agent drafts, passes the linter, submits. You review: questions fire instantly,

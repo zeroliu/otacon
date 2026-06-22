@@ -2062,6 +2062,12 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 ## A distinct terminal `implement_failed`, not folding abort back to `approved`
 
+> **Note (terminal is now reopenable):** See "Reopen a terminal session to amend
+> it, keyed on the build worktree" below: terminal states are no longer strictly
+> one-way. A finished session (`approved`/`implemented`/`implement_failed`) can be
+> reopened back to `revising`. This does not change the terminal *set* or the
+> open-verb guard; it only adds a reverse edge.
+
 - **Decision:** An aborted/failed build lands in its own terminal status
   `implement_failed` (via `otacon implement-done --failed`), distinct from `implemented`
   and from `approved`. The terminal *set* is `{approved, implemented, implement_failed}`;
@@ -2075,6 +2081,33 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** The terminal-state naming settles (it is flagged provisional in the
   plan's Open Questions) — e.g. if a single `done`/`closed` state with an outcome field
   proves cleaner than two sibling terminal statuses.
+
+## Reopen a terminal session to amend it, keyed on the build worktree
+
+- **Decision:** A finished (terminal) session can be **reopened** back to `revising`
+  via `POST /api/sessions/:id/reopen`, instead of terminal being strictly one-way. The
+  reopen pins the diff baseline at the approved revision (`lastReviewedRevision =
+  revision`) and keeps `prUrl` + `impl` intact. To make this discoverable, the session
+  records an **`impl` field** (`{worktree, branch}`, deterministic from the title slug +
+  `worktree.dir`) the moment it flips to `implementing`, in the same registry write as
+  the status flip. A later `/otacon` run from inside that worktree matches `impl.worktree`
+  and reopens the same session.
+- **Why:** After an Implement build, the user often needs to iterate on the implemented
+  plan (fix a phase, adjust scope) without spawning a *second* otacon session and a
+  second build worktree for what is the same piece of work. Reopening the same session in
+  place keeps the plan history, transcript, threads, and PR link as one continuous
+  record, and pinning the baseline at the approved revision means the next submit diffs as
+  a clean amendment rather than re-surfacing the whole plan. Recording `impl` at
+  **approve** time (not at build start) means detection survives an aborted build: even an
+  `implement_failed` session knows its worktree, so a `/otacon` from there still finds and
+  reopens it. The reverse edge is narrow (one explicit endpoint), so the terminal *set*
+  and the open-verb guard (`E_SESSION_OVER`) are unchanged: terminal still means "over"
+  for every implicit path; it just stops meaning "forever".
+- **Revisit when:** Worktree paths stop being deterministic from the slug (e.g. a
+  collision-suffixed worktree dir), or reopen needs to fan out to more than the
+  build-worktree trigger (a UI "reopen" button, reopening a Save-approved session from an
+  arbitrary checkout), at which point matching may need to persist more than `{worktree,
+  branch}`.
 
 ## Build layout: worktree under .otacon, one commit per green phase, PR vs default branch
 
@@ -2657,6 +2690,56 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   cleared on failure so a later submit can retry rather than being poisoned permanently.
 - **Revisit when:** A way exists to distinguish a transient setup blip from a permanent
   break, so a hard break could be surfaced loudly instead of silently skipping the check.
+
+## Worktree-keyed resume: detect by stored `impl.worktree`, match in the resolver, own verb
+
+- **Decision:** A `/otacon <request>` run from inside an Implement build worktree reopens
+  the SAME finished session to amend it rather than starting a new one. Three coupled
+  choices make that work: (1) the owning session is found by the `impl.worktree` recorded
+  on the registry entry when the build was approved (not recomputed from the slug at
+  resume time); (2) `resolveSession`'s implicit default now matches an active session by
+  repo root OR build-worktree root, so once a session is reopened to `revising` every
+  command (submit, wait, ask, ...) resolves it from inside the worktree even though its
+  `.repo` is the main repo where planning happened (no per-command changes); (3) reopening
+  is its own verb, `otacon resume`, not an overload of `otacon start`.
+- **Why:** The stored worktree is authoritative: the agent stands in the worktree, but the
+  session's `.repo` is the main repo, so a repo-root match alone would always miss, and
+  recomputing the path from the slug would drift the moment the slug, worktree base, or
+  branch naming changes. Matching in the single resolver (one lever) keeps every verb
+  worktree-aware without touching submit/wait/ask, which already route through
+  `resolveSession`. `resume` stays separate because `start` mints + registers a brand-new
+  session: folding "reopen the old one" into it would make `start` guess from the cwd
+  whether the user meant fresh or amend, exactly the kind of unrecoverable wrong-plan guess
+  the resolver refuses elsewhere. `otacon status` surfaces the candidate (`resumeCandidate`)
+  over ALL sessions, not the repo-scoped list, for the same `.repo` ≠ worktree reason.
+- **Revisit when:** Build worktrees can host more than one session at a time (the
+  `worktreeOwners` length>1 refusal would need a smarter tiebreak), or `start` grows a flag
+  that should also reopen (so the two verbs reconverge).
+
+## Resume bootstrap: agent-judged relatedness + a terminal confirm, and amend-in-place
+
+- **Decision:** The protocol card teaches the agent, before `otacon start`, to check
+  `otacon status` for a `resumeCandidate` and decide whether to amend the finished plan
+  or plan fresh. The decision is the agent's: it reads the candidate plan, and if the
+  request is clearly unrelated it just starts fresh; if related (or it is unsure) it asks
+  the user in the terminal whether to resume and amend or start new. That terminal
+  question is the single, explicit exception to the "every question goes through
+  `otacon ask`" rule. On resume the build **amends in place**: it reuses the existing
+  worktree and `otacon/impl-<slug>` branch, builds on top of the existing commits scoped
+  to the phases this revision changed, and pushes to update the SAME PR rather than
+  opening a second worktree, branch, and PR.
+- **Why:** Relatedness is a judgment the daemon cannot make (it would need to read the
+  request and the plan), so the card hands it to the agent, which already has both. A
+  silent auto-resume would risk amending the wrong plan from a stale cwd; a silent
+  auto-fresh would throw away the in-place amend whenever the user actually wanted it, so
+  a one-line terminal confirm (the only point with no session open to route an `ask`
+  through) splits the difference cheaply. Amend-in-place keeps a revised plan's code on
+  the branch the original PR tracks, so a reviewer sees one evolving PR instead of two
+  competing worktrees, branches, and PRs for the same feature, and the existing commits
+  stay as history.
+- **Revisit when:** The relatedness call wants tooling (an `otacon`-side hint or a
+  similarity check) instead of pure agent judgment, or amendments need to diverge onto a
+  new branch/PR (a large pivot that should not pile onto the original PR).
 
 ## Live-activity stream: daemon-side, ephemeral, JSONL (not the JSON activity feed)
 
