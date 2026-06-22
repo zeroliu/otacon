@@ -3,7 +3,8 @@
 // fetch against the event feed; an EventSource reconnect re-syncs the same way
 // (DECISIONS.md "UI live updates: in-process Notifier, snapshot-first SSE").
 
-import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
+import { createContext, createElement, useContext, useEffect, useMemo, useState } from "react";
 import { maybeSelfHeal } from "./self-heal";
 import type { ConfigField, ScopeFieldError, ScopeValues } from "../shared/config";
 import type {
@@ -78,7 +79,22 @@ function patch(prev: SessionMap, id: string, fields: Partial<LiveSession>): Sess
   return new Map(prev).set(id, { ...existing, ...fields, changedAt: Date.now() });
 }
 
-export function useSessions(): { sessions: LiveSession[]; connected: boolean } {
+export interface SessionsState {
+  sessions: LiveSession[];
+  connected: boolean;
+}
+
+// One index SSE stream per client, shared through context. Before this, every
+// consumer (the app shell, the sidebar list, the switcher, the welcome pane, the
+// settings repo picker) opened its own `/api/stream` — three-plus concurrent
+// snapshot-replaying connections per client once the persistent shell landed.
+// The provider owns the single EventSource and the registry state; `useSessions`
+// is now a thin context read, so its `{ sessions, connected }` shape is unchanged
+// at every call site (DECISIONS "Index stream is shared via a provider").
+const SessionsContext = createContext<SessionsState | null>(null);
+
+/** Owns the single `/api/stream` connection and feeds every `useSessions()` reader. */
+export function SessionsProvider({ children }: { children: ReactNode }) {
   const [byId, setById] = useState<SessionMap>(new Map());
   const [connected, setConnected] = useState(false);
 
@@ -119,7 +135,21 @@ export function useSessions(): { sessions: LiveSession[]; connected: boolean } {
     () => [...byId.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     [byId],
   );
-  return { sessions, connected };
+  const value = useMemo<SessionsState>(() => ({ sessions, connected }), [sessions, connected]);
+  return createElement(SessionsContext.Provider, { value }, children);
+}
+
+/**
+ * The live session registry + link state, read from the shared provider. Every
+ * face (shell, sidebar list, switcher, welcome, settings) sees the same single
+ * stream. Throws if mounted outside `SessionsProvider` — a wiring bug, not a
+ * runtime condition, so it fails loud at the root rather than silently opening a
+ * second stream.
+ */
+export function useSessions(): SessionsState {
+  const ctx = useContext(SessionsContext);
+  if (!ctx) throw new Error("otacon: useSessions must be used within <SessionsProvider>");
+  return ctx;
 }
 
 export interface SessionDetail {

@@ -151,7 +151,8 @@ body::before {
 
 /* The graphic OTACON wordmark: a flat single-color silhouette (otacon.svg)
  * painted in the brand accent through a CSS mask, so it inherits the
- * light/dark + per-session accent rather than baking in a fixed color. */
+ * light/dark + per-session accent rather than baking in a fixed color. Used in
+ * the app shell sidebar header and the interim mobile masthead. */
 .wordmark {
   margin: 0;
   width: 116px;
@@ -638,7 +639,7 @@ code {
   box-shadow: 0 4px 14px rgb(0 0 0 / 7%);
 }
 
-/* The always-present bar: back + identity + controls + switcher on one line. */
+/* The always-present bar: back + identity + controls + the ☰ menu on one line. */
 .rh-bar {
   display: flex;
   align-items: center;
@@ -666,7 +667,10 @@ code {
   gap: 10px;
 }
 
-.review-header .switcher {
+/* The ☰ "show sessions" button sits at the bar's end (<960px), where the
+ * switcher used to. Hidden at ≥960px (the sidebar is the list) by the shell
+ * media query below. */
+.review-header .rh-menu {
   flex: none;
 }
 
@@ -2264,8 +2268,7 @@ code {
   color: var(--ink-soft);
 }
 
-.baseline select,
-.switch-select select {
+.baseline select {
   appearance: none;
   -webkit-appearance: none;
   padding: 6px 24px 6px 10px;
@@ -2278,8 +2281,7 @@ code {
   cursor: pointer;
 }
 
-.baseline select:focus-visible,
-.switch-select select:focus-visible {
+.baseline select:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
@@ -3904,100 +3906,14 @@ code {
 }
 
 /* ───────────────────────── phone polish (M5b) ─────────────────────────
- * The review UI one-thumb surface. Three instruments, one design family: the
- * topbar's session switcher (dropdown on desktop, an accent-coded chip strip
- * on phones), the section ⋯ menus (coarse anchoring — selection is miserable
- * on glass), and the sticky bar, which on a phone absorbs the header strip's
- * approve and the question tally so the whole control surface sits under the
- * thumb. One DOM throughout; the viewport decides which face shows.
+ * The review UI one-thumb surface. The instruments share one design family: the
+ * section ⋯ menus (coarse anchoring — selection is miserable on glass), and the
+ * sticky bar, which on a phone absorbs the header strip's approve and the
+ * question tally so the whole control surface sits under the thumb. Session
+ * switching itself is the shell's job now — the ☰ button opens the bottom-sheet
+ * session list (the mobile session sheet, below) — not a strip in this header.
+ * One DOM throughout; the viewport decides which face shows.
  */
-
-/* ── topbar: backlink + switcher share the screen's first line ── */
-
-.topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  margin-bottom: 16px;
-  min-width: 0;
-}
-
-.topbar .backlink {
-  flex: none;
-  margin-bottom: 0;
-}
-
-.switcher {
-  min-width: 0;
-}
-
-.switch-select {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font: 600 10.5px/1 var(--mono);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--ink-soft);
-}
-
-.switch-select select {
-  max-width: min(280px, 52vw);
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* The chip strip: phone-only, horizontally scrollable, right edge fading to
- * say "there's more" without a scrollbar. */
-.switch-chips {
-  display: none;
-}
-
-.switch-chip {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 44px;
-  padding: 8px 13px;
-  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
-  border: 1px solid var(--line);
-  border-top: 2px solid var(--accent);
-  color: inherit;
-  text-decoration: none;
-  font: 600 12px/1.2 var(--mono);
-}
-
-.switch-chip:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-/* The chip you are reading: filled blade, no guessing which plan eats a tap. */
-.switch-on {
-  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
-}
-
-.switch-name {
-  max-width: 17ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.switch-state {
-  color: var(--accent);
-  font-size: 11px;
-}
-
-.switch-unread {
-  font: 700 10.5px/1 var(--mono);
-  color: var(--accent);
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-}
 
 /* ── section ⋯ menus: coarse anchors, always on offer ── */
 
@@ -4160,10 +4076,10 @@ code {
     font-size: 16px;
   }
 
-  /* The sticky header goes lean on phone (review UI): title + switcher chips
-   * + the clean⇄diff toggle. The revision and Approve fold away — Approve to the
-   * fixed bottom bar, so it is never shown in two places; the toggle stays, so
-   * diff review is still reachable on a phone. */
+  /* The sticky header goes lean on phone (review UI): title + the clean⇄diff
+   * toggle + the ☰ "show sessions" button. The revision and Approve fold away —
+   * Approve to the fixed bottom bar, so it is never shown in two places; the
+   * toggle stays, so diff review is still reachable on a phone. */
   .review-header .session-rev,
   .review-header .ctrl-approve,
   .rh-detail {
@@ -4174,13 +4090,8 @@ code {
     font-size: 16px;
   }
 
-  /* The chip strip takes its own line under the title so it scrolls full-width. */
-  .review-header .switcher {
-    flex-basis: 100%;
-  }
-
   /* The ❓-queue jump (bottom bar, phone-only) scrolls block:start; clear the
-   * lean header — title + chips wrap to two lines — so it lands fully visible. */
+   * lean header so the queue lands fully visible below it. */
   .grill-queue {
     scroll-margin-top: 96px;
   }
@@ -4298,26 +4209,6 @@ code {
     background: color-mix(in srgb, var(--surface) 86%, transparent);
   }
 
-  /* ── switcher: the dropdown yields to the chip strip ── */
-  .switch-select {
-    display: none;
-  }
-
-  .switch-chips {
-    display: flex;
-    gap: 8px;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-    padding: 2px 0;
-    mask-image: linear-gradient(90deg, #000 calc(100% - 22px), transparent);
-    -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 22px), transparent);
-  }
-
-  .switch-chips::-webkit-scrollbar {
-    display: none;
-  }
-
   /* Bigger thumb pad for the ⋯ without inflating the header line. */
   .sec-menu {
     width: 44px;
@@ -4408,7 +4299,7 @@ code {
   outline-offset: -2px;
 }
 
-/* The Project repo picker — reuses the .switch-select dropdown chrome. */
+/* The Project repo picker — the settings-screen native-select dropdown chrome. */
 .repo-picker {
   display: flex;
   align-items: center;
@@ -4752,6 +4643,523 @@ code {
     flex: 1;
     width: auto;
   }
+}
+
+/* ───────────────────────── sidebar session list ─────────────────────────
+ * The reusable list for the persistent sidebar (app shell): condensed,
+ * scannable rows — a denser sibling of the home .card, accent-aware, ruled off
+ * with the same hairline. Wired into nothing yet; ships as a component here. */
+
+.session-list {
+  display: flex;
+  flex-direction: column;
+}
+
+/* One row: a glyph rail, the title + repo/branch subline, then the agent dot,
+ * unread badge, and a hover-revealed delete — laid out like a tight .card-meta. */
+.sl-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  padding: 8px 6px;
+  border-top: 1px solid var(--line);
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+@media (hover: hover) {
+  .sl-row:hover {
+    background: color-mix(in srgb, var(--accent) 4%, transparent);
+    border-top-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  }
+}
+
+.sl-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The row you are viewing: a filled accent blade so the "you are here" anchor
+ * is unmistakable, the same cue the switcher's on-chip carries. */
+.sl-row.current {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-top-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+}
+
+.sl-row.current::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+}
+
+.sl-glyph {
+  flex: none;
+  width: 1.2em;
+  text-align: center;
+  color: var(--accent);
+  font: 13px/1 var(--mono);
+}
+
+/* Title over subline, both ellipsized so a long name or deep repo path can't
+ * widen the row; min-width:0 lets the flex child actually shrink to clip. */
+.sl-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sl-title {
+  font: 650 13px/1.25 var(--sans);
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sl-where {
+  font: 11px/1.3 var(--mono);
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sl-branch {
+  color: var(--ink-soft);
+}
+
+.sl-unread {
+  flex: none;
+  font: 700 10.5px/1 var(--mono);
+  color: var(--accent);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+/* The per-row delete: hidden until the row is hovered or the button itself is
+ * focused (keyboard reach is preserved), mirroring the home card's .card-delete. */
+.sl-delete {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--ink-soft);
+  font: 11px/1 var(--mono);
+  cursor: pointer;
+  opacity: 0.5;
+  transition: opacity 0.12s ease, color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+/* Where hover exists, keep the ✕ out of sight until the row is hovered or it
+ * holds focus — the list stays calm, the control stays one reveal away. */
+@media (hover: hover) {
+  .sl-delete {
+    opacity: 0;
+  }
+
+  .sl-row:hover .sl-delete,
+  .sl-delete:focus-visible {
+    opacity: 1;
+  }
+
+  .sl-delete:hover {
+    color: var(--chip-await-ink);
+    border-color: color-mix(in srgb, var(--chip-await-ink) 45%, transparent);
+    background: var(--chip-await-bg);
+  }
+}
+
+.sl-delete:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The collapsed approved disclosure, parallel to home's .approved-group but
+ * sized for the sidebar: the same button + count + caret idiom, holding the
+ * condensed over rows. */
+.sl-approved {
+  border-top: 1px solid var(--line);
+}
+
+.sl-approved-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 44px;
+  padding: 9px 6px;
+  border: none;
+  background: none;
+  color: var(--ink-soft);
+  font: 600 11px/1 var(--mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  cursor: pointer;
+  text-align: left;
+}
+
+.sl-approved-toggle:hover {
+  color: var(--ink);
+}
+
+.sl-approved-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.sl-approved-word {
+  flex: none;
+  color: var(--ink);
+}
+
+.sl-approved-count {
+  flex: none;
+  color: var(--accent);
+}
+
+.sl-approved-caret {
+  margin-left: auto;
+  flex: none;
+  color: var(--accent);
+}
+
+/* Drop the first row's top rule — the toggle already rules the section off, so
+ * a doubled hairline would read as a gap. */
+.sl-approved-rows .sl-row:first-child {
+  border-top: none;
+}
+
+/* ───────────────────────── app shell ─────────────────────────
+ *
+ * The persistent frame (app shell): a fixed left sidebar (wordmark, settings,
+ * link-state, collapse toggle, live SessionList) beside the routed content
+ * track. Single column on mobile/tablet — the sidebar is hidden below 960px and
+ * the session list is reached through the ☰ overflow menu (the mobile session
+ * sheet, below); at ≥960px the sidebar appears as a 240px column and can
+ * collapse to a one-column content view with a » handle. The chrome is
+ * accent-neutral: nothing here sets --hue, so --accent resolves to the brand
+ * olive default; only an open review tints. */
+
+.app-shell {
+  display: block; /* single column until the sidebar breakpoint */
+}
+
+.app-sidebar {
+  display: none; /* hidden on mobile/tablet — the ☰ sheet is the face there */
+}
+
+.app-content {
+  min-width: 0; /* lets the inner .page / .page-review keep their own centering */
+}
+
+@media (min-width: 960px) {
+  .app-shell {
+    display: grid;
+    /* --sidebar-width is the reader's dragged width (sidebar-state), seeded inline
+     * on .app-shell; 240px is the default before any drag. */
+    grid-template-columns: var(--sidebar-width, 240px) minmax(0, 1fr);
+  }
+
+  /* Collapsed: drop the sidebar track, hand the whole width to the content. */
+  .app-shell.collapsed {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-sidebar {
+    display: flex;
+    flex-direction: column;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+    padding: 18px 12px 24px;
+    border-right: 1px solid var(--line-strong);
+    background: color-mix(in srgb, var(--surface) 60%, var(--bg));
+  }
+
+  /* Collapsed hides the whole column — the » handle in the content reopens it. */
+  .app-shell.collapsed .app-sidebar {
+    display: none;
+  }
+
+  /* The review header's back-link and ☰ menu are redundant when the sidebar
+   * provides both (home link via the wordmark, switching via the list), so they
+   * fold away at the desktop sidebar width. They stay rendered for <960px, where
+   * the ☰ menu opens the session sheet — the only session-switching face there. */
+  .review-header .backlink,
+  .review-header .rh-menu {
+    display: none;
+  }
+}
+
+/* The sidebar header furniture: the wordmark on the left, the settings gear and
+ * the « collapse toggle grouped on the right of the same row. */
+.app-sidebar-head {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 6px 14px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.app-home {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+  width: max-content;
+}
+
+/* A tighter wordmark than the old masthead's (the column is 240px). The shared
+ * .wordmark rule paints the mask in --accent; only the size differs here. */
+.app-home .wordmark {
+  width: 96px;
+}
+
+.app-home:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.app-sidebar-tools {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+/* The « collapse toggle: a quiet mono glyph beside the settings gear, accent on
+ * hover, matching the gear's treatment. */
+.app-collapse {
+  border: none;
+  background: none;
+  padding: 2px 4px;
+  color: var(--ink-soft);
+  font: 14px/1 var(--mono);
+  cursor: pointer;
+}
+
+.app-collapse:hover,
+.app-collapse:focus-visible {
+  color: var(--accent);
+}
+
+/* The drag-resize separator on the sidebar's right edge. It lives inside
+ * .app-sidebar so it inherits the column's display gating (gone below 960px and
+ * when collapsed); position:fixed pins it to the boundary — left:--sidebar-width
+ * measured from the viewport edge, since the shell starts at left:0 — and escapes
+ * the column's own overflow so it spans the full height without scrolling. */
+.app-resize {
+  display: none;
+}
+
+@media (min-width: 960px) {
+  .app-shell:not(.collapsed) .app-resize {
+    display: block;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: var(--sidebar-width, 240px);
+    width: 9px;
+    transform: translateX(-5px);
+    z-index: 30;
+    cursor: col-resize;
+    /* a centered hairline that warms to the accent on hover / keyboard focus */
+    background: linear-gradient(var(--line-strong), var(--line-strong)) center / 1px 100% no-repeat;
+  }
+
+  .app-shell:not(.collapsed) .app-resize:hover,
+  .app-shell:not(.collapsed) .app-resize:focus-visible {
+    background-image: linear-gradient(var(--accent), var(--accent));
+    background-size: 2px 100%;
+    outline: none;
+  }
+}
+
+/* While a drag is live: kill text selection and force the resize cursor
+ * everywhere, so dragging across the list never selects rows. */
+.app-shell.resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+/* The » expand handle: pinned near the content's top-left while the sidebar is
+ * folded away. ≥960px only — below that the sidebar is already hidden behind the
+ * mobile face, so a reopen handle would dangle with nothing to reopen. */
+.app-expand {
+  display: none;
+}
+
+@media (min-width: 960px) {
+  .app-shell.collapsed .app-expand {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    position: sticky;
+    top: 12px;
+    z-index: 25;
+    float: left;
+    margin: 12px 0 0 12px;
+    width: 30px;
+    height: 30px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: var(--surface);
+    color: var(--ink-soft);
+    font: 14px/1 var(--mono);
+    cursor: pointer;
+    box-shadow: var(--shadow);
+  }
+
+  .app-shell.collapsed .app-expand:hover,
+  .app-shell.collapsed .app-expand:focus-visible {
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+  }
+}
+
+/* ───────────────────── mobile session sheet (<960px) ─────────────────────
+ *
+ * The overflow menu that replaced the in-header switcher: below 960px the
+ * sidebar is hidden, so the ☰ button (in the review header, or in the shell's
+ * mini top-bar on the welcome / settings panes) opens a bottom-docked sheet that
+ * renders the live SessionList. At ≥960px none of this shows — the sidebar is
+ * the list, and the » expand handle is the equivalent "show sessions" control. */
+
+/* The ☰ "show sessions" button: a quiet lozenge, accent on hover, matching the
+ * settings gear / « collapse glyph treatment. Hidden at ≥960px (the sidebar is
+ * the list). The same glyph reads everywhere it appears (header + mini-bar). */
+.ss-menu {
+  display: inline-grid;
+  place-items: center;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 4px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: none;
+  color: var(--ink-soft);
+  font: 15px/1 var(--mono);
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+
+.ss-menu:hover,
+.ss-menu:focus-visible {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line-strong));
+  outline: none;
+}
+
+/* The shell mini top-bar: wordmark + settings gear, on the welcome / settings
+ * panes only (a review screen carries its own ☰ in the review header, and the
+ * welcome pane renders the session list inline below 960px). Accent-neutral,
+ * lightweight — a single hairline under it, no fill. Hidden at ≥960px. */
+.app-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 14px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.app-topbar-home {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+/* A compact wordmark for the slim bar; the shared .wordmark rule paints it. */
+.app-topbar-home .wordmark {
+  width: 84px;
+}
+
+.app-topbar-home:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+@media (min-width: 960px) {
+  /* The sidebar is the list at the desktop width: every <960px session affordance
+   * folds away (the in-header ☰ folds via the shell media query above). */
+  .app-topbar,
+  .ss-menu {
+    display: none;
+  }
+}
+
+/* The sheet scrim: dims + blurs the page behind, dismiss on tap. Mirrors the
+ * approve/delete overlay so the modal vocabulary stays one family. */
+.ss-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: color-mix(in srgb, var(--ink) 32%, transparent);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  animation: overlay-in 0.15s ease-out both;
+}
+
+/* The bottom-docked panel: rides --kb-inset like the review sheets, capped in
+ * height so a long list scrolls inside it rather than off-screen. */
+.ss-sheet {
+  position: fixed;
+  left: 50%;
+  bottom: calc(14px + env(safe-area-inset-bottom) + var(--kb-inset, 0px));
+  transform: translateX(-50%);
+  width: min(440px, calc(100vw - 24px));
+  max-height: min(72vh, 560px);
+  display: flex;
+  flex-direction: column;
+  padding: 12px 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-top: 2px solid var(--accent);
+  box-shadow: var(--shadow), 0 18px 48px rgb(0 0 0 / 18%);
+  animation: sheet-in 0.18s cubic-bezier(0.22, 0.7, 0.3, 1) both;
+}
+
+.ss-head {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-bottom: 4px;
+  padding: 0 4px;
+  font: 600 10px/1 var(--mono);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.ss-title {
+  color: var(--accent);
+}
+
+.ss-head .composer-close {
+  margin-left: auto;
+}
+
+/* The list scrolls inside the sheet; its own rows carry their accents. */
+.ss-sheet .session-list {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* ───────────────────────── motion preferences ───────────────────────── */

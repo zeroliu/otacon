@@ -2708,28 +2708,28 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   restart the daemon in-place to the new version without waiting for the next command (e.g. by
   re-exec'ing the freshly-installed binary the way `maybeAutoUpdate` does).
 
-## Session nav shortcut: `[`/`]` walk the switcher's active sessions
+## Session nav shortcut: `[`/`]` walk the active sessions (mounted on the app shell)
 
-- **Decision:** On the review screen, `[` steps to the previous session and `]` to the next,
-  over the switcher's `active` list (the activity-ordered, non-over set, i.e. the exact
-  chips / dropdown order, §7), wrapping at both ends. The shortcut is review-screen-only and is
-  mounted on the `SessionSwitcher` (`useSessionNav`, above the `byActivity.length === 0`
-  early return so the hook order stays stable). The "don't steal keys from a focused text
-  field" rule is a single shared guard, `isTypingTarget` (`src/ui/review/session-nav.ts`),
-  which the session-screen keydown handler now also calls instead of its old inline
-  tag/contentEditable check.
+- **Decision:** `[` steps to the previous session and `]` to the next, over the `active`
+  list (the activity-ordered, non-over set, i.e. the exact sidebar / session-sheet order,
+  §7), wrapping at both ends. The single `useSessionNav` mount lives on the **app shell**
+  (`src/ui/shell.tsx`) — the one element present on every route — not on the switcher, so the
+  shortcut is live everywhere (welcome / settings / review), not review-screen-only. The
+  "don't steal keys from a focused text field" rule is a single shared guard,
+  `isTypingTarget` (`src/ui/review/session-nav.ts`), which the session-screen keydown handler
+  also calls instead of its old inline tag/contentEditable check.
 - **Why:** `[`/`]` were free (j/k jump changed sections, c/q comment/ask) and read as the
   conventional prev/next pair, so they don't collide with the existing verbs or fight muscle
   memory; modified chords are left alone so Cmd+[ / Cmd+] stay browser back/forward.
-  Navigating the switcher's `active` set (not the full registry) means the keyboard walks
-  exactly what the eyes see in the strip, in the same order, with no surprise stops on hidden
-  over sessions. Mounting on the switcher reuses the list it already streams, so the shortcut
-  needs no second index SSE subscription. Collapsing the two copies of the typing-guard onto
-  one `isTypingTarget` keeps the nav hook and the c/q/j/k handler from ever disagreeing about
-  what counts as "typing".
-- **Revisit when:** A second surface wants the shortcut (it would need its own session list,
-  or the hook lifts to a shared provider), the navigable set should differ from the visible
-  strip, or wrap-at-ends becomes more annoying than convenient (clamp instead).
+  Navigating the `active` set (not the full registry) means the keyboard walks exactly what
+  the eyes see, in the same order, with no surprise stops on hidden over sessions. The mount
+  moved from the switcher to the shell when the shell became the persistent frame: keeping it
+  there would have left it review-only and would have competed with the shell's own list, so
+  there must be exactly one mount and the shell is the natural home. Collapsing the two copies
+  of the typing-guard onto one `isTypingTarget` keeps the nav hook and the c/q/j/k handler
+  from ever disagreeing about what counts as "typing".
+- **Revisit when:** The navigable set should differ from the visible list, or wrap-at-ends
+  becomes more annoying than convenient (clamp instead).
 
 ## L8 diagram check: headless render, not a heuristic
 
@@ -3082,3 +3082,186 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   untouched.
 - **Revisit when:** Reconciliation needs more than the prior value (e.g. a full answer
   history), or the daemon should drive the rewrite rather than hand it to the agent.
+
+## App shell: a persistent frame replaces the list-page / detail-page split
+
+- **Decision:** Every route renders inside one `AppShell` (`src/ui/shell.tsx`): a left
+  sidebar (wordmark home-link, settings, collapse toggle, live `SessionList`)
+  beside a content track holding the routed screen. `app.tsx` resolves the route to a screen
+  and returns `<AppShell>{screen}</AppShell>` — the chrome lives outside the route switch.
+  The old index page is gone; `/` is now a welcome pane in the track.
+- **Why:** Before the shell, the session list lived only on `/` and the only way to switch
+  was the review header's switcher or a trip home — the list vanished the moment you opened a
+  plan. A persistent sidebar keeps the whole queue one click away from anywhere (review,
+  settings, welcome), which is the model every multi-item review tool converges on, and gives
+  the `[`/`]` shortcut a single always-mounted home. Wrapping at the `App()` level (not inside
+  each screen) means the chrome is written once and can't drift between routes.
+- **Revisit when:** A route needs to escape the shell (a full-bleed surface), or the shell
+  grows enough that a real router earns its keep over the hand-rolled one.
+
+## Fixed left column + centered content, not a third review-grid column
+
+- **Decision:** The shell is a two-track grid (`240px minmax(0, 1fr)`); the review content
+  keeps its own centered `.page-review` measure and the existing two-column
+  `.review-main` + `.rail` layout *inside* the content track. The sidebar is not a third
+  column of the review grid — `.app-content` only sets `min-width: 0` so the inner page keeps
+  centering, and touches nothing about its max-width or the rail.
+- **Why:** Folding the session list into the review grid would have entangled two unrelated
+  layouts — the rail sticks at `top: 60px` under the review header, the sidebar sticks at
+  `top: 0` over the full viewport, and they collapse at different breakpoints. Keeping the
+  shell a layer *outside* the content lets the welcome and settings panes reuse the same
+  centered `.page` with zero review-specific CSS, and leaves the review layout (and its
+  sticky offsets) exactly as shipped.
+- **Revisit when:** The content track needs to react to the sidebar's presence beyond simple
+  reflow, or a full-width review surface wants the rail and sidebar to share a grid.
+
+## Sidebar ↔ mobile threshold at 960px (above the review grid's 721px)
+
+- **Decision:** The sidebar shows at `≥960px` and is hidden below it; the review grid's own
+  one-column → two-column switch stays at its existing `721px`. So 721–959px is a band where
+  the review screen is two-column (main + rail) but the sidebar is still hidden and the ☰
+  overflow-menu sheet is the session-switching face.
+- **Why:** A 240px sidebar plus the ~720px reading measure plus the rail needs more room than
+  the rail alone — reusing 721px would have crushed the content the moment the sidebar
+  appeared. 960px is the conventional "comfortable three-zone desktop" line and leaves the
+  reading measure intact once the sidebar lands. The sub-960 band is covered by the ☰ sheet
+  (which replaced the interim header switcher — see "Retire the switcher…"), so nothing is lost
+  there.
+- **Revisit when:** The sidebar/content widths are tuned enough to move the threshold, or the
+  sheet ↔ sidebar handoff wants a different crossover than the chrome's 960px line.
+
+## Collapsible sidebar, persisted in localStorage
+
+- **Decision:** The desktop sidebar collapses to a one-column content view via a `«`/`»`
+  toggle; the flag persists per-device in `localStorage` (`otacon-sidebar-collapsed`, key
+  set only when collapsed), default expanded. The pure `read/writeSidebarCollapsed` helpers
+  tolerate an absent or throwing store (return the expanded default, never throw), and
+  `useSidebarCollapsed` seeds from the read and writes through on toggle
+  (`src/ui/sidebar-state.ts`).
+- **Why:** A reviewer who wants maximum reading width shouldn't re-collapse on every reload,
+  so the choice persists — and it's a pure view preference the daemon has no business
+  knowing, so it lives in the browser like the unread badges (seen.ts) and the renderer-reload
+  guard, with the same "storage may be hostile" guard. Defaulting to expanded means a
+  first-time visitor sees the session list, not a mystery handle.
+- **Revisit when:** The collapse state should sync across devices (it would move to daemon
+  config). The remembered-width follow-up is now its own decision below.
+
+## Drag-resizable sidebar, width persisted in localStorage
+
+- **Decision:** The desktop sidebar's width is reader-adjustable: a `role="separator"` handle
+  on its right edge drags the column (pointer + ←/→ keyboard, persisted), bounded to
+  `[200, 480]px`, default 240. The grid track reads a `--sidebar-width` custom property set
+  inline on `.app-shell`; the width persists per-device in `localStorage`
+  (`otacon-sidebar-width`) via `read/writeSidebarWidth` + `clampSidebarWidth` in
+  `sidebar-state.ts`, which clamp on both write and read so a stored value from a wider
+  monitor can never widen the column past the current max, and tolerate an absent / throwing
+  store like the collapse flag.
+- **Why:** Reviewers split between wanting long titles legible (wider) and wanting maximum
+  reading measure (narrower); a fixed 240px served neither well, and collapse is too blunt (all
+  or nothing). It is a pure per-device view preference the daemon has no business knowing, so
+  it lives in the browser beside the collapse flag, with the same hostile-store guard. The
+  clamp bounds keep the reading column + threads rail from being crushed at the wide end and
+  the rows readable at the narrow end. A fixed-position handle at `left: var(--sidebar-width)`
+  tracks the boundary without a wrapper, and escapes the sidebar's own `overflow-y` scroll.
+- **Revisit when:** The width should sync across devices (move to daemon config), or the
+  resize wants snap points / a double-click-to-reset affordance.
+
+## Retire index-screen.tsx in favor of welcome + sidebar
+
+- **Decision:** `src/ui/index-screen.tsx` is deleted. Its two roles split: the session list
+  became the sidebar's `SessionList` (Phase 1), and its `/` role became `welcome.tsx` — the
+  empty-state copy (lifted verbatim, offline hint included) when the registry is empty, a
+  short "pick a session from the sidebar" prompt otherwise.
+- **Why:** Once the sidebar owns the live list on every route, a separate index page would be
+  a second, divergent copy of the same list that only shows on `/` — exactly the kind of
+  duplicate surface the shared `partitionByApproval` / `stateOf` split exists to prevent.
+  Collapsing it to a thin welcome pane leaves one list implementation and a `/` that orients
+  rather than re-lists. Below 960px the sidebar is hidden; the welcome pane reaches the list
+  through the shell's ☰ overflow-menu sheet (see "Retire the switcher…"), so `/` is never a
+  dead end on a phone.
+- **Revisit when:** `/` should carry more than a welcome (a dashboard / activity overview), or
+  a mobile list surface distinct from the sidebar/sheet is wanted.
+
+## Index stream is shared via a provider (one `/api/stream` per client)
+
+- **Decision:** A single `SessionsProvider` at the React root (`main.tsx`) owns the one
+  `/api/stream` EventSource and the registry state; `useSessions()` is a context read that
+  returns the same `{ sessions, connected }` shape it always did. Every face — the app shell,
+  the sidebar `SessionList`, the mobile session sheet's `SessionList`, the welcome pane, the
+  settings repo picker — reads that one stream. The hook throws if used outside the provider (a
+  wiring bug, caught loud at the root, not a silent fallback to a second stream).
+- **Why:** `useSessions()` used to open its own EventSource per call, so a single review route
+  ran three concurrent index streams (shell + sidebar list + switcher) and the welcome route
+  three (shell + sidebar list + welcome) — each one replays the full snapshot and gets every
+  fan-out frame, multiplying the daemon's per-client SSE cost for identical data. The
+  persistent app shell made this strictly worse by adding an always-mounted consumer on every
+  route. Hoisting the connection into a provider collapses N duplicate streams to one with no
+  behavior change (same snapshot-first sync, same self-heal, same EventSource auto-reconnect)
+  and no call-site change beyond wrapping the root once.
+- **Revisit when:** A consumer needs a *filtered* or differently-scoped registry view (it
+  would select off the shared state, still one stream), or the provider's single state object
+  causes spurious re-renders broad enough to warrant splitting `sessions` from `connected`.
+
+## Retire the switcher for one session list reached by an overflow-menu sheet (<960px)
+
+- **Decision:** `src/ui/switcher.tsx` is deleted. Below 960px the session list is no longer a
+  per-review header strip (a `<select>` + accent chips that only existed on an open plan) but
+  the same `SessionList` the sidebar uses, surfaced through an **overflow menu**: a ☰ "show
+  sessions" button opens a bottom-docked sheet (scrim, `useScrollLock`, `--kb-inset`, dismiss
+  on row tap / scrim tap / Esc / route change). The ☰ button lives in the review header on a
+  plan; the welcome / settings panes instead carry a slim shell mini top-bar (wordmark +
+  settings gear), and the home route renders the list inline below 960px (see "Mobile home
+  renders the session list inline"), so the list is reachable from **every** route. The shell hosts the one sheet and
+  publishes its opener through `SessionSheetContext` (the review header is the shell's
+  `children`, so context beats threading a prop down); the open/close logic is a pure
+  `shouldCloseSheet` / `isDesktopWidth` unit (`session-sheet-state.ts`, tested) and the React
+  skin is `session-sheet.tsx`. At ≥960px the sheet is never opened — the sidebar is the list,
+  and the `»` collapsed-sidebar handle is the equivalent "show sessions" control, sharing the
+  affordance's intent so mobile and desktop read as the same control.
+- **Why:** The switcher and the sidebar were two divergent renderings of the same active-session
+  set — exactly the duplication the shared `partitionByApproval` / `stateOf` split exists to
+  kill — and the switcher only appeared on a review screen, so the welcome and settings panes
+  had **no** way to the list below 960px (a real gap, not just redundancy). Reusing the one
+  `SessionList` in a sheet collapses both surfaces to a single list implementation and closes
+  the gap on every route. A sheet (not the desktop sidebar slid in) keeps the mobile face a
+  thumb-range, scrim-backed surface consistent with the composer / section-menu / approve
+  sheets already in the review UI, and pulling the breakpoint/route-change decision into a pure
+  function lets the strand-open-across-resize and close-on-navigate rules be tested without a
+  render (the same split as `nextCompact` / `keyboardInset`).
+- **Revisit when:** The list grows a mobile-only affordance the sidebar lacks (search, sort,
+  multi-select) and the sheet needs its own list variant, or the sheet should become a fuller
+  navigation drawer (settings / docs links beside the sessions) rather than just the list.
+
+## Drop the browser↔daemon link dot from the sidebar header
+
+- **Decision:** The `LinkState` "link" dot is removed from the app shell sidebar header; the
+  header row is now just the wordmark (left) plus the settings gear + `«` collapse toggle
+  (right). The dot is kept only in the review header's status row, beside the status chip and
+  the agent-presence dot, where it reads in context. The `LinkState` component and the
+  `connected` flag are unchanged (the welcome pane still uses `connected` for its offline hint).
+- **Why:** A persistent green dot in the top-left chrome, present on every route, read as a
+  generic "online" light and competed with the agent-presence dot for the same "is it live"
+  meaning — two pulsing dots that mean different things (browser↔daemon link vs agent on the
+  line) are more confusing the more prominent the weaker one is. The link is rarely down on a
+  local daemon, and when it matters (an open review) the review header still shows it next to
+  the signals it belongs with. Folding the header to wordmark + actions also makes room for the
+  one-row furniture layout.
+- **Revisit when:** The shell gains a non-local / remote daemon mode where the link genuinely
+  drops often, and a global connectivity indicator earns its place back.
+
+## Mobile home renders the session list inline (not a welcome prompt)
+
+- **Decision:** Below 960px the `/` welcome pane renders the live `SessionList` (the condensed
+  cards) inline instead of the "pick a session" prompt; the prompt is desktop-only (where the
+  sidebar already holds the list). A shared `useDesktopWidth()` hook (`viewport.ts`, off the
+  same 960px media query the shell + sheet use) picks the face. The mobile mini top-bar carries
+  the wordmark + settings gear (no ☰); the ☰ overflow sheet is now a review-screen affordance.
+- **Why:** With the sidebar hidden on a phone, a `/` that only said "open a session from the
+  sidebar" pointed at a list the phone couldn't show — the home route felt broken. The home
+  screen has always been the session index on a phone, so rendering the cards there restores
+  that and makes the list the page rather than something hidden behind a menu that duplicates
+  it. Settings stays reachable through the mini-bar gear (the prior gap where the mini-bar's ☰
+  reached the list but nothing reached settings). One `SessionList` still backs all three
+  placements (sidebar, sheet, inline), so there is no divergent mobile list.
+- **Revisit when:** The phone home wants more than the list (a dashboard / activity overview
+  above it), or the inline list and the sheet diverge enough to warrant separate components.
