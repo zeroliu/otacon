@@ -215,7 +215,10 @@ ${protocolCard('otacon')}`;
 }
 
 /**
- * THIS repo's dogfood wrapper — the committed \`.claude/skills/otacon/SKILL.md\`.
+ * THIS repo's dogfood wrapper — the committed \`.claude/skills/otacon-dev/SKILL.md\`.
+ * Named \`otacon-dev\` (not \`otacon\`) so it never collides with the installed
+ * product skill (\`otacon\`) when developing otacon itself: \`/otacon\` stays the
+ * real product, \`/otacon-dev\` is this source-mode wrapper.
  * It is the same protocol card as \`skillMd()\`, but with the
  * \`./bin/otacon\` run-from-source command prefix and a repo preamble (run from
  * source, restart after daemon edits). Generated from this function and never
@@ -225,7 +228,7 @@ ${protocolCard('otacon')}`;
  */
 export function dogfoodSkillMd(): string {
   return `---
-name: otacon
+name: otacon-dev
 description: Plan a feature for THIS repo through an otacon review session — grill interview, schema'd plan, browser/phone review with anchored comments, approved plan saved to a home archive (and your project on Save). Use when the user asks to plan something with otacon, types /otacon, or wants a reviewed implementation plan before coding. Replaces native plan mode. Dogfoods otacon on its own development.
 ---
 

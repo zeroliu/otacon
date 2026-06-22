@@ -4,7 +4,7 @@
  * `package.json` — single-source versioning. `package.json` is the only file to
  * bump; `npm version` fires the `version` lifecycle hook (see package.json) which
  * runs this and stages the regenerated mirror. Same generated-file pattern as the
- * dogfood `.claude/skills/otacon/SKILL.md`.
+ * dogfood `.claude/skills/otacon-dev/SKILL.md`.
  *
  * Run with: `bun run scripts/gen-version.ts` (or `bun run gen:version`).
  */

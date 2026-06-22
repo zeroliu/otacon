@@ -1436,8 +1436,11 @@ on every call).
 **Single source for the protocol card.** The card text is built once, parametrized
 only by command prefix (`protocolCard(cmd)` in `src/cli/install/assets.ts`): the
 installed wrappers use `otacon`, while this repo's own committed dogfood wrapper
-(`.claude/skills/otacon/SKILL.md`) uses the run-from-source `./bin/otacon` prefix and
-prepends a repo preamble. The dogfood file is **generated** from `dogfoodSkillMd()`,
+(`.claude/skills/otacon-dev/SKILL.md`) uses the run-from-source `./bin/otacon` prefix and
+prepends a repo preamble. The dogfood wrapper is named `otacon-dev`, not `otacon`, so it
+never collides with the installed product skill when developing otacon itself: in this
+repo `/otacon` stays the real product and `/otacon-dev` is the source-mode wrapper. The
+dogfood file is **generated** from `dogfoodSkillMd()`,
 not hand-edited, and a test (`assets.test.ts`) asserts the committed file equals that
 output — so a protocol change can never silently drift between what `otacon install`
 writes elsewhere and what this repo runs.

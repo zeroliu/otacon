@@ -1623,8 +1623,11 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   so the review UI exists from the first second. The protocol card is built once by
   `protocolCard(cmd)`, parametrized only by command prefix: the installed wrapper
   (`skillMd`, shared by all three agents) uses `otacon`; this repo's committed dogfood wrapper
-  (`dogfoodSkillMd`, written to `.claude/skills/otacon/SKILL.md`) uses `./bin/otacon`
-  and prepends a repo preamble. The dogfood file is generated, never hand-edited, and
+  (`dogfoodSkillMd`, written to `.claude/skills/otacon-dev/SKILL.md`) uses `./bin/otacon`
+  and prepends a repo preamble. The dogfood wrapper is **named `otacon-dev`, not `otacon`**,
+  so it never collides with the installed product skill (`otacon`) when developing otacon
+  itself — `/otacon` invokes the real product, `/otacon-dev` the source-mode wrapper. The
+  dogfood file is generated, never hand-edited, and
   `assets.test.ts` asserts the committed file equals `dogfoodSkillMd()`.
 - **Why:** Start-first is the whole point of live activity — minting the session only
   after research wastes the watch window the feature exists to provide. Single-source
@@ -1633,10 +1636,17 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   edit could silently update one and not the other. The equality test turns that drift
   into a CI failure. `otacon install` into other repos is unchanged — it writes the
   plain-`otacon` wrapper, which already works anywhere; only this repo needs the
-  source-mode variant, so no project-scoped install path is added.
+  source-mode variant, so no project-scoped install path is added. The dogfood wrapper is
+  named `otacon-dev` because an otacon developer almost always also has the installed
+  `otacon` product skill present; two skills both named `otacon` make `/otacon` ambiguous
+  and the harness silently picks one (in practice the product wrapper, which talks to the
+  shared `:4747` daemon, not this checkout's isolated worktree daemon). A distinct name
+  keeps the choice explicit: `/otacon-dev` always exercises this checkout's source.
 - **Revisit when:** A second repo needs a source-mode wrapper (then generation should
-  be a real CLI subcommand, not a test-guarded committed file), or the two wrappers
-  need to diverge by more than the command prefix + preamble.
+  be a real CLI subcommand, not a test-guarded committed file), the two wrappers
+  need to diverge by more than the command prefix + preamble, or `otacon install
+  --project` in this repo starts writing an `otacon` wrapper that re-introduces the
+  collision the rename avoided.
 
 ## Attention notifications: native macOS banner, not Web Push, for desktop
 

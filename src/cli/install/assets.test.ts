@@ -11,14 +11,14 @@ const DOGFOOD_SKILL_PATH = join(
   "..",
   ".claude",
   "skills",
-  "otacon",
+  "otacon-dev",
   "SKILL.md",
 );
 
 describe("single-source wrappers (D7)", () => {
   test("the committed dogfood SKILL.md is exactly dogfoodSkillMd()", () => {
     // This is the drift guard: a protocol change that edits assets.ts but
-    // forgets to regenerate .claude/skills/otacon/SKILL.md fails right here.
+    // forgets to regenerate .claude/skills/otacon-dev/SKILL.md fails right here.
     const committed = readFileSync(DOGFOOD_SKILL_PATH, "utf8");
     expect(committed).toBe(dogfoodSkillMd());
   });
