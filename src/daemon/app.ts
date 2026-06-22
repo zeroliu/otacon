@@ -73,6 +73,7 @@ import {
   commentThreadStates,
   openCommentThreads,
   readThreads,
+  resolveThread,
 } from "./threads.js";
 import { answerEntry, appendEntries, appendEntry, readTranscript } from "./transcript.js";
 import { registerUiRoutes } from "./ui.js";
@@ -817,7 +818,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
           thread: t.id,
           section: t.anchor?.section ?? null,
           body: t.body,
-          resolution: t.resolution?.body ?? "",
+          reply: t.reply?.body ?? "",
         }));
       const { path, home } = finalizeApproval(session, {
         revision,
@@ -1002,13 +1003,63 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     if (!Array.isArray(rawItems) || rawItems.length === 0) {
       return badRequest(c, "items must be a non-empty array");
     }
-    const drafts: { anchor: Anchor | null; body: string }[] = [];
+    // A batch may mix new comments and follow-ups: an item with `replyTo` (a
+    // comment thread id) continues that conversation INSTEAD of carrying its own
+    // anchor — it inherits the root's anchor and orphan state, and a client
+    // anchor on it is ignored; an item without `replyTo` parses its own anchor.
+    const existing = readThreads(store.threadsPath(session.id));
+    const drafts: {
+      anchor: Anchor | null;
+      anchorState?: "orphaned";
+      replyTo?: string;
+      body: string;
+    }[] = [];
     for (const raw of rawItems as Record<string, unknown>[]) {
-      const anchor = parseAnchor(raw?.anchor);
-      if (typeof raw?.body !== "string" || raw.body.trim() === "" || anchor === undefined) {
+      if (typeof raw?.body !== "string" || raw.body.trim() === "") {
         return badRequest(c, "each item needs a non-empty body and a valid anchor (or null)");
       }
-      drafts.push({ anchor, body: raw.body });
+      const replyToRaw = raw.replyTo;
+      if (replyToRaw === undefined) {
+        const anchor = parseAnchor(raw.anchor);
+        if (anchor === undefined) {
+          return badRequest(c, "each item needs a non-empty body and a valid anchor (or null)");
+        }
+        drafts.push({ anchor, body: raw.body });
+        continue;
+      }
+      if (typeof replyToRaw !== "string" || replyToRaw === "") {
+        return badRequest(c, "replyTo must name a comment thread id (t<n>)");
+      }
+      const parent = existing.find(
+        (t): t is Extract<Thread, { kind: "comment" }> =>
+          t.id === replyToRaw && t.kind === "comment",
+      );
+      if (!parent) {
+        return c.json(
+          {
+            error: {
+              code: "E_UNKNOWN_COMMENT",
+              message: `session ${session.id} has no comment ${replyToRaw}`,
+            },
+          },
+          404,
+        );
+      }
+      // Resolve the root so a whole chain shares one key — "follow up on a
+      // follow-up" collapses to the same root, whose anchor (and orphan state)
+      // the new turn inherits and travels with.
+      const rootId = parent.replyTo ?? parent.id;
+      const root = existing.find(
+        (t): t is Extract<Thread, { kind: "comment" }> =>
+          t.id === rootId && t.kind === "comment",
+      );
+      const source = root ?? parent;
+      drafts.push({
+        anchor: source.anchor,
+        ...(source.anchorState === "orphaned" ? { anchorState: "orphaned" as const } : {}),
+        replyTo: rootId,
+        body: raw.body,
+      });
     }
     // Ids are minted only after the whole batch validates, in one counter
     // write — a rejected batch burns neither ids nor disk writes.
@@ -1020,19 +1071,23 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     const firstThread = counters.thread - drafts.length;
     const items: CommentItem[] = drafts.map((draft, i) => ({
       thread: `t${firstThread + i + 1}`,
-      ...draft,
+      anchor: draft.anchor,
+      body: draft.body,
+      ...(draft.replyTo !== undefined ? { replyTo: draft.replyTo } : {}),
     }));
     const batch = `b${counters.batch}`;
     // Each item becomes a persistent thread (threaded review and revision) — the rail's
     // source of truth; the queued event is only the agent's wake-up copy.
     const createdAt = new Date().toISOString();
-    const threads: Thread[] = items.map((item) => ({
-      id: item.thread,
+    const threads: Thread[] = drafts.map((draft, i) => ({
+      id: `t${firstThread + i + 1}`,
       kind: "comment",
       batch,
-      anchor: item.anchor,
-      body: item.body,
+      anchor: draft.anchor,
+      ...(draft.anchorState === "orphaned" ? { anchorState: "orphaned" as const } : {}),
+      body: draft.body,
       createdAt,
+      ...(draft.replyTo !== undefined ? { replyTo: draft.replyTo } : {}),
     }));
     appendThreads(store.threadsPath(session.id), threads);
     // Flushing a batch is the implicit "I reviewed this revision" signal
@@ -1166,6 +1221,42 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       question: qid,
       answeredAt: thread.answer.answeredAt,
     });
+  });
+
+  // The reviewer's side of closing a thread (the Resolve verb): {resolved:true}
+  // stamps the close (carrying the session's current revision) on the conversation
+  // root, {resolved:false} reopens it. Resolve doubles as the comment-withdraw
+  // path — a resolved comment no longer owes a reply (L5 skips it) and no longer
+  // counts unresolved at approve. Refused on a terminal session (like the
+  // questions route); 404 on an unknown thread id.
+  app.post("/api/sessions/:id/threads/:tid/resolve", async (c) => {
+    const session = sessionFor(c);
+    if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    const body = (await readJsonBody(c)) ?? {};
+    if (sessionEnded(session.id)) return sessionOver(c, session.id);
+    if (typeof body.resolved !== "boolean") {
+      return badRequest(c, "resolved must be a boolean");
+    }
+    const tid = c.req.param("tid") ?? "";
+    const thread = resolveThread(
+      store.threadsPath(session.id),
+      tid,
+      body.resolved,
+      store.readState(session.id).revision,
+    );
+    if (!thread) {
+      return c.json(
+        {
+          error: {
+            code: "E_UNKNOWN_THREAD",
+            message: `session ${session.id} has no thread ${tid}`,
+          },
+        },
+        404,
+      );
+    }
+    publishThread(session.id, thread);
+    return c.json({ ok: true }, 202);
   });
 
   app.get("/api/sessions/:id/threads", (c) => {
@@ -1468,11 +1559,28 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
         : body.implement === true;
     const threads = readThreads(store.threadsPath(session.id));
     const openComments = openCommentThreads(threads);
-    // Unresolved = comment threads with no resolution + user questions with no
-    // answer — the same open items the rail shows.
-    const unresolved = threads.filter((t) =>
-      t.kind === "comment" ? t.resolution === undefined : t.answer === undefined,
-    ).length;
+    // Unresolved is counted **per conversation**, not per turn: a multi-turn
+    // comment or question conversation contributes at most 1. Both kinds carry
+    // `replyTo` (a follow-up keys on its root). A conversation is unresolved when
+    // its root is not reviewer-`resolved` AND it still owes attention — a
+    // **comment** conversation always owes it (you must Resolve it; a landed
+    // reply is a response, not a close), a **question** conversation owes it only
+    // while some turn is unanswered. So: a responded-but-unresolved comment
+    // conversation counts (once); a reviewer-resolved one does not; an unanswered
+    // ask counts; an unanswered-but-resolved ask does not.
+    const resolvedRoots = new Set(threads.filter((t) => t.resolved).map((t) => t.id));
+    const rootOf = (t: Thread): string => t.replyTo ?? t.id;
+    const roots = new Set(threads.map(rootOf));
+    let unresolved = 0;
+    for (const root of roots) {
+      if (resolvedRoots.has(root)) continue;
+      const turns = threads.filter((t) => rootOf(t) === root);
+      const isComment = turns.some((t) => t.kind === "comment");
+      const owesAttention = isComment
+        ? true
+        : turns.some((t) => t.kind === "question" && t.answer === undefined);
+      if (owesAttention) unresolved += 1;
+    }
 
     // Comment & approve: defer the finalize and hand the agent every open comment
     // thread for one solo fold-in pass — its next clean submit finalizes. Only

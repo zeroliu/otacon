@@ -257,17 +257,21 @@ Fuzzy re-anchoring across revisions: on every accepted revision the daemon re-lo
 each thread's quote — exact match first, then prefix/suffix-disambiguated, then a
 normalized match (whitespace collapsed, markdown emphasis markers ignored) that
 rewrites the stored quote to the new revision's text. A unique match re-anchors
-(following moved text across sections); no match or an ambiguous one sets the thread's
-`anchorState` to **orphaned** and it lands in the **orphaned tray** — never silently
-dropped, and automatically recovered if a later revision restores the text. Whole-plan
-(non-anchored) comments are also supported and never orphan.
+(following moved text across sections); no match or an ambiguous one marks the anchor
+internally (`anchorState:"orphaned"`) and the thread **stays inline in the rail with its
+quote muted** — never silently dropped, and automatically recovered if a later revision
+restores the text. Whole-plan (non-anchored) comments are also supported and never lose
+their anchor.
 
 Open threads keep their anchored text **persistently lit** in the clean view — the
 steady counterpart to the click-flash, so which passages are under discussion is
 visible at a glance. Open questions, open comments, and unsent drawer drafts paint
-via the CSS Custom Highlight API (never by re-rendering the plan); a mark clears when
-its thread is answered or resolved, or when its quote orphans. Whole-plan and orphaned
-anchors are never lit — there is no re-locatable quote to paint.
+via the CSS Custom Highlight API (never by re-rendering the plan); a question's mark
+clears when it is answered or when the reviewer **resolves** the conversation (a
+follow-up keys on its root's close), a comment's mark clears when the reviewer
+**resolves** it (not merely when the agent replies — a reply is a response, the thread
+stays lit until the reviewer closes it), and any mark clears when its quote orphans.
+Whole-plan and orphaned anchors are never lit — there is no re-locatable quote to paint.
 
 ---
 
@@ -282,7 +286,7 @@ errors on stdout; the agent fixes and resubmits. Invalid revisions never reach t
 | L2   | Read-path budgets (Summary ≤5 lines, Goal ≤3, etc.)                                                                                              | error                                  |
 | L3   | Decision traceability: every `D<n>` cites a `q<n>` (`← q7` or `← q7, q9`; `<-` accepted) or `[assumed]`; cited ids must exist in the grill transcript | error (warning in `--quick` sessions)  |
 | L4   | Detail containment heuristics: file paths in Details must appear in that phase's Files; new dependency names in Details must appear in Decisions | warning                                |
-| L5   | Revision accompaniment: a submit must include a resolution reply for every open comment thread, and every revision ≥ 2 must carry a changelog    | error                                  |
+| L5   | Revision accompaniment: a submit must include a reply for every open comment thread that has none — a comment the reviewer has **resolved** (the close/withdraw verb) is skipped, never blocking the submit — and every revision ≥ 2 must carry a changelog | error                                  |
 | L6   | Detail soft caps (>80 lines/section)                                                                                                             | warning, surfaced as a badge in the UI |
 | L7   | First-screen recommendation: a lead diagram (`mermaid`) near the top is strongly recommended (~90% of plans); a `<!-- no-lead-diagram -->` marker in Summary opts out | warning (nudge, never blocks) |
 | L8   | Diagram renderability: every `mermaid` fence parses headlessly (mermaid in a happy-dom DOM); a fence mermaid cannot parse is `E_DIAGRAM_UNRENDERABLE`, so an unrenderable diagram never reaches the reviewer | error (fails open: no headless setup → no check) |
@@ -362,9 +366,11 @@ The `--resolutions` file is the revision-accompaniment document:
 }
 ```
 
-`threads` maps comment-thread ids to resolution replies — lint L5 requires one per
-open comment thread; accepted replies land on the threads and mark them resolved
-(re-resolving overwrites). `changelog` is the agent's summary of the revision,
+`threads` maps comment-thread ids to the agent's replies — lint L5 requires one per
+open comment thread that has none; accepted replies land on the threads as the agent's
+*response* (re-replying overwrites). A reply is not a close: the thread stays open
+until the **reviewer** resolves it (§9), so a comment can carry a reply and still be
+open. `changelog` is the agent's summary of the revision,
 required on every revision ≥ 2, stored per revision, and shown in the UI's revision
 banner (§9). The CLI sends the file's content as the `resolutions` field of the
 submit JSON: `{"plan": "...", "resolutions": {...}}`; unknown keys or non-string
@@ -400,8 +406,9 @@ when it is a **follow-up** on an earlier question (§9) — the agent skims that
 prior turns for context and answers the new `q<n>` the usual way. A `comments` event
 carries `final:true` when it is the **comment & approve** fold-in batch (§12): the
 reviewer approved with comments still open and chose *Send to agent*, so the daemon
-re-delivers every still-open comment thread for one solo pass — the agent resolves them,
-and its next clean `submit` finalizes the plan (it then receives `approved`, which may
+re-delivers every comment thread still owed a response (no reply yet and not
+reviewer-resolved) for one solo pass — the agent replies to each, and its next clean
+`submit` finalizes the plan (it then receives `approved`, which may
 carry `implement:true`) instead of returning to in-review. Approval writes the plan file
 and the event reports where; the agent runs no git for it.
 `approved.home` is ALWAYS the absolute canonical copy in the home archive
@@ -460,7 +467,12 @@ DELETE /api/sessions/:id                    deregister a session, status-branche
                                             SSE frame; response carries `archivedTo`
 GET  /api/sessions/:id/events?wait=540      agent long-poll
 POST /api/sessions/:id/submit               lint; reject 422 with issues, or store revision N
-POST /api/sessions/:id/comments             flush a comment batch
+POST /api/sessions/:id/comments             flush a comment batch; a batch item may
+                                            carry {replyTo:"t<n>"} to post a follow-up
+                                            on that comment's conversation — it inherits
+                                            the root's anchor (a client anchor is
+                                            ignored), 404 E_UNKNOWN_COMMENT on a
+                                            non-comment id
 POST /api/sessions/:id/questions            user question (instant); optional
                                             {replyTo:"q<n>"} posts a follow-up on
                                             that question's conversation — it
@@ -470,6 +482,15 @@ POST /api/sessions/:id/questions            user question (instant); optional
 POST /api/sessions/:id/questions/:qid/answer  agent's answer to a user question
                                             (otacon answer); 404 E_UNKNOWN_QUESTION
                                             on ids that are not open questions
+POST /api/sessions/:id/threads/:tid/resolve   the reviewer's Resolve verb: {resolved}
+                                            stamps (or clears) the close on a comment or
+                                            question conversation root — {resolved:true}
+                                            carries the session's current revision, doubles
+                                            as the comment-withdraw path (a resolved comment
+                                            owes no reply, L5 skips it). → 202 + a `thread`
+                                            SSE upsert; 404 E_UNKNOWN_THREAD on a bad id;
+                                            non-boolean `resolved` → 400; refused on a
+                                            terminal session (E_SESSION_OVER)
 GET  /api/sessions/:id/threads              comment + question threads (the UI's rail)
 POST /api/sessions/:id/ask                  agent grill question (otacon ask):
                                             {question, options?, recommend?, multi?}
@@ -506,11 +527,13 @@ POST /api/sessions/:id/approve              approve: writes
                                             the home copy ONLY, flips to `implementing`
                                             (non-terminal), and queues `approved` with
                                             path=home, implement:true (§12).
-                                            Unresolved threads (comments without a
-                                            resolution + questions without an answer)
-                                            → 409 E_UNRESOLVED_THREADS carrying both
+                                            Unresolved threads (comments the reviewer
+                                            hasn't Resolved + questions with neither an
+                                            answer nor a Resolve) → 409
+                                            E_UNRESOLVED_THREADS carrying both
                                             `unresolved` (the total) and `openComments`
-                                            (the foldable count). The UI's warn stage
+                                            (the foldable count: comments still owed a
+                                            response). The UI's warn stage
                                             offers two ways past it: {"force":true}
                                             finalizes now and drops the open threads, or
                                             {"sendOpenComments":true} — comment & approve
@@ -598,9 +621,10 @@ also carries the daemon's `version`, which open tabs use to self-heal after an
 update, see §16), then pushes `session` / `revision` /
 `queue` / `thread` / `grill` / `activity` / `stream` / `removed` frames as state changes — a
 `revision` frame carries the revision number and its changelog; a `thread` frame is
-an upsert: a new comment/question thread (a follow-up question carries `replyTo`, the
-root it continues), or an existing thread changing (a question gaining its answer, a
-comment gaining its resolution, an anchor re-anchoring or orphaning); a `grill` frame is the transcript's upsert: a question asked via
+an upsert: a new comment/question thread (a follow-up of either kind carries `replyTo`,
+the root it continues), or an existing thread changing (a question gaining its answer, a
+comment gaining the agent's reply or the reviewer's resolution, an anchor re-anchoring or
+orphaning); a `grill` frame is the transcript's upsert: a question asked via
 `otacon ask`, or an entry gaining the user's answer; an `activity` frame carries one
 new progress note appended to the per-session activity log (the draft chip rides the
 `session` frame's `latestActivity` instead); a `stream` frame carries one or more new
@@ -676,12 +700,16 @@ mirroring the budgets config. Off macOS the banner is a silent no-op.
 3. **Draft.** Agent writes `plan.md`, runs `otacon submit`; loops on lint errors until clean.
 4. **Review.** Agent parks in `wait`. User reads, fires instant questions
    (agent answers via `otacon answer`, returns to `wait`), stacks comments, taps Send.
+   The reviewer **Resolves** a comment or question conversation when satisfied (the
+   close verb, which doubles as withdraw); a comment stays open — and lit — until then,
+   even after the agent replies.
 5. **Revise.** Agent edits `plan.md`, writes `resolutions.json` (changelog + thread →
-   reply), resubmits. Daemon resolves the threads, re-anchors every quote in the new
-   text (§4), computes diff vs the user's last-reviewed revision, pushes the
-   changelog banner. Repeat 4–5.
-6. **Approve = Save.** User taps **Save** (warned if unresolved threads exist — the
-   daemon answers 409 with the count until the UI confirms). The **daemon** composes
+   reply), resubmits. Daemon lands the replies on the threads as the agent's *response*
+   (not a close), re-anchors every quote in the new text (§4), computes diff vs the
+   user's last-reviewed revision, pushes the changelog banner. Repeat 4–5.
+6. **Approve = Save.** User taps **Save** (warned if unresolved threads exist —
+   comments the reviewer hasn't Resolved, plus asks with neither an answer nor a
+   Resolve — the daemon answers 409 with the count until the UI confirms). The **daemon** composes
    the artifact (`status: approved` + the grill transcript appended) and writes it to
    two places: ALWAYS the canonical home archive
    (`~/.otacon/sessions/<id>/YYYY-MM-DD-<slug>.md`), and ALSO a project copy under the
@@ -692,10 +720,11 @@ mirroring the budgets config. Off macOS the banner is a silent no-op.
    copy if you want it in git. Session over.
    On the unresolved-threads warning the reviewer has a second choice — **comment &
    approve** (*Send to agent*): instead of dropping the open comments, the daemon
-   defers the finalize (status `finalizing`) and hands the agent every open comment
-   thread in one `final:true` comments batch; the agent folds them in and its next
-   clean `submit` finalizes — writing the same artifact, now with a `## Review notes`
-   section recording what it changed (§12). The reviewer is done the instant they
+   defers the finalize (status `finalizing`) and hands the agent every comment thread
+   still owed a response (no reply yet and not reviewer-resolved) in one `final:true`
+   comments batch; the agent replies to them and its next clean `submit` finalizes —
+   writing the same artifact, now with a `## Review notes` section recording what it
+   changed (§12). The reviewer is done the instant they
    click; the chosen variant (Save vs Implement) carries through.
 7. **Approve = Implement** (optional, §12). The other approve action — **Implement** —
    finalizes the plan but writes it to the home archive ONLY (nothing into the
@@ -814,28 +843,39 @@ Structural integration:
 | Type               | Default timing                                       | Effect                                                                                                             |
 | ------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | User **question**  | instant                                              | Agent answers in-thread (`otacon answer`); plan untouched. **Follow up** to keep the conversation going (a linked question, same anchor); one-tap **Promote to comment** after reading the answer |
-| User **comment**   | batched in a drawer; per-comment "send now" override | Flushed batch → exactly one revision, one changelog                                                                |
+| User **comment**   | batched in a drawer; per-comment "send now" override | Flushed batch → exactly one revision, one changelog. A comment is a conversation too — **Follow up** to add a linked comment turn (same anchor); the agent replies per turn on its next submit (L5) |
 | **Agent question** | instant (during grill or anytime)                    | Card in UI; user answers with chips/text                                                                           |
 
 **Mixed flush:** questions answered first (answers may inform further review), then all
 comments applied as one revision. Keeps revisions chunky — the agent never thrashes on
 every keystroke.
 
-**Follow-up questions:** a question thread is a conversation, not a one-shot. After the
-agent answers, a **Follow up** affordance on that card posts another question — one
-direction, you ask and the agent answers. A follow-up is its own `q<n>` thread linked to
-the root by `replyTo` (reusing the queue, `otacon answer`, and the shared q-id space),
-and it inherits the root's anchor, so the rail groups the whole chain into one card that
-jumps and orphans as a unit. Scope is question threads only; comment threads stay
-one-shot resolutions.
+**Follow-up conversations:** both comment and question threads are conversations, not
+one-shots — after the agent responds, a **Follow up** affordance on the card posts
+another turn. A follow-up is its own `t<n>`/`q<n>` thread linked to the root by `replyTo`
+and inherits the root's anchor, so the rail groups the whole chain into one card that
+jumps and orphans as a unit. The two kinds differ only in how the agent responds: a
+**question** follow-up rides the questions route and is answered out-of-band via `otacon
+answer` (plan untouched); a **comment** follow-up rides the comments route and is
+answered per turn through the revise/submit loop — the agent's next submit must reply to
+every un-replied comment turn (L5), so a comment conversation is revision-tied. Resolving
+the root withdraws every turn of the conversation at once.
+
+**Reviewer-driven resolution:** the agent's reply to a comment is a *response*, not a
+close — only the **reviewer** closes a thread, via the **Resolve** verb (on both comment
+and question conversation roots). Resolve doubles as **withdraw**: resolving a comment
+that has no reply tells the agent it is dropped (L5 then skips it, so it can never
+deadlock a submit). A resolved thread leaves the lit set and the Approve unresolved
+count; Reopen (`resolved:false`) puts it back.
 
 **Re-review (3 layers):**
 
 1. **Changelog** — agent-written summary at the top of each revision banner. Submitted
    in the resolutions document (§6), required on every revision ≥ 2 (lint L5), stored
    per revision.
-2. **Threads** — every comment becomes a thread the agent MUST resolve with a reply
-   (lint L5); unresolved threads are visible at a glance and warned on Approve.
+2. **Threads** — every comment becomes a thread the agent MUST reply to (lint L5),
+   then the reviewer Resolves to close it; threads not yet Resolved are visible at a
+   glance and warned on Approve.
 3. **Diff** — toggle between clean-latest and inline diff **vs the revision the user
    last actually reviewed** (not merely the previous one; baseline selectable). Changed
    sections carry gutter markers even in clean view, so unprompted changes to sections
@@ -1006,13 +1046,28 @@ returns to the index.
   out of scope. Everything here is browser-only: the daemon never sees these drafts,
   so nothing in this gate touches the protocol.
 - Threads rail: clicking an anchored thread scrolls to its section and flashes the
-  quoted text in the plan. A question and its follow-ups render as one **conversation
-  card** — each turn with its answer (or the blinking "answering…" cursor) — with a
-  collapsed **Follow up** button that reveals a reply box for the next question.
-  Resolved comments collapse to their ✓ line (id, revision, section) and expand to the
-  agent's reply. Orphaned threads leave the list for the rail's badge-counted **orphan
-  tray**: an orphaned conversation travels as a unit, each entry keeping its dead quote
-  (section slug struck through) and expanding to the full original anchor text.
+  quoted text in the plan. Both kinds render through one shared **conversation card** —
+  the root plus each follow-up turn, each turn paired with the agent's response (or the
+  blinking pending cursor: "answering…" for a question, "responding…" for a comment) —
+  with a collapsed **Follow up** button that reveals a reply box for the next turn, plus
+  a **Resolve** button to close the whole conversation. The two kinds differ only in the
+  agent's text and the follow-up route: a **question** turn shows its `answer` and a
+  follow-up posts to the questions route; a **comment** turn shows its `reply` (labelled
+  with the revision it landed on) and a follow-up posts to the comments route (an
+  un-replied comment's Resolve is a withdraw). When the **reviewer** Resolves: a question
+  conversation shows its inline ✓ mark with the resolved revision; a comment conversation
+  collapses to a ✓ line (id, the reviewer's resolved revision, section) that expands to
+  the whole conversation — every turn and its reply. Either kind then offers a **Reopen**
+  control that re-opens the resolved conversation (`resolved:false`). The ✓
+  card is keyed on the reviewer's close, never on the mere presence of a reply.
+  Resolve/Reopen/Follow up all hide read-only
+  (session over). A **detached thread** — whose quoted text changed in a later revision
+  and can no longer be located — stays **inline in the same list** as every other
+  thread; its quote renders **muted** (no live text to jump to or flash, so it is not
+  clickable) beside a subtle icon whose hover tooltip explains the quote changed in a
+  later revision. A conversation keys on its root, so a detached root keeps its whole
+  chain inline too. (Internally the anchor still carries `anchorState:"orphaned"`; the
+  UI never surfaces that word or a revision number.)
 - Persistent thread marks (clean view): open threads and unsent drafts keep their
   anchored text lit — questions one ink (underlined), comments + drafts another — so
   the two read apart and stay legible without color; the click-flash still pops above
@@ -1089,8 +1144,9 @@ returns to the index.
 ### Cross-cutting
 
 UI updates over SSE (watch status flip from _revising_ to _new revision_, answers
-stream into threads). Mobile-first CSS. Orphaned-comment tray reachable from the
-threads rail. The review screen reports its visibility to the daemon
+stream into threads). Mobile-first CSS. A thread whose quote can no longer be
+located stays inline in the threads rail with its quote muted. The review screen
+reports its visibility to the daemon
 (`POST /presence`) so desktop attention banners (§6) fire only when you are not
 already watching that review.
 
@@ -1236,7 +1292,7 @@ Operational requirement: the Mac stays awake while a plan is in review
 
 | Location                                          | Contents                                                                                                       | Git                                        |
 | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `<repo>/.otacon/`                                 | Working state under `<id>/`: `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), threads (`threads.json`: comment + question threads with answers, resolutions, and anchor states inline), the grill transcript (`transcript.json`), the capped live-activity feed (`activity.json`: the newest ~N `otacon progress` notes), the live-activity stream (`stream.jsonl`: the normalized, capped, append-only event stream, §10a), queues | the user's call — otacon manages no `.gitignore` |
+| `<repo>/.otacon/`                                 | Working state under `<id>/`: `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), threads (`threads.json`: comment + question threads with answers, agent replies, reviewer-resolve closes, and anchor states inline), the grill transcript (`transcript.json`), the capped live-activity feed (`activity.json`: the newest ~N `otacon progress` notes), the live-activity stream (`stream.jsonl`: the normalized, capped, append-only event stream, §10a), queues | the user's call — otacon manages no `.gitignore` |
 | `~/.otacon/worktrees/<slug>/`                     | Implement build's git worktree on branch `otacon/impl-<slug>` (base dir is `worktree.dir`, default `~/.otacon/worktrees` — outside the repo)                    | n/a (global, outside the repo)             |
 | `~/.otacon/sessions/<id>/YYYY-MM-DD-<slug>.md`    | Canonical approved plan, every session (`status: approved` frontmatter + grill transcript)                     | n/a (global, permanent archive)            |
 | `<repo>/<plans.dir>/YYYY-MM-DD-<slug>.md`         | Save-time project copy (default `.otacon/plans`; set `plans.dir=docs/plans` to group with tracked plans)       | yours to commit (or not)                   |
@@ -1287,8 +1343,9 @@ line (`choice`/comma-joined `choices`, ` — text` appended when both were given
 `_unanswered_` when the question was never answered). A `--quick` session's empty
 transcript appends no section. When the approval went through **comment & approve**
 (§6), a `## Review notes` section follows the Interview — one `### t<n> — <section>`
-per comment the agent folded in unreviewed, the reviewer's comment as a blockquote
-and the agent's resolution beneath it — so the trusted fold-in stays auditable
+per comment the agent folded in unreviewed (the response-owed comments: no reply yet and
+not reviewer-resolved), the reviewer's comment as a blockquote and the agent's reply
+beneath it — so the trusted fold-in stays auditable
 (a plain or *commit-anyway* approve folds nothing in, so the section is omitted).
 The reviewer reaches this same fold-in in one click even from browser-only drafts the
 daemon never received: picking an approve variant with unsent drawer comments opens the

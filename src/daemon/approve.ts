@@ -58,8 +58,8 @@ export function pickProjectRelPath(
 /**
  * One swept comment thread rendered for the Review notes section: the reviewer's
  * comment as a blockquote (anchored to its section, or whole-plan), then the
- * agent's resolution. Multi-line bodies keep their breaks — the blockquote
- * prefixes each line, the resolution flows as paragraph text.
+ * agent's reply. Multi-line bodies keep their breaks — the blockquote prefixes
+ * each line, the reply flows as paragraph text.
  */
 export interface ReviewNote {
   /** Thread id (t<n>) — the audit handle that matches threads.json. */
@@ -68,8 +68,8 @@ export interface ReviewNote {
   section: string | null;
   /** The reviewer's comment body. */
   body: string;
-  /** The agent's resolution reply (L5-required before the finalize submit). */
-  resolution: string;
+  /** The agent's reply (L5-required before the finalize submit). */
+  reply: string;
 }
 
 function renderReviewNote(note: ReviewNote): string {
@@ -78,7 +78,7 @@ function renderReviewNote(note: ReviewNote): string {
     .split("\n")
     .map((line) => (line === "" ? ">" : `> ${line}`))
     .join("\n");
-  return [`### ${note.thread} — ${where}`, "", quoted, "", note.resolution.trim()].join("\n");
+  return [`### ${note.thread} — ${where}`, "", quoted, "", note.reply.trim()].join("\n");
 }
 
 /** One transcript entry rendered for the Interview section. */

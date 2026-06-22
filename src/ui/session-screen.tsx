@@ -16,9 +16,11 @@ import { Component, lazy, Suspense, useCallback, useEffect, useLayoutEffect, use
 import { accentStyle } from "./accent";
 import type { Anchor, CommentDraft, LiveSession, StreamEvent, Thread, TranscriptEntry } from "./api";
 import {
+  postCommentFollowup,
   postComments,
   postFollowup,
   postQuestion,
+  postResolve,
   postReviewed,
   useDiff,
   usePresence,
@@ -336,13 +338,31 @@ function ReviewLoop({
   // (null/quote-less) anchors are never lit — no text to paint (review UI).
   const litEntries = useMemo<LitThread[]>(() => {
     const lit: LitThread[] = [];
+    // Conversation roots the reviewer closed (Resolve lives on the root). A
+    // follow-up turn keys on its root, so a resolved root clears the whole chain.
+    const resolvedRoots = new Set(threads.filter((t) => t.resolved).map((t) => t.id));
+    // Mark is carried by the conversation ROOT, lit once per conversation (not
+    // once per turn — every turn shares the root's anchor). A question root with
+    // an unanswered follow-up still owes an answer, so owe-status spans all turns.
+    const owesAnswer = new Set(
+      threads
+        .filter((t) => t.kind === "question" && t.answer === undefined)
+        .map((t) => t.replyTo ?? t.id),
+    );
     for (const thread of threads) {
       if (thread.anchorState === "orphaned" || !thread.anchor?.exact) continue;
+      // Only roots carry the mark; a follow-up turn inherits the root's anchor and
+      // would just re-light the same quote, so skip it (the root covers the chain).
+      if (thread.replyTo !== undefined) continue;
+      if (resolvedRoots.has(thread.id)) continue; // reviewer closed the whole conversation
       if (thread.kind === "question") {
-        if (thread.answer === undefined) {
+        // A question conversation's mark clears once every turn is answered.
+        if (owesAnswer.has(thread.id)) {
           lit.push({ id: thread.id, anchor: thread.anchor, kind: "question" });
         }
-      } else if (thread.resolution === undefined) {
+      } else {
+        // A comment conversation's mark clears only when the REVIEWER resolves it
+        // (a landed agent reply is a response, not a close — the mark stays lit).
         lit.push({ id: thread.id, anchor: thread.anchor, kind: "comment" });
       }
     }
@@ -546,10 +566,27 @@ function ReviewLoop({
     if (planRef.current) flashAnchor(planRef.current, anchor);
   }, []);
 
-  // A follow-up question on an existing conversation (threaded review and revision): inherits
-  // the root's anchor server-side, so the rail only passes the root id + body.
+  // A follow-up on an existing conversation (threaded review and revision):
+  // inherits the root's anchor server-side, so the rail only passes the root id +
+  // body. The rail is kind-agnostic; route by the root thread's kind — a comment
+  // root's follow-up rides the comments route (revision-tied, answered via the
+  // agent's revise/submit loop), a question root's rides the questions route
+  // (answered out-of-band via `otacon answer`). A missing root (a degraded card
+  // never offers the box) falls back to the question route.
   const followup = useCallback(
-    (rootId: string, body: string): Promise<boolean> => postFollowup(session.id, rootId, body),
+    (rootId: string, body: string): Promise<boolean> => {
+      const root = threads.find((t) => t.id === rootId);
+      return root?.kind === "comment"
+        ? postCommentFollowup(session.id, rootId, body)
+        : postFollowup(session.id, rootId, body);
+    },
+    [session.id, threads],
+  );
+
+  // The reviewer's Resolve verb on a conversation root: close (`resolved:true`)
+  // or reopen (`false`); the close lands back over the `thread` SSE frame.
+  const resolve = useCallback(
+    (threadId: string, resolved: boolean): Promise<boolean> => postResolve(session.id, threadId, resolved),
     [session.id],
   );
 
@@ -743,6 +780,7 @@ function ReviewLoop({
             onJump={jump}
             focus={focusThread}
             onFollowup={readOnly ? undefined : followup}
+            onResolve={readOnly ? undefined : resolve}
           />
         )}
       </div>

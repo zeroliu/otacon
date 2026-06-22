@@ -174,6 +174,8 @@ export interface CommentItem {
   thread: string;
   anchor: Anchor | null;
   body: string;
+  /** Root comment thread this follows up on (threaded review and revision); absent on a root comment. */
+  replyTo?: string;
 }
 
 export type EventPayload =
@@ -219,13 +221,19 @@ export type EventPayload =
 
 /**
  * One review thread, persisted in .otacon/<id>/threads.json (threaded review and revision).
- * Comment threads come from comment batches (one per item) and gain a
- * `resolution` from the agent's resolutions on resubmit (lint L5); question
- * threads gain an `answer` when the agent runs `otacon answer`. A follow-up
- * question is its own thread linked to the root by `replyTo` (threaded review and revision):
- * it inherits the root's anchor, so a whole conversation groups, jumps, and
- * orphans as one unit. `anchorState` "orphaned" means re-anchoring lost the
- * quote in the current revision; absent = anchored.
+ * Comment threads come from comment batches (one per item) and gain a `reply`
+ * from the agent's resolutions on resubmit (lint L5) — that reply is a *response*,
+ * not a close; question threads gain an `answer` when the agent runs `otacon
+ * answer`. A conversation root closes only when the **reviewer** sets `resolved`
+ * (the new Resolve verb), which doubles as the comment-withdraw path: a resolved
+ * comment no longer owes a reply (L5 skips it) and no longer counts unresolved at
+ * approve. A follow-up — comment OR question — is its own thread linked to the
+ * root by `replyTo` (threaded review and revision): it inherits the root's anchor,
+ * so a whole conversation groups, jumps, and orphans as one unit. A follow-up
+ * comment turns a one-shot comment into a conversation; L5 demands a reply per
+ * un-replied turn, and resolving the root withdraws every turn at once.
+ * `anchorState` "orphaned" means re-anchoring lost the quote in the current
+ * revision; absent = anchored.
  */
 export type Thread =
   | {
@@ -236,7 +244,12 @@ export type Thread =
       anchorState?: "orphaned";
       body: string;
       createdAt: string;
-      resolution?: { body: string; revision: number; resolvedAt: string };
+      /** Root comment id this follows up on; absent on a root comment. */
+      replyTo?: string;
+      /** The agent's response, landed on resubmit (lint L5); not a close. */
+      reply?: { body: string; revision: number; repliedAt: string };
+      /** The reviewer closed this conversation (Resolve verb); lives on the root. */
+      resolved?: { revision: number; at: string };
     }
   | {
       id: string; // q<n>
@@ -248,12 +261,14 @@ export type Thread =
       /** Root question id this follows up on; absent on a root question. */
       replyTo?: string;
       answer?: { body: string; answeredAt: string };
+      /** The reviewer closed this conversation (Resolve verb); lives on the root. */
+      resolved?: { revision: number; at: string };
     };
 
 /**
  * The agent-written revision-accompaniment document (resolutions.json,
- * submitted with a revision: `threads` maps comment-thread ids to resolution replies
- * (lint L5); `changelog` is the agent's summary of the revision (required on
+ * submitted with a revision: `threads` maps comment-thread ids to the agent's
+ * replies (lint L5); `changelog` is the agent's summary of the revision (required on
  * revisions ≥ 2, threaded review and revision layer 1).
  */
 export interface Resolutions {
