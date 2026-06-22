@@ -2723,3 +2723,16 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** The relatedness call wants tooling (an `otacon`-side hint or a
   similarity check) instead of pure agent judgment, or amendments need to diverge onto a
   new branch/PR (a large pivot that should not pile onto the original PR).
+
+## `revised`/`prior` on re-answer events
+
+- **Decision:** Overwriting an already-answered grill question stamps the queued `answer`
+  event with `revised:true` and `prior` (the previous answer's content, no `answeredAt`);
+  a first answer omits both fields, leaving its event shape byte-for-byte unchanged.
+- **Why:** Re-answering already overwrote the stored answer silently, so an agent that had
+  cited the old value in a Decision (`← q<n>`) had no signal to reconcile. Carrying the
+  prior content on the event lets the agent treat the new answer as a correction and
+  rewrite the affected entries; making it additive keeps every first-answer consumer
+  untouched.
+- **Revisit when:** Reconciliation needs more than the prior value (e.g. a full answer
+  history), or the daemon should drive the rewrite rather than hand it to the agent.
