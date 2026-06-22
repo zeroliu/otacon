@@ -1,5 +1,5 @@
 ---
-name: otacon
+name: otacon-dev
 description: Plan a feature for THIS repo through an otacon review session: grill interview, schema'd plan, browser/phone review with anchored comments, approved plan saved to a home archive (and your project on Save). Use when the user asks to plan something with otacon, types /otacon, or wants a reviewed implementation plan before coding. Replaces native plan mode. Dogfoods otacon on its own development. Also resumes and amends an implemented plan when run from inside its build worktree.
 ---
 
@@ -61,12 +61,16 @@ spawning a second worktree.
    the session and prints the review URL. Tell the user to open it (`./bin/otacon open`
    launches it in their browser) so they can watch the whole thing from the first second.
    `--quick` skips the interview — only when the user explicitly asks.
-2. **Research the codebase**, narrating as you go with
-   `./bin/otacon progress "<what you're doing>"` — call it whenever you start a chunk of
-   work the user can't otherwise see (reading a module, drafting, revising). It is
-   a non-blocking one-liner that feeds the live activity log and the draft chip; no
-   answer comes back, so never park on it. Read enough to propose answers, not
-   collect questions.
+2. **Research the codebase.** On supported agents the daemon now auto-streams your
+   tool calls, text, and thinking to the reviewer's now-playing console, so it
+   already sees the routine work. Use `./bin/otacon progress "<what you're doing>"` for
+   OCCASIONAL highlights and chapter markers (a milestone, a phase boundary, "what
+   I'm about to do next"), not per-step narration. It is the universal floor: on an
+   agent with no auto-capture those notes are the ONLY thing keeping the now-playing
+   bar alive, so still drop one whenever you start a chunk of work the user can't
+   otherwise see. It is a non-blocking one-liner that feeds the live stream and the
+   draft chip; no answer comes back, so never park on it. Read enough to propose
+   answers, not collect questions.
 3. **Grill** (mandatory unless --quick): Interview me relentlessly about every
    aspect of this plan until we reach a shared understanding. Walk down each branch
    of the design tree, resolving dependencies between decisions one-by-one. For
@@ -115,16 +119,19 @@ spawning a second worktree.
 ## CLI quick reference
 
 - `./bin/otacon start --title <t> [--quick]` · `./bin/otacon resume [--session <id>]` ·
-  `./bin/otacon progress "<note>"` ·
+  `./bin/otacon progress "<note>"` (occasional highlights / chapter markers; the activity
+  floor on agents without auto-capture) ·
   `./bin/otacon ask ...` · `./bin/otacon wait --timeout 540` · `./bin/otacon submit [--resolutions f]` ·
   `./bin/otacon answer <q> --body "..."` · `./bin/otacon implement-done [--pr <url>] [--failed]` ·
   `./bin/otacon status` · `./bin/otacon open` · `./bin/otacon config [get <key>]`
 
 ## Implement loop (on `approved` with `implement:true`)
 
-You are the **orchestrator**: you only coordinate and narrate
-(`./bin/otacon progress` at each checkpoint) — every phase's real work runs in a fresh
-native subagent (Task tool) so your own context stays lean.
+You are the **orchestrator**: you only coordinate and mark progress
+(`./bin/otacon progress` at phase boundaries, an occasional chapter marker rather than
+every action; on supported agents the now-playing console already streams the work).
+Every phase's real work runs in a fresh native subagent (Task tool) so your own
+context stays lean.
 
 1. **Setup.** Read the plan from the home archive at the event `path`.
    - **Amending** (you resumed this session, so its build worktree already exists
@@ -136,11 +143,13 @@ native subagent (Task tool) so your own context stays lean.
      default `~/.otacon/worktrees`, outside the repo):
      `git worktree add <worktree.dir>/<slug> -b otacon/impl-<slug>` (off the default
      branch).
-   `./bin/otacon progress` each checkpoint throughout.
+   Drop a `./bin/otacon progress` highlight at each phase boundary throughout, not at
+   every step.
 2. **Per phase, in order** (read the phases from the home plan at the event `path`;
    on an amendment, implement only the phases this revision changed, using the
    changelog and the diff to scope):
-   - `./bin/otacon progress "phase N — implementing"`; spawn an **implement+test**
+   - `./bin/otacon progress "phase N — implementing"` (one marker per phase); spawn an
+     **implement+test**
      subagent (Task tool) scoped to that phase's Goal/Files/Verification — it
      implements and runs the phase Verification plus the repo gates.
    - spawn a **separate** `/code-review --fix` subagent on the phase's working

@@ -1569,6 +1569,13 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 ## Live agent activity: explicit `otacon progress` narration, not inferred state
 
+> [!note] Reframed by "`otacon progress` stays as the universal floor + curated
+> highlights" below. `progress` is no longer the *only* live-activity signal: the
+> automatic transcript stream (§10a) now carries routine activity on supported agents,
+> so `progress` is asked for sparingly (highlights / chapter markers) and is the sole
+> signal only on agents with no transcript adapter. The verb, endpoint, and feed are
+> unchanged.
+
 - **Decision:** The agent reports what it's doing with a new `otacon progress
   "<note>"` verb (not the daemon inferring state from existing calls). Notes append
   to a capped (~20, config) `activity.json` feed, push as an `activity` SSE frame,
@@ -1616,8 +1623,11 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   so the review UI exists from the first second. The protocol card is built once by
   `protocolCard(cmd)`, parametrized only by command prefix: the installed wrapper
   (`skillMd`, shared by all three agents) uses `otacon`; this repo's committed dogfood wrapper
-  (`dogfoodSkillMd`, written to `.claude/skills/otacon/SKILL.md`) uses `./bin/otacon`
-  and prepends a repo preamble. The dogfood file is generated, never hand-edited, and
+  (`dogfoodSkillMd`, written to `.claude/skills/otacon-dev/SKILL.md`) uses `./bin/otacon`
+  and prepends a repo preamble. The dogfood wrapper is **named `otacon-dev`, not `otacon`**,
+  so it never collides with the installed product skill (`otacon`) when developing otacon
+  itself — `/otacon` invokes the real product, `/otacon-dev` the source-mode wrapper. The
+  dogfood file is generated, never hand-edited, and
   `assets.test.ts` asserts the committed file equals `dogfoodSkillMd()`.
 - **Why:** Start-first is the whole point of live activity — minting the session only
   after research wastes the watch window the feature exists to provide. Single-source
@@ -1626,10 +1636,17 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   edit could silently update one and not the other. The equality test turns that drift
   into a CI failure. `otacon install` into other repos is unchanged — it writes the
   plain-`otacon` wrapper, which already works anywhere; only this repo needs the
-  source-mode variant, so no project-scoped install path is added.
+  source-mode variant, so no project-scoped install path is added. The dogfood wrapper is
+  named `otacon-dev` because an otacon developer almost always also has the installed
+  `otacon` product skill present; two skills both named `otacon` make `/otacon` ambiguous
+  and the harness silently picks one (in practice the product wrapper, which talks to the
+  shared `:4747` daemon, not this checkout's isolated worktree daemon). A distinct name
+  keeps the choice explicit: `/otacon-dev` always exercises this checkout's source.
 - **Revisit when:** A second repo needs a source-mode wrapper (then generation should
-  be a real CLI subcommand, not a test-guarded committed file), or the two wrappers
-  need to diverge by more than the command prefix + preamble.
+  be a real CLI subcommand, not a test-guarded committed file), the two wrappers
+  need to diverge by more than the command prefix + preamble, or `otacon install
+  --project` in this repo starts writing an `otacon` wrapper that re-introduces the
+  collision the rename avoided.
 
 ## Attention notifications: native macOS banner, not Web Push, for desktop
 
@@ -2723,6 +2740,241 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** The relatedness call wants tooling (an `otacon`-side hint or a
   similarity check) instead of pure agent judgment, or amendments need to diverge onto a
   new branch/PR (a large pivot that should not pile onto the original PR).
+
+## Live-activity stream: daemon-side, ephemeral, JSONL (not the JSON activity feed)
+
+- **Decision:** The automatic, cross-agent live-activity stream is a separate
+  append-only **JSONL** file (`.otacon/<id>/stream.jsonl`), distinct from the existing
+  `activity.json` feed. It holds normalized `StreamEvent`s (the daemon assigns a
+  monotonic per-session `seq`, redacts + truncates every event before storing), is
+  capped by rewriting to the newest N only when it overflows, tolerates corrupt lines by
+  skipping them (never quarantines the whole file), and is ephemeral working state —
+  never archived to the home store. `otacon progress` notes land in this stream as
+  `highlight` events *in addition to* the legacy `activity.json` feed.
+- **Why:** The stream is a high-frequency, append-heavy surface (future phases tail an
+  agent's transcript), so JSONL's cheap per-line append beats the whole-file
+  rewrite-on-every-write that the small `activity.json` feed uses — and a single torn or
+  hand-edited line should cost one line, not the whole stream (so line-skip, not the
+  JSON files' quarantine-the-file recovery). It stays a *separate* file from
+  `activity.json` because the draft chip still reads `latestActivity` from the feed (a
+  small, capped, human-shaped list) and changing that store's shape/cap would churn an
+  unrelated, load-bearing surface; routing `progress` into both keeps the chip working
+  while the new stream becomes the single normalized activity record. Daemon-side
+  normalization (redact + truncate + label) is mandatory and shared so no capture source
+  can leak a secret or a 5 KB body into a review screen. Ephemeral because it is live
+  telemetry about *how* a plan was built, not part of the approved artifact.
+- **Revisit when:** The stream needs to survive into the archived plan (then it must move
+  to the home store and gain a retention policy), the capture volume outgrows
+  rewrite-on-overflow capping (then rotate by file segment), or the activity feed and the
+  stream converge enough that the draft chip can read the stream directly and
+  `activity.json` can be retired.
+
+## cwd+recency transcript discovery (no per-agent hook dependency)
+
+- **Decision:** The tailer discovers a coding agent's live transcript by *locating* it
+  on disk — the freshest transcript file whose recorded working directory equals the
+  session's repo root — not by any hook, env handshake, or cooperation from the agent.
+  Each agent's `TranscriptAdapter.locate(repoRoot)` owns the format-specific search
+  (e.g. the Claude adapter encodes `repoRoot` into `~/.claude/projects/<dash-encoded-cwd>/`,
+  picks the newest `.jsonl` there by mtime, and confirms the match by reading the file's
+  recorded `cwd`). The registry tries adapters in order; the first with a located handle
+  wins, and **no match returns `null`** — the session then runs only on the manual
+  `otacon progress` floor. Both `locate` and `parse` are fail-soft: a throwing `locate`
+  counts as no match, and a malformed/vanished transcript is skipped, never fatal.
+- **Why:** A hook or wrapper would require installing into every agent and would break the
+  moment an agent is launched outside otacon's wrapper (the common case — otacon is "drive
+  it from your Bash tool", not a launcher). The transcript already exists on disk for any
+  agent worth supporting, so reading it needs zero buy-in and works retroactively for a
+  session that started before otacon attached. Matching on the *recorded cwd* (not just the
+  dir-name encoding) is authoritative and tolerant: the encoding is lossy (a literal `-` in
+  a path is indistinguishable from a separator), so the recorded cwd disambiguates and
+  guards against a stale/foreign transcript in a colliding directory. Recency (mtime)
+  picks the *live* session when a repo has several historical transcripts. The hard `null`
+  floor is the graceful-degradation guarantee: an unsupported agent loses automatic capture
+  but never the manual progress feed, and a new agent is one adapter + one registry line
+  away — no change to the daemon, the pipeline, or the UI.
+- **Revisit when:** An agent has no on-disk transcript (then that adapter needs a different
+  capture path — a hook or an API), two live sessions share one repo root and must be told
+  apart by more than recency (then `locate` needs a stronger key than cwd+mtime, e.g. a
+  session id handshake), or transcript formats churn often enough that fail-soft skipping
+  hides real capture gaps (then add a per-adapter health/coverage signal).
+
+## Live activity is an always-on now-playing bar, not a buried collapsible fold
+
+- **Decision:** The review screen surfaces the live-activity stream as a slim, always-on
+  "now-playing" bar pinned under the sticky header that expands into a full console. It
+  replaces the old `<section className="activity">` collapsible, which was default-closed,
+  rendered only once a plan existed, and easy to miss. The bar is shown whenever the agent
+  is active OR any stream event exists (so it appears during pre-plan research, not gated on
+  `hasPlan`); the console auto-expands during `draft`/`implementing` and collapses to the
+  bar in resting states, with a status crossing re-applying that default while a manual
+  toggle wins until the next crossing. The bar carries a `live`/`notes` **mode badge**,
+  reading `live` once any captured (tool/text/thinking) event exists and `notes` while only
+  `highlight` progress notes do, making the adapter-attached-vs-floor distinction (§10a)
+  visible.
+- **Why:** "What is the agent doing right now?" is the exact question a reviewer asks while
+  waiting through research and drafting, and the old fold answered it only if you knew to
+  open it. An always-visible one-liner answers at a glance with the firehose one click away;
+  pinning it under the header (sticky, just below z20) keeps it a fixed instrument while the
+  plan scrolls. Showing it pre-plan is the whole point: that is when the wait is longest and
+  the old fold (gated on a plan) showed nothing. The mode badge is cheap honesty: without it
+  a `notes`-only session looks identically "quiet" to a broken adapter, so the badge tells
+  the user whether rich capture is even attached. Thinking is hidden behind an off-by-default
+  toggle because it is the noisiest kind and would drown the concrete tool/text activity; the
+  Thinking *filter* force-shows it (selecting it is strong intent). Newest-at-the-bottom with
+  pin-aware auto-scroll matches a terminal's mental model and never yanks a user reading
+  history. Pairing a running event with its outcome and same-label run-collapsing ("Read ×5")
+  keep a dense captured stream legible instead of a thousand-row wall.
+- **Revisit when:** The bar's "latest meaningful event" heuristic misleads on some agent's
+  label vocabulary (then the now-playing selection needs per-kind weighting, not just
+  "skip trailing thinking"), the 500-event client cap proves too small for a long
+  `implementing` build's console (then window/virtualize the row list rather than render the
+  capped tail), or a future surface needs the stream off the review screen (then the
+  now-playing/console pair lifts out as a standalone component over the same `useSession`
+  field).
+
+## The console's fold/select logic is a pure module; its components are thin views
+
+- **Decision:** All non-trivial console behavior lives in `console-model.ts` as pure,
+  React-free functions: pairing a tool `running` event with its later `ok`/`error` outcome,
+  collapsing consecutive same-(kind,label,tool) runs into a counted row, the kind filter plus
+  thinking toggle, the `live`/`notes` mode, and the now-playing label/timer/dim selection.
+  They are exhaustively unit-tested in `live-console.test.tsx` with `bun:test`. The React
+  components (`now-playing.tsx`, `live-console.tsx`, `console-rows.tsx`) own only chrome,
+  toggles, and scroll behavior.
+- **Why:** This mirrors the existing `group.ts`/`group.test.ts` (rail grouping) and
+  `compact.ts` (header scroll state) split. The repo carries no React test renderer
+  (no `@testing-library`), and its DOM tests use happy-dom only for low-level Range work
+  (anchor.test.ts), never component rendering. Pushing the logic into a pure module makes the
+  required behavioral assertions testable directly and fast, with no rendering harness to add:
+  a running Bash call yields its label plus a running flag plus a timer, and a noisy
+  repeated-read-plus-thinking stream collapses the repeats, hides thinking, and narrows under
+  the filter. (Also: `src/ui/tsconfig.json`'s test exclude was widened from `**/*.test.ts` to
+  also cover `**/*.test.tsx`, since the new test is the repo's first `.tsx` test and
+  `bun:test` files must compile only under the bun-typed `tsconfig.test.json`.)
+- **Revisit when:** The components grow logic worth asserting through real rendering (then
+  add `@testing-library/react` plus a happy-dom register, and the pure split stays as the fast
+  inner layer), or a second surface needs the same fold so the model gains a non-UI consumer
+  (it already takes plain `StreamEvent[]`, so that is a lift, not a rewrite).
+
+## `otacon progress` stays as the universal floor + curated highlights
+
+- **Decision:** Now that the transcript tailer (§10a) auto-streams a supported agent's
+  tool calls, text, and thinking to the now-playing console, `otacon progress` is *not*
+  retired. It is reframed to two roles: (a) the **universal floor**, the one activity
+  signal that works on ANY agent, including the long tail with no transcript adapter
+  (hermes, pi, gemini-cli, and whatever ships next), where it is the *only* thing keeping
+  the now-playing bar alive; and (b) occasional **curated highlights / chapter markers**
+  (milestones, phase boundaries, "what I'm about to do next") that read as emphasized
+  dividers in the console. The managed wrapper (`assets.ts`) and DESIGN.md §6/§10 ask for
+  it SPARINGLY on supported agents (the firehose covers routine work) but still require it
+  on the floor. The verb, the `POST /progress` endpoint, the `highlight` stream event, and
+  the activity feed are all unchanged; this is a guidance reframe, not an API change.
+- **Why:** Auto-capture is per-agent and optional by construction (cwd+recency discovery,
+  one adapter per agent, `null` floor), so a signal that depends on it can never be
+  *universal*, and the floor is exactly what guarantees every agent shows *something*.
+  Retiring `progress` would strand every adapter-less agent on a dead bar and throw away a
+  cheap, zero-API, human-authored highlight track that no transcript can synthesize (the
+  agent saying "I'm about to do X" before it does). Reviewer noise from the firehose is the
+  real concern auto-capture introduced, but that is handled in the *display* (run-collapsing,
+  the thinking toggle, the now-playing "latest meaningful event" pick, §10a), not by
+  suppressing capture or leaning back on manual narration. Telling the agent to narrate
+  every step on top of the firehose would double-report routine work; telling it to stop
+  narrating entirely would blind the floor; "sparingly, but always on the floor" is the
+  only framing that holds for both the supported and the unsupported agent.
+- **Revisit when:** Every agent otacon targets has a transcript adapter (then the floor is
+  vestigial and `progress` could collapse to highlights-only), or auto-capture grows a
+  reliable cross-agent fallback (an API/hook handshake) that removes the adapter-less long
+  tail this floor exists for.
+
+## Codex adapter: walk the date-partitioned rollout tree; map the real `exec_command` shape
+
+- **Decision:** The Codex `TranscriptAdapter` locates by recursively walking
+  `$CODEX_HOME/sessions/` (default `~/.codex/sessions/`, CODEX_HOME-aware), collecting every
+  `rollout-*.jsonl`, sorting newest-first by mtime, and returning the first whose leading
+  `session_meta.payload.cwd` equals the repo root. It does **not** derive a per-repo
+  subdirectory the way the Claude adapter does. `parse` reads the envelope
+  `{ timestamp, type, payload }` and maps only `type:"response_item"` payloads: `reasoning`
+  → thinking (flattening `summary[].text`; encrypted-only reasoning yields nothing),
+  assistant `message` → text (user messages skipped), `function_call`/`custom_tool_call` →
+  a `running` tool event, `function_call_output`/`custom_tool_call_output` → its `ok`/`error`
+  outcome (error inferred from a non-zero exit code or `success:false` in a JSON output,
+  else ok). Shell tools (`exec_command` and the older `shell`) render as `Bash: <command>`,
+  pulling the command from `arguments.cmd` (a string) or a `command` array (unwrapping a
+  `bash -lc <script>`); `apply_patch` renders as `Edit <file>` when a path is recoverable.
+- **Why:** Codex's on-disk layout is date-partitioned by session start (`<YYYY>/<MM>/<DD>/`),
+  not keyed by cwd like Claude's dash-encoded project dirs, so there is no cheap directory to
+  jump to — the recorded `session_meta.cwd` is the only authoritative repo key, and reading it
+  per candidate (newest-first, short-circuiting on the first match) is the correct and still
+  cheap discovery. Inspecting real rollouts on disk showed the *current* Codex CLI diverges
+  from the older documented shape: the shell tool is `exec_command` with a string `arguments.cmd`
+  (not the `shell` tool with a `["bash","-lc",…]` array), reasoning is frequently
+  `encrypted_content`-only with an empty `summary`, and `function_call_output.output` is usually
+  plain text rather than a JSON envelope. The adapter handles both the documented and the
+  observed shapes defensively so it survives version churn, and emits nothing (not a noisy
+  empty event) for encrypted-only reasoning. Mapping the running call and its outcome as two
+  appended events preserves the append-only store invariant the pipeline already relies on.
+- **Revisit when:** Walking the whole sessions tree per `locate` becomes a hot path on a
+  machine with thousands of historical rollouts (then index by mtime/most-recent-day first, or
+  cache the meta-cwd scan), Codex moves the session cwd off the leading `session_meta` record,
+  or a future Codex build encrypts assistant/tool content too (then capture needs an API or a
+  decrypt path, not transcript reading).
+
+## OpenCode adapter: tail the local SQLite store read-only, not the `opencode serve` stream
+
+- **Decision:** The OpenCode `TranscriptAdapter` reads OpenCode's **local on-disk storage**,
+  not its `opencode serve` HTTP event stream. On a real install (storage migration 2) that
+  storage is a **SQLite database** at `$XDG_DATA_HOME/opencode/opencode.db` (default
+  `~/.local/share/opencode/`), *not* the documented `storage/{session,message,part}/*.json`
+  tree — most session data now lives in the DB and only `session_diff/*.json` remains as
+  loose files. `locate` opens the DB **read-only** (Node's built-in `node:sqlite`, zero new
+  npm deps) and runs `SELECT id FROM session WHERE directory = ? ORDER BY time_updated DESC`
+  to find the freshest session whose recorded cwd is the repo root, encoding the resolved
+  session id into the handle path as `<db>#<sessionId>` (the `TranscriptHandle` has only a
+  `path`). `parse` queries `part WHERE session_id = ? AND time_created >= watermark ORDER BY
+  time_created`, maps `data.type` `text` → text, `reasoning` → thinking, and `tool` → a
+  `running` event plus, when `state.status` is `completed`/`error`, a SEPARATE `ok`/`error`
+  outcome event. Tool labels mirror the Claude verbs over OpenCode's lowercase tool names
+  (`bash` → `Bash: …`, `read`/`edit`/`write` → `Read/Edit/Write <file>`, `grep`/`glob`,
+  etc.). The whole adapter is fail-soft: a missing `node:sqlite`, a locked/absent/corrupt DB,
+  or a torn `data` JSON is swallowed and the session falls to the floor.
+- **Why:** The HTTP stream would require otacon to spawn and own a long-lived `opencode
+  serve` process per repo — exactly the extra-process, cooperation-required coupling the
+  Claude/Codex adapters were designed to avoid (they read files the agent already writes,
+  no daemon of the agent's needed). Reading the same on-disk store the agent already
+  persists keeps the file-based, no-extra-process, read-only model uniform across all three
+  adapters and survives the agent not running a server at all. Inspecting a real install
+  showed the *current* OpenCode keeps that store in SQLite, not the older JSON-file tree, so
+  the adapter reads the DB directly rather than globbing a `part/` directory that no longer
+  exists. `node:sqlite` is a built-in (no dependency, no native build) and we open it
+  read-only so we never touch the agent's DB.
+- **Cursor — watermark, not byte offset.** The JSONL adapters advance a byte `offset` into a
+  growing file; a SQLite source has no such offset (rows are inserted and tool parts are
+  *mutated in place* as a tool settles). So the OpenCode cursor leaves `offset` unused and
+  carries a high-water `time_created` watermark plus the set of part ids emitted *at exactly*
+  that watermark. Each `parse` asks for `time_created >= watermark` (`>=`, not `>`, so a part
+  inserted in the same millisecond as the prior frontier is not missed), skips any id already
+  in the tie set, emits the rest in `time_created` order, then advances the watermark to the
+  newest time seen and resets the tie set to just the ids at that new frontier — bounded to
+  the frontier, never the whole session. The tailer round-trips this carry untouched, exactly
+  as it does the byte offset, so a dir/DB-tree adapter drops into the same poll loop with no
+  tailer change. A part re-surfaced by a later `time_updated` bump (its tool finishing) is
+  *not* re-read by this watermark — that is acceptable: a tool's outcome detail is a nicety,
+  not a correctness requirement, and re-emitting the running event would violate append-only.
+- **Freshest-by-`time_updated`.** `locate` returns the session with the newest
+  `time_updated` for the cwd, which is the one being actively worked — the right target for a
+  live tailer, even though a cwd with a long history can carry many *empty* abandoned
+  sessions whose `time_updated` is older. (Observed on a real install: the newest session for
+  a repo was an empty 0-part shell; the session with content was a few seconds older. That is
+  fine — an active session accrues parts as work happens and stays the freshest; a dormant
+  repo with only empty sessions has no activity to capture and runs on the floor regardless.)
+- **Revisit when:** OpenCode reverts to (or also writes) the loose JSON-file tree and we want
+  to support both shapes; or `node:sqlite` is unavailable on a runtime otacon must support
+  (it is Node-22+; under bun the test runner lacks it and the adapter degrades to the floor —
+  fine for the daemon, which ships as `node dist/daemon/main.js`, but it means OpenCode
+  capture needs a Node ≥ 22 daemon); or we decide the streamed tool *outcome* matters enough
+  to also watch `part.time_updated` (then the cursor needs an updated-watermark dimension and
+  a dedupe of the already-emitted running event).
 
 ## `revised`/`prior` on re-answer events
 

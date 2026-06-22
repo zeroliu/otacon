@@ -1,0 +1,9 @@
+{"type":"summary","summary":"Synthetic session for adapter tests","leafUuid":"00000000-0000-0000-0000-000000000000"}
+{"type":"user","cwd":"/repo","timestamp":"2026-06-21T00:00:00.000Z","isSidechain":false,"message":{"role":"user","content":[{"type":"text","text":"Add a retry to the fetch helper."}]}}
+{"type":"assistant","cwd":"/repo","timestamp":"2026-06-21T00:00:01.000Z","isSidechain":false,"message":{"role":"assistant","content":[{"type":"thinking","thinking":"The user wants a retry. I should read the fetch helper first to see its current shape.","signature":"synthetic"}]}}
+{"type":"assistant","cwd":"/repo","timestamp":"2026-06-21T00:00:02.000Z","isSidechain":false,"message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_read1","name":"Read","input":{"file_path":"/repo/src/fetch.ts"}}]}}
+{"type":"user","cwd":"/repo","timestamp":"2026-06-21T00:00:03.000Z","isSidechain":false,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_read1","content":"export async function fetchJson(url) { return (await fetch(url)).json(); }"}]}}
+{"type":"assistant","cwd":"/repo","timestamp":"2026-06-21T00:00:04.000Z","isSidechain":false,"message":{"role":"assistant","content":[{"type":"text","text":"I'll run the tests to confirm the baseline before editing."}]}}
+{"type":"assistant","cwd":"/repo","timestamp":"2026-06-21T00:00:05.000Z","isSidechain":false,"message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_bash1","name":"Bash","input":{"command":"bun test src/fetch.test.ts","description":"Run the fetch tests"}}]}}
+{"type":"user","cwd":"/repo","timestamp":"2026-06-21T00:00:06.000Z","isSidechain":false,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_bash1","content":[{"type":"text","text":"1 pass, 0 fail"}],"is_error":false}]}}
+{"type":"system","subtype":"info","cwd":"/repo","timestamp":"2026-06-21T00:00:07.000Z","content":"hooks ran"}
