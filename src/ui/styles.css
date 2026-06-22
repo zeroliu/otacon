@@ -4691,7 +4691,9 @@ code {
 @media (min-width: 960px) {
   .app-shell {
     display: grid;
-    grid-template-columns: 240px minmax(0, 1fr);
+    /* --sidebar-width is the reader's dragged width (sidebar-state), seeded inline
+     * on .app-shell; 240px is the default before any drag. */
+    grid-template-columns: var(--sidebar-width, 240px) minmax(0, 1fr);
   }
 
   /* Collapsed: drop the sidebar track, hand the whole width to the content. */
@@ -4726,11 +4728,13 @@ code {
   }
 }
 
-/* The sidebar header furniture: a smaller wordmark over a tools row (settings,
- * link-state, the « collapse toggle). */
+/* The sidebar header furniture: the wordmark on the left, the settings gear and
+ * the « collapse toggle grouped on the right of the same row. */
 .app-sidebar-head {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
   gap: 12px;
   padding: 0 6px 14px;
   margin-bottom: 6px;
@@ -4761,10 +4765,9 @@ code {
   gap: 14px;
 }
 
-/* The « collapse toggle: a quiet mono glyph at the row's end, accent on hover,
- * matching the settings gear's treatment. */
+/* The « collapse toggle: a quiet mono glyph beside the settings gear, accent on
+ * hover, matching the gear's treatment. */
 .app-collapse {
-  margin-left: auto;
   border: none;
   background: none;
   padding: 2px 4px;
@@ -4776,6 +4779,45 @@ code {
 .app-collapse:hover,
 .app-collapse:focus-visible {
   color: var(--accent);
+}
+
+/* The drag-resize separator on the sidebar's right edge. It lives inside
+ * .app-sidebar so it inherits the column's display gating (gone below 960px and
+ * when collapsed); position:fixed pins it to the boundary — left:--sidebar-width
+ * measured from the viewport edge, since the shell starts at left:0 — and escapes
+ * the column's own overflow so it spans the full height without scrolling. */
+.app-resize {
+  display: none;
+}
+
+@media (min-width: 960px) {
+  .app-shell:not(.collapsed) .app-resize {
+    display: block;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: var(--sidebar-width, 240px);
+    width: 9px;
+    transform: translateX(-5px);
+    z-index: 30;
+    cursor: col-resize;
+    /* a centered hairline that warms to the accent on hover / keyboard focus */
+    background: linear-gradient(var(--line-strong), var(--line-strong)) center / 1px 100% no-repeat;
+  }
+
+  .app-shell:not(.collapsed) .app-resize:hover,
+  .app-shell:not(.collapsed) .app-resize:focus-visible {
+    background-image: linear-gradient(var(--accent), var(--accent));
+    background-size: 2px 100%;
+    outline: none;
+  }
+}
+
+/* While a drag is live: kill text selection and force the resize cursor
+ * everywhere, so dragging across the list never selects rows. */
+.app-shell.resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 /* The » expand handle: pinned near the content's top-left while the sidebar is
@@ -4846,9 +4888,10 @@ code {
   outline: none;
 }
 
-/* The shell mini top-bar: wordmark + ☰, on the welcome / settings panes only
- * (the review header carries its own ☰ there). Accent-neutral, lightweight — a
- * single hairline under it, no fill. Hidden at ≥960px (the sidebar takes over). */
+/* The shell mini top-bar: wordmark + settings gear, on the welcome / settings
+ * panes only (a review screen carries its own ☰ in the review header, and the
+ * welcome pane renders the session list inline below 960px). Accent-neutral,
+ * lightweight — a single hairline under it, no fill. Hidden at ≥960px. */
 .app-topbar {
   display: flex;
   align-items: center;

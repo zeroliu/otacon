@@ -56,7 +56,7 @@ Every decision below was resolved deliberately; rationale follows in the relevan
 | 12  | Visuals v1        | Mermaid, code + before/after blocks, ASCII wireframes. Images deferred to v2                                                                                                      |
 | 13  | Storage           | Working state in `<repo>/.otacon/` (otacon manages no `.gitignore` — track or ignore it as you like); every approved plan archived to the home store `~/.otacon/sessions/<id>/` (permanent, never cleaned); on Save also copied into the repo under `plans.dir`                                  |
 | 14  | LLM cost          | Zero API spend invariant: daemon/CLI/UI never call a model; all intelligence runs in the user's interactive subscription-backed session. No Agent SDK anywhere                    |
-| 15  | Multi-session     | One daemon, many concurrent sessions; per-session event queues; UI session list (sidebar ≥960px, overflow-menu sheet below)                                                       |
+| 15  | Multi-session     | One daemon, many concurrent sessions; per-session event queues; UI session list (resizable/collapsible sidebar ≥960px; inline home list + ☰ overflow sheet below)                 |
 | 16  | Grilling          | grill-me discipline is a mandatory protocol phase before drafting; decisions must trace to grill answers (linted)                                                                 |
 | 17  | Name              | CLI `otacon`, daemon `otacond`. Future implementer: `snake` (suggestion, not locked)                                                                                              |
 | 18  | Storage format    | Plain JSON files, written atomically; SQLite rejected (native dep, opaque state)                                                                                                  |
@@ -716,11 +716,11 @@ HTTP requests, no contention.
 condensed row per active session — accent, title, repo/branch, status glyph, agent dot,
 unread badge — with approved (and implemented / implement_failed) sessions folded into a
 collapsed `approved (n)` disclosure below, the same split the old index read. On desktop
-(≥960px) it's a fixed 240px column wrapping every route, so switching is one click from
-anywhere; `/` itself is a welcome pane, not the index. Below 960px the sidebar is hidden
-and the same list is reached through an **overflow menu** instead — a ☰ "show sessions"
-button opens a bottom-sheet `SessionList`, so switching is the same condensed rows, one
-tap away from every route (§8). The review screen has one **sticky header** pinned to the
+(≥960px) it's a drag-resizable, collapsible column (240px by default) wrapping every
+route, so switching is one click from anywhere; `/` itself is a welcome pane, not the
+index. Below 960px the sidebar is hidden: the home route renders the list inline (the
+phone index), and from an open plan the same condensed rows are one tap away through the
+review header's ☰ **overflow menu**, a bottom-sheet `SessionList` (§8). The review screen has one **sticky header** pinned to the
 top of the scroll: expanded it shows the full masthead (title, revision, repo/branch,
 status), the clean⇄diff toggle, and Approve; scrolling down it compacts to a tight
 one-line bar and re-expands at the top (§10). The header carries the ☰ button at <960px
@@ -819,16 +819,18 @@ older baselines stay reachable through the diff endpoint's `?from=`.
 ## 10. UI/UX
 
 A persistent **app shell** wraps every route: a left sidebar (the OTACON wordmark
-linking home, the settings gear, the browser↔daemon link dot, and the live session
-list) beside a content track. `/` is a **welcome pane** in the track (the sidebar holds
-the index now); `/s/:id` is the open session; `/settings` is the config screen (User /
-Project / Project · local scopes; reached from the sidebar gear or `otacon config`).
-On desktop (≥960px) the sidebar is a fixed 240px column, **collapsible** to a one-column
-content view with the choice persisted across reloads (a `»` handle reopens it); below
-960px the sidebar is hidden and the session list is reached through the ☰ overflow-menu
-sheet (§7) — from the review header on a plan, and from a slim shell mini top-bar on the
-welcome / settings panes, so it's one tap away on every route. The shell chrome is
-accent-neutral — only an open review tints, via its own per-session accent. Config is
+linking home, the settings gear, and the live session list) beside a content track.
+`/` is a **welcome pane** in the track (the sidebar holds the index now); `/s/:id` is
+the open session; `/settings` is the config screen (User / Project / Project · local
+scopes; reached from the sidebar gear or `otacon config`).
+On desktop (≥960px) the sidebar is a column (240px by default) that is **drag-resizable**
+(a separator on its right edge; the width persists across reloads) and **collapsible** to
+a one-column content view (the choice persists too; a `»` handle reopens it). Below
+960px the sidebar is hidden: the home route renders the session list inline, and from an
+open plan it is reached through the review header's ☰ overflow-menu sheet (§7); the slim
+shell mini top-bar on the welcome / settings panes carries the wordmark + the settings
+gear. The shell chrome is accent-neutral; only an open review tints, via its own
+per-session accent. Config is
 still file-backed (§16); the Settings screen is a web editor over those files. Sections
 render worktree → notifications → budgets → activity (the build-time and attention
 knobs lead; the line budgets are the long tail). The worktree heading carries both
@@ -884,10 +886,11 @@ gracefully rather than misattaching.
 ### Sidebar session list + welcome pane
 
 The app shell's left sidebar is the persistent session list (the desktop index).
-Its header carries the graphic OTACON wordmark (§3, the home link), the settings gear,
-the browser↔daemon link-state dot, and a `«` collapse toggle; below them, one condensed
-row per session — accent, status glyph, title, repo + branch, agent-presence dot, an
-unread badge, and a hover-revealed delete. Click → review screen. The same status
+Its header row carries the graphic OTACON wordmark (§3, the home link) on the left, with
+the settings gear and a `«` collapse toggle grouped on the right; the column itself is
+**drag-resizable** (a right-edge separator, width persisted) and **collapsible**. Below
+the header, one condensed row per session: accent, status glyph, title, repo + branch,
+agent-presence dot, an unread badge, and a hover-revealed delete. Click → review screen. The same status
 derivation drives the row glyph and the review chip: `awaiting your review` /
 `agent revising` / `questions pending` /
 `approved` / `implementing` / `implemented` / `implement failed`, plus an
@@ -897,8 +900,8 @@ shows the latest `otacon progress` note (truncated), falling back to `agent
 working` until the agent narrates — so the chip never claims "drafting" while the
 agent is still reading. The **agent-presence dot** (live/offline) sits beside the
 chip — a subtle "is the agent still on the line?" mark, distinct from the
-browser↔daemon link dot (labelled `agent` vs `link`); the status chip stays the
-primary "your turn" signal. The dot is live while the agent is parked in
+browser↔daemon link dot, which now lives in the review header's status row (labelled
+`agent` vs `link`); the status chip stays the primary "your turn" signal. The dot is live while the agent is parked in
 `otacon wait` or its last contact is recent, and is hidden on approved sessions.
 
 **Approved sessions group separately.** The main list holds only active sessions
@@ -909,20 +912,22 @@ same disclosure idiom as the activity panel). Approved plans stay readable: open
 approved row shows its read-only plan — the disclosure is the only entry point now the
 list no longer keeps them in the active set.
 
-**Welcome pane.** With no session open, `/` shows a short welcome in the content track:
-when the registry is empty, the empty-state copy (run `otacon start` — the offline hint
-appears when the daemon link is down); otherwise a brief "pick a session" prompt. The
-session list (sidebar ≥960px, the ☰ sheet below) carries the live index either way.
+**Welcome pane.** With no session open, `/` depends on width. At ≥960px it shows a short
+welcome in the content track: when the registry is empty, the empty-state copy (run
+`otacon start`; the offline hint appears when the daemon link is down); otherwise a brief
+"pick a session" prompt pointing at the sidebar. Below 960px the sidebar is hidden, so
+`/` renders the live session list (the condensed cards) inline instead, the way the home
+screen always read on a phone.
 
-**Mobile (below 960px).** The sidebar is hidden, so the session list is reached through
-the ☰ **overflow menu** (§7): the button sits in the review header on a plan, and in a
-slim shell mini top-bar (wordmark + ☰) on the welcome / settings panes, so the full list
-is one tap away on **every** route, not just an open review. Tapping it opens a
-bottom-sheet `SessionList` — the same condensed rows, scrim-backed, dismissed on a row
-tap, a scrim tap, Esc, or any route change. The status chip / agent dot / unread
-vocabulary above is what the sheet and (desktop) sidebar rows both render — one list,
-two presentations. At ≥960px the sheet is never opened; the `»` collapsed-sidebar handle
-is the equivalent "show sessions" control there.
+**Mobile (below 960px).** The sidebar is hidden, so the list is reached two ways: the
+home route (`/`) renders it inline (the phone index), and an open plan reaches it through
+the ☰ **overflow menu** in the review header (§7), a scrim-backed bottom-sheet
+`SessionList` dismissed on a row tap, a scrim tap, Esc, or any route change. The welcome
+and settings panes carry a slim shell mini top-bar (wordmark + settings gear) so brand
+and config stay reachable where the sidebar is hidden. The status chip / agent dot /
+unread vocabulary above is what the inline list, the sheet, and the desktop sidebar rows
+all render: one list, three placements. At ≥960px the sheet is never opened; the `»`
+collapsed-sidebar handle is the equivalent "show sessions" control there.
 
 Every session carries a small delete control on its card — and one in the review
 screen header — to remove it from the index without dropping to the CLI. It opens a

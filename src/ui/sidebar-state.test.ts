@@ -6,7 +6,16 @@
 // with a Map-backed fake, exactly like self-heal.test.ts stubs sessionStorage.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { readSidebarCollapsed, writeSidebarCollapsed } from "./sidebar-state.js";
+import {
+  SIDEBAR_DEFAULT_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+  clampSidebarWidth,
+  readSidebarCollapsed,
+  readSidebarWidth,
+  writeSidebarCollapsed,
+  writeSidebarWidth,
+} from "./sidebar-state.js";
 
 const g = globalThis as Record<string, unknown>;
 const saved = { localStorage: g.localStorage };
@@ -71,5 +80,40 @@ describe("sidebar collapse persistence", () => {
     expect(() => readSidebarCollapsed()).not.toThrow();
     expect(readSidebarCollapsed()).toBe(false);
     expect(() => writeSidebarCollapsed(true)).not.toThrow();
+  });
+});
+
+describe("sidebar width persistence", () => {
+  test("clamps into [min, max] and rounds; non-finite falls back to the default", () => {
+    expect(clampSidebarWidth(SIDEBAR_MIN_WIDTH - 50)).toBe(SIDEBAR_MIN_WIDTH);
+    expect(clampSidebarWidth(SIDEBAR_MAX_WIDTH + 50)).toBe(SIDEBAR_MAX_WIDTH);
+    expect(clampSidebarWidth(263.7)).toBe(264);
+    expect(clampSidebarWidth(Number.NaN)).toBe(SIDEBAR_DEFAULT_WIDTH);
+  });
+
+  test("defaults to 240 when nothing is stored", () => {
+    expect(readSidebarWidth()).toBe(SIDEBAR_DEFAULT_WIDTH);
+  });
+
+  test("write → read round-trips a clamped width", () => {
+    writeSidebarWidth(320);
+    expect(readSidebarWidth()).toBe(320);
+  });
+
+  test("a stored out-of-bounds width is re-clamped on read", () => {
+    (g.localStorage as Storage).setItem("otacon-sidebar-width", "9000");
+    expect(readSidebarWidth()).toBe(SIDEBAR_MAX_WIDTH);
+  });
+
+  test("a garbage stored value reads as the default", () => {
+    (g.localStorage as Storage).setItem("otacon-sidebar-width", "wide");
+    expect(readSidebarWidth()).toBe(SIDEBAR_DEFAULT_WIDTH);
+  });
+
+  test("absent / throwing store reads the default and never escapes", () => {
+    g.localStorage = undefined;
+    expect(() => readSidebarWidth()).not.toThrow();
+    expect(readSidebarWidth()).toBe(SIDEBAR_DEFAULT_WIDTH);
+    expect(() => writeSidebarWidth(300)).not.toThrow();
   });
 });

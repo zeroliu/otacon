@@ -2657,7 +2657,7 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 ## App shell: a persistent frame replaces the list-page / detail-page split
 
 - **Decision:** Every route renders inside one `AppShell` (`src/ui/shell.tsx`): a left
-  sidebar (wordmark home-link, settings, link-state, collapse toggle, live `SessionList`)
+  sidebar (wordmark home-link, settings, collapse toggle, live `SessionList`)
   beside a content track holding the routed screen. `app.tsx` resolves the route to a screen
   and returns `<AppShell>{screen}</AppShell>` — the chrome lives outside the route switch.
   The old index page is gone; `/` is now a welcome pane in the track.
@@ -2715,7 +2715,27 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   guard, with the same "storage may be hostile" guard. Defaulting to expanded means a
   first-time visitor sees the session list, not a mystery handle.
 - **Revisit when:** The collapse state should sync across devices (it would move to daemon
-  config), or collapse needs more than a boolean (e.g. a remembered width).
+  config). The remembered-width follow-up is now its own decision below.
+
+## Drag-resizable sidebar, width persisted in localStorage
+
+- **Decision:** The desktop sidebar's width is reader-adjustable: a `role="separator"` handle
+  on its right edge drags the column (pointer + ←/→ keyboard, persisted), bounded to
+  `[200, 480]px`, default 240. The grid track reads a `--sidebar-width` custom property set
+  inline on `.app-shell`; the width persists per-device in `localStorage`
+  (`otacon-sidebar-width`) via `read/writeSidebarWidth` + `clampSidebarWidth` in
+  `sidebar-state.ts`, which clamp on both write and read so a stored value from a wider
+  monitor can never widen the column past the current max, and tolerate an absent / throwing
+  store like the collapse flag.
+- **Why:** Reviewers split between wanting long titles legible (wider) and wanting maximum
+  reading measure (narrower); a fixed 240px served neither well, and collapse is too blunt (all
+  or nothing). It is a pure per-device view preference the daemon has no business knowing, so
+  it lives in the browser beside the collapse flag, with the same hostile-store guard. The
+  clamp bounds keep the reading column + threads rail from being crushed at the wide end and
+  the rows readable at the narrow end. A fixed-position handle at `left: var(--sidebar-width)`
+  tracks the boundary without a wrapper, and escapes the sidebar's own `overflow-y` scroll.
+- **Revisit when:** The width should sync across devices (move to daemon config), or the
+  resize wants snap points / a double-click-to-reset affordance.
 
 ## Retire index-screen.tsx in favor of welcome + sidebar
 
@@ -2759,9 +2779,10 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   per-review header strip (a `<select>` + accent chips that only existed on an open plan) but
   the same `SessionList` the sidebar uses, surfaced through an **overflow menu**: a ☰ "show
   sessions" button opens a bottom-docked sheet (scrim, `useScrollLock`, `--kb-inset`, dismiss
-  on row tap / scrim tap / Esc / route change). The button lives in the review header on a
-  plan and in a slim shell mini top-bar (wordmark + ☰) on the welcome / settings panes, so the
-  list is reachable from **every** route, not just a review. The shell hosts the one sheet and
+  on row tap / scrim tap / Esc / route change). The ☰ button lives in the review header on a
+  plan; the welcome / settings panes instead carry a slim shell mini top-bar (wordmark +
+  settings gear), and the home route renders the list inline below 960px (see "Mobile home
+  renders the session list inline"), so the list is reachable from **every** route. The shell hosts the one sheet and
   publishes its opener through `SessionSheetContext` (the review header is the shell's
   `children`, so context beats threading a prop down); the open/close logic is a pure
   `shouldCloseSheet` / `isDesktopWidth` unit (`session-sheet-state.ts`, tested) and the React
@@ -2781,3 +2802,37 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** The list grows a mobile-only affordance the sidebar lacks (search, sort,
   multi-select) and the sheet needs its own list variant, or the sheet should become a fuller
   navigation drawer (settings / docs links beside the sessions) rather than just the list.
+
+## Drop the browser↔daemon link dot from the sidebar header
+
+- **Decision:** The `LinkState` "link" dot is removed from the app shell sidebar header; the
+  header row is now just the wordmark (left) plus the settings gear + `«` collapse toggle
+  (right). The dot is kept only in the review header's status row, beside the status chip and
+  the agent-presence dot, where it reads in context. The `LinkState` component and the
+  `connected` flag are unchanged (the welcome pane still uses `connected` for its offline hint).
+- **Why:** A persistent green dot in the top-left chrome, present on every route, read as a
+  generic "online" light and competed with the agent-presence dot for the same "is it live"
+  meaning — two pulsing dots that mean different things (browser↔daemon link vs agent on the
+  line) are more confusing the more prominent the weaker one is. The link is rarely down on a
+  local daemon, and when it matters (an open review) the review header still shows it next to
+  the signals it belongs with. Folding the header to wordmark + actions also makes room for the
+  one-row furniture layout.
+- **Revisit when:** The shell gains a non-local / remote daemon mode where the link genuinely
+  drops often, and a global connectivity indicator earns its place back.
+
+## Mobile home renders the session list inline (not a welcome prompt)
+
+- **Decision:** Below 960px the `/` welcome pane renders the live `SessionList` (the condensed
+  cards) inline instead of the "pick a session" prompt; the prompt is desktop-only (where the
+  sidebar already holds the list). A shared `useDesktopWidth()` hook (`viewport.ts`, off the
+  same 960px media query the shell + sheet use) picks the face. The mobile mini top-bar carries
+  the wordmark + settings gear (no ☰); the ☰ overflow sheet is now a review-screen affordance.
+- **Why:** With the sidebar hidden on a phone, a `/` that only said "open a session from the
+  sidebar" pointed at a list the phone couldn't show — the home route felt broken. The home
+  screen has always been the session index on a phone, so rendering the cards there restores
+  that and makes the list the page rather than something hidden behind a menu that duplicates
+  it. Settings stays reachable through the mini-bar gear (the prior gap where the mini-bar's ☰
+  reached the list but nothing reached settings). One `SessionList` still backs all three
+  placements (sidebar, sheet, inline), so there is no divergent mobile list.
+- **Revisit when:** The phone home wants more than the list (a dashboard / activity overview
+  above it), or the inline list and the sheet diverge enough to warrant separate components.

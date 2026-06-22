@@ -17,7 +17,8 @@ import type { ReactNode } from "react";
 import { usePath } from "./router";
 import { useScrollLock } from "./review/keyboard";
 import { SessionList } from "./session-list";
-import { isDesktopWidth, shouldCloseSheet, SIDEBAR_VIEWPORT } from "./session-sheet-state";
+import { shouldCloseSheet } from "./session-sheet-state";
+import { useDesktopWidth } from "./viewport";
 
 /** The opener handed to any header/bar that wants to surface the session list (<960px). */
 interface SessionSheetApi {
@@ -29,23 +30,6 @@ const SessionSheetContext = createContext<SessionSheetApi>({ open: () => undefin
 /** The shell-mounted opener — `open()` surfaces the mobile session sheet. */
 export function useSessionSheet(): SessionSheetApi {
   return useContext(SessionSheetContext);
-}
-
-/**
- * Tracks whether the viewport is at/above the sidebar breakpoint, off the same
- * `min-width: 960px` media query the CSS shell uses, so the sheet logic and the
- * chrome flip together. Seeded from the live width so the first render is right.
- */
-function useDesktopWidth(): boolean {
-  const [desktop, setDesktop] = useState(() => isDesktopWidth(window.innerWidth));
-  useEffect(() => {
-    const mq = window.matchMedia(`(min-width: ${SIDEBAR_VIEWPORT}px)`);
-    const update = () => setDesktop(mq.matches);
-    update();
-    mq.addEventListener("change", update);
-    return () => mq.removeEventListener("change", update);
-  }, []);
-  return desktop;
 }
 
 /**
