@@ -189,6 +189,10 @@ export type EventPayload =
       choice?: string;
       choices?: string[];
       text?: string;
+      /** True when this overwrites an already-answered question (a revision); absent on a first answer. */
+      revised?: boolean;
+      /** The pre-overwrite answer's content (no `answeredAt`); present only alongside `revised`. */
+      prior?: { choice?: string; choices?: string[]; text?: string };
     }
   // The approval wake-up. `home` is the absolute canonical
   // copy under `~/.otacon/sessions/<id>/`. `path` is the copy the agent acts on:

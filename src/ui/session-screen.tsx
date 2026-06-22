@@ -689,10 +689,12 @@ function ReviewLoop({
           )}
           {!readOnly && <GrillQueue sessionId={session.id} transcript={transcript} />}
           <InterviewPanel
+            sessionId={session.id}
             transcript={transcript}
             open={interviewOpen}
             onToggle={toggleInterview}
             target={ivTarget}
+            editable={!readOnly}
           />
           {hasPlan ? (
             <main
