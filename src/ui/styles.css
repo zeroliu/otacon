@@ -3100,115 +3100,375 @@ code {
   animation: details-in 0.2s ease-out both;
 }
 
-/* ───────────────────────── the activity log ─────────────────────────
- * The agent's `otacon progress` narration as live telemetry (review loop and daemon API,
- * review UI): a compact collapsible panel on the review screen, led-with open on the
- * pre-plan placeholder. Newest-on-top via column-reverse over a DOM that stays
- * oldest→newest, so append-only keys never churn.
+/* ──────────────────── now-playing bar + live console ────────────────────
+ * The always-on "what is the agent doing right now?" status bar (the
+ * live-activity stream §10a, review UI), pinned directly under the sticky
+ * header, that expands into the full streaming console below it. Replaces the
+ * old buried, default-closed activity fold: the bar is never hidden, so the
+ * work shows from the first second. All tokens are the shared codec palette:
+ * ink/accent/line/mono, the live pulse, the details-in motion.
  */
 
-.activity {
-  margin-top: 14px;
-  border: 1px solid var(--line);
-  background: color-mix(in srgb, var(--ink) 2.5%, var(--surface));
+/* The dock pins the bar (and the console it expands) under the header. The
+ * header is sticky at z20; the dock sits just below it, also sticky, so the bar
+ * stays a fixed instrument while the plan scrolls. A hair under the header's z
+ * so a compact header's shadow lands over it, not under. */
+.now-playing-dock {
+  position: sticky;
+  top: 46px; /* clears the compact header (≈46px) so the bar never underlaps it */
+  z-index: 19;
+  margin: -10px 0 12px; /* close the header's bottom margin so they read as one unit */
 }
 
-.activity-toggle {
+/* The bar itself: one mono line, a full-width button (the whole bar toggles). */
+.now-playing {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 10px;
   width: 100%;
   min-height: 44px;
-  padding: 12px 14px;
-  border: none;
-  background: none;
-  color: var(--ink-soft);
-  font: 600 11px/1 var(--mono);
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  cursor: pointer;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-strong);
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+  color: var(--ink);
+  font: 13px/1.3 var(--mono);
   text-align: left;
+  cursor: pointer;
+  transition: background 0.18s ease;
 }
 
-.activity-toggle:focus-visible {
+.now-playing:hover {
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+
+.now-playing:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
 
-.activity-toggle:hover {
-  color: var(--ink);
+/* When the console is open the bar squares off into it (no double border). */
+.now-playing.is-open {
+  border-bottom-color: var(--line);
 }
 
-.activity-glyph {
+.np-glyph {
   flex: none;
   color: var(--accent);
+  font-weight: 700;
 }
 
-.activity-word {
-  flex: none;
-  color: var(--ink);
-}
-
-/* The latest note shown inline while collapsed: natural case, truncated, soft. */
-.activity-latest {
-  flex: 1;
+.np-label {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  text-transform: none;
-  letter-spacing: 0.01em;
-  font-weight: 500;
+  color: var(--ink);
+}
+
+/* A trailing `thinking` shows dimmed + italic: present, but clearly not the
+ * concrete work the bar prefers. */
+.np-label.is-dim {
+  color: var(--ink-soft);
+  font-style: italic;
+}
+
+/* The ticking elapsed timer on a still-running tool call: mono, accent-tinted,
+ * tabular so the digits don't jitter as they advance. */
+.np-timer {
+  flex: none;
+  font: 11px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+}
+
+.np-spacer {
+  flex: 1 1 auto;
+}
+
+/* The mode badge: a tiny uppercase mono tag making the rich-capture-vs-floor
+ * distinction visible. "live" reads in the live/accent tone; "notes" stays
+ * quiet (just the floor). */
+.np-mode {
+  flex: none;
+  padding: 2px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  font: 600 9px/1 var(--mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
   color: var(--ink-soft);
 }
 
-.activity-caret {
-  margin-left: auto;
+.np-mode-live {
+  border-color: color-mix(in srgb, var(--live) 55%, var(--line-strong));
+  color: color-mix(in srgb, var(--live) 78%, var(--ink-soft));
+}
+
+/* The pulse dot: only while the session is agent-active (.is-active). Reuses
+ * the agent-dot's live-pulse so the "alive" signal is one visual language. */
+.np-pulse {
+  flex: none;
+  display: inline-flex;
+}
+
+.np-pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--line-strong);
+}
+
+.now-playing.is-active .np-pulse-dot {
+  background: var(--live);
+  animation: live-pulse 2.4s ease-out infinite;
+}
+
+.np-caret {
   flex: none;
   color: var(--accent);
 }
 
-.activity-body {
-  display: flex;
-  flex-direction: column-reverse;
-  margin: 0;
-  padding: 4px 15px 12px;
-  list-style: none;
-  border-top: 1px dashed var(--line-strong);
-  max-height: 260px;
-  overflow-y: auto;
+/* The expandable console: the firehose, one click below the bar. */
+.live-console {
+  border: 1px solid var(--line);
+  border-top: none;
+  background: color-mix(in srgb, var(--ink) 2.5%, var(--surface));
   animation: details-in 0.2s ease-out both;
 }
 
-.act-entry {
+/* Filter chips + thinking toggle row. */
+.lc-controls {
   display: flex;
-  gap: 10px;
-  align-items: baseline;
-  padding: 5px 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 9px 12px;
+  border-bottom: 1px dashed var(--line-strong);
+}
+
+.lc-filters {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.lc-chip,
+.lc-think {
+  min-height: 28px;
+  padding: 4px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: none;
+  color: var(--ink-soft);
+  font: 600 10px/1 var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.lc-chip:hover,
+.lc-think:hover {
+  color: var(--ink);
+}
+
+.lc-chip:focus-visible,
+.lc-think:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.lc-chip.is-on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.lc-think {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto; /* push the thinking toggle to the right edge of the row */
+}
+
+.lc-think.is-on {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+
+.lc-think:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.lc-think-box {
+  color: var(--accent);
+}
+
+/* The scrolling event list: newest at the bottom (terminal feel), auto-scrolled
+ * only while pinned. Capped height so the firehose never eats the screen. */
+.lc-scroll {
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* Anchoring fights the auto-scroll-to-latest, the same flicker the review
+   * page disables; keep the tail pinned by our own scrollTop, not the browser. */
+  overflow-anchor: none;
+}
+
+.lc-rows {
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+}
+
+.lc-empty {
+  margin: 0;
+  padding: 14px;
+  font: 12px/1.4 var(--mono);
+  color: var(--ink-soft);
+}
+
+.lc-row {
   border-bottom: 1px dashed var(--line);
 }
 
-/* In column-reverse the first DOM child sits at the bottom (oldest): drop its
- * rule so the panel doesn't end on a dangling divider. */
-.act-entry:first-child {
+.lc-row:last-child {
   border-bottom: none;
 }
 
-.act-when {
-  flex: none;
-  width: 5.5em;
-  font: 10.5px/1.4 var(--mono);
-  letter-spacing: 0.02em;
-  color: var(--ink-soft);
-  text-align: right;
+/* A row's main line is a button (expands `detail` when present). It carries no
+ * button chrome: it reads as a telemetry line, not a control. */
+.lc-main {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  width: 100%;
+  min-height: 30px;
+  padding: 6px 13px;
+  border: none;
+  background: none;
+  color: var(--ink);
+  font: 12.5px/1.4 var(--mono);
+  text-align: left;
+  cursor: pointer;
 }
 
-.act-text {
-  flex: 1;
+.lc-main:disabled {
+  cursor: default;
+}
+
+.lc-main:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.lc-main:not(:disabled):hover {
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+
+.lc-glyph {
+  flex: none;
+  width: 1em;
+  color: var(--ink-soft);
+  text-align: center;
+}
+
+.lc-label {
+  flex: 1 1 auto;
   min-width: 0;
-  font-size: 13.5px;
-  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+/* Thinking is dimmed + italic everywhere it shows (it is opt-in noise). */
+.lc-label.is-thinking,
+.lc-kind-thinking .lc-glyph {
+  color: var(--ink-soft);
+  font-style: italic;
+}
+
+/* The collapsed-run count ("×5"): a small accent tally. */
+.lc-count {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font: 600 10px/1.3 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Tool lifecycle marks: a quiet running ellipsis, a calm ok check, a caution
+ * error cross (the palette's amber stand-in, like the failed chip). */
+.lc-running {
+  flex: none;
+  color: var(--accent);
+  animation: chip-breathe 1.6s ease-in-out infinite;
+}
+
+.lc-mark {
+  flex: none;
+  font-weight: 700;
+}
+
+.lc-status-ok .lc-mark {
+  color: var(--live);
+}
+
+.lc-status-error .lc-mark {
+  color: var(--chip-failed-ink);
+}
+
+.lc-when {
+  flex: none;
+  font: 10px/1.4 var(--mono);
+  color: var(--ink-soft);
+}
+
+.lc-caret {
+  flex: none;
+  color: var(--accent);
+}
+
+/* Highlights (`otacon progress` notes) are chapter dividers, set apart from
+ * the firehose: an accent left rule, natural case, never collapsed. */
+.lc-highlight {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 9px 13px;
+  border-left: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+.lc-highlight .lc-glyph {
+  color: var(--accent);
+}
+
+.lc-highlight-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: 13px/1.45 var(--sans);
   color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+/* The expanded per-row detail (already redacted + truncated by the daemon). */
+.lc-detail {
+  padding: 0 13px 10px 34px;
+}
+
+.lc-detail-body {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--ink) 3%, var(--surface));
+  font: 11.5px/1.5 var(--mono);
+  color: var(--ink-soft);
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 

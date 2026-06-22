@@ -461,6 +461,11 @@ export class Store {
     return paths.activityPath(this.require(id).repo, id);
   }
 
+  /** Where this session's normalized live-activity stream persists (src/daemon/capture/stream-store.ts). */
+  streamPath(id: string): string {
+    return paths.streamPath(this.require(id).repo, id);
+  }
+
   private require(id: string): RegistrySession {
     const session = this.registry.sessions[id];
     if (!session) throw new Error(`unknown session: ${id}`);
