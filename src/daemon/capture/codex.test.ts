@@ -229,6 +229,15 @@ describe("pure mappers", () => {
     expect(__test.lineToEvents({ type: "event_msg", payload: { type: "task_started" } }, "/repo")).toEqual([]);
   });
 
+  test("lineToEvents: a long assistant message clamps its label with an ellipsis", () => {
+    const text = "x".repeat(200);
+    const [event] = __test.lineToEvents({ type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text }] } }, "/repo");
+    expect(event?.kind).toBe("text");
+    expect(event?.label.length).toBeLessThan(90);
+    expect(event?.label.endsWith("…")).toBe(true);
+    expect(event?.detail).toBe(text); // full text stays on detail
+  });
+
   test("lineToEvents: a function_call_output with a non-zero exit maps to status error", () => {
     const [event] = __test.lineToEvents({ type: "response_item", payload: { type: "function_call_output", call_id: "x", output: '{"exit_code":1,"output":"boom"}' } }, "/repo");
     expect(event).toMatchObject({ kind: "tool", status: "error", label: "→ error" });

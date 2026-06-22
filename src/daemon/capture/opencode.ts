@@ -233,7 +233,7 @@ function partToEvents(data: PartData, repoRoot: string): RawStreamEvent[] {
     case "text": {
       const text = typeof data.text === "string" ? data.text : "";
       if (text.trim() === "") return [];
-      return [{ kind: "text", label: firstLine(text).slice(0, TOOL_LABEL_MAX) || "text", detail: text }];
+      return [{ kind: "text", label: clamp(text) || "text", detail: text }];
     }
     case "reasoning": {
       const text = typeof data.text === "string" ? data.text : "";

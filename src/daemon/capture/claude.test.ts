@@ -200,6 +200,16 @@ describe("pure mappers", () => {
     expect(__test.resultText(undefined)).toBe("");
   });
 
+  test("lineToEvents: a long text block clamps its label with an ellipsis", () => {
+    const text = "x".repeat(200);
+    const line = { message: { role: "assistant", content: [{ type: "text", text }] } };
+    const [event] = __test.lineToEvents(line, "/repo");
+    expect(event?.kind).toBe("text");
+    expect(event?.label.length).toBeLessThan(90);
+    expect(event?.label.endsWith("…")).toBe(true);
+    expect(event?.detail).toBe(text); // full text stays on detail
+  });
+
   test("lineToEvents: an error tool_result maps to status error", () => {
     const line = { message: { role: "user", content: [{ type: "tool_result", tool_use_id: "x", content: "boom", is_error: true }] } };
     const [event] = __test.lineToEvents(line, "/repo");

@@ -299,7 +299,7 @@ function payloadToEvent(payload: Record<string, unknown>, repoRoot: string): Raw
       if (payload.role !== "assistant") return null;
       const text = messageText(payload);
       if (text.trim() === "") return null;
-      return { kind: "text", label: firstLine(text).slice(0, TOOL_LABEL_MAX) || "text", detail: text };
+      return { kind: "text", label: clamp(text) || "text", detail: text };
     }
     case "function_call":
     case "custom_tool_call": {

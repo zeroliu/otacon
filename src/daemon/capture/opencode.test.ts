@@ -307,6 +307,15 @@ describe("pure mappers", () => {
     expect(__test.partToEvents({ type: "reasoning", text: "" }, "/repo")).toEqual([]);
   });
 
+  test("partToEvents: a long text part clamps its label with an ellipsis", () => {
+    const text = "x".repeat(200);
+    const [event] = __test.partToEvents({ type: "text", text }, "/repo");
+    expect(event?.kind).toBe("text");
+    expect(event?.label.length).toBeLessThan(90);
+    expect(event?.label.endsWith("…")).toBe(true);
+    expect(event?.detail).toBe(text); // full text stays on detail
+  });
+
   test("partToEvents: unrecognized part types yield nothing", () => {
     expect(__test.partToEvents({ type: "step-start" }, "/repo")).toEqual([]);
     expect(__test.partToEvents({ type: "patch" }, "/repo")).toEqual([]);

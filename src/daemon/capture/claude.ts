@@ -117,6 +117,12 @@ function firstLine(text: string): string {
   return (nl === -1 ? text : text.slice(0, nl)).trim();
 }
 
+/** Cap a one-line command/string to the label width with a trailing ellipsis. */
+function clamp(text: string): string {
+  const oneLine = firstLine(text);
+  return oneLine.length > TOOL_LABEL_MAX ? `${oneLine.slice(0, TOOL_LABEL_MAX - 1)}…` : oneLine;
+}
+
 /** Make `p` repo-relative when it sits under `repoRoot`; else return it as-is. */
 function relPath(p: string, repoRoot: string): string {
   if (typeof p !== "string" || p === "") return String(p ?? "");
@@ -139,12 +145,8 @@ function toolLabel(name: string, input: Record<string, unknown>, repoRoot: strin
       return `Edit ${file("file_path")}`;
     case "Write":
       return `Write ${file("file_path")}`;
-    case "Bash": {
-      const cmd = String(input.command ?? "");
-      const oneLine = firstLine(cmd);
-      const shown = oneLine.length > TOOL_LABEL_MAX ? `${oneLine.slice(0, TOOL_LABEL_MAX - 1)}…` : oneLine;
-      return `Bash: ${shown}`;
-    }
+    case "Bash":
+      return `Bash: ${clamp(String(input.command ?? ""))}`;
     case "Grep":
       return `Grep ${String(input.pattern ?? "")}`;
     case "Glob":
@@ -175,7 +177,7 @@ function blockToEvent(block: ContentBlock, repoRoot: string): RawStreamEvent | n
     case "text": {
       const text = typeof block.text === "string" ? block.text : "";
       if (text.trim() === "") return null;
-      return { kind: "text", label: firstLine(text).slice(0, TOOL_LABEL_MAX) || "text", detail: text };
+      return { kind: "text", label: clamp(text) || "text", detail: text };
     }
     case "thinking": {
       const thinking = typeof block.thinking === "string" ? block.thinking : "";
