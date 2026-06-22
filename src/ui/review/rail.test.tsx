@@ -169,7 +169,7 @@ describe("ThreadsRail question conversations", () => {
     expect(html).toContain("thread-resolve-btn");
   });
 
-  test("a reviewer-resolved question conversation shows its inline ✓ mark, not the collapsed comment card", () => {
+  test("a reviewer-resolved question conversation shows its inline ✓ mark + a Reopen control, not the collapsed comment card", () => {
     const html = render([
       question("q1", {
         answer: { body: "settled", answeredAt: AT },
@@ -179,10 +179,22 @@ describe("ThreadsRail question conversations", () => {
     // Inline resolved mark inside the still-open conversation article…
     expect(html).toContain("thread-resolved-mark");
     expect(html).toContain("r4");
-    // …not the collapsed comment ✓ summary, and no follow-up/resolve controls.
+    // …not the collapsed comment ✓ summary, and no follow-up box…
     expect(html).not.toContain("resolved-summary");
     expect(html).not.toContain("thread-followup-open");
+    // …but it offers Reopen (re-open the resolved conversation).
+    expect(html).toContain("thread-resolve-btn");
+    expect(html).toContain("reopen");
+  });
+
+  test("a resolved question conversation hides Reopen when the session is over (read-only)", () => {
+    const html = render(
+      [question("q1", { answer: { body: "settled", answeredAt: AT }, resolved: { revision: 4, at: AT } })],
+      { onResolve: null, onFollowup: null },
+    );
+    expect(html).toContain("thread-resolved-mark");
     expect(html).not.toContain("thread-resolve-btn");
+    expect(html).not.toContain("reopen");
   });
 });
 
@@ -245,8 +257,11 @@ describe("ThreadsRail comment conversations", () => {
     expect(html).toContain("addressed");
     expect(html).toContain("follow-up note");
     expect(html).toContain("and that too");
-    // Resolved cards don't offer the follow-up box (the conversation is closed).
+    // Resolved cards don't offer the follow-up box (the conversation is closed)…
     expect(html).not.toContain("thread-followup-open");
+    // …but they offer a Reopen control to re-open the conversation.
+    expect(html).toContain("thread-resolve-btn");
+    expect(html).toContain("reopen");
   });
 
   test("the Resolve + Follow-up controls hide when the session is over (read-only)", () => {

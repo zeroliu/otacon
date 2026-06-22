@@ -1024,7 +1024,8 @@ returns to the index.
   un-replied comment's Resolve is a withdraw). When the **reviewer** Resolves: a question
   conversation shows its inline ✓ mark with the resolved revision; a comment conversation
   collapses to a ✓ line (id, the reviewer's resolved revision, section) that expands to
-  the whole conversation — every turn and its reply — with a **Reopen** control. The ✓
+  the whole conversation — every turn and its reply. Either kind then offers a **Reopen**
+  control that re-opens the resolved conversation (`resolved:false`). The ✓
   card is keyed on the reviewer's close, never on the mere presence of a reply.
   Resolve/Reopen/Follow up all hide read-only
   (session over). A **detached thread** — whose quoted text changed in a later revision

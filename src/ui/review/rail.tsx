@@ -11,7 +11,9 @@
 // an un-replied comment's Resolve doubles as withdraw). Once the reviewer
 // resolves: a question conversation shows its inline ✓ mark with the resolved
 // revision; a comment conversation collapses to a ✓ summary (keyed on the close)
-// that expands to its turns + replies. A detached conversation — whose quoted
+// that expands to its turns + replies. Either kind then offers a **Reopen** (the
+// same Resolve seam in reverse) to re-open the conversation, hidden read-only.
+// A detached conversation — whose quoted
 // text no longer exists in the current revision (plan structure, lint, and
 // anchoring) — stays inline in the same list as everything else. Its quote
 // renders muted (no live text to flash, so it is not clickable or jumpable)
@@ -147,29 +149,43 @@ export const ThreadsRail = memo(function ThreadsRail({
 });
 
 /**
- * The reviewer's Resolve action: a button that closes the thread (and, on a
- * comment with no reply, doubles as the withdraw). Posts {resolved:true} and
- * relies on the `thread` SSE frame to fold the close back in; on failure it
- * surfaces a retry hint inline. Absent `onResolve` (session over) renders nothing.
+ * The reviewer's Resolve/Reopen action — the same seam in both directions. With
+ * `target` true (default) it closes the thread (and, on a comment with no reply,
+ * doubles as the withdraw); with `target` false it re-opens a resolved
+ * conversation. Posts {resolved:target} and relies on the `thread` SSE frame to
+ * fold the change back in; on failure it surfaces a retry hint inline. Absent
+ * `onResolve` (session over) renders nothing.
  */
-function ResolveButton({ threadId, onResolve }: { threadId: string; onResolve?: Resolve }) {
+function ResolveButton({
+  threadId,
+  onResolve,
+  target = true,
+}: {
+  threadId: string;
+  onResolve?: Resolve;
+  /** The `resolved` state to set: true = resolve/close, false = reopen. */
+  target?: boolean;
+}) {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   if (!onResolve) return null;
-  const resolve = () => {
+  const label = target ? "resolve" : "reopen";
+  const act = () => {
     if (busy) return;
     setBusy(true);
     setFailed(false);
-    void onResolve(threadId, true).then((ok) => {
+    void onResolve(threadId, target).then((ok) => {
       setBusy(false);
       if (!ok) setFailed(true);
     });
   };
   return (
     <div className="thread-resolve">
-      {failed && <span className="composer-hint composer-failed">resolve failed — is otacond up?</span>}
-      <button type="button" className="btn btn-ghost thread-resolve-btn" disabled={busy} onClick={resolve}>
-        {busy ? "resolving…" : "resolve"}
+      {failed && (
+        <span className="composer-hint composer-failed">{label} failed — is otacond up?</span>
+      )}
+      <button type="button" className="btn btn-ghost thread-resolve-btn" disabled={busy} onClick={act}>
+        {busy ? (target ? "resolving…" : "reopening…") : label}
       </button>
     </div>
   );
@@ -313,12 +329,15 @@ function ConversationCard({
           don't offer a reply box / Resolve there — they'd link to a missing root. */}
       {root.replyTo === undefined &&
         (root.resolved ? (
-          <p className="thread-resolved-mark">
-            <span className="resolved-check" aria-hidden="true">
-              ✓
-            </span>
-            resolved <span className="resolved-rev">r{root.resolved.revision}</span>
-          </p>
+          <>
+            <p className="thread-resolved-mark">
+              <span className="resolved-check" aria-hidden="true">
+                ✓
+              </span>
+              resolved <span className="resolved-rev">r{root.resolved.revision}</span>
+            </p>
+            <ResolveButton threadId={root.id} onResolve={onResolve} target={false} />
+          </>
         ) : (
           <>
             {onFollowup && <FollowupBox rootId={root.id} kind={root.kind} onFollowup={onFollowup} />}
@@ -441,7 +460,6 @@ function ResolvedCard({
 }) {
   const { anchor, resolved } = root;
   if (!resolved) return null; // callers only route reviewer-resolved conversations here
-  const reopen = () => void onResolve?.(root.id, false);
   return (
     <details className="thread thread-comment thread-resolved" data-thread={root.id}>
       <summary className="resolved-summary">
@@ -463,13 +481,7 @@ function ResolvedCard({
             <TurnResponse thread={followup} />
           </div>
         ))}
-        {onResolve && (
-          <div className="thread-resolve">
-            <button type="button" className="btn btn-ghost thread-resolve-btn" onClick={reopen}>
-              reopen
-            </button>
-          </div>
-        )}
+        <ResolveButton threadId={root.id} onResolve={onResolve} target={false} />
       </div>
     </details>
   );
