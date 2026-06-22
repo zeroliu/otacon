@@ -2121,6 +2121,12 @@ code {
   margin-left: auto;
 }
 
+/* The Resolve / Reopen control sits a step below the conversation's content (and
+   below the follow-up box, when both show) so it reads as a separate action. */
+.thread-resolve {
+  margin-top: 9px;
+}
+
 /* ── jump-and-flash: the anchored text lights up ── */
 
 ::highlight(otacon-flash) {
