@@ -86,7 +86,7 @@ test("UI acceptance: the whole agent/reviewer loop renders and round-trips in th
   ]);
   expect(asked.code).toBe(0);
   const qid = (JSON.parse(asked.stdout) as { id: string }).id;
-  const gcard = page.locator(`.grill-card[data-q="${qid}"]`);
+  const gcard = page.locator(`.grill-card[data-iv="${qid}"]`);
   await expect(gcard).toBeVisible();
   expect(await readMarker(page)).toBe(true); // arrived over SSE, no reload
   await expect(page.locator(".chip")).toHaveText("questions pending");
@@ -100,7 +100,7 @@ test("UI acceptance: the whole agent/reviewer loop renders and round-trips in th
   expect(ans.event).toBe("answer");
   expect(ans.question).toBe(qid);
   expect(ans.choice).toBe("RS256");
-  await expect(page.locator(`.grill-settled[data-q="${qid}"]`)).toBeVisible();
+  await expect(page.locator(`.grill-settled[data-iv="${qid}"]`)).toBeVisible();
 
   // ── 3. Draft: r1 rendered as schema + mermaid + collapsed Details badge ───
   // The decision cites the REAL transcript id — exactly what lint L3 enforces.

@@ -1201,6 +1201,11 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 ## Grill cards: one-tap single answers; settled cards persist per mount only
 
+> Superseded 2026-06-23 by "The Interview panel is the single grill surface; the
+> pinned queue is removed". The one-tap-single-answer rule still holds (it lives
+> in `AnswerForm`); the pinned card queue and the per-mount "settle in place"
+> persistence are gone.
+
 - **Decision:** On a single-choice card the chip tap IS the answer — no arm/
   confirm step; multi-select and free text arm an explicit send. An answered
   card settles in place (green-checked, answer echoed) rather than vanishing,
@@ -3282,3 +3287,53 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   placements (sidebar, sheet, inline), so there is no divergent mobile list.
 - **Revisit when:** The phone home wants more than the list (a dashboard / activity overview
   above it), or the inline list and the sheet diverge enough to warrant separate components.
+
+## The Interview panel is the single grill surface; the pinned queue is removed (2026-06-23)
+
+- **Decision:** The "agent on the line" pinned card queue (`GrillQueue`, rendered
+  above the plan) is deleted. The collapsible **Interview** panel is now the only
+  grill surface: two labeled zones, each newest-first, an "open" group on top
+  where unanswered questions are answered inline (the same interactive card the
+  queue used) and an "answered" group below, with a divider between them when both
+  are non-empty. Answering, undo, and the deep-link flash all happen in the panel.
+- **Why:** With both surfaces live, an answered card was duplicated (once settled
+  in the queue and again in the Interview panel), so a reviewer saw the same Q&A
+  twice and had to learn two layouts that did the same thing. One surface is
+  clearer, removes the per-mount "did this card settle here or only in the panel?"
+  ambiguity that the old `watched` set existed to manage, and keeps the interactive
+  card (its look and one-tap answer flow) the user already likes, now in a single
+  place.
+- **Revisit when:** Users want live questions pinned above the plan again (e.g. an
+  open question that must not be missed while reading a long plan deep below the
+  fold), at which point a pinned mirror of the panel's open zone could return.
+
+## Answered interview cards hide the option list, revealing it only on undo (2026-06-23)
+
+- **Decision:** An answered card in the Interview panel shows ONLY the answer
+  (the chosen choice(s) and/or free text), with no full list of the options that
+  were offered. The chips reappear only when the reviewer clicks **undo**, which opens
+  the `AnswerForm` in edit mode prefilled with the current answer.
+- **Why:** undo is the only reason to see the other options (to pick a different
+  one), so an always-on option list is redundant: it adds a row of dead chrome to
+  every settled card and competes with the answer for the eye. Hiding it keeps the
+  answered zone a quiet, scannable record (question + what you said), and the undo
+  control already advertises that the options are one tap away.
+- **Revisit when:** Reviewers need to see the offered options at a glance without
+  entering edit mode (e.g. to judge whether the agent framed the choice well), at
+  which point a collapsed-by-default "options offered" disclosure could return.
+
+## The Interview panel auto-expands during draft and collapses after, keyed on draft only (2026-06-23)
+
+- **Decision:** The panel is default-expanded while the session status is `draft`
+  (the grill phase) and auto-collapses the moment the status leaves `draft`. The
+  crossing is ref-guarded so it fires only on the transition, leaving a manual
+  toggle to stick within a phase; a decision citation (or the ❓ jump) still opens
+  it regardless of phase.
+- **Why:** During the grill the panel IS the action surface, so it should be open
+  without a tap; once drafting/review begins the plan is the focus and the answered
+  transcript is reference material that belongs folded away. Keying on `draft`
+  alone matches the grill phase exactly and is derivable from the live `session`
+  frame, with no new state to persist or keep in sync.
+- **Revisit when:** Questions asked in later phases (review-time grilling) need the
+  panel to auto-open too, at which point the trigger would key on "an open question
+  exists" rather than on the `draft` status.

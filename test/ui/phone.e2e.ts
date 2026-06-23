@@ -144,11 +144,14 @@ test("375px: sticky bar counts live-update over SSE; ❓ jumps to the question q
   await expect(page.locator(".drawer-tally .drawer-count")).toHaveText("1");
   expect(await readMarker(page)).toBe(true); // all of it over SSE, no reload
 
-  // From deep in the plan, ❓ brings the question queue back into reach.
+  // From deep in the plan, ❓ opens the Interview panel and deep-links the first
+  // open question (q1) into reach (the panel is the single grill surface; the
+  // open zone is newest-first, so q1 is centered, not the topmost card).
   await page.evaluate("window.scrollTo(0, document.body.scrollHeight)");
   await page.locator(".bar-quest").click();
+  await expect(page.locator(".interview-toggle")).toHaveAttribute("aria-expanded", "true");
   await expect(async () => {
-    const box = await page.locator(".grill-queue").boundingBox();
+    const box = await page.locator('.iv-zone-open .grill-card[data-iv="q1"]').boundingBox();
     expect(box).not.toBeNull();
     expect(box!.y).toBeGreaterThan(-10);
     expect(box!.y).toBeLessThan(PHONE.height);
@@ -291,8 +294,11 @@ test("desktop regression: header strip intact, phone bar controls absent, ⋯ op
   await expect(page.locator(".switch-select select")).toBeVisible();
   await expect(page.locator(".switch-chips")).toBeHidden();
 
-  // The phone-only bar instruments stay dormant even with a question open.
-  await expect(page.locator(".grill-card")).toBeVisible();
+  // The phone-only bar instruments stay dormant even with a question open. The
+  // plan is past draft, so the Interview panel starts collapsed; open it to reach
+  // the open question card (the single grill surface).
+  await page.locator(".interview-toggle").click();
+  await expect(page.locator(".iv-zone-open .grill-card")).toBeVisible();
   await expect(page.locator(".bar-quest")).toBeHidden();
   await expect(page.locator(".bar-approve")).toBeHidden();
 

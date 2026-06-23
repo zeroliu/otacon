@@ -810,9 +810,10 @@ Transport is `otacon ask` → question card in the UI (option chips, recommended
 first, free text) → answer via `wait`. **Grilling works from the phone, one thumb,
 while walking.** An option question is never a trap: every card also takes a free-form
 custom answer — typed text alone (native-AskUserQuestion "Other" parity), or riding a
-chosen chip as a note. An answer is not final while the session is live: a settled card
-carries an **undo** control that reopens the same form prefilled with the current
-answer, and submitting overwrites it (the overwrite is the `revised` answer event of §4).
+chosen chip as a note. An answer is not final while the session is live: an answered card
+carries an **undo** control that reveals the full option chips again (the same form
+prefilled with the current answer), and submitting overwrites it (the overwrite is the
+`revised` answer event of §4).
 
 The transcript persists in `.otacon/<session>/transcript.json` — distinct from the
 user-question threads in `threads.json` (different surface, different lifecycle: the
@@ -824,11 +825,19 @@ Structural integration:
 
 - **Traceability** (§4, lint L3): plan decisions cite the grill Q&A that produced them
   (`D3 ← q7`) or wear `[assumed]`. No plan reaches review with silently-made decisions.
-- **The transcript is part of the review UI**: a collapsible "Interview" panel shows
-  the Q&A history; each decision deep-links to its originating answer ("why RS256?" —
-  one tap, including what the user said at the time). While the session is live the
-  panel's answered entries carry the same **undo** control as the settled card; once
-  the session is read-only the archive is static.
+- **The transcript is part of the review UI**: a collapsible **"Interview" panel is the
+  single grill surface** (no separate pinned queue above the plan). It has two labeled
+  zones, each newest-first: an **"open"** group on top where unanswered questions are
+  answered inline (the interactive card with chips/text), a divider, then an
+  **"answered"** group below where each card shows only the answer (no option list) plus
+  an **undo** control that reveals the full option chips to change it. The panel is
+  **default-expanded during the grill phase** (status `draft`), still collapsible, and
+  **auto-collapses once grill is over** (the status leaves `draft`); a manual toggle
+  sticks within a phase. Each decision in the plan deep-links to its originating answer
+  ("why RS256?" answered in one tap, opening the panel and scrolling to the entry,
+  including what the user said at the time); the ❓ jump opens the panel and lands on the
+  first open question. Once the session is read-only the archive is static: the answer
+  echo with no inline form and no undo.
 - **The transcript ships with the artifact**: archived with the approved plan so
   `snake` inherits not just decisions but their reasoning.
 - Escape hatch: `otacon start --quick` skips the grill and downgrades L3 to a warning.
@@ -1113,10 +1122,12 @@ returns to the index.
   view; diff lines are telemetry, not plan text an anchor could survive on. Markers
   (and the banner) wait for a first review: with no baseline everything is new, and
   marking every section says nothing.
-- Agent questions: card queue pinned above the plan (chips + free text), session-colored.
 - Collapsed Details show size badges ("▸ 34 lines · 1 diagram · 2 code blocks") —
   skipping is a conscious choice. L6 warnings render here.
-- Collapsible "Interview" panel: grill transcript; decisions deep-link into it.
+- Agent questions: answered in the collapsible **"Interview" panel** (§8), the single
+  grill surface, with open questions in an "open" zone (chips + free text, session-colored)
+  on top, answered ones in an "answered" zone below, and default-expanded during the grill
+  phase. Decisions deep-link into it; the ❓ jump lands on the first open question.
 - Live activity rides the always-on **now-playing bar + console** (§10a), pinned under
   the header: the automatic, cross-agent stream of the agent's tool calls, text, and
   thinking, with `otacon progress` highlights inline as chapter markers. It is the
@@ -1155,10 +1166,11 @@ returns to the index.
   are not in the phone header — Approve and the question tally live in the bottom bar
   instead, never shown in two places; the toggle stays so diff review is still reachable.
 - Threads open as bottom sheets. Sticky bar = whole control surface: pending
-  questions ❓ (tap → the question queue), drawer + Send, Approve (confirm sheet:
-  Save r4 to the project copy / Implement from the home archive — §6, §12). The
-  bar is the desktop drawer augmented at the phone breakpoint — approve and the
-  question tally fold into it and leave the header strip, never shown twice.
+  questions ❓ (tap → opens the Interview panel and lands on the first open question),
+  drawer + Send, Approve (confirm sheet: Save r4 to the project copy / Implement from
+  the home archive — §6, §12). The bar is the desktop drawer augmented at the phone
+  breakpoint — approve and the question tally fold into it and leave the header strip,
+  never shown twice.
 - Agent question cards answerable with chips — designed for grilling on the move.
 - Touch inputs (composer, drawer edit, grill answer) are sized ≥16px so iOS never
   auto-zooms the page when a field is focused; the viewport meta stays permissive,

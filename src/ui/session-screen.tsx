@@ -3,10 +3,11 @@
 // dossier (review UI) — with the review loop's desktop verbs (select text
 // → toolbar, comments batch in the drawer, questions fire instantly, threads
 // in the rail), M3's re-review layer (banner, [clean|diff] + baseline picker,
-// gutter markers, j/k), and M4's grill + approve surfaces: agent-question
-// cards pinned above the plan (useful pre-plan — the grill happens before
-// drafting), the collapsible Interview panel that decision citations
-// deep-link into, and the warn-then-force Approve control. Keyboard:
+// gutter markers, j/k), and M4's grill + approve surfaces: the collapsible
+// Interview panel as the single grill surface (open questions answered inline,
+// answered ones shown with undo; default-expanded during the draft grill phase)
+// that decision citations deep-link into, and the warn-then-force Approve
+// control. Keyboard:
 // c = comment, q = ask, j/k = changed sections; no Approve shortcut exists,
 // deliberately (review UI). Approved sessions render read-only behind the quiet
 // approved notice. The renderer stays a lazy chunk.
@@ -31,7 +32,6 @@ import {
   captureSelection,
   clearThreadHighlights,
   flashAnchor,
-  motionSafeScroll,
   paintThreads,
   threadAtPoint,
 } from "./review/anchor";
@@ -45,7 +45,6 @@ import type { PendingComment } from "./review/drawer";
 import { CommentDrawer } from "./review/drawer";
 import type { ComposerState } from "./review/feedback";
 import { Composer, SelectionBar, useSelection } from "./review/feedback";
-import { GrillQueue } from "./review/grill";
 import { ReviewHeader } from "./review/header";
 import type { InterviewTarget } from "./review/interview";
 import { InterviewPanel } from "./review/interview";
@@ -171,11 +170,22 @@ function ReviewLoop({
   // a number = the user picked another baseline from the diff controls.
   const [baseline, setBaseline] = useState<number | null>(null);
   const [changelogOpen, setChangelogOpen] = useState(false);
-  // The Interview panel (interview questions): open state is screen-local; a
-  // decision citation sets `ivTarget` (nonce re-fires repeat clicks) and
-  // opens the panel in the same commit, so the entry exists when its
-  // deep-link effect runs.
-  const [interviewOpen, setInterviewOpen] = useState(false);
+  // The Interview panel is the single grill surface: default-expanded during the
+  // grill phase (draft) and auto-collapsed once grill is over, while a manual
+  // toggle still sticks within a phase. A decision citation (ivTarget) opens it
+  // regardless.
+  const grillPhase = session.status === "draft";
+  const [interviewOpen, setInterviewOpen] = useState(grillPhase);
+  const lastGrillPhase = useRef(grillPhase);
+  useEffect(() => {
+    if (grillPhase !== lastGrillPhase.current) {
+      lastGrillPhase.current = grillPhase;
+      setInterviewOpen(grillPhase);
+    }
+  }, [grillPhase]);
+  // A decision citation sets `ivTarget` (nonce re-fires repeat clicks) and opens
+  // the panel in the same commit, so the entry exists when its deep-link effect
+  // runs.
   const [ivTarget, setIvTarget] = useState<InterviewTarget | null>(null);
   const ivNonce = useRef(0);
   const [approveOpen, setApproveOpen] = useState(false);
@@ -637,12 +647,14 @@ function ReviewLoop({
     setMenu(null);
   };
 
-  // The sticky bar's ❓ (review UI): jump back up to the question queue.
+  // The sticky bar's ❓ (review UI): open the Interview panel and deep-link the
+  // first open question, reusing the interview's scroll + flash machinery.
   const openQuestions = transcript.filter((entry) => entry.answer === undefined).length;
   const jumpQuestions = useCallback(() => {
-    const queue = document.querySelector(".grill-queue");
-    if (queue) motionSafeScroll(queue, "start");
-  }, []);
+    const firstOpen = transcript.find((entry) => entry.answer === undefined);
+    setInterviewOpen(true);
+    if (firstOpen) setIvTarget({ id: firstOpen.id, nonce: (ivNonce.current += 1) });
+  }, [transcript]);
 
   const toggleInterview = useCallback(() => setInterviewOpen((value) => !value), []);
 
@@ -713,7 +725,6 @@ function ReviewLoop({
               onClose={() => setChangelogOpen(false)}
             />
           )}
-          {!readOnly && <GrillQueue sessionId={session.id} transcript={transcript} />}
           <InterviewPanel
             sessionId={session.id}
             transcript={transcript}
