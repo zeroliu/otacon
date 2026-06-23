@@ -4,7 +4,10 @@
 // explicit command overrides a config that only governs the implicit start-time
 // check). It still fails open on a registry blip and never escalates to sudo —
 // it shares `runNpmUpdate` with the start-time gate, so the install behavior is
-// identical (D12, plan docs/plans/2026-06-19-auto-update-outdated-version.md).
+// identical (D12, plan docs/plans/2026-06-19-auto-update-outdated-version.md). The
+// channel (latest vs staging) is derived from the installed version the same way
+// the start-time gate derives it (`channelOf`), so a staging install upgrades on
+// staging and a clean install resolves `otacon@latest` exactly as before.
 //
 //   --check  report current/latest/outdated and exit; never installs (a dry run
 //            for "am I behind?", and the only safe mode in CI / pinned shops).
@@ -18,21 +21,22 @@ import { parseArgs } from "node:util";
 import { VERSION } from "../../shared/version.js";
 import { isSourceRun } from "../client.js";
 import { notice, printJson } from "../output.js";
-import { fetchLatest, isNewer, runNpmUpdate } from "../update.js";
+import { channelOf, fetchDistTag, isNewer, runNpmUpdate } from "../update.js";
 
 /**
  * Seams so the command is testable with no real registry, npm, or source-run
  * probe. Defaults wire the real implementations; a test passes stubs. Mirrors
- * the `AutoUpdateDeps` shape used by `maybeAutoUpdate`.
+ * the `AutoUpdateDeps` shape used by `maybeAutoUpdate`. `fetch` receives the
+ * channel dist-tag to look up.
  */
 export interface UpdateCommandDeps {
-  fetch: typeof fetchLatest;
+  fetch: typeof fetchDistTag;
   runNpmUpdate: typeof runNpmUpdate;
   sourceRun: () => boolean;
 }
 
 const REAL_DEPS: UpdateCommandDeps = {
-  fetch: fetchLatest,
+  fetch: fetchDistTag,
   runNpmUpdate,
   sourceRun: isSourceRun,
 };
@@ -53,9 +57,13 @@ export async function updateCommand(
     return 0;
   }
 
+  // Channel (derived from the installed VERSION): a `-staging.` build tracks the
+  // `staging` dist-tag, anything else `latest`, the same derivation as the start-time gate.
+  const channel = channelOf(VERSION);
+
   // Fail-open (D5): a transient registry blip is not a hard error — report that
   // we couldn't check and exit 0, exactly as the start-time gate proceeds.
-  const latest = await deps.fetch();
+  const latest = await deps.fetch(channel);
   if (latest === undefined) {
     notice("could not reach the npm registry to check for updates; try again later");
     printJson({ ok: true, current: VERSION, latest: null, outdated: false });
@@ -76,12 +84,12 @@ export async function updateCommand(
     return 0;
   }
 
-  // Outdated: install. On failure this is the one expected exit-1 path.
-  if (!deps.runNpmUpdate(latest).ok) {
-    notice("auto-update failed; run: npm install -g otacon@latest");
+  // Outdated: install the channel dist-tag. On failure this is the one expected exit-1 path.
+  if (!deps.runNpmUpdate(channel).ok) {
+    notice(`auto-update failed; run: npm install -g otacon@${channel}`);
     printJson({
       ok: false,
-      error: { code: "E_UPDATE_FAILED", message: "npm install -g otacon@latest failed" },
+      error: { code: "E_UPDATE_FAILED", message: `npm install -g otacon@${channel} failed` },
     });
     return 1;
   }

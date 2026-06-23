@@ -2379,9 +2379,38 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   next build is one command with no manual version math. Cutting from a dedicated
   `staging` branch keeps prerelease history off `main`. No GitHub Release for staging
   keeps the Releases page a clean record of shipped stable versions.
-- **Revisit when:** A third channel is needed (e.g. `next` for release candidates), the
-  CLI's auto-updater should track `staging` for opted-in users (today it pins `@latest`),
-  or staging cadence justifies splitting into its own workflow + Trusted Publisher.
+- **Revisit when:** A third channel is needed (e.g. `next` for release candidates), or
+  staging cadence justifies splitting into its own workflow + Trusted Publisher. (The CLI
+  auto-updater is now channel-aware, see "Channel-aware auto-update" below, so a staging
+  install tracks `staging` rather than pinning `@latest`.)
+
+## Channel-aware auto-update: derive the channel from the installed version suffix
+
+- **Decision:** The CLI auto-update gate (DESIGN §16) is channel-aware. `channelOf(VERSION)`
+  returns `staging` when the installed version carries a `-staging.` prerelease, else
+  `latest`. The start-time gate (`maybeAutoUpdate`) and the standalone `otacon update`
+  command both fetch the registry version for that channel (`fetchDistTag(channel)`, a
+  generalization of the old `fetchLatest`, GETs `registry.npmjs.org/otacon/<tag>`) and run
+  `npm install -g otacon@<channel>` (`runNpmUpdate(tag)`). `isNewer` became prerelease-aware:
+  at an equal major.minor.patch core a clean build outranks any staging build (so a stable
+  user is never offered a `-staging` build), and two `-staging.N` builds order by their
+  numeric `N`; different cores are still decided by the triple, and a malformed input on
+  either side is still `false`. The channel is derived purely from the version string: no
+  new config key, no new state file. The split is intentionally binary (staging vs latest),
+  not a general preid lookup.
+- **Why:** A staging tester must auto-update staging→staging and never be silently pulled
+  back to stable, while a clean install must keep its exact prior behavior (track `latest`,
+  same messages, same install command). Deriving the channel from the version suffix
+  reuses the one fact that already distinguishes the two installs, the published version,
+  so there is nothing extra to set, persist, or keep in sync, and a re-exec'd child stays on
+  the same channel automatically. Making `isNewer` prerelease-aware (rather than ignoring the
+  suffix as before) is what keeps a stable user off staging builds at the same core and lets
+  one staging build supersede an earlier one; for two clean versions it is byte-for-byte the
+  old core-triple comparison, so the stable path cannot regress. A binary split avoids
+  speculative machinery for channels that do not exist yet.
+- **Revisit when:** A third channel ships (e.g. `next`), an install needs to switch channels
+  without reinstalling (today the only way off staging is an explicit clean install), or
+  arbitrary preids must be supported (generalize `channelOf` beyond the staging/latest split).
 
 ## Maintainer release steps live in RELEASING.md; README stays user-facing
 
@@ -2630,8 +2659,9 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 - **Decision:** The `otacon start` update check (DESIGN §16) throttles to once per hour
   via a `$OTACON_HOME/update-check.json` cache (`checkedAt`), and discovers the latest
-  version by a direct GET to `registry.npmjs.org/otacon/latest` with a 1.5s
-  `AbortSignal.timeout` — not by shelling out to `npm view`. Every failure path is
+  version by a direct GET to `registry.npmjs.org/otacon/<tag>` with a 1.5s
+  `AbortSignal.timeout`, not by shelling out to `npm view` (the tag is the install's
+  channel; see "Channel-aware auto-update"). Every failure path is
   fail-open: a malformed/absent cache counts as "due" rather than wedging the check off,
   and any fetch error (network, non-200, bad JSON, missing version, timeout) resolves to
   `undefined` so the caller proceeds on the installed version. `update.auto` (default
@@ -2651,7 +2681,8 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 ## Auto-update: re-exec at start, fail-open, never sudo
 
 - **Decision:** When `otacon start` finds a strictly newer published version it runs
-  `npm install -g otacon@latest` and then **re-execs** itself —
+  `npm install -g otacon@<channel>` (the install's channel; see "Channel-aware
+  auto-update") and then **re-execs** itself —
   `process.execPath [process.argv[1], "start", ...argv]` with `OTACON_UPDATED=1` — and
   exits with the child's status (`maybeAutoUpdate` never returns on this path). The
   re-exec reproduces the user's original flags exactly, so the new CLI mints the session

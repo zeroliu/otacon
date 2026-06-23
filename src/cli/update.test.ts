@@ -7,13 +7,41 @@ import { updateCachePath } from "../shared/paths.js";
 import { VERSION } from "../shared/version.js";
 import {
   type AutoUpdateDeps,
-  fetchLatest,
+  channelOf,
+  fetchDistTag,
   isNewer,
   maybeAutoUpdate,
   runNpmUpdate,
   type UpdateCache,
   updateCheckDue,
 } from "./update.js";
+
+describe("channelOf", () => {
+  test("a -staging. prerelease tracks the staging channel", () => {
+    expect(channelOf("0.1.4-staging.2")).toBe("staging");
+    expect(channelOf("v0.1.4-staging.0")).toBe("staging");
+    expect(channelOf("1.0.0-staging.99")).toBe("staging");
+  });
+
+  test("a clean version tracks latest", () => {
+    expect(channelOf("0.1.4")).toBe("latest");
+    expect(channelOf("v0.1.4")).toBe("latest");
+    expect(channelOf("1.0.0")).toBe("latest");
+  });
+
+  test("a non-staging prerelease tracks latest (binary split)", () => {
+    expect(channelOf("0.1.4-beta.1")).toBe("latest");
+    expect(channelOf("0.1.4-rc.0")).toBe("latest");
+    // `-staging` with no `.N` is not the staging shape we cut → latest.
+    expect(channelOf("0.1.4-staging")).toBe("latest");
+  });
+
+  test("malformed input is latest, never throws", () => {
+    expect(channelOf("")).toBe("latest");
+    expect(channelOf("garbage")).toBe("latest");
+    expect(channelOf(undefined as unknown as string)).toBe("latest");
+  });
+});
 
 describe("isNewer", () => {
   test("a strictly greater patch is newer", () => {
@@ -49,6 +77,44 @@ describe("isNewer", () => {
     expect(isNewer("0.1.2.3", "0.1.1")).toBe(false);
     expect(isNewer("", "0.1.1")).toBe(false);
   });
+
+  // Prerelease-aware ordering (Phase 2). The stable-path cases above must be
+  // unaffected; these add the staging cases.
+  test("two clean versions order exactly as the core triple (regression guard)", () => {
+    // The full set of stable cases must match the pre-Phase-2 core-only behavior.
+    expect(isNewer("0.1.4", "0.1.3")).toBe(true);
+    expect(isNewer("0.1.3", "0.1.4")).toBe(false);
+    expect(isNewer("0.1.4", "0.1.4")).toBe(false);
+    expect(isNewer("1.0.0", "0.9.9")).toBe(true);
+    expect(isNewer("0.2.0", "0.1.9")).toBe(true);
+  });
+
+  test("two -staging.N at the same core order by their numeric N", () => {
+    expect(isNewer("0.1.4-staging.7", "0.1.4-staging.3")).toBe(true);
+    expect(isNewer("0.1.4-staging.3", "0.1.4-staging.7")).toBe(false);
+    expect(isNewer("0.1.4-staging.7", "0.1.4-staging.7")).toBe(false);
+    // Numeric, not lexicographic: 10 > 9.
+    expect(isNewer("0.1.4-staging.10", "0.1.4-staging.9")).toBe(true);
+  });
+
+  test("a clean version outranks a staging build at the same core", () => {
+    expect(isNewer("0.1.4", "0.1.4-staging.7")).toBe(true);
+    expect(isNewer("0.1.4", "0.1.4-staging.0")).toBe(true);
+  });
+
+  test("a staging build never outranks the clean release at the same core", () => {
+    // A stable user must never be offered a -staging build at the same core.
+    expect(isNewer("0.1.4-staging.7", "0.1.4")).toBe(false);
+    expect(isNewer("0.1.4-staging.99", "0.1.4")).toBe(false);
+  });
+
+  test("a higher core wins regardless of prerelease on either side", () => {
+    expect(isNewer("0.2.0-staging.0", "0.1.9-staging.4")).toBe(true);
+    expect(isNewer("0.2.0", "0.1.9-staging.4")).toBe(true);
+    expect(isNewer("0.2.0-staging.0", "0.1.9")).toBe(true);
+    // and a lower core never wins
+    expect(isNewer("0.1.9-staging.4", "0.2.0-staging.0")).toBe(false);
+  });
 });
 
 describe("updateCheckDue", () => {
@@ -83,7 +149,7 @@ describe("updateCheckDue", () => {
   });
 });
 
-describe("fetchLatest", () => {
+describe("fetchDistTag", () => {
   const realFetch = globalThis.fetch;
 
   afterEach(() => {
@@ -94,33 +160,50 @@ describe("fetchLatest", () => {
     globalThis.fetch = (() => impl()) as unknown as typeof fetch;
   }
 
-  test("returns the version from a 200 JSON body", async () => {
-    stubFetch(async () => new Response(JSON.stringify({ version: "0.3.0" }), { status: 200 }));
-    expect(await fetchLatest()).toBe("0.3.0");
+  test("builds the registry URL from the tag and returns the version", async () => {
+    let seenUrl: string | undefined;
+    globalThis.fetch = ((url: string) => {
+      seenUrl = url;
+      return Promise.resolve(new Response(JSON.stringify({ version: "0.3.0" }), { status: 200 }));
+    }) as unknown as typeof fetch;
+    expect(await fetchDistTag("latest")).toBe("0.3.0");
+    expect(seenUrl).toBe("https://registry.npmjs.org/otacon/latest");
+  });
+
+  test("a staging tag GETs the staging dist-tag URL", async () => {
+    let seenUrl: string | undefined;
+    globalThis.fetch = ((url: string) => {
+      seenUrl = url;
+      return Promise.resolve(
+        new Response(JSON.stringify({ version: "0.1.4-staging.2" }), { status: 200 }),
+      );
+    }) as unknown as typeof fetch;
+    expect(await fetchDistTag("staging")).toBe("0.1.4-staging.2");
+    expect(seenUrl).toBe("https://registry.npmjs.org/otacon/staging");
   });
 
   test("returns undefined on a non-200 response", async () => {
     stubFetch(async () => new Response("not found", { status: 404 }));
-    expect(await fetchLatest()).toBeUndefined();
+    expect(await fetchDistTag("latest")).toBeUndefined();
   });
 
   test("returns undefined when fetch rejects (network/timeout)", async () => {
     stubFetch(async () => {
       throw new Error("network down");
     });
-    expect(await fetchLatest()).toBeUndefined();
+    expect(await fetchDistTag("latest")).toBeUndefined();
   });
 
   test("returns undefined on a malformed JSON body", async () => {
     stubFetch(async () => new Response("{not json", { status: 200 }));
-    expect(await fetchLatest()).toBeUndefined();
+    expect(await fetchDistTag("latest")).toBeUndefined();
   });
 
   test("returns undefined when version is missing or empty", async () => {
     stubFetch(async () => new Response(JSON.stringify({ name: "otacon" }), { status: 200 }));
-    expect(await fetchLatest()).toBeUndefined();
+    expect(await fetchDistTag("latest")).toBeUndefined();
     stubFetch(async () => new Response(JSON.stringify({ version: "" }), { status: 200 }));
-    expect(await fetchLatest()).toBeUndefined();
+    expect(await fetchDistTag("latest")).toBeUndefined();
   });
 
   test("passes a provided AbortSignal through to fetch", async () => {
@@ -130,7 +213,7 @@ describe("fetchLatest", () => {
       return Promise.resolve(new Response(JSON.stringify({ version: "0.4.0" }), { status: 200 }));
     }) as unknown as typeof fetch;
     const controller = new AbortController();
-    expect(await fetchLatest(controller.signal)).toBe("0.4.0");
+    expect(await fetchDistTag("latest", controller.signal)).toBe("0.4.0");
     expect(seen).toBe(controller.signal);
   });
 });
@@ -144,15 +227,25 @@ describe("runNpmUpdate", () => {
       calls.push({ cmd, args, opts });
       return { status: 0, error: undefined };
     }) as unknown as Spawn;
-    expect(runNpmUpdate("99.0.0", spawn).ok).toBe(true);
+    expect(runNpmUpdate("latest", spawn).ok).toBe(true);
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ cmd: "npm", args: ["install", "-g", "otacon@latest"] });
     expect(calls[0]?.opts?.stdio).toBe("inherit");
   });
 
+  test("a staging tag installs `otacon@staging`", () => {
+    const calls: { cmd: string; args: string[] }[] = [];
+    const spawn = ((cmd: string, args: string[]) => {
+      calls.push({ cmd, args });
+      return { status: 0, error: undefined };
+    }) as unknown as Spawn;
+    expect(runNpmUpdate("staging", spawn).ok).toBe(true);
+    expect(calls[0]).toMatchObject({ cmd: "npm", args: ["install", "-g", "otacon@staging"] });
+  });
+
   test("a non-zero exit status is ok:false", () => {
     const spawn = (() => ({ status: 1, error: undefined })) as unknown as Spawn;
-    expect(runNpmUpdate("99.0.0", spawn).ok).toBe(false);
+    expect(runNpmUpdate("latest", spawn).ok).toBe(false);
   });
 
   test("a spawn error (ENOENT, npm missing) is ok:false", () => {
@@ -160,7 +253,7 @@ describe("runNpmUpdate", () => {
       status: null,
       error: Object.assign(new Error("spawn npm ENOENT"), { code: "ENOENT" }),
     })) as unknown as Spawn;
-    expect(runNpmUpdate("99.0.0", spawn).ok).toBe(false);
+    expect(runNpmUpdate("latest", spawn).ok).toBe(false);
   });
 });
 
@@ -179,6 +272,7 @@ describe("maybeAutoUpdate", () => {
     spawnCalls: SpawnCall[];
     exitCalls: number[];
     fetchCalls: number;
+    fetchTags: string[];
   }
 
   function harness(over: {
@@ -189,12 +283,14 @@ describe("maybeAutoUpdate", () => {
   }): Harness {
     const spawnCalls: SpawnCall[] = [];
     const exitCalls: number[] = [];
+    const fetchTags: string[] = [];
     let fetchCalls = 0;
     const deps: AutoUpdateDeps = {
       sourceRun: () => over.sourceRun ?? false,
       nowMs: () => 1_000_000_000,
-      fetch: async () => {
+      fetch: async (tag: string) => {
         fetchCalls++;
+        fetchTags.push(tag);
         return "latest" in over ? over.latest : NEWER;
       },
       spawnSync: ((cmd: string, args: string[], opts?: { env?: NodeJS.ProcessEnv }) => {
@@ -210,7 +306,15 @@ describe("maybeAutoUpdate", () => {
         throw new Error("__exit__");
       }) as (code: number) => never,
     };
-    return { deps, spawnCalls, exitCalls, get fetchCalls() { return fetchCalls; } } as Harness;
+    return {
+      deps,
+      spawnCalls,
+      exitCalls,
+      fetchTags,
+      get fetchCalls() {
+        return fetchCalls;
+      },
+    } as Harness;
   }
 
   beforeEach(() => {
@@ -287,6 +391,9 @@ describe("maybeAutoUpdate", () => {
     // exit() throws our sentinel — maybeAutoUpdate never returns on this path.
     await expect(maybeAutoUpdate(["--title", "x", "--quick"], h.deps)).rejects.toThrow("__exit__");
 
+    // The installed VERSION is clean, so the gate tracks the `latest` channel:
+    // it fetched the `latest` tag and installed `otacon@latest`, byte-for-byte as before.
+    expect(h.fetchTags).toEqual(["latest"]);
     // exactly two spawns: the npm install, then the re-exec.
     expect(h.spawnCalls).toHaveLength(2);
     expect(h.spawnCalls[0]).toMatchObject({

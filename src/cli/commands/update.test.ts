@@ -31,22 +31,29 @@ afterEach(() => {
 
 const printed = () => JSON.parse(out.join("").trim()) as Record<string, unknown>;
 
-/** Build deps with sensible defaults; npmCalls records install attempts. */
+/**
+ * Build deps with sensible defaults. `npmCalls` records the dist-tag each install
+ * was asked to install; `fetchTags` records the dist-tag each lookup queried.
+ */
 function harness(over: {
   latest?: string | undefined;
   installOk?: boolean;
   sourceRun?: boolean;
-}): { deps: UpdateCommandDeps; npmCalls: string[] } {
+}): { deps: UpdateCommandDeps; npmCalls: string[]; fetchTags: string[] } {
   const npmCalls: string[] = [];
+  const fetchTags: string[] = [];
   const deps: UpdateCommandDeps = {
     sourceRun: () => over.sourceRun ?? false,
-    fetch: async () => ("latest" in over ? over.latest : NEWER),
-    runNpmUpdate: (latest: string) => {
-      npmCalls.push(latest);
+    fetch: async (tag: string) => {
+      fetchTags.push(tag);
+      return "latest" in over ? over.latest : NEWER;
+    },
+    runNpmUpdate: (tag: string) => {
+      npmCalls.push(tag);
       return { ok: over.installOk ?? true };
     },
   };
-  return { deps, npmCalls };
+  return { deps, npmCalls, fetchTags };
 }
 
 test("--check reports outdated:true and never installs", async () => {
@@ -84,7 +91,9 @@ test("outdated install success reports {updated, from, to}", async () => {
   const code = await updateCommand([], h.deps);
   expect(code).toBe(0);
   expect(printed()).toEqual({ ok: true, updated: true, from: VERSION, to: NEWER });
-  expect(h.npmCalls).toEqual([NEWER]);
+  // VERSION is clean → the command queried the `latest` tag and installed `otacon@latest`.
+  expect(h.fetchTags).toEqual(["latest"]);
+  expect(h.npmCalls).toEqual(["latest"]);
 });
 
 test("outdated install failure → exit 1 + E_UPDATE_FAILED", async () => {
@@ -95,7 +104,7 @@ test("outdated install failure → exit 1 + E_UPDATE_FAILED", async () => {
     ok: false,
     error: { code: "E_UPDATE_FAILED", message: "npm install -g otacon@latest failed" },
   });
-  expect(h.npmCalls).toEqual([NEWER]);
+  expect(h.npmCalls).toEqual(["latest"]);
 });
 
 test("a source checkout refuses with source:true and never installs", async () => {

@@ -5,13 +5,17 @@
 // Decisions that shape the code:
 //   - D3: the whole check is throttled to once per hour via the
 //     `update-check.json` cache (`updateCheckDue`).
-//   - D5: latest is discovered by GET registry.npmjs.org/otacon/latest with a
-//     short timeout, fail-open on ANY error (`fetchLatest` → undefined).
+//   - D5: the registry version is discovered by GET
+//     registry.npmjs.org/otacon/<tag> with a short timeout, fail-open on ANY
+//     error (`fetchDistTag` → undefined).
 //   - D6: a source-tree run (the `.ts` daemon entry signal, `isSourceRun`) is
 //     skipped — there is no global npm package to update from a checkout.
-//   - D7: update with `npm install -g otacon@latest`; on any failure notify the
+//   - D7: update with `npm install -g otacon@<channel>`; on any failure notify the
 //     manual command and proceed on the installed version — never sudo.
 //   - D8: `OTACON_UPDATED=1` guards the re-exec'd child against a second check.
+//   - Channel: the update channel is derived purely from the installed VERSION's
+//     suffix (`channelOf`): a `-staging.` build tracks the `staging` dist-tag and
+//     stays on staging, anything else tracks `latest`. No new config or state.
 
 import { spawnSync as nodeSpawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -23,27 +27,60 @@ import { notice } from "./output.js";
 import { findRepoRoot, realpathOr } from "./session.js";
 
 /**
- * True iff `latest` is a strictly greater semver than `current`. Parses
- * major.minor.patch numerically (a leading `v` and any prerelease/build suffix
- * after patch is ignored). A malformed input on either side returns false —
- * never throws — so a garbled registry answer can never trigger an update.
+ * The npm dist-tag a given installed version tracks. A `-staging.` prerelease
+ * build follows the `staging` channel (so staging→staging, never pulled back to
+ * stable); anything else (a clean `vX.Y.Z`, any other suffix, or malformed
+ * input) follows `latest`. Derived purely from the version string (no config or
+ * state) and never throws. Intentionally a binary staging/latest split (not a
+ * general preid lookup); see DECISIONS.md.
+ */
+export function channelOf(version: string): "staging" | "latest" {
+  return typeof version === "string" && /-staging\./.test(version) ? "staging" : "latest";
+}
+
+/**
+ * True iff `latest` is a strictly greater semver than `current`. Compares the
+ * major.minor.patch triple numerically first (a leading `v` ignored). When the
+ * cores are equal it is prerelease-aware: a version with NO prerelease ranks
+ * above one WITH a prerelease (so stable `0.1.4` > `0.1.4-staging.9`), and two
+ * `-staging.N` prereleases compare by their numeric `N` (so `0.1.4-staging.7` >
+ * `0.1.4-staging.3`). A malformed input on either side returns false (never
+ * throws), so a garbled registry answer can never trigger an update. For two
+ * clean versions the result is identical to the core-triple-only comparison.
  */
 export function isNewer(latest: string, current: string): boolean {
   const a = parseSemver(latest);
   const b = parseSemver(current);
   if (a === undefined || b === undefined) return false;
   for (let i = 0; i < 3; i++) {
-    const [ai, bi] = [a[i] ?? 0, b[i] ?? 0];
+    const [ai, bi] = [a.core[i] ?? 0, b.core[i] ?? 0];
     if (ai > bi) return true;
     if (ai < bi) return false;
   }
-  return false;
+  // Equal cores: rank the prerelease component. A clean build (pre === undefined)
+  // outranks any staging build; two staging builds order by their numeric N.
+  if (a.pre === b.pre) return false;
+  if (a.pre === undefined) return true; // clean latest > staging current
+  if (b.pre === undefined) return false; // staging latest is NOT newer than clean current
+  return a.pre > b.pre; // both staging: higher N is newer
 }
 
-/** Parse `x.y.z` (optional leading `v`, trailing `-pre`/`+build` ignored) into a numeric triple. */
-function parseSemver(version: string): [number, number, number] | undefined {
+/**
+ * A parsed version: the numeric `core` triple plus the optional `staging`
+ * prerelease counter (`pre`, the `N` in `-staging.N`). `pre` is `undefined` for
+ * a clean version and for any non-staging suffix, so a clean build always
+ * outranks a staging one at the same core.
+ */
+interface ParsedSemver {
+  core: [number, number, number];
+  pre: number | undefined;
+}
+
+/** Parse `x.y.z[-staging.N]` (optional leading `v`, `+build` ignored) into a core triple + optional staging `N`. */
+function parseSemver(version: string): ParsedSemver | undefined {
   if (typeof version !== "string") return undefined;
-  const core = version.trim().replace(/^v/, "").split(/[-+]/, 1)[0] ?? "";
+  const trimmed = version.trim().replace(/^v/, "");
+  const core = trimmed.split(/[-+]/, 1)[0] ?? "";
   const parts = core.split(".");
   if (parts.length !== 3) return undefined;
   const nums: number[] = [];
@@ -51,7 +88,11 @@ function parseSemver(version: string): [number, number, number] | undefined {
     if (!/^\d+$/.test(part)) return undefined;
     nums.push(Number(part));
   }
-  return [nums[0] ?? 0, nums[1] ?? 0, nums[2] ?? 0];
+  const staging = /-staging\.(\d+)/.exec(trimmed);
+  return {
+    core: [nums[0] ?? 0, nums[1] ?? 0, nums[2] ?? 0],
+    pre: staging ? Number(staging[1]) : undefined,
+  };
 }
 
 /** The persisted update-check cache (`$OTACON_HOME/update-check.json`): when we last checked. */
@@ -77,15 +118,15 @@ export function updateCheckDue(
 }
 
 /**
- * GET registry.npmjs.org/otacon/latest and return its `.version` (D5). On ANY
- * error — network failure, non-200, bad JSON, missing/empty version, or the
- * timeout — resolves to `undefined` so the caller fails open and proceeds on
- * the current version. Never throws. Defaults to a 1.5s timeout when no
- * `signal` is supplied.
+ * GET registry.npmjs.org/otacon/<tag> and return its `.version` (D5), where
+ * `tag` is the channel dist-tag (`latest` or `staging`). On ANY error (network
+ * failure, non-200, bad JSON, missing/empty version, or the timeout) resolves
+ * to `undefined` so the caller fails open and proceeds on the current version.
+ * Never throws. Defaults to a 1.5s timeout when no `signal` is supplied.
  */
-export async function fetchLatest(signal?: AbortSignal): Promise<string | undefined> {
+export async function fetchDistTag(tag: string, signal?: AbortSignal): Promise<string | undefined> {
   try {
-    const response = await fetch("https://registry.npmjs.org/otacon/latest", {
+    const response = await fetch(`https://registry.npmjs.org/otacon/${tag}`, {
       signal: signal ?? AbortSignal.timeout(1500),
     });
     if (!response.ok) return undefined;
@@ -120,20 +161,21 @@ function writeCache(nowMs: number): void {
 }
 
 /**
- * Run `npm install -g otacon@latest` (D7), the one mutating side effect shared
- * by the auto-update gate (`maybeAutoUpdate`) and the standalone `otacon update`
- * command. stdio is inherited so npm's own progress reaches the human's stderr.
+ * Run `npm install -g otacon@<tag>` (D7), the one mutating side effect shared by
+ * the auto-update gate (`maybeAutoUpdate`) and the standalone `otacon update`
+ * command. `tag` is the channel dist-tag (`latest` or `staging`), so a staging
+ * install stays on staging and a clean install resolves `otacon@latest` exactly
+ * as before. stdio is inherited so npm's own progress reaches the human's stderr.
  * Returns `{ ok }`: false on a non-zero exit (a non-writable global dir, an npm
  * error) OR a spawn error (`ENOENT` when npm is missing) — never throws, and
- * never escalates to sudo (D1). `latest` is accepted for symmetry/logging at the
- * call site; the registry tag `otacon@latest` is what npm actually resolves.
- * `spawnSync` is injectable so tests drive both outcomes with no real npm.
+ * never escalates to sudo (D1). `spawnSync` is injectable so tests drive both
+ * outcomes with no real npm.
  */
 export function runNpmUpdate(
-  _latest: string,
+  tag: string,
   spawnSync: typeof nodeSpawnSync = nodeSpawnSync,
 ): { ok: boolean } {
-  const install = spawnSync("npm", ["install", "-g", "otacon@latest"], {
+  const install = spawnSync("npm", ["install", "-g", `otacon@${tag}`], {
     stdio: "inherit",
   });
   return { ok: install.error === undefined && install.status === 0 };
@@ -144,10 +186,11 @@ export function runNpmUpdate(
  * registry, npm, or process exit. Defaults wire the real implementations; a
  * test passes stubs. `spawnSync` runs the npm install and the re-exec; `exit`
  * ends the parent after a successful re-exec (so maybeAutoUpdate never returns
- * on that path). `nowMs`/`fetch` mirror the pure helpers' injectable shape.
+ * on that path). `nowMs`/`fetch` mirror the pure helpers' injectable shape;
+ * `fetch` receives the channel dist-tag to look up.
  */
 export interface AutoUpdateDeps {
-  fetch: typeof fetchLatest;
+  fetch: typeof fetchDistTag;
   spawnSync: typeof nodeSpawnSync;
   exit: (code: number) => never;
   nowMs: () => number;
@@ -155,7 +198,7 @@ export interface AutoUpdateDeps {
 }
 
 const REAL_DEPS: AutoUpdateDeps = {
-  fetch: fetchLatest,
+  fetch: fetchDistTag,
   spawnSync: nodeSpawnSync,
   exit: (code) => process.exit(code),
   nowMs: () => Date.now(),
@@ -171,10 +214,15 @@ const REAL_DEPS: AutoUpdateDeps = {
  *   2. dev-run skip — a source checkout has no global package to update (D6)
  *   3. config gate  — `update.auto:false` pins the version (D4)
  *   4. throttle     — checked within the hour → skip; else stamp the cache now (D3)
- *   5. fetch+compare— registry latest (fail-open) must be strictly newer (D5)
- *   6. update       — `npm install -g otacon@latest`; on success notice + re-exec
+ *   5. fetch+compare— the channel's registry version (fail-open) must be strictly newer (D5)
+ *   6. update       — `npm install -g otacon@<channel>`; on success notice + re-exec
  *                     `start <argv>` with OTACON_UPDATED=1 and exit the parent;
  *                     on ANY failure notice the manual command and return (D1/D7)
+ *
+ * The channel is derived from the installed VERSION (`channelOf`): a `-staging.`
+ * build tracks the `staging` dist-tag (staging stays on staging, never pulled to
+ * stable), anything else tracks `latest`, identical to the prior behavior for a
+ * clean install.
  *
  * On the successful-update path this NEVER returns: it re-execs and exits with
  * the child's status. The child runs the new CLI, mints the session, and (via
@@ -202,17 +250,19 @@ export async function maybeAutoUpdate(
   if (!updateCheckDue(readCache(), now)) return;
   writeCache(now);
 
-  // 5. Fetch + compare (D5): fail-open on no answer; only act if strictly newer.
-  const latest = await deps.fetch();
+  // 5. Fetch + compare (D5): look up the installed version's channel dist-tag,
+  // fail-open on no answer; only act if strictly newer.
+  const channel = channelOf(VERSION);
+  const latest = await deps.fetch(channel);
   if (latest === undefined) return;
   if (!isNewer(latest, VERSION)) return;
 
   // 6. Update (D7): npm install -g via the shared helper; fail-open on any error.
-  if (!runNpmUpdate(latest, deps.spawnSync).ok) {
+  if (!runNpmUpdate(channel, deps.spawnSync).ok) {
     // ENOENT (npm missing), non-zero exit, or a non-writable global dir — never
     // escalate to sudo (D1). Notify the manual command and proceed on current.
     notice(
-      `a newer otacon ${latest} is available but auto-update failed; run: npm install -g otacon@latest`,
+      `a newer otacon ${latest} is available but auto-update failed; run: npm install -g otacon@${channel}`,
     );
     return;
   }
