@@ -1,10 +1,12 @@
 // M4b e2e: the grill + approve surfaces round-trip through a real browser,
-// the real daemon, AND the real built CLI — `otacon ask` raises a question
-// card live (pre-plan: the grill happens before drafting), chip taps and free
-// text wake a parked `otacon wait` with the answer event, decision citations
-// deep-link into the Interview panel, and Approve warns on unresolved threads
-// before a force Save writes the .otacon/plans/ project copy (plus the home
-// archive) and locks the session.
+// the real daemon, AND the real built CLI. The Interview panel is the single
+// grill surface (default-expanded during the draft grill phase): `otacon ask`
+// raises a question card live in its "open" zone (pre-plan: the grill happens
+// before drafting), chip taps and free text wake a parked `otacon wait` with the
+// answer event and settle the card into the "answered" zone, decision citations
+// deep-link into the panel, and Approve warns on unresolved threads before a
+// force Save writes the .otacon/plans/ project copy (plus the home archive) and
+// locks the session.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -70,10 +72,11 @@ test("pre-plan grill: `otacon ask` raises a live card, recommended chip first, o
   const qid = (JSON.parse(asked.stdout) as { id: string }).id;
   expect(qid).toBe("q1");
 
-  const card = page.locator(`.grill-card[data-q="${qid}"]`);
+  // The panel is the single grill surface, default-expanded during draft; the
+  // open question lands in its "open" zone over SSE, no reload.
+  const card = page.locator(`.iv-zone-open .grill-card[data-iv="${qid}"]`);
   await expect(card).toBeVisible();
   expect(await readMarker(page)).toBe(true); // SSE, not a navigation
-  await expect(page.locator(".grill-open-count")).toHaveText("1 open");
   // The chip flips to your-move state while a question is open (review UI).
   await expect(page.locator(".chip")).toHaveText("questions pending");
 
@@ -105,11 +108,12 @@ test("pre-plan grill: `otacon ask` raises a live card, recommended chip first, o
   expect(event.choice).toBe("HS256");
   expect(event.text).toBe("prefer the simpler one");
 
-  // The card settles in place — the flip is the confirmation.
-  const settled = page.locator(`.grill-settled[data-q="${qid}"]`);
+  // The card settles into the "answered" zone — the flip is the confirmation.
+  const settled = page.locator(`.iv-zone-answered .grill-settled[data-iv="${qid}"]`);
   await expect(settled).toBeVisible();
   await expect(settled.locator(".settled-choice")).toHaveText("HS256");
-  await expect(page.locator(".grill-open-count")).toHaveCount(0);
+  // No open question remains: the open zone is gone.
+  await expect(page.locator(".iv-zone-open")).toHaveCount(0);
   await expect(page.locator(".chip")).toHaveText("agent working");
 });
 
@@ -128,7 +132,7 @@ test("multi-select toggles chips and arms a send; free text answers optionless q
   await page.goto(`/s/${session.id}`);
 
   // Multi: chips toggle (no instant fire); send stays disabled until a pick.
-  const multiCard = page.locator(`.grill-card[data-q="${multiId}"]`);
+  const multiCard = page.locator(`.grill-card[data-iv="${multiId}"]`);
   await expect(multiCard.locator(".grill-mode")).toHaveText("pick any");
   const send = multiCard.locator(".grill-send");
   await expect(send).toBeDisabled();
@@ -144,12 +148,12 @@ test("multi-select toggles chips and arms a send; free text answers optionless q
   const multiEvent = JSON.parse(result.stdout) as { question: string; choices?: string[] };
   expect(multiEvent.question).toBe(multiId);
   expect(multiEvent.choices).toEqual(["traces", "logs"]); // tap order preserved
-  await expect(page.locator(`.grill-settled[data-q="${multiId}"] .settled-choice`)).toHaveText(
+  await expect(page.locator(`.grill-settled[data-iv="${multiId}"] .settled-choice`)).toHaveText(
     "traces, logs",
   );
 
   // Free text: the textarea is the whole answer; send arms on content.
-  const textCard = page.locator(`.grill-card[data-q="${textId}"]`);
+  const textCard = page.locator(`.grill-card[data-iv="${textId}"]`);
   await expect(textCard.locator(".grill-mode")).toHaveText("free text");
   await expect(textCard.locator(".grill-send")).toBeDisabled();
   await textCard.locator(".grill-text").fill("jwt_rollout_q3");
@@ -161,9 +165,9 @@ test("multi-select toggles chips and arms a send; free text answers optionless q
   expect(textEvent.question).toBe(textId);
   expect(textEvent.text).toBe("jwt_rollout_q3");
 
-  // Both cards stay settled on this mount; nothing is open anymore.
-  await expect(page.locator(".grill-settled")).toHaveCount(2);
-  await expect(page.locator(".grill-open-count")).toHaveCount(0);
+  // Both cards settle into the answered zone; the open zone is gone.
+  await expect(page.locator(".iv-zone-answered .grill-settled")).toHaveCount(2);
+  await expect(page.locator(".iv-zone-open")).toHaveCount(0);
 });
 
 test("option cards take a chip-less custom answer: single 'send custom', multi text-only", async ({
@@ -185,7 +189,7 @@ test("option cards take a chip-less custom answer: single 'send custom', multi t
 
   // Single-select: the note box doubles as the custom-answer field — typed
   // text alone, no chip, is a valid answer (native-"Other" parity).
-  const single = page.locator(`.grill-card[data-q="${singleId}"]`);
+  const single = page.locator(`.grill-card[data-iv="${singleId}"]`);
   await expect(single.locator(".grill-foot")).toHaveCount(0); // no foot until a custom answer opens
   await single.locator(".grill-note-toggle").click();
   const custom = single.locator(".grill-send");
@@ -201,10 +205,10 @@ test("option cards take a chip-less custom answer: single 'send custom', multi t
   expect(event.question).toBe(singleId);
   expect(event.choice).toBeUndefined(); // text-only, no chip
   expect(event.text).toBe("none of these — ship neither yet");
-  await expect(page.locator(`.grill-settled[data-q="${singleId}"]`)).toBeVisible();
+  await expect(page.locator(`.grill-settled[data-iv="${singleId}"]`)).toBeVisible();
 
   // Multi-select: send arms on non-empty custom text even with no chip picked.
-  const multi = page.locator(`.grill-card[data-q="${multiId}"]`);
+  const multi = page.locator(`.grill-card[data-iv="${multiId}"]`);
   const send = multi.locator(".grill-send");
   await expect(send).toBeDisabled();
   await multi.locator(".grill-note-toggle").click();
@@ -221,7 +225,7 @@ test("option cards take a chip-less custom answer: single 'send custom', multi t
   expect(event.text).toBe("trace spans, actually");
 });
 
-test("the Interview archive renders a chip-less custom answer: no option highlighted, custom text echoed", async ({
+test("the answered card renders a chip-less custom answer: answer-only echo, no option list", async ({
   page,
   request,
 }) => {
@@ -235,14 +239,13 @@ test("the Interview archive renders a chip-less custom answer: no option highlig
   await answer(request, session.id, { question: qid, text: "postgres, actually" });
   await page.goto(`/s/${session.id}`);
 
-  await page.locator(".interview-toggle").click();
-  const entry = page.locator(`.iv-entry[data-iv="${qid}"]`);
+  // The panel is default-expanded during draft; the answered card sits in the
+  // "answered" zone showing only the answer — no option list (it appears solely
+  // inside the form on undo). The typed text is echoed as what the user said.
+  const entry = page.locator(`.iv-zone-answered .grill-settled[data-iv="${qid}"]`);
   await expect(entry).toBeVisible();
-  // The offered options still show, but none is marked chosen — the answer was
-  // custom — and the typed text is echoed as what the user actually said.
-  await expect(entry.locator(".iv-opt")).toHaveCount(2);
-  await expect(entry.locator(".iv-opt-chosen")).toHaveCount(0);
-  await expect(entry.locator(".iv-answer-body")).toHaveText("postgres, actually");
+  await expect(entry.locator(".grill-chip")).toHaveCount(0);
+  await expect(entry.locator(".settled-answer")).toHaveText("postgres, actually");
 });
 
 test("decision citations deep-link into the Interview panel; [assumed] wears the veto tag", async ({
@@ -279,11 +282,12 @@ test("decision citations deep-link into the Interview panel; [assumed] wears the
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
   await cite.click();
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
-  const entry = page.locator(`.iv-entry[data-iv="${qid}"]`);
+  const entry = page.locator(`.grill-settled[data-iv="${qid}"]`);
   await expect(entry).toBeVisible();
   await expect(entry).toHaveClass(/iv-hit/); // the deep-link wash landed
-  await expect(entry.locator(".iv-opt-chosen")).toContainText("RS256");
-  await expect(entry.locator(".iv-answer-body")).toHaveText("RS256 — keys rotate quarterly");
+  // The answered card shows the answer-only echo (choice + note), no option list.
+  await expect(entry.locator(".settled-choice")).toHaveText("RS256");
+  await expect(entry.locator(".settled-answer")).toHaveText("RS256 — keys rotate quarterly");
 
   // Still a collapsible panel: the toggle closes it again.
   await toggle.click();
@@ -344,7 +348,11 @@ test("approve warns on unresolved threads, forces on confirm, locks the session,
 
   // Read-only: every mutation surface is gone…
   await expect(page.locator(".ctrl-approve")).toHaveCount(0);
-  await expect(page.locator(".grill-queue")).toHaveCount(0);
+  // The Interview panel's answer affordances are gone too: no inline undo on the
+  // answered card (it opens to the static echo only).
+  await page.locator(".interview-toggle").click();
+  await expect(page.locator(".grill-undo")).toHaveCount(0);
+  await expect(page.locator(`.grill-settled[data-iv="${qid}"] .settled-choice`)).toHaveText("yes");
   await expect(page.locator(".drawer-bar")).toHaveCount(0);
   await selectText(page, "#summary .md", "token issuance");
   await expect(page.locator(".sel-bar")).toHaveCount(0);
@@ -398,7 +406,10 @@ test("375px: cards are one-thumb — ≥44px targets, no horizontal scroll, appr
   });
   await submitFixturePlan(request, session.id, "valid-plan.md");
   await page.goto(`/s/${session.id}`);
-  await expect(page.locator(".grill-card")).toBeVisible();
+  // A submitted plan moves past draft, so the panel starts collapsed; open it to
+  // reach the open question card (the single grill surface).
+  await page.locator(".interview-toggle").click();
+  await expect(page.locator(".iv-zone-open .grill-card")).toBeVisible();
 
   // Every chip and the send button meet the 44px thumb target (interview questions); rounded
   // because Chrome renders the 1.5px chip border at subpixel widths.
@@ -442,7 +453,7 @@ test("dark scheme renders the grill, interview, and approve surfaces", async ({
   await expect(page.locator("#decisions a.q-cite")).toBeVisible();
   await expect(page.locator("#decisions .assumed-tag")).toBeVisible();
   await page.locator(".interview-toggle").click();
-  await expect(page.locator(`.iv-entry[data-iv="${qid}"]`)).toBeVisible();
+  await expect(page.locator(`.grill-settled[data-iv="${qid}"]`)).toBeVisible();
   await page.locator(".ctrl-approve").click();
   await expect(page.locator(".approve-sheet")).toBeVisible();
 });

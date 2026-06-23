@@ -3,10 +3,11 @@
 // dossier (review UI) — with the review loop's desktop verbs (select text
 // → toolbar, comments batch in the drawer, questions fire instantly, threads
 // in the rail), M3's re-review layer (banner, [clean|diff] + baseline picker,
-// gutter markers, j/k), and M4's grill + approve surfaces: agent-question
-// cards pinned above the plan (useful pre-plan — the grill happens before
-// drafting), the collapsible Interview panel that decision citations
-// deep-link into, and the warn-then-force Approve control. Keyboard:
+// gutter markers, j/k), and M4's grill + approve surfaces: the collapsible
+// Interview panel as the single grill surface (open questions answered inline,
+// answered ones shown with undo; default-expanded during the draft grill phase)
+// that decision citations deep-link into, and the warn-then-force Approve
+// control. Keyboard:
 // c = comment, q = ask, j/k = changed sections; no Approve shortcut exists,
 // deliberately (review UI). Approved sessions render read-only behind the quiet
 // approved notice. The renderer stays a lazy chunk.
@@ -31,7 +32,6 @@ import {
   captureSelection,
   clearThreadHighlights,
   flashAnchor,
-  motionSafeScroll,
   paintThreads,
   threadAtPoint,
 } from "./review/anchor";
@@ -45,7 +45,6 @@ import type { PendingComment } from "./review/drawer";
 import { CommentDrawer } from "./review/drawer";
 import type { ComposerState } from "./review/feedback";
 import { Composer, SelectionBar, useSelection } from "./review/feedback";
-import { GrillQueue } from "./review/grill";
 import { ReviewHeader } from "./review/header";
 import type { InterviewTarget } from "./review/interview";
 import { InterviewPanel } from "./review/interview";
@@ -171,11 +170,22 @@ function ReviewLoop({
   // a number = the user picked another baseline from the diff controls.
   const [baseline, setBaseline] = useState<number | null>(null);
   const [changelogOpen, setChangelogOpen] = useState(false);
-  // The Interview panel (interview questions): open state is screen-local; a
-  // decision citation sets `ivTarget` (nonce re-fires repeat clicks) and
-  // opens the panel in the same commit, so the entry exists when its
-  // deep-link effect runs.
-  const [interviewOpen, setInterviewOpen] = useState(false);
+  // The Interview panel is the single grill surface: default-expanded during the
+  // grill phase (draft) and auto-collapsed once grill is over, while a manual
+  // toggle still sticks within a phase. A decision citation (ivTarget) opens it
+  // regardless.
+  const grillPhase = session.status === "draft";
+  const [interviewOpen, setInterviewOpen] = useState(grillPhase);
+  const lastGrillPhase = useRef(grillPhase);
+  useEffect(() => {
+    if (grillPhase !== lastGrillPhase.current) {
+      lastGrillPhase.current = grillPhase;
+      setInterviewOpen(grillPhase);
+    }
+  }, [grillPhase]);
+  // A decision citation sets `ivTarget` (nonce re-fires repeat clicks) and opens
+  // the panel in the same commit, so the entry exists when its deep-link effect
+  // runs.
   const [ivTarget, setIvTarget] = useState<InterviewTarget | null>(null);
   const ivNonce = useRef(0);
   const [approveOpen, setApproveOpen] = useState(false);
@@ -205,22 +215,12 @@ function ReviewLoop({
   // an empty stream (e.g. an over session that never captured anything) drops it.
   const agentActive = isAgentActive(session.status);
   const showNowPlaying = agentActive || stream.length > 0;
-  // The console auto-expands while the agent is actively producing the firehose
-  // worth watching, namely `draft` (pre-plan research + drafting) and
-  // `implementing` (building the approved plan), and collapses to the bar in
-  // `in_review` and other resting states. The user can toggle freely; a status
-  // *crossing* re-applies the auto decision (draft to in_review collapses; a
-  // later implementing re-opens), so the console follows the work without
-  // trapping a manual choice across a phase change.
-  const autoOpen = session.status === "draft" || session.status === "implementing";
-  const [consoleOpen, setConsoleOpen] = useState(autoOpen);
-  const lastAutoOpen = useRef(autoOpen);
-  useEffect(() => {
-    if (autoOpen !== lastAutoOpen.current) {
-      lastAutoOpen.current = autoOpen;
-      setConsoleOpen(autoOpen);
-    }
-  }, [autoOpen]);
+  // The console starts collapsed and never auto-expands. The user opens it
+  // manually with the toggle, and the choice sticks (no status crossing
+  // overrides it). The always-on one-line now-playing bar still signals activity
+  // while the agent works, so the firehose is one click away without forcing the
+  // full console open on every draft or implementing phase.
+  const [consoleOpen, setConsoleOpen] = useState(false);
   // Over = the session reached a terminal state (approval and archive lifecycle: approved /
   // implemented / implement_failed): the whole screen goes read-only — no
   // selection anchoring, no composer, no drawer, no cards. `implementing` is NOT
@@ -647,12 +647,14 @@ function ReviewLoop({
     setMenu(null);
   };
 
-  // The sticky bar's ❓ (review UI): jump back up to the question queue.
+  // The sticky bar's ❓ (review UI): open the Interview panel and deep-link the
+  // first open question, reusing the interview's scroll + flash machinery.
   const openQuestions = transcript.filter((entry) => entry.answer === undefined).length;
   const jumpQuestions = useCallback(() => {
-    const queue = document.querySelector(".grill-queue");
-    if (queue) motionSafeScroll(queue, "start");
-  }, []);
+    const firstOpen = transcript.find((entry) => entry.answer === undefined);
+    setInterviewOpen(true);
+    if (firstOpen) setIvTarget({ id: firstOpen.id, nonce: (ivNonce.current += 1) });
+  }, [transcript]);
 
   const toggleInterview = useCallback(() => setInterviewOpen((value) => !value), []);
 
@@ -723,7 +725,6 @@ function ReviewLoop({
               onClose={() => setChangelogOpen(false)}
             />
           )}
-          {!readOnly && <GrillQueue sessionId={session.id} transcript={transcript} />}
           <InterviewPanel
             sessionId={session.id}
             transcript={transcript}
@@ -763,8 +764,9 @@ function ReviewLoop({
             <main className="review-wait">
               <p className="wait-line">// no revision yet</p>
               {/* During research + drafting the live console above is the main
-                  thing to watch: it leads open while the agent is in `draft`
-                  (auto-expand), so the placeholder no longer carries its own. */}
+                  thing to watch: the always-on now-playing bar surfaces the
+                  work (one click expands the console), so the placeholder no
+                  longer carries its own activity line. */}
               <p>
                 The agent interviews before it drafts — questions land above as cards, one at a
                 time. The plan renders here the moment revision 1 passes the linter; this screen

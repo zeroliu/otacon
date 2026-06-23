@@ -1,11 +1,14 @@
-// The collapsible Interview panel (interview questions, review UI): the grill transcript
-// as reviewable telemetry — every Q&A with its asked/answered state and
-// timestamps. Decisions in the rendered plan citing `← q<n>` deep-link here:
-// the panel opens, scrolls to the entry, and flashes it, answering "why?"
-// with what the user actually said at the time.
+// The collapsible Interview panel (interview questions, review UI): the single
+// grill surface. Two labeled zones, newest first within each: an "open" zone on
+// top where unanswered questions are answered INLINE (the same interactive card
+// the old pinned queue used), a divider, then an "answered" zone below where
+// each card shows only the answer plus an `undo` that reveals the option chips
+// to change it. Decisions in the rendered plan citing `← q<n>` deep-link here:
+// the panel opens, scrolls to the entry, and flashes it, answering "why?" with
+// what the user actually said at the time.
 
 import { memo, useEffect, useRef, useState } from "react";
-import type { TranscriptEntry } from "../api";
+import type { GrillAnswer, TranscriptEntry } from "../api";
 import { relativeTime } from "../format";
 import { AnswerForm, prefillFromAnswer } from "./answer-form";
 import { motionSafeScroll } from "./anchor";
@@ -33,9 +36,9 @@ export const InterviewPanel = memo(function InterviewPanel({
   open: boolean;
   onToggle: () => void;
   target: InterviewTarget | null;
-  // While the session is live an answered entry can be reopened and changed
-  // here (the same affordance as the grill settled card); once read-only the
-  // archive is byte-for-byte its old static self.
+  // While the session is live an open question is answered inline and an
+  // answered entry can be reopened and changed here; once read-only the archive
+  // shows the static answer echo with no form and no undo.
   editable: boolean;
 }) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -55,7 +58,15 @@ export const InterviewPanel = memo(function InterviewPanel({
   }, [target, open]);
 
   if (transcript.length === 0) return null;
-  const answered = transcript.filter((entry) => entry.answer !== undefined).length;
+
+  // Two zones, each newest first: the active/most-recent question leads. Reverse
+  // copies of the filtered arrays so the prop is never mutated. `open` is ordered
+  // by askedAt descending, `answered` by answeredAt descending.
+  const open$ = transcript.filter((entry) => entry.answer === undefined).reverse();
+  const answered$ = transcript
+    .filter((entry) => entry.answer !== undefined)
+    .sort((a, b) => b.answer!.answeredAt.localeCompare(a.answer!.answeredAt));
+  const answeredCount = answered$.length;
 
   return (
     <section className="interview" id="interview" aria-label="interview transcript">
@@ -70,7 +81,7 @@ export const InterviewPanel = memo(function InterviewPanel({
         </span>
         <span className="interview-word">interview</span>
         <span className="interview-tally">
-          {answered}/{transcript.length} answered
+          {answeredCount}/{transcript.length} answered
         </span>
         <span className="interview-caret" aria-hidden="true">
           {open ? "▾" : "▸"}
@@ -78,21 +89,47 @@ export const InterviewPanel = memo(function InterviewPanel({
       </button>
       {open && (
         <div className="interview-body" ref={bodyRef}>
-          {transcript.map((entry) => (
-            <InterviewEntry
-              key={entry.id}
-              sessionId={sessionId}
-              entry={entry}
-              editable={editable}
-            />
-          ))}
+          {open$.length > 0 && (
+            <div className="iv-zone iv-zone-open">
+              <p className="iv-zone-label">open</p>
+              {open$.map((entry) => (
+                <OpenCard
+                  key={entry.id}
+                  sessionId={sessionId}
+                  entry={entry}
+                  editable={editable}
+                />
+              ))}
+            </div>
+          )}
+          {open$.length > 0 && answered$.length > 0 && (
+            <hr className="iv-divider" aria-hidden="true" />
+          )}
+          {answered$.length > 0 && (
+            <div className="iv-zone iv-zone-answered">
+              <p className="iv-zone-label">answered</p>
+              {answered$.map((entry) => (
+                <AnsweredCard
+                  key={entry.id}
+                  sessionId={sessionId}
+                  entry={entry}
+                  editable={editable}
+                />
+              ))}
+            </div>
+          )}
         </div>
       )}
     </section>
   );
 });
 
-function InterviewEntry({
+// An open question: card chrome + meta, with the interactive body supplied by
+// AnswerForm in fresh mode (no prefill), so answering happens inline exactly as
+// the old pinned queue did. A read-only archive can hold an open question (the
+// session ended before it was answered): it shows the static awaiting line, no
+// form. `data-iv` keeps the deep-link flash/scroll working.
+function OpenCard({
   sessionId,
   entry,
   editable,
@@ -101,73 +138,97 @@ function InterviewEntry({
   entry: TranscriptEntry;
   editable: boolean;
 }) {
-  // Mirrors the grill settled card: while editable an answered entry reopens
-  // into the shared AnswerForm prefilled with the current answer, and the flag
-  // survives the SSE re-render (same entry.id key) so onDone returns to the
-  // static view now showing the answer the `grill` frame just upserted.
-  const [editing, setEditing] = useState(false);
-  const answer = entry.answer;
-  const chosen = new Set(answer?.choices ?? (answer?.choice !== undefined ? [answer.choice] : []));
-  const echo = [answer?.choices?.join(", ") ?? answer?.choice, answer?.text]
-    .filter((part): part is string => part !== undefined && part !== "")
-    .join(" — ");
+  const hasOptions = (entry.options?.length ?? 0) > 0;
   return (
-    <article className="iv-entry" data-iv={entry.id}>
-      <div className="iv-meta">
-        <span className="iv-id">{entry.id}</span>
-        {entry.multi === true && <span className="iv-mode">multi</span>}
-        <span className="iv-when">asked {relativeTime(entry.askedAt)}</span>
+    <article className="grill-card" data-iv={entry.id}>
+      <div className="grill-meta">
+        <span className="grill-glyph" aria-hidden="true">
+          ▍
+        </span>
+        <span className="grill-id">{entry.id}</span>
+        {entry.multi === true && <span className="grill-mode">pick any</span>}
+        {!hasOptions && <span className="grill-mode">free text</span>}
+        <span className="grill-when">asked {relativeTime(entry.askedAt)}</span>
       </div>
-      <p className="iv-q">{entry.question}</p>
-      {entry.options && (
-        <div className="iv-options" aria-label="options offered">
-          {entry.options.map((option) => (
-            <span
-              key={option}
-              className={chosen.has(option) ? "iv-opt iv-opt-chosen" : "iv-opt"}
-            >
-              {option === entry.recommend && (
-                <span className="grill-rec" aria-hidden="true">
-                  ★
-                </span>
-              )}
-              {option}
-            </span>
-          ))}
-        </div>
-      )}
-      {answer ? (
-        editing ? (
-          <AnswerForm
-            sessionId={sessionId}
-            entry={entry}
-            prefill={prefillFromAnswer(answer)}
-            onCancel={() => setEditing(false)}
-            onDone={() => setEditing(false)}
-          />
-        ) : (
-          <>
-            <div className="iv-answer">
-              <span className="iv-answer-label">↳ you · {relativeTime(answer.answeredAt)}</span>
-              {echo !== "" && <p className="iv-answer-body">{echo}</p>}
-            </div>
-            {editable && (
-              <button
-                type="button"
-                className="grill-undo"
-                onClick={() => setEditing(true)}
-              >
-                <span className="grill-undo-glyph" aria-hidden="true">
-                  ↶
-                </span>
-                undo
-              </button>
-            )}
-          </>
-        )
+      <p className="grill-question">{entry.question}</p>
+      {editable ? (
+        <AnswerForm sessionId={sessionId} entry={entry} />
       ) : (
         <p className="iv-awaiting">awaiting your answer</p>
       )}
     </article>
+  );
+}
+
+/**
+ * An answered question, settled in place: the one-glance confirmation showing
+ * ONLY the answer (no full option list). While editable an "undo" control
+ * reopens the same AnswerForm prefilled with the current answer (its option
+ * chips reappear), so the answer can be changed; submitting overwrites it. The
+ * `editing` flag lives here and survives the SSE re-render (same entry.id key),
+ * so onDone returns to the settled view now showing the new answer the `grill`
+ * frame just upserted. A read-only archive shows the echo with no undo.
+ */
+function AnsweredCard({
+  sessionId,
+  entry,
+  editable,
+}: {
+  sessionId: string;
+  entry: TranscriptEntry;
+  editable: boolean;
+}) {
+  const [editing, setEditing] = useState(false);
+  const answer = entry.answer;
+  if (!answer) return null; // callers only route answered entries here
+  return (
+    <article className="grill-card grill-settled" data-iv={entry.id}>
+      <div className="grill-meta">
+        <span className="settled-check" aria-hidden="true">
+          ✓
+        </span>
+        <span className="grill-id">{entry.id}</span>
+        <span className="settled-word">answered</span>
+        <span className="grill-when">{relativeTime(answer.answeredAt)}</span>
+      </div>
+      <p className="grill-question grill-question-settled">{entry.question}</p>
+      {editing ? (
+        <AnswerForm
+          sessionId={sessionId}
+          entry={entry}
+          prefill={prefillFromAnswer(answer)}
+          onCancel={() => setEditing(false)}
+          onDone={() => setEditing(false)}
+        />
+      ) : (
+        <>
+          <p className="settled-answer">{answerEcho(answer)}</p>
+          {editable && (
+            <button
+              type="button"
+              className="grill-undo"
+              onClick={() => setEditing(true)}
+            >
+              <span className="grill-undo-glyph" aria-hidden="true">
+                ↶
+              </span>
+              undo
+            </button>
+          )}
+        </>
+      )}
+    </article>
+  );
+}
+
+/** The answer echo: chosen choice(s) and/or free text, no option list. */
+function answerEcho(answer: GrillAnswer) {
+  const picked = answer.choices?.join(", ") ?? answer.choice;
+  return (
+    <>
+      {picked !== undefined && <strong className="settled-choice">{picked}</strong>}
+      {picked !== undefined && answer.text !== undefined && " — "}
+      {answer.text}
+    </>
   );
 }

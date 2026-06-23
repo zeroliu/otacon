@@ -1201,6 +1201,11 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 ## Grill cards: one-tap single answers; settled cards persist per mount only
 
+> Superseded 2026-06-23 by "The Interview panel is the single grill surface; the
+> pinned queue is removed". The one-tap-single-answer rule still holds (it lives
+> in `AnswerForm`); the pinned card queue and the per-mount "settle in place"
+> persistence are gone.
+
 - **Decision:** On a single-choice card the chip tap IS the answer — no arm/
   confirm step; multi-select and free text arm an explicit send. An answered
   card settles in place (green-checked, answer echoed) rather than vanishing,
@@ -2956,9 +2961,9 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   replaces the old `<section className="activity">` collapsible, which was default-closed,
   rendered only once a plan existed, and easy to miss. The bar is shown whenever the agent
   is active OR any stream event exists (so it appears during pre-plan research, not gated on
-  `hasPlan`); the console auto-expands during `draft`/`implementing` and collapses to the
-  bar in resting states, with a status crossing re-applying that default while a manual
-  toggle wins until the next crossing. The bar carries a `live`/`notes` **mode badge**,
+  `hasPlan`); the console starts collapsed and the user expands it via the toggle (see the
+  later "console starts collapsed" entry, which superseded the original
+  auto-expand-on-`draft`/`implementing` behavior). The bar carries a `live`/`notes` **mode badge**,
   reading `live` once any captured (tool/text/thinking) event exists and `notes` while only
   `highlight` progress notes do, making the adapter-attached-vs-floor distinction (§10a)
   visible.
@@ -2982,6 +2987,23 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   capped tail), or a future surface needs the stream off the review screen (then the
   now-playing/console pair lifts out as a standalone component over the same `useSession`
   field).
+
+## The now-playing console starts collapsed and no longer auto-expands (2026-06-23)
+
+- **Decision:** The expanded live console now defaults to collapsed and never auto-expands.
+  The original behavior (above) opened the console automatically on `draft`/`implementing`
+  and re-applied that default on every status crossing; that is removed. The console opens
+  only when the user clicks the toggle, and that choice sticks for the life of the session.
+  The one-line now-playing bar and its toggle button are unchanged: the bar is still always
+  shown while there is activity.
+- **Why:** Users found the auto-expanded console noisy. The always-on one-line now-playing
+  bar already signals activity at a glance, so the full firehose does not need to be forced
+  open. The status-crossing auto-open also trapped or overrode a manual choice (collapsing a
+  console the user had opened, or reopening one they had closed) whenever the phase changed,
+  which felt like the UI fighting the user.
+- **Revisit when:** Users report missing the live build firehose during long `implementing`
+  runs (then consider an opt-in "auto-expand while implementing" preference rather than a
+  hardwired default, so the choice is the user's, not the status machine's).
 
 ## The console's fold/select logic is a pure module; its components are thin views
 
@@ -3321,3 +3343,53 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   placements (sidebar, sheet, inline), so there is no divergent mobile list.
 - **Revisit when:** The phone home wants more than the list (a dashboard / activity overview
   above it), or the inline list and the sheet diverge enough to warrant separate components.
+
+## The Interview panel is the single grill surface; the pinned queue is removed (2026-06-23)
+
+- **Decision:** The "agent on the line" pinned card queue (`GrillQueue`, rendered
+  above the plan) is deleted. The collapsible **Interview** panel is now the only
+  grill surface: two labeled zones, each newest-first, an "open" group on top
+  where unanswered questions are answered inline (the same interactive card the
+  queue used) and an "answered" group below, with a divider between them when both
+  are non-empty. Answering, undo, and the deep-link flash all happen in the panel.
+- **Why:** With both surfaces live, an answered card was duplicated (once settled
+  in the queue and again in the Interview panel), so a reviewer saw the same Q&A
+  twice and had to learn two layouts that did the same thing. One surface is
+  clearer, removes the per-mount "did this card settle here or only in the panel?"
+  ambiguity that the old `watched` set existed to manage, and keeps the interactive
+  card (its look and one-tap answer flow) the user already likes, now in a single
+  place.
+- **Revisit when:** Users want live questions pinned above the plan again (e.g. an
+  open question that must not be missed while reading a long plan deep below the
+  fold), at which point a pinned mirror of the panel's open zone could return.
+
+## Answered interview cards hide the option list, revealing it only on undo (2026-06-23)
+
+- **Decision:** An answered card in the Interview panel shows ONLY the answer
+  (the chosen choice(s) and/or free text), with no full list of the options that
+  were offered. The chips reappear only when the reviewer clicks **undo**, which opens
+  the `AnswerForm` in edit mode prefilled with the current answer.
+- **Why:** undo is the only reason to see the other options (to pick a different
+  one), so an always-on option list is redundant: it adds a row of dead chrome to
+  every settled card and competes with the answer for the eye. Hiding it keeps the
+  answered zone a quiet, scannable record (question + what you said), and the undo
+  control already advertises that the options are one tap away.
+- **Revisit when:** Reviewers need to see the offered options at a glance without
+  entering edit mode (e.g. to judge whether the agent framed the choice well), at
+  which point a collapsed-by-default "options offered" disclosure could return.
+
+## The Interview panel auto-expands during draft and collapses after, keyed on draft only (2026-06-23)
+
+- **Decision:** The panel is default-expanded while the session status is `draft`
+  (the grill phase) and auto-collapses the moment the status leaves `draft`. The
+  crossing is ref-guarded so it fires only on the transition, leaving a manual
+  toggle to stick within a phase; a decision citation (or the ❓ jump) still opens
+  it regardless of phase.
+- **Why:** During the grill the panel IS the action surface, so it should be open
+  without a tap; once drafting/review begins the plan is the focus and the answered
+  transcript is reference material that belongs folded away. Keying on `draft`
+  alone matches the grill phase exactly and is derivable from the live `session`
+  frame, with no new state to persist or keep in sync.
+- **Revisit when:** Questions asked in later phases (review-time grilling) need the
+  panel to auto-open too, at which point the trigger would key on "an open question
+  exists" rather than on the `draft` status.
