@@ -1534,7 +1534,8 @@ the daemon never spawns a model.
 ### One-time machine setup
 
 ```sh
-npm install -g otacon        # one package: CLI + daemon (Node ≥ 20)
+npm install -g otacon        # one package: CLI + daemon (Node ≥ 20); the `latest` dist-tag
+                             # (or `npm install -g otacon@staging` to opt into preview builds)
 otacon install --all         # write agent skill wrappers; or --agent claude|codex|opencode
                              # --hooks also registers the Claude Code Stop hook
 otacon doctor                # verify: node ≥ 20, daemon boots + port free-or-ours,
@@ -1656,6 +1657,17 @@ looked in, and — when in a repo — mentions `--project` as an install option.
    default branch, per-phase implement+review subagents, pause-on-first-blocker — and
    opens a PR, surfaced on the home card (§6, §12). No plan file rides in the repo on
    Implement.
+
+### Release channels
+
+otacon publishes to two npm dist-tags. **`latest`** is the stable channel a clean
+`vX.Y.Z` tag publishes to (and gets a GitHub Release). **`staging`** is a preview channel
+testers opt into with `npm i -g otacon@staging`: a `vX.Y.Z-staging.N` prerelease tag
+publishes there (and gets no GitHub Release). Both channels share one publish workflow,
+which routes by version suffix: a `-staging.` version goes to `staging`, anything else to
+`latest`, so a staging build never moves `latest` and never lands in front of regular
+users. Re-cutting a staging build increments the `-staging.N` build counter and moves the
+`staging` dist-tag to the newest build; the maintainer runbook is in RELEASING.md.
 
 ### Updating
 

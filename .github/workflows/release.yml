@@ -3,12 +3,18 @@ name: Release
 # Publishes otacon to npm when a `vX.Y.Z` tag is pushed (see scripts/release.sh,
 # run via `bun run release`, which bumps + tags + pushes WITHOUT publishing).
 # Gates (typecheck/test/build) run BEFORE publish so a failing gate stops the publish.
+#
+# One publish job, routed by version suffix: a clean `vX.Y.Z` tag publishes to the
+# `latest` dist-tag and creates a GitHub Release; a `vX.Y.Z-staging.N` tag (cut by
+# `bun run release:staging`, see scripts/release-staging.sh) publishes to the
+# `staging` dist-tag and creates NO GitHub Release.
 on:
   push:
     tags:
-      # Match release tags `vX.Y.Z` only (must be quoted — a bare leading `*` is
-      # invalid YAML). `v[0-9]*` avoids spinning up a publish run for unrelated
-      # `v`-prefixed tags (e.g. `vendor-snapshot`); the version guard backstops it.
+      # Match release tags `vX.Y.Z` and `vX.Y.Z-staging.N` (must be quoted: a bare
+      # leading `*` is invalid YAML). `v[0-9]*` matches both (e.g. `v0.1.4-staging.0`)
+      # and avoids spinning up a publish run for unrelated `v`-prefixed tags (e.g.
+      # `vendor-snapshot`); the version guard backstops it.
       - 'v[0-9]*'
 
 # Serializes concurrent runs of this workflow for a given ref so two in-flight
@@ -60,6 +66,15 @@ jobs:
             exit 1
           fi
 
+      # Route the publish by version suffix: a `-staging.` prerelease version goes to
+      # the `staging` dist-tag; any other (clean) version goes to `latest`. The clean
+      # vs prerelease split here also gates the GitHub Release step below.
+      - name: Derive dist tag from version
+        id: disttag
+        run: |
+          TAG=$(node -e "console.log(require('./package.json').version.includes('-staging.') ? 'staging' : 'latest')")
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
       - name: Typecheck
         run: bun run typecheck
 
@@ -74,10 +89,14 @@ jobs:
       # Publisher for this repo + workflow file is configured on npmjs.com (see
       # RELEASING.md). Provenance is attached automatically under trusted publishing.
       # prepublishOnly also runs `npm run build` — harmless, it just rebuilds dist/.
+      # --tag routes to the dist-tag derived above (latest for clean tags, staging
+      # for `-staging.N` prereleases).
       - name: Publish to npm
-        run: npm publish --access public
+        run: npm publish --tag ${{ steps.disttag.outputs.tag }} --access public
 
+      # Clean (latest) tags get a GitHub Release; staging prereleases do not.
       - name: Create GitHub Release
+        if: steps.disttag.outputs.tag == 'latest'
         run: gh release create "$GITHUB_REF_NAME" --generate-notes --title "$GITHUB_REF_NAME"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

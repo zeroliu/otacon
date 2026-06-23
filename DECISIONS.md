@@ -2318,8 +2318,8 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   publish step makes a red gate stop the publish; the tag-vs-`package.json` guard stops
   a mismatched version; npm rejecting a duplicate version makes a re-pushed tag a no-op.
   (← grill q2.)
-- **Revisit when:** Prerelease/`next` dist-tag publishing is needed (not wired today),
-  or the release wants a non-default base branch.
+- **Revisit when:** The release wants a non-default base branch. (Prerelease dist-tag
+  publishing is now wired, see "Staging channel" below.)
 
 ## `package.json` is the single version source; `version.ts` is generated
 
@@ -2357,6 +2357,31 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** npm supports configuring a Trusted Publisher for a not-yet-published
   package (removes the manual first-publish bootstrap), npm changes its OIDC/provenance
   contract, or a pinned action needs a SHA bump (update the SHA + its version comment).
+
+## Staging channel: `staging` dist-tag, suffix-routed inside the one release workflow
+
+- **Decision:** Preview builds publish to a `staging` npm dist-tag from `-staging.N`
+  prerelease versions. `bun run release:staging [minor|major]` (`scripts/release-staging.sh`,
+  a near-copy of `release.sh`) cuts a `vX.Y.Z-staging.N` tag from the **`staging`** branch
+  (the guard requires it, not `main`) via `npm version <prerelease|preminor|premajor>
+  --preid staging`. The **same** `release.yml` workflow runs on the pushed tag (the
+  existing `v[0-9]*` trigger already matches), derives the dist-tag from the version
+  suffix (`-staging.` → `staging`, else `latest`), publishes `npm publish --tag <tag>`,
+  and skips the GitHub Release for staging tags. Testers run `npm i -g otacon@staging`
+  (newest) or `@0.1.4-staging.1` (pinned); re-cutting increments `-staging.N` and moves
+  the dist-tag.
+- **Why:** A dist-tag is npm's native opt-in preview channel: it never moves `latest`, so
+  regular users are untouched, while testers point at `@staging`. Routing by version
+  suffix inside the **one** existing workflow reuses the single npm Trusted Publisher
+  (configured per workflow filename) with **zero new npm setup**; a second workflow file
+  would need its own Trusted Publisher entry. `-staging.N` semver prereleases sort below
+  the stable line and let `prerelease` auto-increment the build counter, so cutting the
+  next build is one command with no manual version math. Cutting from a dedicated
+  `staging` branch keeps prerelease history off `main`. No GitHub Release for staging
+  keeps the Releases page a clean record of shipped stable versions.
+- **Revisit when:** A third channel is needed (e.g. `next` for release candidates), the
+  CLI's auto-updater should track `staging` for opted-in users (today it pins `@latest`),
+  or staging cadence justifies splitting into its own workflow + Trusted Publisher.
 
 ## Maintainer release steps live in RELEASING.md; README stays user-facing
 

@@ -96,11 +96,40 @@ npm install -g otacon          # clean smoke install on a fresh machine/shell
 otacon doctor
 ```
 
-## dist-tags
+## Staging channel
 
-Releases publish to the `latest` dist-tag by default. Prerelease / `next` tagging is
-**not wired yet** — there is no flag for it in the release script or workflow today.
-(Future work if prereleases become a need.)
+Stable releases publish to the `latest` dist-tag (above). For preview builds testers can
+opt into without affecting `latest`, otacon has a `staging` dist-tag.
+
+Cut a staging build from a **clean `staging` branch checkout**:
+
+```sh
+bun run release:staging            # next prerelease build (default)
+bun run release:staging minor      # or: minor / major (bump the base version line)
+bun run release:staging --dry-run  # rehearse: runs gates, prints commands, mutates nothing
+```
+
+`bun run release:staging [minor|major]` ([`scripts/release-staging.sh`](scripts/release-staging.sh))
+mirrors `bun run release`, but it guards that you are on the **`staging`** branch (not
+`main`) and bumps a **prerelease** version with `npm version <mode> --preid staging`:
+
+- no kind → `prerelease` (advances to the next patch line from a clean version, or
+  increments the `-staging.N` build counter when already on a staging prerelease)
+- `minor` → `preminor`, `major` → `premajor` (move the base version line first)
+
+It commits, creates the annotated `vX.Y.Z-staging.N` tag, and `git push --follow-tags`.
+The same `release.yml` workflow runs on the pushed tag, routes by version suffix to the
+**`staging`** dist-tag (`npm publish --tag staging`), and creates **no GitHub Release**
+(those are reserved for clean `latest` tags). Re-running `release:staging` increments the
+`-staging.N` build counter and moves the `staging` dist-tag to the newest build.
+
+Testers install from the staging channel:
+
+```sh
+npm i -g otacon@staging          # newest staging build (the staging dist-tag)
+npm i -g otacon@0.1.4-staging.1  # pin an exact staging build
+npm i -g otacon@latest           # leave staging, back to the stable channel
+```
 
 ## Rollback / mistakes
 
