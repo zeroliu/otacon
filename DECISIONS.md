@@ -2900,9 +2900,9 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   replaces the old `<section className="activity">` collapsible, which was default-closed,
   rendered only once a plan existed, and easy to miss. The bar is shown whenever the agent
   is active OR any stream event exists (so it appears during pre-plan research, not gated on
-  `hasPlan`); the console auto-expands during `draft`/`implementing` and collapses to the
-  bar in resting states, with a status crossing re-applying that default while a manual
-  toggle wins until the next crossing. The bar carries a `live`/`notes` **mode badge**,
+  `hasPlan`); the console starts collapsed and the user expands it via the toggle (see the
+  later "console starts collapsed" entry, which superseded the original
+  auto-expand-on-`draft`/`implementing` behavior). The bar carries a `live`/`notes` **mode badge**,
   reading `live` once any captured (tool/text/thinking) event exists and `notes` while only
   `highlight` progress notes do, making the adapter-attached-vs-floor distinction (§10a)
   visible.
@@ -2926,6 +2926,23 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   capped tail), or a future surface needs the stream off the review screen (then the
   now-playing/console pair lifts out as a standalone component over the same `useSession`
   field).
+
+## The now-playing console starts collapsed and no longer auto-expands (2026-06-23)
+
+- **Decision:** The expanded live console now defaults to collapsed and never auto-expands.
+  The original behavior (above) opened the console automatically on `draft`/`implementing`
+  and re-applied that default on every status crossing; that is removed. The console opens
+  only when the user clicks the toggle, and that choice sticks for the life of the session.
+  The one-line now-playing bar and its toggle button are unchanged: the bar is still always
+  shown while there is activity.
+- **Why:** Users found the auto-expanded console noisy. The always-on one-line now-playing
+  bar already signals activity at a glance, so the full firehose does not need to be forced
+  open. The status-crossing auto-open also trapped or overrode a manual choice (collapsing a
+  console the user had opened, or reopening one they had closed) whenever the phase changed,
+  which felt like the UI fighting the user.
+- **Revisit when:** Users report missing the live build firehose during long `implementing`
+  runs (then consider an opt-in "auto-expand while implementing" preference rather than a
+  hardwired default, so the choice is the user's, not the status machine's).
 
 ## The console's fold/select logic is a pure module; its components are thin views
 

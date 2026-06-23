@@ -205,22 +205,12 @@ function ReviewLoop({
   // an empty stream (e.g. an over session that never captured anything) drops it.
   const agentActive = isAgentActive(session.status);
   const showNowPlaying = agentActive || stream.length > 0;
-  // The console auto-expands while the agent is actively producing the firehose
-  // worth watching, namely `draft` (pre-plan research + drafting) and
-  // `implementing` (building the approved plan), and collapses to the bar in
-  // `in_review` and other resting states. The user can toggle freely; a status
-  // *crossing* re-applies the auto decision (draft to in_review collapses; a
-  // later implementing re-opens), so the console follows the work without
-  // trapping a manual choice across a phase change.
-  const autoOpen = session.status === "draft" || session.status === "implementing";
-  const [consoleOpen, setConsoleOpen] = useState(autoOpen);
-  const lastAutoOpen = useRef(autoOpen);
-  useEffect(() => {
-    if (autoOpen !== lastAutoOpen.current) {
-      lastAutoOpen.current = autoOpen;
-      setConsoleOpen(autoOpen);
-    }
-  }, [autoOpen]);
+  // The console starts collapsed and never auto-expands. The user opens it
+  // manually with the toggle, and the choice sticks (no status crossing
+  // overrides it). The always-on one-line now-playing bar still signals activity
+  // while the agent works, so the firehose is one click away without forcing the
+  // full console open on every draft or implementing phase.
+  const [consoleOpen, setConsoleOpen] = useState(false);
   // Over = the session reached a terminal state (approval and archive lifecycle: approved /
   // implemented / implement_failed): the whole screen goes read-only — no
   // selection anchoring, no composer, no drawer, no cards. `implementing` is NOT
@@ -763,8 +753,9 @@ function ReviewLoop({
             <main className="review-wait">
               <p className="wait-line">// no revision yet</p>
               {/* During research + drafting the live console above is the main
-                  thing to watch: it leads open while the agent is in `draft`
-                  (auto-expand), so the placeholder no longer carries its own. */}
+                  thing to watch: the always-on now-playing bar surfaces the
+                  work (one click expands the console), so the placeholder no
+                  longer carries its own activity line. */}
               <p>
                 The agent interviews before it drafts — questions land above as cards, one at a
                 time. The plan renders here the moment revision 1 passes the linter; this screen
