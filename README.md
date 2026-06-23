@@ -29,6 +29,9 @@ Otacon replaces your coding agent's native plan mode with a review surface you'l
 npm install -g otacon
 ```
 
+> **Preview builds:** `npm i -g otacon@staging` opts into the staging channel to try the
+> newest pre-release. Regular users stay on `npm install -g otacon`.
+
 **Install the skill into your agent.** This drops the Otacon skill into the agent's skill
 folder so it knows how to run a review:
 

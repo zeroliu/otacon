@@ -40,7 +40,8 @@
     "gen:version": "bun run scripts/gen-version.ts",
     "version": "bun run gen:version && git add src/shared/version.ts",
     "prepublishOnly": "npm run build",
-    "release": "bash scripts/release.sh"
+    "release": "bash scripts/release.sh",
+    "release:staging": "bash scripts/release-staging.sh"
   },
   "dependencies": {
     "@hono/node-server": "^1",

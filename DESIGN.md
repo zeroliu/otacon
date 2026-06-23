@@ -1534,7 +1534,8 @@ the daemon never spawns a model.
 ### One-time machine setup
 
 ```sh
-npm install -g otacon        # one package: CLI + daemon (Node ≥ 20)
+npm install -g otacon        # one package: CLI + daemon (Node ≥ 20); the `latest` dist-tag
+                             # (or `npm install -g otacon@staging` to opt into preview builds)
 otacon install --all         # write agent skill wrappers; or --agent claude|codex|opencode
                              # --hooks also registers the Claude Code Stop hook
 otacon doctor                # verify: node ≥ 20, daemon boots + port free-or-ours,
@@ -1657,19 +1658,41 @@ looked in, and — when in a repo — mentions `--project` as an install option.
    opens a PR, surfaced on the home card (§6, §12). No plan file rides in the repo on
    Implement.
 
+### Release channels
+
+otacon publishes to two npm dist-tags. **`latest`** is the stable channel a clean
+`vX.Y.Z` tag publishes to (and gets a GitHub Release). **`staging`** is a preview channel
+testers opt into with `npm i -g otacon@staging`: a `vX.Y.Z-staging.N` prerelease tag
+publishes there (and gets no GitHub Release). Both channels share one publish workflow,
+which routes by version suffix: a `-staging.` version goes to `staging`, anything else to
+`latest`, so a staging build never moves `latest` and never lands in front of regular
+users. Re-cutting a staging build increments the `-staging.N` build counter and moves the
+`staging` dist-tag to the newest build; the maintainer runbook is in RELEASING.md.
+
+The CLI's self-update (below) is **channel-aware**: a staging install (its own version
+carries the `-staging.` suffix) tracks the `staging` dist-tag and auto-updates
+staging→staging, so it is never pulled back to a stable build; a clean install tracks
+`latest` exactly as before. The channel is derived purely from the installed version's
+suffix, with no extra config or state.
+
 ### Updating
 
-`otacon start` self-updates: before a session exists it discovers the latest
-published version (GET `registry.npmjs.org/otacon/latest`, short timeout, fail-open
-on any error) and updates the global install when a newer one is published. The check
-is throttled to once per hour via `$OTACON_HOME/update-check.json` (a `checkedAt`
+`otacon start` self-updates on its own channel: before a session exists it discovers the
+latest published version on the channel its installed version tracks (GET
+`registry.npmjs.org/otacon/<channel>`, short timeout, fail-open on any error) and updates
+the global install when a newer one is published. The channel is derived from the
+installed version's suffix: a `-staging.` build tracks the `staging` dist-tag (so a
+staging install auto-updates staging→staging and is never pulled back to a stable build),
+and anything else tracks `latest` (the clean-install behavior, unchanged). The check is
+throttled to once per hour via `$OTACON_HOME/update-check.json` (a `checkedAt`
 timestamp), so most starts pay no network cost. Turn it off with the `update.auto`
 config key (default true) to pin the installed version (CI, air-gapped, pinned-version
 shops). Only `otacon start` runs the check — the tight loops (wait/ask/progress) never
 do — and a run from a source checkout (a `.ts` daemon entry) is skipped.
 
-When a newer version is published, `otacon start` runs `npm install -g otacon@latest`
-and then **re-execs itself** — `node main.js start <original argv>` with
+When a newer version is published on its channel, `otacon start` runs `npm install -g
+otacon@<channel>` (`otacon@latest` for a clean install) and then **re-execs itself** —
+`node main.js start <original argv>` with
 `OTACON_UPDATED=1` set — so the rest of the command runs on the freshly-installed CLI
 (the env var is the loop guard that stops the re-exec'd child from re-checking). stdio
 is inherited, so the child prints the single JSON line on stdout and the start contract
@@ -1677,7 +1700,7 @@ is preserved; the parent exits with the child's code. The daemon needs no separa
 update step: the re-exec'd child's `ensureDaemon` version handshake restarts a stale
 `otacond` on its next call, just as it already does after any manual bump. If `npm
 install` fails for any reason (a non-writable global dir, npm missing) otacon **never
-escalates to sudo** — it prints the manual `npm install -g otacon@latest` command and
+escalates to sudo** — it prints the manual `npm install -g otacon@<channel>` command and
 proceeds on the installed version.
 
 A restart swaps the daemon's code, but an already-open review tab is still running the
@@ -1697,9 +1720,10 @@ auto-reloads once per tab — falling back to a manual "Reload" link if that did
 `otacon update` forces the upgrade on demand. Unlike the start-time gate it ignores both
 suppressors: the 1h throttle (the user asked now) and `update.auto:false` (an explicit
 command overrides a config that only governs the implicit start-time check). It discovers
-the latest version the same way (fail-open on any registry error → reports `latest:null`,
-exit 0), refuses on a source checkout (nothing global to update), and runs the same
-`npm install -g otacon@latest` — never sudo. `--check` reports `{current, latest, outdated}`
+the latest version on the same channel the same way (fail-open on any registry error →
+reports `latest:null`, exit 0), refuses on a source checkout (nothing global to update),
+and runs the same `npm install -g otacon@<channel>` — never sudo. `--check` reports
+`{current, latest, outdated}`
 and never installs (the dry run, and the only safe mode in CI / pinned shops). On a
 successful install it does **not** restart the daemon: the running process is still the old
 code, so its `ensureDaemon` would see no version mismatch; the new daemon and the open
