@@ -367,7 +367,7 @@ the model is suspended — no inference, no token spend.
 | `otacon implement-done [--pr <url>] [--failed]`                             | End an `implementing` session: record the PR link and flip to `implemented`, or `--failed` → `implement_failed` (§12) |
 | `otacon resume [--session <id>]`                                            | Reopen a finished session for amendment (flip terminal → `revising`): auto-detects the session that owns the cwd build worktree (its recorded `impl.worktree`), or `--session` names one. Prints the daemon's reopen body plus `title`, `repo`, `plan` (the file to amend, in the home store `~/.otacon/sessions/<id>/`) (§12) |
 | `otacon status [--all]`                                                     | Session state + undelivered event count (crash/resume entry point); also surfaces `resumeCandidate` (id, title, status, plan) when the cwd is inside a known build worktree |
-| `otacon open [--session <id>]`                                              | Open the review URL in the browser, or the index URL when no session resolves; `OTACON_NO_BROWSER` prints it instead of launching |
+| `otacon open [--session <id>]`                                              | Open the review URL in the browser, or the index URL when no session resolves; skips the launch when an otacon tab from this daemon is already open (health `viewers >= 1`), dedup only, no focus (open-tab reuse, below); `OTACON_NO_BROWSER` prints it instead of launching (with `reused: true`/`false`) |
 | `otacon config [open]`                                                      | Open the Settings web UI in the browser: `/settings?repo=<cwd repo root>` inside a repo (Project scope), bare `/settings` outside one (User scope); `OTACON_NO_BROWSER` prints the URL instead |
 | `otacon config get <key>`                                                   | Read-only: print the merged effective value of one dotted key (`worktree.dir`, `budgets.summaryLines`, …) from the config files; no daemon. Unknown key → exit 1 |
 | `otacon clean [--all]`                                                      | Permanently remove ended sessions' home folders (`~/.otacon/sessions/<id>/`) and prune the registry; no archive (§12) |
@@ -442,7 +442,10 @@ woken with it immediately rather than left to 404 on its next call.
 ### HTTP API (daemon, 127.0.0.1 only)
 
 ```
-GET  /api/health                            daemon identity + version (CLI handshake)
+GET  /api/health                            daemon identity + version (CLI handshake);
+                                            also `viewers`, the count of live browser
+                                            tabs from their heartbeat (open-tab reuse,
+                                            below)
 POST /api/shutdown                          clean daemon exit
 GET  /api/config?repo=<root>                config surface for the Settings UI:
                                             {schema: CONFIG_SCHEMA, scopes} where
@@ -589,6 +592,11 @@ GET  /api/sessions/:id/revisions/:n         raw revision markdown; with Accept:
 GET  /api/sessions/:id/diff?from=&to=       computed structural diff (below)
 GET  /api/sessions/:id/stream               SSE for the UI (one session)
 GET  /api/stream                            SSE for the index (all sessions)
+POST /api/viewers/heartbeat                  a browser tab's liveness ping
+                                            ({clientId, gone?}); daemon-wide (not
+                                            session-scoped), feeds health `viewers`
+                                            for open-tab reuse (below). 400 on a
+                                            missing/empty clientId
 GET  /                                      index page (the SPA)
 GET  /s/:id                                 review page for a session (same SPA)
 ```
@@ -652,6 +660,22 @@ daemon ends the per-session stream after the frame (nothing can be published for
 session again, so a client that ignored the frame must not pin the connection; the
 index stream stays open) — with a comment heartbeat to keep idle proxies from
 closing the stream.
+The daemon also tracks its live browser tabs via an explicit SPA heartbeat: each
+tab POSTs `/api/viewers/heartbeat` ({clientId, gone?}) once on load and on a ~30s
+interval, and the daemon counts the distinct clientIds seen within a 90s TTL,
+exposed as `viewers` on `GET /api/health`. `viewers >= 1` means at least one
+otacon tab from this daemon is live (any session or the index; the app-shell
+sidebar lets that one tab reach every session), which `otacon open` reads to skip
+launching a duplicate review tab. It is a daemon-wide presence check, not a
+session-scoped one. The TTL self-expires a closed or crashed tab whose ping
+simply stops, while a `gone:true` beacon on tab close drops it immediately. It is
+ephemeral: a restart starts at 0 and live tabs re-count on their next beat.
+The skip is dedup only, with no focus (the open tab is not raised or navigated,
+since in-page focus is unreliable; the existing tab's sidebar already reaches every
+session), and it suppresses whichever url `otacon open` would launch, session or
+index. Under `OTACON_NO_BROWSER` the printed JSON carries `reused: true` when the
+launch was skipped and `reused: false` otherwise. Only `otacon open` dedups;
+`otacon config` always opens the Settings UI.
 Session payloads (snapshot, `session` frames, session detail) carry
 `lastReviewedRevision` alongside `revision`, and `openQuestions` — the count of
 transcript entries still awaiting the user's answer, from which the index's
