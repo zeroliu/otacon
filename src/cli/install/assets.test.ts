@@ -105,4 +105,30 @@ describe("single-source wrappers (D7)", () => {
       expect(text).toContain("next clean submit **finalizes**");
     }
   });
+
+  test("every wrapper teaches the verify-before-merge loop (non-goals, self-review, ledger, drift)", () => {
+    for (const text of [skillMd(), dogfoodSkillMd()]) {
+      // Grill must pin observable behavior and record explicit non-goals as decisions.
+      expect(text).toContain("OUT of scope");
+      expect(text).toContain("record non-goals as");
+      // A post-draft self-review pass before submit.
+      expect(text).toContain("Self-review before you submit");
+      // The implement loop assembles + passes the verification ledger; the gate refuses.
+      expect(text).toContain("implement-done --ledger");
+      expect(text).toContain("E_UNVERIFIED");
+      // Per-phase scenario attestation feeds the ledger.
+      expect(text).toContain("each Verification gwt scenario as");
+      // The drift reconciliation is read at finish.
+      expect(text).toContain("shippedBeyondPlan");
+      // gwt scenarios are framed as the attested ledger, not just a human checklist.
+      expect(text).toContain("ledger you must attest");
+    }
+  });
+
+  test("the browse rendered-output recipe is dogfood-only (not in the shipped product wrapper)", () => {
+    // browse/gstack is a dev-env tool, so the rendered-output recipe lives in the
+    // dogfood preamble, never in the product wrapper users install.
+    expect(dogfoodSkillMd()).toContain("browse/gstack headless browser");
+    expect(skillMd()).not.toContain("browse/gstack");
+  });
 });

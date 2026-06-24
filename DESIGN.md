@@ -834,6 +834,18 @@ the code can answer. Independent sibling questions — ones whose answers don't 
 each other — may be posted together in one `otacon ask --batch` call; they render as
 ordinary cards, each answered instantly, and the agent loops `wait` to collect them.
 
+Two captures are mandatory before drafting: the **observable behavior that defines
+done** — each becomes a `Verification` `gwt` scenario and, at build time, a line in the
+verification ledger (§6, §12) — and the **explicit non-goals**: what the change
+deliberately will not touch, recorded as out-of-scope decisions (`D<n>: … out of scope
+← q<n>`) so a silent scope addition reads as a violated decision and the drift
+reconciliation (§5, §12) surfaces it. After drafting, the agent **self-reviews** the
+plan as the reviewer would — every phase's Verification names observable behavior, the
+non-goals are on record, nothing contradicts an explicit grill instruction — and fixes
+the gaps before the first `submit`. This discipline is prose in the skill wrapper, not a
+new lint rule — the wrapper (`src/cli/install/assets.ts`, regenerated into the committed
+SKILL.md) is the single source for this protocol text.
+
 Transport is `otacon ask` → question card in the UI (option chips, recommended option
 first, free text) → answer via `wait`. **Grilling works from the phone, one thumb,
 while walking.** An option question is never a trap: every card also takes a free-form

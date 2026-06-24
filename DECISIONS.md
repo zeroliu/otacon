@@ -3499,3 +3499,26 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** The grill question gains real markdown rendering (then assert the
   block structure the markdown produces instead of the pre-wrap height heuristic), or
   the rendered-output class grows beyond questions (extend the spec to plan callouts).
+
+## Grill rigor is prose-only: non-goals + observable behavior + a self-review pass (2026-06-24)
+
+- **Decision:** The grill/implement-loop discipline is strengthened in the skill wrapper
+  text (`src/cli/install/assets.ts`, shared by `skillMd()` and `dogfoodSkillMd()`), with
+  NO new lint rule. The grill must pin the observable behavior that defines done (each a
+  `Verification` gwt scenario) and the explicit non-goals (recorded as out-of-scope
+  decisions); the agent self-reviews the draft before the first submit; the implement
+  loop attests each scenario per phase and assembles the `--ledger`, then reads the
+  `shippedBeyondPlan` reconciliation. The browse/gstack rendered-output recipe is
+  dogfood-only (it is a dev-env tool), so it lives in the dogfood preamble, never the
+  shipped product wrapper.
+- **Why:** The motivating failures were behavioral, not structural — a shallow grill that
+  never asked about staging, and a fix assumed sufficient without checking the rendered
+  output. A lint rule forcing a gwt scenario per phase (the rejected option) adds friction
+  on genuinely trivial phases and still cannot judge whether the RIGHT behavior was
+  captured; the leverage is the interview discipline itself. The hard enforcement already
+  exists where it can be precise — the ledger gate (no scenario closes unattested) and the
+  drift reconciliation — so the wrapper supplies the judgement and those gates supply the
+  teeth. `assets.test.ts` guards the new text so a future edit cannot silently drop it.
+- **Revisit when:** Shallow grills keep slipping through despite the prose — then add a
+  soft lint WARNING (never an error) when a phase's Verification carries zero gwt
+  scenarios, nudging coverage without blocking trivial work.

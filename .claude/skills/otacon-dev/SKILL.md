@@ -23,6 +23,11 @@ from current source). Use `./bin/otacon restart`, not a raw curl to a fixed port
 in a git worktree the shim runs the daemon on a derived port, and `restart` always
 targets the one this checkout talks to. CLI/linter/parser edits need no restart.
 
+When a phase changes what the review UI renders, do not trust that the fix worked —
+verify the actual rendered output. The gated assertion belongs in a Playwright e2e
+(`test/ui/*.e2e.ts`); for a fast manual check use the browse/gstack headless browser
+to screenshot or diff the live session (the recipe is in `test/verify-branch.sh`).
+
 These commands implement otacon's full review loop, grill discipline, and
 failure habits; the canonical wrapper text lives in `src/cli/install/assets.ts`.
 
@@ -90,7 +95,11 @@ spawning a second worktree.
    aspect of this plan until we reach a shared understanding. Walk down each branch
    of the design tree, resolving dependencies between decisions one-by-one. For
    each question, provide your recommended answer. Explore the code before asking.
-   Never ask what the code can answer.
+   Never ask what the code can answer. Two things you must always pin down: the
+   OBSERVABLE behavior that defines done (you will turn each into a Verification
+   gwt scenario), and what is explicitly OUT of scope — record non-goals as
+   decisions (`- D<n>: staging handling out of scope ← q<n>`) so the reviewer sees
+   what you deliberately won't touch and any later drift reads as a violated decision.
    - `./bin/otacon ask --question "..." --options "A|B|C" --recommend A` — always lead
      with your recommended answer. `--multi` for multi-select; omit `--options`
      for free text. The user can always answer with free-form custom text instead
@@ -104,7 +113,11 @@ spawning a second worktree.
      to 600000 ms). The answer arrives as `{"event":"answer","question":"q<n>",...}`.
 4. **Draft** the plan at `.otacon/<session>/plan.md` in the schema below, then
    `./bin/otacon submit`. On exit 1, fix every reported lint issue and resubmit until
-   accepted. After a clean submit, stop all implementation work and park in
+   accepted. **Self-review before you submit**, as if you were the reviewer: does
+   every phase's Verification name the observable behavior it will be checked against
+   (a gwt scenario), are the non-goals on record, and does nothing in the plan
+   contradict an explicit instruction the user gave during the grill? Fix the gaps
+   first. After a clean submit, stop all implementation work and park in
    `./bin/otacon wait`; only an `approved` event with `implement:true` enters the
    Implement loop.
 5. **Review loop** — park in `./bin/otacon wait --timeout 540` (Bash timeout 600000 ms)
@@ -139,7 +152,8 @@ spawning a second worktree.
   `./bin/otacon progress "<note>"` (occasional highlights / chapter markers; the activity
   floor on agents without auto-capture) ·
   `./bin/otacon ask ...` · `./bin/otacon wait --timeout 540` · `./bin/otacon submit [--resolutions f]` ·
-  `./bin/otacon answer <q> --body "..."` · `./bin/otacon implement-done [--pr <url>] [--failed]` ·
+  `./bin/otacon answer <q> --body "..."` ·
+  `./bin/otacon implement-done --ledger <f> [--pr <url>] [--failed]` ·
   `./bin/otacon status` · `./bin/otacon open` · `./bin/otacon config [get <key>]`
 
 ## Implement loop (on `approved` with `implement:true`)
@@ -168,7 +182,10 @@ context stays lean.
    - `./bin/otacon progress "phase N — implementing"` (one marker per phase); spawn an
      **implement+test**
      subagent (Task tool) scoped to that phase's Goal/Files/Verification — it
-     implements and runs the phase Verification plus the repo gates.
+     implements and runs the phase Verification plus the repo gates, then records
+     each Verification gwt scenario as `pass` or `skip` with one line of evidence
+     (what actually proved it — a test name, a command, an observed result). You
+     will need every scenario attested to finish.
    - spawn a **separate** `/code-review --fix` subagent on the phase's working
      diff; it applies findings; re-review. (`/code-review` effort is config — start
      moderate so false positives don't become needless pauses.)
@@ -180,8 +197,17 @@ context stays lean.
    `gh pr create` (PR body = the plan summary + the per-phase log; fall back to the
    local branch + path when there is no remote). On an **amendment**, the PR already
    exists: push the branch and it updates, so reuse its URL (it is on the session;
-   `./bin/otacon status` reports `prUrl`). Either way finish with
-   `./bin/otacon implement-done --pr <url>`. On abort, run `./bin/otacon implement-done --failed`.
+   `./bin/otacon status` reports `prUrl`). Assemble `ledger.json` from the per-phase
+   attestations — every Verification gwt scenario, keyed
+   `{"<phase>":{"<scenarioIndex>":{"status":"pass|skip","evidence":"..."}}}`
+   (`scenarioIndex` 0-based, in document order within the phase) — and finish with
+   `./bin/otacon implement-done --ledger ledger.json --pr <url>`. It refuses
+   `E_UNVERIFIED` (exit 1) if any scenario is unattested or its evidence is empty:
+   verify the missing behavior, complete the ledger, and retry. The response carries
+   `shippedBeyondPlan` — source files you changed that no phase's `Files:` cited;
+   if any are unexpected, that is drift (the staging-gate failure mode), so disclose
+   it or fix it before you call it done. On abort, run
+   `./bin/otacon implement-done --failed` (a failed build needs no ledger).
 
 While `implementing` the Stop hook still keeps you on the line — never end the turn
 until `implement-done`.
@@ -235,8 +261,9 @@ or callout.
 - **Behavioral assertions** — a ```gwt fence inside a phase's `Verification`
   holding one or more Given/When/Then scenarios (blank line between scenarios;
   `And`/`But` continue a clause). They render as scenario cards that double as
-  the human's approve checklist (Test-Driven Review), so write the observable
-  behavior the reviewer signs off, not the test code:
+  the human's approve checklist (Test-Driven Review) — and become the verification
+  ledger you must attest `pass`|`skip` with evidence at `implement-done`, so write
+  the observable behavior the reviewer signs off, not the test code:
   ```gwt
   Given a plan with no Contract section
   When the agent submits it
