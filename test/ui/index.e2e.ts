@@ -84,8 +84,9 @@ test("the /s/:id shell renders the session header in its accent color", async ({
   await page.goto(`/s/${session.id}`);
 
   await expect(page.locator(".session-title")).toHaveText(session.title);
+  // The status pill renders in the always-on bar even before any plan lands (r0);
+  // the old r0 revision pill is gone, so the chip is the no-plan header's signal.
   await expect(page.locator(".chip")).toHaveText("agent working");
-  await expect(page.locator(".session-rev")).toHaveText("r0");
 
   const hue = await page
     .locator(".page")

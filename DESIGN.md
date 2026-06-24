@@ -834,9 +834,10 @@ route, so switching is one click from anywhere; `/` itself is a welcome pane, no
 index. Below 960px the sidebar is hidden: the home route renders the list inline (the
 phone index), and from an open plan the same condensed rows are one tap away through the
 review header's ☰ **overflow menu**, a bottom-sheet `SessionList` (§8). The review screen has one **sticky header** pinned to the
-top of the scroll: expanded it shows the full masthead (title, revision, repo/branch,
-status), the clean⇄diff toggle, and Approve; scrolling down it compacts to a tight
-one-line bar and re-expands at the top (§10). The header carries the ☰ button at <960px
+top of the scroll: a single always-on bar carrying the identity ("Title - repo · branch"),
+the status pill, the agent-presence dot, the "updated Xm ago" timestamp, the delete button,
+the clean⇄diff toggle, and Approve; scrolling down it compacts (tighter padding + title
+size, not a collapsing row) and re-expands at the top (§10). The header carries the ☰ button at <960px
 (where the sidebar is hidden); at ≥960px it folds away, since the sidebar is already the
 list. `[`/`]` walk the active sessions in activity order (wrapping at both ends), so a
 reviewer can sweep the queue from the keyboard; the shortcut mounts on the **app shell**
@@ -1045,7 +1046,7 @@ shows the latest `otacon progress` note (truncated), falling back to `agent
 working` until the agent narrates — so the chip never claims "drafting" while the
 agent is still reading. The **agent-presence dot** (live/offline) sits beside the
 chip — a subtle "is the agent still on the line?" mark, distinct from the
-browser↔daemon link dot, which now lives in the review header's status row (labelled
+browser↔daemon link dot, which now lives in the review header's bar (labelled
 `agent` vs `link`); the status chip stays the primary "your turn" signal. The dot is live while the agent is parked in
 `otacon wait` or its last contact is recent, and is hidden on approved sessions.
 
@@ -1107,12 +1108,13 @@ returns to the index.
     top strip = the sticky header; it compacts to one line as the plan scrolls
 ```
 
-- Sticky header: one always-present masthead pinned to the top — title, revision,
-  repo/branch, status, the agent-presence dot, the clean⇄diff toggle, and Approve, plus
-  (only <960px, where the sidebar is hidden) the ☰ "show sessions" button that opens the
-  mobile session sheet (§7). It **compacts** to a tight one-line bar as the plan
-  scrolls down and re-expands at the top; because it is a single element there is no
-  second copy to keep in sync. The review page disables scroll anchoring so the header's
+- Sticky header: one always-present, always-on bar pinned to the top, carrying the identity
+  ("Title - repo · branch"), the status pill, the agent-presence dot, the "updated Xm ago"
+  timestamp, the delete button, the clean⇄diff toggle, and Approve, plus (only <960px,
+  where the sidebar is hidden) the ☰ "show sessions" button that opens the mobile session
+  sheet (§7). It **compacts** as the plan scrolls down (tighter padding and title size,
+  not a collapsing detail row) and re-expands at the top; because it is a single element
+  there is no second copy to keep in sync. The review page disables scroll anchoring so the header's
   compaction cannot perturb the scroll offset, which would otherwise re-cross the fold and
   flicker the header. The diff baseline picker, the changed-section tally
   (`j`/`k`), and the changelog recall live below it in a contextual in-flow strip, not
@@ -1231,10 +1233,12 @@ returns to the index.
   no exact quote; it survives revisions as long as the section does). The menu is
   always available — a popover on desktop, a bottom sheet in thumb range on phone —
   and long-press text selection still works for precision.
-- The sticky header stays lean on phone: title + the clean⇄diff toggle + the ☰
-  "show sessions" button (which opens the session sheet, §7). The revision and Approve
-  are not in the phone header — Approve and the question tally live in the bottom bar
-  instead, never shown in two places; the toggle stays so diff review is still reachable.
+- On phone the single always-on bar wraps to keep everything visible: the "Title - repo ·
+  branch" identity, the status pill, the agent dot, the timestamp, the delete button, the
+  clean⇄diff toggle, and the ☰ "show sessions" button (which opens the session sheet, §7).
+  Only Approve is absent from the phone header; Approve and the question tally live in the
+  bottom bar instead, never shown in two places, and the toggle stays so diff review is
+  still reachable.
 - Threads open as bottom sheets. Sticky bar = whole control surface: pending
   questions ❓ (tap → opens the Interview panel and lands on the first open question),
   drawer + Send, Approve (confirm sheet: Save r4 to the project copy / Implement from
