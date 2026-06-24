@@ -171,25 +171,6 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   and an escape hatch for port conflicts. Harmless otherwise.
 - **Revisit when:** Real config wants to subsume them.
 
-## Project config: gitignored `<repo>/.otacon/config.json`, no committed layer
-
-> [!warning] Superseded by "Two-tier project config" below. This made
-> `<repo>/.otacon/config.json` gitignored with no committed layer; the two-tier
-> decision makes `config.json` the **committed** project layer and adds a
-> gitignored `config.local.json` override.
-
-- **Decision:** The per-repo config override is `<repo>/.otacon/config.json` (in the
-  already-gitignored `.otacon/` dir). The old committed `<repo>/otacon.config.json`
-  layer is dropped — the read order is now defaults ← `~/.otacon/config.json` ←
-  `<repo>/.otacon/config.json`.
-- **Why:** The upcoming Settings UI writes project config; pointing it at the gitignored
-  dir means it never mutates a tracked, team-shared file (zero tracked edits, ever).
-  Config is per-developer tuning, not a shared contract, so a committed layer wasn't
-  earning its keep. No repos rely on the old path yet, so a hard drop beats migration
-  ceremony.
-- **Revisit when:** A genuinely shared, reviewed project config (committed, PR-edited)
-  becomes worth reintroducing as a distinct layer.
-
 ## Two-tier project config: committed `config.json` + gitignored `config.local.json`
 
 - **Decision:** Project config goes two-tier, mirroring Claude Code's `settings.json`
@@ -197,29 +178,19 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   **committed, team-shared** project layer and `<repo>/.otacon/config.local.json` is a
   **gitignored, personal** override. Precedence is defaults ← user
   (`~/.otacon/config.json`) ← project (`config.json`) ← project.local
-  (`config.local.json`) — closest wins. `otacon start` writes a **selective** ignore to
-  a fresh repo's `.gitignore` (`.otacon/*` + `!.otacon/config.json`) so all working
-  state stays ignored while `config.json` is trackable; `config.local.json` is caught by
-  the `.otacon/*` glob. The daemon `/api/config` GET/POST gain a `project.local` scope.
-  This supersedes the "gitignored, no committed layer" decision above (#11).
-- **Why:** The genuinely shared, reviewed project config that #11 deferred is now needed
-  so a team can commit a shared save location (the configurable-plan-storage feature):
-  `plans.dir` is a contract a team wants to share, not per-developer tuning. Claude
-  Code's two-tier split is the proven pattern — committed defaults plus a `.local`
-  personal escape hatch — so we adopt it verbatim rather than invent. The selective
-  gitignore keeps the one tracked file precise: `.otacon/*` + a single negation, instead
-  of enumerating every working-state path. No migration of pre-existing blanket
-  `.otacon/` ignores: pre-release, no repos carry one (decision t2), and `start` simply
-  leaves any existing otacon ignore line untouched.
+  (`config.local.json`) — closest wins. The daemon `/api/config` GET/POST gain a
+  `project.local` scope. (otacon writes no `.gitignore` for any of these — see "otacon
+  manages no `.gitignore`" below; whether `config.local.json` is tracked is the user's
+  call.)
+- **Why:** A genuinely shared, reviewed project config is needed so a team can commit a
+  shared save location (the configurable-plan-storage feature): `plans.dir` is a contract
+  a team wants to share, not per-developer tuning, so a committed layer earns its keep
+  (an earlier design made the per-repo config gitignored with no committed layer; the
+  shared-save-location need is what reversed it). Claude Code's two-tier split is the
+  proven pattern — committed defaults plus a `.local` personal escape hatch — so we adopt
+  it verbatim rather than invent.
 - **Revisit when:** Two tiers stop being enough (e.g. a third committed-but-environment
-  scope), or the selective-ignore negation collides with a path users want ignored under
-  `.otacon/`.
-- **Superseded in part** by "otacon manages no `.gitignore`; build worktrees live in
-  `~/.otacon`" below: the `.otacon/*` + `!.otacon/config.json` ignore `start` used to
-  write is gone. The two-tier *layering* survives unchanged (user ← project ←
-  project.local, closest wins); only the auto-ignore did — `config.local.json` is no
-  longer special-cased out of git, so a developer who wants it private now ignores it
-  themselves.
+  scope).
 
 ## Single `CONFIG_SCHEMA` as the source of truth; `worktree.dir` tunable
 
@@ -381,7 +352,6 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   own module (`../ui` from `dist/daemon`, falling back to `<root>/dist/ui` for
   source-tree runs). No serveStatic middleware. `/s/:id` always answers 200 — unknown
   ids render a client-side not-found. Without a build, the pages answer 503.
-  (Supersedes the M1 plain-text `/s/:id` placeholder.)
 - **Why:** @hono/node-server's serveStatic resolves roots against `process.cwd()`,
   which is meaningless for a daemon spawnable from any repo; resolving next to the
   module is the same trick that makes daemon spawn-by-path reliable. Vite's output is
@@ -643,15 +613,6 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** the suites need shared fixtures, or bun can run Playwright specs
   natively.
 
-## M1 scope: CLI surface is `start`/`submit`/`wait`/`status` only
-
-- **Decision:** M1 ships sessions, registry, submit + linter (L1/L2/L6), event queues,
-  and status. `ask`/`answer`/`open`/`clean`/approve, diffs, SSE, and the web UI come in
-  later milestones. Comment/question HTTP endpoints exist so curl can exercise queues.
-- **Why:** The strict milestone reading keeps every change small and testable
-  end-to-end via curl/CLI before any UI exists.
-- **Revisit when:** M2+ planning starts (each milestone gets its own `.otacon/` plan).
-
 ## Review screen renders via a ported line grammar, not the linter parser
 
 - **Decision:** The UI has its own plan parser (`src/ui/plan/parse.ts`) implementing
@@ -770,8 +731,7 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   makes the innermost slug (phase over section) the anchor for free. Highlights
   paint without mutating the DOM — wrapping quotes in `<mark>`s would fight React's
   reconciliation over nodes it owns. A quote spanning block boundaries fails to
-  re-locate (toString() synthesizes newlines) and degrades to the section wash;
-  M3's orphan tray is the real answer for moved/edited quotes.
+  re-locate (toString() synthesizes newlines) and degrades to the section wash.
 - **Revisit when:** Re-anchoring across revisions lands in M3 (fuzzy matching will
   want a real algorithm, e.g. diff-match-patch-style), or Safari/Firefox support
   data changes the fallback calculus.
@@ -1171,32 +1131,6 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   model), or a hung-finalize timeout should auto-fall-back to drop without the
   manual escape.
 
-## Approve archives logically; the artifact appends an "## Interview" section
-
-> **Superseded** by "Home plan store + Save vs Implement; otacon never commits" —
-> the artifact now lands in `~/.otacon/sessions/<id>/` (canonical) plus, on Save, a
-> project copy under `plans.dir`; otacon no longer writes `docs/plans/` or commits.
-> The "## Interview" append and the collision-suffix naming still hold.
-
-- **Decision:** Approve writes `docs/plans/YYYY-MM-DD-<slug>.md` (local approve
-  date; slug from the session title, `plan` fallback; name collisions suffix
-  `-2`, `-3`, … rather than overwrite) containing the final revision with
-  frontmatter `status`/`revision` rewritten by the daemon and the transcript
-  appended as `## Interview` (`### q<n> — question`, an `- Options:` line with
-  `(recommended)`/`(multi)` tags, an `- Answer:` line; `_unanswered_` for open
-  questions; omitted entirely on an empty transcript). `.otacon/<id>/` stays on
-  disk untouched; physical archival is `otacon clean`'s job (M5).
-- **Why:** The daemon owns frontmatter truth (DECISIONS "Frontmatter authority"),
-  so the committed file must carry its values, not the agent's last guess. The
-  Interview lives outside the closed schema because the artifact is post-lint
-  output for humans and `snake`, never resubmitted — extending the schema for it
-  would weaken L1's anti-smuggling closure. Logical-only archival because the
-  approved event still has to drain through the session's queue file, and
-  `E_SESSION_OVER`/registry status already remove the session from every active
-  surface; moving directories under a live queue would be a race for zero gain.
-- **Revisit when:** `snake` needs structured (non-markdown) access to the interview.
-  *(The physical move landed in M5a — see "clean: daemon deregisters, CLI archives".)*
-
 ## "questions pending" is derived from openQuestions, never a stored status
 
 - **Decision:** Session summaries carry `openQuestions` (transcript entries
@@ -1212,29 +1146,6 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   the only consumer.
 - **Revisit when:** Summaries grow more derived counts (unread threads?) and
   recomputing the transcript on every summary read shows up in profiles.
-
-## Grill cards: one-tap single answers; settled cards persist per mount only
-
-> Superseded 2026-06-23 by "The Interview panel is the single grill surface; the
-> pinned queue is removed". The one-tap-single-answer rule still holds (it lives
-> in `AnswerForm`); the pinned card queue and the per-mount "settle in place"
-> persistence are gone.
-
-- **Decision:** On a single-choice card the chip tap IS the answer — no arm/
-  confirm step; multi-select and free text arm an explicit send. An answered
-  card settles in place (green-checked, answer echoed) rather than vanishing,
-  but only for questions this mount watched while open; on reload, answered
-  entries render solely in the Interview panel. An optional note rides any
-  chip answer as `text`.
-- **Why:** §8 says grilling happens one-thumbed while walking — a confirm step
-  on the 90% path (tap the recommended chip) doubles every interaction for no
-  information, while the settle-in-place flip is the answer's only visible
-  confirmation (the POST has no UI of its own). Settled cards expire with the
-  mount because the queue is an action surface, not an archive: re-rendering
-  every answered question above the plan forever would bury the open ones the
-  card queue exists to surface.
-- **Revisit when:** Re-answering from the card (not just the API) is wanted, or
-  the agent asks faster than one-at-a-time and the queue needs grouping.
 
 ## Decision citations: pre-render text transform, delegated clicks, ephemeral path
 
@@ -1381,9 +1292,9 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   learns to stop on `deleted`. The confirm sheet (one stage, mirroring Approve) is the
   only guard, and its copy follows status: "archived (recoverable)" vs "permanent".
 - **Why:** Sessions of any status pile up in the index, and clearing them shouldn't
-  require the CLI. Disposition follows committed value: an **approved** session's plan +
-  transcript are committed under `docs/plans/`, so its working state is worth keeping —
-  archived, exactly as `clean` already does. A **pending** session has no committed
+  require the CLI. Disposition follows durable value: an **approved** session's plan +
+  transcript already live in the home archive, so its working state is worth keeping —
+  archived, exactly as `clean` already does. A **pending** session has no approved
   artifact and its working state is pure review exhaust, so archiving every discarded
   draft would just grow `.otacon/archive/` with junk — hard-remove instead. Waking a
   parked agent beats letting it 404 on its next `wait`: it stops *immediately and cleanly*
@@ -1542,32 +1453,13 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Browsers gain a real hook to suppress or reposition the native
   popover, or selection moves to a canvas surface that eliminates it.
 
-## Switcher rides the index stream; current chip leads; unread is device-local
-
-- **Decision:** The review header's session switcher is one component with two
-  CSS-toggled faces: a native `<select>` on desktop, the §7 chip strip on phones.
-  It opens its own `/api/stream` EventSource (snapshot + `session` + `removed`
-  frames). The current session's chip is pinned first and never shows an unread
-  badge; other chips badge `●N` where N = revision − this device's seen mark
-  (localStorage, M2's unread convention).
-- **Why:** The index stream already carries exactly the needed summaries live —
-  reusing it costs one idle SSE connection and zero new endpoints. A native select
-  is the one dropdown that needs no positioning, focus-trap, or ARIA work. Pinning
-  the current chip keeps the "you are here" anchor from scrolling out of the strip;
-  suppressing its badge avoids a lie — markSeen runs after the first render, so the
-  badge would flash for one frame on every switch and then mean nothing.
-- **Revisit when:** Session counts make the strip unwieldy (then: collapse approved
-  chips behind a tail toggle), or the select needs unread affordances a native
-  control cannot draw.
-
 ## clean publishes a terminal `removed` frame; cleaned screens close their stream
 
 - **Decision:** `DELETE /api/sessions/:id` publishes `removed` (the M5a review's
-  carry-forward) after deregistration. The index and switcher drop the session from
-  their maps; an open review screen flips to a quiet "session cleaned" terminal
-  state — switcher still live, message naming `otacon clean` and `docs/plans/` —
-  and closes its EventSource for good. The daemon ends the per-session stream after
-  the frame too (the index stream stays open).
+  carry-forward) after deregistration. The session list drops the session from its
+  map; an open review screen flips to a quiet "session cleaned" terminal state
+  (message naming `otacon clean`) and closes its EventSource for good. The daemon
+  ends the per-session stream after the frame too (the index stream stays open).
 - **Why:** Without the frame, an open tab showed a ghost session until reload (noted
   as acceptable-for-M5a, revisited here). Closing the stream matters: EventSource
   auto-reconnects, and a reconnect against the deregistered id can only 404-loop;
@@ -1649,13 +1541,6 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   hairline to separate from dense neighbors.
 
 ## Live agent activity: explicit `otacon progress` narration, not inferred state
-
-> [!note] Reframed by "`otacon progress` stays as the universal floor + curated
-> highlights" below. `progress` is no longer the *only* live-activity signal: the
-> automatic transcript stream (§10a) now carries routine activity on supported agents,
-> so `progress` is asked for sparingly (highlights / chapter markers) and is the sole
-> signal only on agents with no transcript adapter. The verb, endpoint, and feed are
-> unchanged.
 
 - **Decision:** The agent reports what it's doing with a new `otacon progress
   "<note>"` verb (not the daemon inferring state from existing calls). Notes append
@@ -1808,33 +1693,26 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   effort/dependency tradeoff (the alternatives from the interview's q2 are recorded
   there).
 
-## Follow-up questions: linked `replyTo` threads, not a `messages[]` rewrite
+## Follow-up threads: linked `replyTo` threads, not a `messages[]` rewrite
 
-> [!warning] The "question threads only / comment threads stay one-shot" scope is
-> superseded by "Comments are multi-turn conversations too" below. The `replyTo`
-> linked-thread mechanism itself stands — it is what comments now reuse.
-
-- **Decision:** A follow-up on a question thread is a brand-new `q<n>` thread carrying
-  `replyTo` (the root question's id), not a turn appended to a `messages[]` array on the
-  existing thread. The new thread inherits the **root's** anchor (a client anchor on a
-  follow-up is ignored), and "follow up on a follow-up" resolves to the same root, so a
-  chain shares one key. The UI groups root + follow-ups into one conversation card with a
-  pure `groupThreads` helper. Scope is question threads only, one direction (you ask, the
-  agent answers); comment threads stay one-shot resolutions.
+- **Decision:** A follow-up on a thread is a brand-new thread carrying `replyTo` (the
+  root's id), not a turn appended to a `messages[]` array on the existing thread. The new
+  thread inherits the **root's** anchor (a client anchor on a follow-up is ignored), and
+  "follow up on a follow-up" resolves to the same root, so a chain shares one key. The UI
+  groups root + follow-ups into one conversation card with a pure `groupThreads` helper.
+  (This started on question threads only; comments now reuse the same mechanism — see
+  "Comments are multi-turn conversations too" below.)
 - **Why:** Linking reuses everything already built — the event queue and `question`
   wake-up, overwrite-idempotent `otacon answer <q>` (each turn is its own id, so a
-  duplicate POST is still a shrug), the SSE `thread` upsert, the shared q-id space, and
+  duplicate POST is still a shrug), the SSE `thread` upsert, the shared id space, and
   the existing re-anchoring pass (a chain that shares the root's anchor relocates and
   orphans identically, so the group travels as a unit). A `messages[]` rewrite would
   reshape the `Thread` union, migrate `body`/`answer` into the array, break the
   answer-by-id idempotency, and touch every thread reader (linter L5, approve's
-  unresolved count, the rail, orphan re-anchoring) — far more surface for a P3 feature.
-  Keeping it to question threads and one direction matches how the surface is actually
-  used (you interrogate the plan; the agent's turn is the plan revision itself), and
-  leaves comment-thread back-and-forth out of a change that doesn't need it.
-- **Revisit when:** Conversations need agent-initiated turns inside a thread, comment
-  threads need follow-ups too, or per-turn metadata (edits, reactions) makes a first-
-  class `messages[]` model worth the migration.
+  unresolved count, the rail, orphan re-anchoring) — far more surface for the same
+  outcome.
+- **Revisit when:** Conversations need agent-initiated turns inside a thread, or per-turn
+  metadata (edits, reactions) makes a first-class `messages[]` model worth the migration.
 
 ## Comments are multi-turn conversations too, sharing the rail's conversation card
 
@@ -1864,28 +1742,6 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   closes), agent-initiated turns are wanted inside a thread, or per-turn metadata makes a
   first-class `messages[]` model worth the migration.
 
-## The switcher hides approved sessions on both faces, with no current-session anchor
-
-- **Decision:** The session switcher (DESIGN.md §7) lists only active sessions —
-  approved ones are filtered from both faces (phone chips and desktop dropdown),
-  including the session you are currently viewing (there is no "you are here" anchor
-  exception for an approved current). Active-vs-approved comes from one shared,
-  React-free `partitionByApproval` (`src/ui/session-filter.ts`) that also feeds the home
-  list. When the current session is absent from the visible list — cleaned, or itself
-  approved (opened from home) — the controlled `<select>` shows a labeled placeholder
-  (title + state) and the chip strip omits it, rather than rendering blank.
-- **Why:** Approved sessions are over; leaving them in the switcher clutters the strip
-  you switch through on a phone with plans you'll never touch again. An interview first
-  chose to keep the current session's chip as an anchor (q1), but that was reversed (t3):
-  a lone approved anchor is dead weight, and once the current session can be absent for a
-  *cleaned* reason anyway, "current isn't in the visible list" is one condition the
-  placeholder already had to handle — folding approved into it adds no new state. One
-  shared split (not two independent filters) is what guarantees the switcher and the home
-  list can never disagree about which sessions are hidden.
-- **Revisit when:** Switching back to an approved plan from the switcher (not just home)
-  becomes a common need, or the placeholder's "title + state" proves to carry too little
-  context.
-
 ## Approving the viewed session redirects home — on the live transition only
 
 - **Decision:** When the session open on the review screen transitions to approved, the
@@ -1898,8 +1754,8 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   per-session crossing can't leak across a navigation. A `session` SSE frame that flips
   the status remotely (approved on another device) still redirects — accepted, not
   special-cased.
-- **Why:** Once approved, the session's switcher chip is gone (above), so leaving you on
-  a screen whose switcher can't navigate back to it is a dead end; home is where the
+- **Why:** Once approved, the session drops out of the active session list, so leaving you
+  on a review screen with no way to navigate back to it is a dead end; home is where the
   approved section now holds it. The transition-only guard is load-bearing: if the
   redirect fired whenever status is approved, the home approved section could open
   nothing — every tap would bounce straight back, making approved plans unopenable. The
@@ -1939,18 +1795,17 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 ## Sticky session header: one element that compacts, not a separate reveal bar
 
 - **Decision:** The review screen's masthead is a single sticky header (`ReviewHeader`,
-  `position: sticky; top: 0`) that subsumes the old `.topbar` (back + switcher) and the
-  scroll-away `SessionHead` hero. It always renders the full content — title, revision,
-  repo/branch, status, switcher, clean⇄diff toggle, Approve — and **compacts** to a
+  `position: sticky; top: 0`) that subsumes the old `.topbar` and the scroll-away
+  `SessionHead` hero. It always renders the full content — title, revision, repo/branch,
+  status, the session-list opener, clean⇄diff toggle, Approve — and **compacts** to a
   one-line bar past a small scroll threshold (`nextCompact`, rAF-throttled in
   `useCompactOnScroll`), re-expanding at the top. The rejected alternative was a hero
   plus a separate condensed bar that fades in once the hero scrolls past. On phone the
-  header is lean (title + switcher chips + the clean⇄diff toggle); the revision and
+  header is lean (title + session-list opener + the clean⇄diff toggle); the revision and
   Approve are CSS-hidden below 640px, with Approve living solely in the fixed bottom
-  bar. (The plan's q3 settled the phone header as "chips only"; we keep the toggle
-  because hiding it removed the only phone path into diff view — a regression an
-  existing 375px e2e test caught — and the toggle, unlike Approve, carries no
-  shown-in-two-places hazard.)
+  bar. (We keep the toggle because hiding it removed the only phone path into diff view —
+  a regression an existing 375px e2e test caught — and the toggle, unlike Approve, carries
+  no shown-in-two-places hazard.)
 - **Why:** Two elements (hero + reveal bar) means an IntersectionObserver to gate the
   reveal and **two copies of the title/Approve** that can disagree or briefly both show
   — the exact double-render the §10 "Approve never shown twice" rule forbids. One
@@ -2222,51 +2077,22 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   arbitrary checkout), at which point matching may need to persist more than `{worktree,
   branch}`.
 
-## Build layout: worktree under .otacon, one commit per green phase, PR vs default branch
+## Build layout: one commit per green phase, PR vs default branch
 
-> **Superseded in part** by "otacon manages no `.gitignore`; build worktrees live in
-> `~/.otacon`" below: the build worktree now defaults to `<worktree.dir>/<slug>` with
-> `worktree.dir = ~/.otacon/worktrees` (outside the repo), not `.otacon/worktrees`. The
-> per-phase-commit + PR-vs-default-branch parts are unchanged.
-
-- **Decision:** The build runs in a git worktree at `.otacon/worktrees/<slug>`
-  (gitignored, like the rest of `.otacon/`) on branch `otacon/impl-<slug>` rooted at the
-  plan-doc commit; each clean+green phase is its own commit; the finish is a `gh pr
+- **Decision:** The build runs in a git worktree at `<worktree.dir>/<slug>` (default
+  `~/.otacon/worktrees`, see "otacon manages no `.gitignore`" below) on branch
+  `otacon/impl-<slug>`; each clean+green phase is its own commit; the finish is a `gh pr
   create` against the repo's **default branch**, with a fall back to noting the local
   branch + path when there is no remote. `otacon clean` should prune the worktree and
   branch of a finished/aborted build.
 - **Why:** A worktree isolates the build from the user's working tree (the planning
-  session's checkout stays untouched), and putting it under the already-gitignored
-  `.otacon/` needs no new ignore rule. Rooting the branch at the plan commit ties the
-  implementation to exactly the approved artifact. Per-phase commits make the build
-  legible and bisectable and give the pause-on-blocker flow a clean rollback point; the
-  local-branch fallback keeps the loop working in a repo with no remote. **Open question:**
-  per-phase commits vs a final squash, and whether the PR bundles the plan-doc commit, are
-  not yet settled — easy to flip since they only affect the finish step, not the protocol.
-- **Revisit when:** The commit-granularity / squash question is decided, builds want to
-  target a non-default base branch, or worktree-under-`.otacon` collides with the build's
-  own tooling.
-
-## A successful build archives its plan via a PR commit; the agent owns the move
-
-> **Superseded** by "Dropped the docs/plans archive step from the Implement loop" —
-> the plan is no longer committed to `docs/plans/`, so there is nothing to `git mv`
-> into `docs/plans/archive/`. The build branches off the default-branch HEAD and
-> reads the plan from the home copy; no archive commit rides in the PR.
-
-- **Decision:** On a successful Approve & Implement build, the implementing agent
-  `git mv`s the committed plan `docs/plans/YYYY-MM-DD-<slug>.md` into `docs/plans/archive/`
-  as a commit on the impl branch — so the move lands in the implementation PR. An aborted
-  build (`implement-done --failed`) and a plain Approve (no `implement`) both leave the plan
-  in `docs/plans/`. `otacon clean` is unchanged: it still never rewrites `docs/plans/`.
-- **Why:** `docs/plans/` reads as a live backlog of not-yet-implemented plans, with shipped
-  ones filed under `archive/` (matching the layout that was previously curated by hand).
-  Doing the move as a PR commit makes archival **atomic with the merge** — if the PR never
-  lands, the plan stays active on the default branch with no drift and no cleanup pass; and
-  it keeps the daemon out of it (clean only ever touches gitignored working state, so the
-  agent, which already holds the git worktree, is the natural owner of a committed-file move).
-- **Revisit when:** A flat `archive/` grows unwieldy (consider per-month subdirs), or plain
-  Approve should archive too (right now an un-built approved plan stays in `docs/plans/`).
+  session's checkout stays untouched). Per-phase commits make the build legible and
+  bisectable and give the pause-on-blocker flow a clean rollback point; the local-branch
+  fallback keeps the loop working in a repo with no remote. **Open question:** per-phase
+  commits vs a final squash is not yet settled — easy to flip since it only affects the
+  finish step, not the protocol.
+- **Revisit when:** The commit-granularity / squash question is decided, or builds want to
+  target a non-default base branch.
 
 ## Unsent drawer drafts gate Approve client-side; Send & commit reuses the fold-in
 
@@ -2596,18 +2422,28 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 ## Home-canonical plan store keyed by session id
 
 - **Decision:** Every approved plan is written to a **home archive** at
-  `~/.otacon/sessions/<id>/YYYY-MM-DD-<slug>.md` — always, on both Save and Implement.
-  The session id (a globally-unique hash) is the namespace, mirroring the repo-local
-  `.otacon/<id>/` layout, so plans from different repos never collide and need no
-  repo-basename/hash prefix. `homeSessionsDir()`/`homeSessionDir(id)` build the paths;
-  `otacon clean` and session deletion NEVER touch `~/.otacon/sessions/`.
+  `~/.otacon/sessions/<id>/YYYY-MM-DD-<slug>.md` (local approve date; slug from the
+  session title, `plan` fallback; a name collision suffixes `-2`, `-3`, … rather than
+  overwrite) — always, on both Save and Implement. The file contains the final revision
+  with frontmatter `status`/`revision` rewritten by the daemon and the transcript appended
+  as a `## Interview` section (`### q<n> — question`, an `- Options:` line with
+  `(recommended)`/`(multi)` tags, an `- Answer:` line; `_unanswered_` for open questions;
+  the section is omitted entirely on an empty transcript). The session id (a
+  globally-unique hash) is the namespace, mirroring the repo-local `.otacon/<id>/` layout,
+  so plans from different repos never collide and need no repo-basename/hash prefix.
+  `homeSessionsDir()`/`homeSessionDir(id)` build the paths; `otacon clean` and session
+  deletion NEVER touch `~/.otacon/sessions/`.
 - **Why:** "Default zero footprint" (q1, q9) means the target repo gets nothing unless
   the reviewer chooses Save — but otacon still needs one canonical, always-present copy a
   downstream implementer (or a future you on another machine) can find. The home store is
   that record. Keying by the existing session id reuses a unique namespace we already mint
   (q11 leaned toward repo-basename+hash, but the id is simpler and already unique — t1),
   and keeping it out of `otacon clean` makes it a permanent archive, not transient working
-  state that gets swept with the session dir.
+  state that gets swept with the session dir. The daemon owns frontmatter truth (DECISIONS
+  "Frontmatter authority"), so the written file must carry its values, not the agent's last
+  guess. The Interview lives outside the closed schema because the artifact is post-lint
+  output for humans and `snake`, never resubmitted — extending the schema for it would
+  weaken L1's anti-smuggling closure.
 - **Revisit when:** The home store grows unbounded enough to want pruning/retention, or a
   user wants the canonical location configurable (today it is fixed).
 
@@ -2675,10 +2511,8 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   `.otacon/plans` copy are committable unless the user ignores them. To keep throwaway
   build trees out of the project regardless, `worktree.dir` now defaults to
   `~/.otacon/worktrees` (a `~`/absolute path **outside** the repo, alongside the home
-  sessions store) instead of the repo-relative `.otacon/worktrees`. This supersedes the
-  selective-ignore mechanism of "Two-tier project config" (#178) and the
-  worktree-under-`.otacon` location of "Build layout" above; the config *layering* and
-  the per-phase-commit build are unchanged.
+  sessions store) instead of the repo-relative `.otacon/worktrees` (which "Build layout"
+  above set); the config *layering* and the per-phase-commit build are unchanged.
 - **Why:** Editing a user's `.gitignore` is a surprising side effect for a planning tool,
   and the selective `.otacon/* / !config.json` pair was subtle, easy to get wrong across
   CRLF/blank-line/pre-existing-line cases, and coupled otacon to the user's VCS policy.
@@ -2994,9 +2828,8 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   replaces the old `<section className="activity">` collapsible, which was default-closed,
   rendered only once a plan existed, and easy to miss. The bar is shown whenever the agent
   is active OR any stream event exists (so it appears during pre-plan research, not gated on
-  `hasPlan`); the console starts collapsed and the user expands it via the toggle (see the
-  later "console starts collapsed" entry, which superseded the original
-  auto-expand-on-`draft`/`implementing` behavior). The bar carries a `live`/`notes` **mode badge**,
+  `hasPlan`); the console starts collapsed and the user expands it via the toggle. The bar
+  carries a `live`/`notes` **mode badge**,
   reading `live` once any captured (tool/text/thinking) event exists and `notes` while only
   `highlight` progress notes do, making the adapter-attached-vs-floor distinction (§10a)
   visible.
