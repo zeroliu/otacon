@@ -7,6 +7,15 @@
 // home screen's ApprovedSection so the two surfaces can never disagree about
 // what is hidden.
 
+import {
+  Check,
+  CheckCheck,
+  CircleX,
+  Eye,
+  LoaderCircle,
+  MessageCircleQuestion,
+  TriangleAlert,
+} from "lucide-react";
 import type { CSSProperties, MouseEvent } from "react";
 import { useState } from "react";
 import { accentStyle } from "./accent";
@@ -18,8 +27,21 @@ import { DeleteDialog } from "./review/delete";
 import { navigate } from "./router";
 import { unreadCount } from "./seen";
 import { isOver, partitionByApproval } from "./session-filter";
-import { stateOf } from "./session-status";
+import type { NavIcon } from "./session-status";
+import { navState } from "./session-status";
 import { useNow } from "./tick";
+
+// nav icon name → lucide component. Named imports only, so Vite tree-shakes the
+// rest of the set out of the bundle.
+const NAV_ICONS: Record<NavIcon, typeof Check> = {
+  answer: MessageCircleQuestion,
+  review: Eye,
+  working: LoaderCircle,
+  stalled: TriangleAlert,
+  approved: Check,
+  implemented: CheckCheck,
+  failed: CircleX,
+};
 
 export function SessionList({
   current,
@@ -117,7 +139,8 @@ function SessionRow({
   now: number;
   onNavigate?: () => void;
 }) {
-  const { glyph, word } = stateOf(session);
+  const nav = navState(session, now);
+  const Icon = NAV_ICONS[nav.icon];
   const unread = unreadCount(session.id, session.revision);
   const href = `/s/${session.id}`;
   // Any session can be deleted (review UI): all deletes permanently remove the
@@ -138,14 +161,16 @@ function SessionRow({
   return (
     <>
       <a
-        className={current ? "sl-row current" : "sl-row"}
+        className={["sl-row", current && "current", nav.attention && "attention"]
+          .filter(Boolean)
+          .join(" ")}
         href={href}
         style={accentStyle(session.id) as CSSProperties}
         aria-current={current ? "page" : undefined}
         onClick={onClick}
       >
-        <span className="sl-glyph" aria-label={word}>
-          {glyph}
+        <span className={`sl-glyph sl-glyph-${nav.icon}`} aria-label={nav.word}>
+          <Icon aria-hidden />
         </span>
         <span className="sl-text">
           <span className="sl-title">{session.title}</span>

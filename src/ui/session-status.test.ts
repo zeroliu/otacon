@@ -1,36 +1,126 @@
-// Pins the condensed status derivation both the switcher and the sidebar list
-// read (session registry and switcher): unanswered grill questions outrank the
-// agent-side status (the "?" / "questions" chip), and every non-question status
-// maps to its fixed GLYPHS entry — the property the "the two surfaces can never
-// disagree" claim rests on. Construct minimal LiveSession fixtures: stateOf
-// reads only `status` and `openQuestions`, so the rest is cast-filled.
+// Pins the side-nav status derivation the sidebar list reads: unanswered grill
+// questions outrank the agent-side status (the "answer" icon, attention), an
+// in_review session asks for review, a working session spins only while the
+// agent is on the line (else it warns), and terminal statuses map to their
+// static outcome icons. Construct minimal LiveSession fixtures (navState reads
+// only status / openQuestions / parked / lastContactAt) so the rest is
+// cast-filled. The live/stalled split uses the real agentLive threshold (5 min).
 
 import { describe, expect, test } from "bun:test";
 import type { LiveSession, SessionStatus } from "./api";
-import { GLYPHS, stateOf } from "./session-status";
+import { navState } from "./session-status";
 
-// Only `status` and `openQuestions` are read; the cast keeps the fixture to the
-// fields the function actually touches.
-function session(status: SessionStatus, openQuestions: number): LiveSession {
-  return { status, openQuestions } as LiveSession;
+const NOW = 1_700_000_000_000;
+
+// Only the four fields navState touches are set; the cast keeps the fixture lean.
+function session(fields: {
+  status: SessionStatus;
+  openQuestions?: number;
+  parked?: boolean;
+  lastContactAt?: number;
+}): LiveSession {
+  return {
+    status: fields.status,
+    openQuestions: fields.openQuestions ?? 0,
+    parked: fields.parked ?? false,
+    lastContactAt: fields.lastContactAt,
+  } as LiveSession;
 }
 
-describe("stateOf", () => {
-  test("returns the questions chip when grill questions are pending", () => {
-    // in_review is live, so openQuestions > 0 flips it to the questions chip —
-    // NOT the raw `✋` / `awaiting` status glyph.
-    expect(stateOf(session("in_review", 2))).toEqual({ glyph: "?", word: "questions" });
+describe("navState", () => {
+  test("pending questions on a live working status → answer, attention", () => {
+    // draft is live, so openQuestions > 0 flips it to answer-needed, NOT the
+    // working spinner.
+    expect(navState(session({ status: "draft", openQuestions: 2 }), NOW)).toEqual({
+      icon: "answer",
+      word: "answer needed",
+      attention: true,
+    });
   });
 
-  test("ignores pending questions on a terminal session", () => {
-    // approved is over: questions can't outrank a finished session, so it keeps
-    // its own glyph even with openQuestions set.
-    expect(stateOf(session("approved", 3))).toEqual(GLYPHS.approved);
+  test("pending questions while implementing → answer, attention", () => {
+    // implementing counts as live (a build blocker can post `otacon ask`), so a
+    // pending question outranks the build spinner.
+    expect(navState(session({ status: "implementing", openQuestions: 1 }), NOW)).toEqual({
+      icon: "answer",
+      word: "answer needed",
+      attention: true,
+    });
   });
 
-  test("returns the matching GLYPHS entry for a non-question status", () => {
-    for (const status of ["draft", "approved", "implementing"] as const) {
-      expect(stateOf(session(status, 0))).toEqual(GLYPHS[status]);
+  test("in_review → review, attention", () => {
+    expect(navState(session({ status: "in_review" }), NOW)).toEqual({
+      icon: "review",
+      word: "review needed",
+      attention: true,
+    });
+  });
+
+  test("each working status with a live agent → working + its phase word", () => {
+    const words = {
+      draft: "drafting",
+      revising: "revising",
+      finalizing: "finalizing",
+      implementing: "implementing",
+    } as const;
+    for (const status of ["draft", "revising", "finalizing", "implementing"] as const) {
+      // parked:true is live regardless of lastContactAt.
+      expect(navState(session({ status, parked: true }), NOW)).toEqual({
+        icon: "working",
+        word: words[status],
+        attention: false,
+      });
     }
+  });
+
+  test("recent contact counts as live (under the 5-min threshold)", () => {
+    expect(navState(session({ status: "revising", lastContactAt: NOW }), NOW)).toEqual({
+      icon: "working",
+      word: "revising",
+      attention: false,
+    });
+  });
+
+  test("working status with an offline agent → stalled", () => {
+    // Not parked and last contact is 10 min back (past the 5-min threshold).
+    expect(
+      navState(session({ status: "draft", parked: false, lastContactAt: NOW - 10 * 60_000 }), NOW),
+    ).toEqual({ icon: "stalled", word: "stalled", attention: false });
+  });
+
+  test("working status with no contact at all → stalled", () => {
+    expect(navState(session({ status: "implementing", parked: false }), NOW)).toEqual({
+      icon: "stalled",
+      word: "stalled",
+      attention: false,
+    });
+  });
+
+  test("terminal statuses map to their static outcome icons, no attention", () => {
+    expect(navState(session({ status: "approved" }), NOW)).toEqual({
+      icon: "approved",
+      word: "approved",
+      attention: false,
+    });
+    expect(navState(session({ status: "implemented" }), NOW)).toEqual({
+      icon: "implemented",
+      word: "implemented",
+      attention: false,
+    });
+    expect(navState(session({ status: "implement_failed" }), NOW)).toEqual({
+      icon: "failed",
+      word: "failed",
+      attention: false,
+    });
+  });
+
+  test("pending questions never reach a terminal session", () => {
+    // questionsPending excludes terminal statuses, so openQuestions can't flip
+    // an approved session to answer-needed; it keeps its outcome icon.
+    expect(navState(session({ status: "approved", openQuestions: 3 }), NOW)).toEqual({
+      icon: "approved",
+      word: "approved",
+      attention: false,
+    });
   });
 });

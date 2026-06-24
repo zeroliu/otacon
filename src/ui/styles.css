@@ -4597,6 +4597,24 @@ code {
   outline-offset: -2px;
 }
 
+/* Attention rows (answer-needed / review-needed): a subtle lift so "your turn"
+ * sessions read as a group at a glance. A neutral wash off --surface (not the
+ * per-session --accent) on purpose: the group should be legible regardless of
+ * which accent a session carries. Declared before .sl-row.current so the
+ * equally-specific current-row highlight still wins when both classes are set. */
+.sl-row.attention {
+  background: color-mix(in srgb, var(--ink) 5%, var(--surface));
+}
+
+@media (hover: hover) {
+  /* :not(.current) so the attention-hover lift never out-specifics the
+   * current-row highlight: a current row that is also an attention row keeps its
+   * accent background on hover (the "you are here" anchor still wins). */
+  .sl-row.attention:not(.current):hover {
+    background: color-mix(in srgb, var(--ink) 8%, var(--surface));
+  }
+}
+
 /* The row you are viewing: a filled accent blade so the "you are here" anchor
  * is unmistakable, the same cue the switcher's on-chip carries. */
 .sl-row.current {
@@ -4614,12 +4632,69 @@ code {
   background: var(--accent);
 }
 
+/* The leading status indicator: a lucide icon, inked through currentColor so
+ * each kind can carry its own tone (set on the .sl-glyph-* variants below). */
 .sl-glyph {
   flex: none;
-  width: 1.2em;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--accent);
-  font: var(--fs-body)/1 var(--mono);
+}
+
+.sl-glyph svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+/* Per-kind tones, reusing chip tokens so the nav reads consistent with the
+ * review chips: answer = await amber (the "your turn" caution), review = revise
+ * blue. */
+.sl-glyph-answer {
+  color: var(--chip-await-ink);
+}
+
+.sl-glyph-review {
+  color: var(--chip-revise-ink);
+}
+
+/* Working = accent (active, on-brand); the spinner says it is moving. */
+.sl-glyph-working {
+  color: var(--accent);
+}
+
+.sl-glyph-working svg {
+  animation: sl-spin 1s linear infinite;
+}
+
+@keyframes sl-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Stalled = await amber: a working session whose agent went quiet, the same
+ * caution tone as answer-needed, but a warning triangle, not a question. */
+.sl-glyph-stalled {
+  color: var(--chip-await-ink);
+}
+
+/* Terminal outcomes: approved/implemented read done (green), failed reads
+ * error (the palette's one red, from the implement-failed chip). */
+.sl-glyph-approved,
+.sl-glyph-implemented {
+  color: var(--live);
+}
+
+.sl-glyph-failed {
+  color: var(--chip-failed-ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sl-glyph-working svg {
+    animation: none;
+  }
 }
 
 /* Title over subline, both ellipsized so a long name or deep repo path can't

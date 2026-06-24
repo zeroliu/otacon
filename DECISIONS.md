@@ -3681,3 +3681,51 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** A non-version input begins to drive the channel (the seam should then
   carry that instead), or the release stops stamping `version.ts` before the gates run (the
   coupling would no longer exist).
+
+## Side-nav status indicators are lucide-react icons (2026-06-25)
+
+- **Decision:** The session list's leading status indicator (`session-list.tsx` →
+  `SessionRow`, the `.sl-glyph` span) renders a lucide-react icon (`MessageCircleQuestion`,
+  `Eye`, `LoaderCircle`, `TriangleAlert`, `Check`, `CheckCheck`, `CircleX`) instead of the
+  old unicode glyph from `GLYPHS`. lucide-react is a devDependency (build-time only, like
+  react/react-dom), imported by name so Vite tree-shakes the unused set out of the bundle.
+- **Why:** The unicode glyphs (`✎ ✋ ⏳ ⚙ ✓ ✔ ✕`) rendered inconsistently across platform
+  fonts and read as a wall of similar marks; recognizable, uniformly-weighted icons make
+  the scan-the-list-and-know-state job legible. Named imports keep the cost to the seven
+  icons actually used (verified: the names minify out of the index bundle entirely). Pulling
+  the icon mapping into the row (not `session-status.ts`) keeps the derivation file
+  React-free and icon-free: it returns a `NavIcon` name + word, the row maps name → component.
+- **Revisit when:** The icon count grows enough to justify a sprite/font over per-icon
+  modules, or a second surface needs the same name→component map (then lift it to shared).
+
+## The working spinner is live-gated; an offline working session warns (2026-06-25)
+
+- **Decision:** A working session (`draft` / `revising` / `finalizing` / `implementing`)
+  shows the spinning `LoaderCircle` only while `agentLive(parked, lastContactAt, now)` is
+  true; when the agent has gone quiet it shows `TriangleAlert` (the `stalled` icon, no
+  spin) instead. `navState` takes `now` so the row's ticking clock keeps this honest, the
+  same clock the agent-presence dot already reads.
+- **Why:** A perpetual spinner on a session whose agent has actually stopped calling is a
+  lie: it implies progress that is not happening. Reusing the existing `agentLive` 5-min
+  presence threshold (the dot's source of truth) means the spinner and the dot can never
+  disagree about whether the agent is on the line, and the warning gives the reviewer a
+  real "this one is stuck, go look" signal instead of false reassurance.
+- **Revisit when:** The presence threshold is retuned (the gate follows `agentLive`
+  automatically), or a working status gains a "queued, agent not expected yet" sub-state
+  where a warning would be wrong (then distinguish stalled from not-yet-started).
+
+## Only attention rows get a brighter background, with a neutral tint (2026-06-25)
+
+- **Decision:** Only the two attention states (`answer needed`, `review needed`) carry
+  `attention` on the row, which lifts the background via a neutral wash off `--surface`
+  (`color-mix(--ink 5% --surface)`), NOT the per-session `--accent`. Working, stalled, and
+  terminal rows keep the plain row background. The `.sl-row.attention` rule is declared
+  before `.sl-row.current` so the equally-specific current-row highlight still wins.
+- **Why:** "Your turn" sessions are the ones a reviewer must act on, so they earn a visual
+  lift the rest do not; widening it to working/terminal rows would dilute the cue back to
+  noise. A neutral tint (not accent) lets the attention set read as one group across rows
+  that each carry a different per-session accent; an accent-based wash would make each
+  attention row look like its own thing. Hover/current still win by token strength and
+  rule order, so the lift never fights the "you are here" anchor.
+- **Revisit when:** A third state proves it also needs to pull the eye (re-weigh which
+  states are "act now"), or the neutral tint reads muddy against a future surface palette.
