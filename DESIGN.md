@@ -38,7 +38,7 @@ the horizon, §14.)
 
 ## 2. Decision record
 
-Every decision below was resolved deliberately; rationale follows in the relevant section.
+Every decision below was resolved deliberately; the rationale lives in DECISIONS.md, grouped by subsystem.
 
 | #   | Decision          | Choice                                                                                                                                                                            |
 | --- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -48,15 +48,15 @@ Every decision below was resolved deliberately; rationale follows in the relevan
 | 4   | Conciseness       | Deterministic linter at submit + 2-tier schema (budgeted read path / unbudgeted collapsible detail)                                                                               |
 | 5   | Re-review         | 3 layers: agent changelog, mandatory comment-resolution threads, diff vs last-reviewed revision                                                                                   |
 | 6   | Agent integration | Replace native plan modes with one CLI protocol; thin skill wrapper per agent                                                                                                     |
-| 7   | Approval          | Approve = **Save** or **Implement**. Save writes a project copy under `plans.dir` (you commit it if you want); Implement builds from the home copy. The canonical copy always lands in the home archive                |
+| 7   | Approval          | Approve = **Save** or **Implement**; the canonical copy always lands in the home archive (see "Implement & build" in DECISIONS)                |
 | 8   | Phone access      | Tailscale Serve to the local daemon; plans never leave personal devices                                                                                                           |
 | 9   | State topology    | Local-first. Daemon on the Mac is the single source of truth (hosted relay considered and rejected for privacy/simplicity; protocol stays plain HTTP so it remains a future lift) |
 | 10  | Feedback grammar  | User comments (batched), user questions (instant, plan untouched), agent questions (`otacon ask`)                                                                                 |
 | 11  | Mixed batch       | Questions answered first, then all comments applied as one revision with one changelog                                                                                            |
 | 12  | Visuals v1        | Mermaid, code + before/after blocks, ASCII wireframes. Images deferred to v2                                                                                                      |
-| 13  | Storage           | Working state in `<repo>/.otacon/` (otacon manages no `.gitignore` — track or ignore it as you like); every approved plan archived to the home store `~/.otacon/sessions/<id>/` (permanent, never cleaned); on Save also copied into the repo under `plans.dir`                                  |
+| 13  | Storage           | Working state in `<repo>/.otacon/`; every approved plan archived to the permanent home store; on Save also copied into the repo (see "Storage & state" in DECISIONS, §12)                                  |
 | 14  | LLM cost          | Zero API spend invariant: daemon/CLI/UI never call a model; all intelligence runs in the user's interactive subscription-backed session. No Agent SDK anywhere                    |
-| 15  | Multi-session     | One daemon, many concurrent sessions; per-session event queues; UI session list (resizable/collapsible sidebar ≥960px; inline home list + ☰ overflow sheet below)                 |
+| 15  | Multi-session     | One daemon, many concurrent sessions; per-session event queues; UI session list (see "Session nav & app shell" in DECISIONS)                 |
 | 16  | Grilling          | grill-me discipline is a mandatory protocol phase before drafting; decisions must trace to grill answers (linted)                                                                 |
 | 17  | Name              | CLI `otacon`, daemon `otacond`. Future implementer: `snake` (suggestion, not locked)                                                                                              |
 | 18  | Storage format    | Plain JSON files, written atomically; SQLite rejected (native dep, opaque state)                                                                                                  |
@@ -183,8 +183,7 @@ The linter checks **presence, never usefulness** (a diagram that merely restates
 summary adds reading load): a Summary with no diagram earns a non-blocking nudge (lint
 L7, §5), never an error. When a chart genuinely wouldn't help — a pure docs or config
 change — an explicit `<!-- no-lead-diagram: <why> -->` marker in Summary suppresses the
-nudge (the marker is chrome, exempt from the line budget). The escape hatch is explicit
-so "no diagram" is always a deliberate choice, never an oversight.
+nudge (the marker is chrome, exempt from the line budget).
 
 ### The normative / informative contract
 
@@ -1044,7 +1043,7 @@ returns to the index.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│ auth-refactor  r4 · in review   [Clean|Diff]  [session ▾] ✓Approve│
+│ auth-refactor  r4 · in review        [Clean|Diff]      ✓Approve  │
 ├────┬────────────────────────────────────────┬────────────────────┤
 │    │ # Summary                              │ ⊙ THREADS          │
 │    │ Replace session auth with JWT…         │ ┌────────────────┐ │
