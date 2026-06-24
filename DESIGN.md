@@ -366,7 +366,7 @@ the model is suspended — no inference, no token spend.
 | `otacon implement-done [--pr <url>] [--failed]`                             | End an `implementing` session: record the PR link and flip to `implemented`, or `--failed` → `implement_failed` (§12) |
 | `otacon resume [--session <id>]`                                            | Reopen a finished session for amendment (flip terminal → `revising`): auto-detects the session that owns the cwd build worktree (its recorded `impl.worktree`), or `--session` names one. Prints the daemon's reopen body plus `title`, `repo`, `plan` (the file to amend, under the session's main repo) (§12) |
 | `otacon status [--all]`                                                     | Session state + undelivered event count (crash/resume entry point); also surfaces `resumeCandidate` (id, title, status, plan) when the cwd is inside a known build worktree |
-| `otacon open [--session <id>]`                                              | Open the review URL in the browser, or the index URL when no session resolves; `OTACON_NO_BROWSER` prints it instead of launching |
+| `otacon open [--session <id>]`                                              | Open the review URL in the browser, or the index URL when no session resolves; skips the launch when an otacon tab from this daemon is already open (health `viewers >= 1`), dedup only, no focus (open-tab reuse, below); `OTACON_NO_BROWSER` prints it instead of launching (with `reused: true`/`false`) |
 | `otacon config [open]`                                                      | Open the Settings web UI in the browser: `/settings?repo=<cwd repo root>` inside a repo (Project scope), bare `/settings` outside one (User scope); `OTACON_NO_BROWSER` prints the URL instead |
 | `otacon config get <key>`                                                   | Read-only: print the merged effective value of one dotted key (`worktree.dir`, `budgets.summaryLines`, …) from the config files; no daemon. Unknown key → exit 1 |
 | `otacon clean [--all]`                                                      | Archive ended sessions' working state to `.otacon/archive/` and prune the registry (§12) |
@@ -662,6 +662,12 @@ index; the app-shell sidebar lets that one tab reach every session), which
 `otacon open` reads to skip launching a duplicate review tab. It is a daemon-wide
 presence check, never a precise tab count (a session tab holds ~2 connections),
 and it is ephemeral: a restart starts at 0 and live tabs re-count on reconnect.
+The skip is dedup only, with no focus (the open tab is not raised or navigated,
+since in-page focus is unreliable; the existing tab's sidebar already reaches every
+session), and it suppresses whichever url `otacon open` would launch, session or
+index. Under `OTACON_NO_BROWSER` the printed JSON carries `reused: true` when the
+launch was skipped and `reused: false` otherwise. Only `otacon open` dedups;
+`otacon config` always opens the Settings UI.
 Session payloads (snapshot, `session` frames, session detail) carry
 `lastReviewedRevision` alongside `revision`, and `openQuestions` — the count of
 transcript entries still awaiting the user's answer, from which the index's

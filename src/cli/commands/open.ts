@@ -5,11 +5,17 @@
 // config launch the browser"). With no resolvable session the index URL is the
 // answer, not an error; reading is never the wrong screen, and the never-guess
 // rule guards writes, not looks.
+//
+// Open-tab reuse (DECISIONS.md "reuse an existing open tab"): if any otacon tab
+// from this daemon is already connected (health's daemon-wide `viewers >= 1`),
+// skip the launch rather than pile up a duplicate tab. Dedup only, no focus, and
+// it applies to whichever url we would have opened: a single open tab, via its
+// session sidebar, already reaches every session.
 
 import { parseArgs } from "node:util";
 import { openOrPrint } from "../browser.js";
 import { baseUrl, ensureDaemon } from "../client.js";
-import { CliError, notice } from "../output.js";
+import { CliError, notice, printJson } from "../output.js";
 import { listSessions, realpathOr, resolveSession } from "../session.js";
 
 export async function openCommand(argv: string[]): Promise<number> {
@@ -17,12 +23,31 @@ export async function openCommand(argv: string[]): Promise<number> {
     args: argv,
     options: { session: { type: "string" } },
   });
-  await ensureDaemon();
+  const { viewers } = await ensureDaemon();
+
+  // Deliver a url the way `open` does, but suppress the launch when a tab from
+  // this daemon is already open. `viewers ?? 0` keeps an absent field behaving
+  // like today (open as usual), so an older daemon degrades gracefully.
+  const deliver = (url: string, payload: Record<string, unknown>): void => {
+    if ((viewers ?? 0) >= 1) {
+      // A tab from this daemon is already connected; don't spawn a duplicate.
+      // Under OTACON_NO_BROWSER the result is machine-read, so flag the reuse on
+      // stdout; interactively, mirror the spawn path and notice only on stderr.
+      if (process.env.OTACON_NO_BROWSER) {
+        printJson({ ...payload, reused: true });
+      } else {
+        notice("otacon is already open in this browser; not opening another tab");
+      }
+      return;
+    }
+    openOrPrint(url, { ...payload, reused: false });
+  };
+
   const sessions = await listSessions();
   try {
     const session = resolveSession(sessions, values.session, realpathOr(process.cwd()));
     const url = `${baseUrl()}/s/${session.id}`;
-    openOrPrint(url, { ok: true, session: session.id, title: session.title, url });
+    deliver(url, { ok: true, session: session.id, title: session.title, url });
   } catch (error) {
     // An explicit --session that fails to resolve is a real refusal; implicit
     // resolution failures (no session, ambiguity, stale pointer) degrade to
@@ -30,7 +55,7 @@ export async function openCommand(argv: string[]): Promise<number> {
     if (!(error instanceof CliError) || values.session !== undefined) throw error;
     notice(`${error.message}; using the index`);
     const url = `${baseUrl()}/`;
-    openOrPrint(url, { ok: true, url });
+    deliver(url, { ok: true, url });
   }
   return 0;
 }

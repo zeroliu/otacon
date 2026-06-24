@@ -21,6 +21,8 @@ export interface DaemonHealth {
   app: string;
   version: string;
   pid: number;
+  /** Daemon-wide count of live SSE viewers (open otacon tabs from this daemon). */
+  viewers: number;
 }
 
 const PROBE_TIMEOUT_MS = 1500;

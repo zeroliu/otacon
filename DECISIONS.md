@@ -3498,3 +3498,28 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** A use case needs per-session tab awareness (e.g. focusing or
   counting the tabs watching one specific session), at which point the gauge becomes a
   per-session map and likely moves onto the session summary.
+
+## Reuse an existing open tab: `otacon open` dedup, no focus (2026-06-24)
+
+- **Decision:** `otacon open` reads `viewers` from the health response that
+  `ensureDaemon()` already returns (the daemon-wide gauge above) and, when `viewers >= 1`,
+  skips launching a browser tab (dedup only, with no attempt to focus, raise, or
+  navigate the existing tab, D1). The skip applies to whichever url it would have opened,
+  session or index (any open tab from this daemon, via its sidebar, already reaches every
+  session). It is scoped to `otacon open` alone: `otacon config` always opens the Settings
+  UI (D3). No `--new` / `--force` escape hatch is added (D4). Under `OTACON_NO_BROWSER` the
+  printed JSON gains `reused: true` (skipped) or `reused: false` (launched); interactively
+  the skip emits one stderr notice and prints nothing, mirroring the spawn path. `viewers ??
+  0` treats an absent field (an older daemon) as "open as today".
+- **Why:** D1, dedup-only avoids the unreliable parts. An in-page `window.focus()` does not
+  reliably raise a backgrounded tab across browsers, and OS-level focusing (AppleScript and
+  friends) is fragile and platform-specific; the user's intent ("don't pile up duplicate
+  tabs") is fully served by just not spawning another, so we stop there. D3, `config` opens
+  a different surface (Settings) that a review tab does not stand in for, and the connection
+  gauge is about review tabs, so leaving `config` untouched keeps each verb's contract clear.
+  D4, the signal self-corrects (close the tab and the count drops to 0, so the next `open`
+  launches again), which makes a manual override redundant and keeps the CLI surface minimal;
+  a real need for "open another anyway" can add the flag later.
+- **Revisit when:** Browsers gain a reliable cross-platform way to focus an existing tab (then
+  reuse could raise instead of merely skip), or a concrete workflow needs a second tab badly
+  enough to justify a `--new` flag.
