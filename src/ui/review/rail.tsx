@@ -74,6 +74,8 @@ export const ThreadsRail = memo(function ThreadsRail({
   onFollowup,
   onResolve,
   focus,
+  hasPlan,
+  onAsk,
 }: {
   threads: Thread[];
   onJump: Jump;
@@ -83,6 +85,10 @@ export const ThreadsRail = memo(function ThreadsRail({
   onResolve?: Resolve;
   /** Tap-a-lit-span → focus its rail thread (review UI); null = no target. */
   focus?: FocusTarget | null;
+  /** Whether a plan revision exists yet; varies the empty-state copy. */
+  hasPlan: boolean;
+  /** Open a whole-plan ask composer; absent read-only so the CTA hides. */
+  onAsk?: () => void;
 }) {
   const railRef = useRef<HTMLElement>(null);
   // Scroll the tapped thread's card into view and pulse it. Re-fires on every
@@ -113,7 +119,7 @@ export const ThreadsRail = memo(function ThreadsRail({
         <span className="rail-count">{groups.length}</span>
       </div>
       {threads.length === 0 ? (
-        <p className="rail-empty">no threads yet — select plan text to comment or ask</p>
+        <RailEmpty hasPlan={hasPlan} onAsk={onAsk} />
       ) : (
         groups.map((group) => {
           // A reviewer-resolved conversation (question OR comment) collapses to
@@ -151,6 +157,34 @@ export const ThreadsRail = memo(function ThreadsRail({
     </aside>
   );
 });
+
+/**
+ * The empty-state placeholder: the rail is always present, so a thread-less
+ * session shows a centered glyph + a line of copy rather than a blank column.
+ * The copy varies by whether a plan exists yet, and when `onAsk` is provided
+ * (a live, editable session) it offers an ask control so the reviewer can put a
+ * whole-plan question to the agent at any point, including during the grill
+ * phase before a plan exists. Absent `onAsk` (read-only) the control is dropped.
+ */
+function RailEmpty({ hasPlan, onAsk }: { hasPlan: boolean; onAsk?: () => void }) {
+  return (
+    <div className="rail-empty">
+      <span className="rail-empty-glyph" aria-hidden="true">
+        ⊙
+      </span>
+      <p className="rail-empty-copy">
+        {hasPlan
+          ? "No threads yet. Select plan text to comment or ask."
+          : "No plan yet. The agent is still working; threads appear here once it is up."}
+      </p>
+      {onAsk && (
+        <button type="button" className="btn btn-ghost rail-empty-ask" onClick={onAsk}>
+          ask the agent
+        </button>
+      )}
+    </div>
+  );
+}
 
 /**
  * The reviewer's Resolve/Reopen action — the same seam in both directions. With

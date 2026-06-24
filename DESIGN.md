@@ -1131,7 +1131,13 @@ returns to the index.
   clickable) beside a subtle icon whose hover tooltip explains the quote changed in a
   later revision. A conversation keys on its root, so a detached root keeps its whole
   chain inline too. (Internally the anchor still carries `anchorState:"orphaned"`; the
-  UI never surfaces that word or a revision number.)
+  UI never surfaces that word or a revision number.) The rail is **always present**:
+  with no threads it shows a centered placeholder (a glyph and a line of copy that
+  varies by whether a plan exists yet), never a blank column. The placeholder also
+  carries an **ask the agent** action (hidden read-only) that opens a whole-plan
+  question composer, so the reviewer can put a question to the agent **at any time,
+  including during the grill phase before a plan exists**; such whole-plan questions
+  reach the agent as ordinary question events.
 - Persistent thread marks (clean view): open threads and unsent drafts keep their
   anchored text lit — questions one ink (underlined), comments + drafts another — so
   the two read apart and stay legible without color; the click-flash still pops above
