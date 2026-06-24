@@ -140,7 +140,6 @@ function ReviewLoop({
   threads,
   transcript,
   stream,
-  connected,
   now,
 }: {
   session: LiveSession;
@@ -148,7 +147,6 @@ function ReviewLoop({
   transcript: TranscriptEntry[];
   /** The normalized live-activity stream (§10a) powering the bar + console. */
   stream: StreamEvent[];
-  connected: boolean;
   /** A ticking clock for the presence dot + activity timestamps. */
   now: number;
 }) {
@@ -276,12 +274,15 @@ function ReviewLoop({
   // One shared lock for every bottom sheet (composer, section ⋯ menu, approve),
   // not just the composer: any open sheet freezes the plan behind it so the
   // page stops drifting under the keyboard while typing. The gate mirrors the
-  // sheets' own render guards exactly — the composer/menu only render under
-  // `hasPlan && !over`, and approve only under `approveOpen && canApprove`.
-  // Tracking bare `approveOpen` would strand the lock on with no sheet visible
-  // when an SSE status flip (Approve & Implement → `implementing`, or a plain
-  // approve → `over`) clears `canApprove` while `approveOpen` still lingers.
-  const composerOrMenuOpen = hasPlan && !readOnly && (composer !== null || menu !== null);
+  // sheets' own render guards exactly: the composer renders under
+  // `composer !== null && !readOnly` (a whole-plan ask works pre-plan, no hasPlan
+  // gate), the section ⋯ menu under `hasPlan && !readOnly`, and approve only under
+  // `approveOpen && canApprove`. Tracking bare `approveOpen` would strand the lock
+  // on with no sheet visible when an SSE status flip (Approve & Implement →
+  // `implementing`, or a plain approve → `over`) clears `canApprove` while
+  // `approveOpen` still lingers.
+  const composerOrMenuOpen =
+    !readOnly && (composer !== null || (hasPlan && menu !== null));
   const approveSheetOpen = approveOpen && canApprove;
   useScrollLock(phone && (composerOrMenuOpen || approveSheetOpen));
 
@@ -658,11 +659,20 @@ function ReviewLoop({
 
   const toggleInterview = useCallback(() => setInterviewOpen((value) => !value), []);
 
+  // The rail's empty-state ask: open the ask composer on a null (whole-plan)
+  // anchor, mirroring the drawer's `onWholePlan` but in ASK mode. `at:null`
+  // docks it as a bottom sheet on phones, same as the whole-plan comment path.
+  // This is the only ask surface before a plan exists (no plan text to select),
+  // so the reviewer can put a whole-plan question to the agent during the grill.
+  const askWholePlan = useCallback(() => {
+    composerSeq.current += 1;
+    setComposer({ mode: "ask", anchor: null, at: null });
+  }, []);
+
   return (
     <>
       <ReviewHeader
         session={session}
-        connected={connected}
         now={now}
         view={view}
         onView={setView}
@@ -775,15 +785,18 @@ function ReviewLoop({
             </main>
           )}
         </div>
-        {hasPlan && (
-          <ThreadsRail
-            threads={threads}
-            onJump={jump}
-            focus={focusThread}
-            onFollowup={readOnly ? undefined : followup}
-            onResolve={readOnly ? undefined : resolve}
-          />
-        )}
+        {/* Always mounted: the desktop right column is never blank. The rail
+            renders its own empty-state placeholder when there are no threads,
+            including during research/grill before a plan exists. */}
+        <ThreadsRail
+          threads={threads}
+          onJump={jump}
+          focus={focusThread}
+          onFollowup={readOnly ? undefined : followup}
+          onResolve={readOnly ? undefined : resolve}
+          hasPlan={hasPlan}
+          onAsk={readOnly ? undefined : askWholePlan}
+        />
       </div>
       {approveOpen && canApprove && (
         <ApproveDialog
@@ -823,6 +836,23 @@ function ReviewLoop({
           onDeleted={() => navigate("/")}
         />
       )}
+      {/* The composer is NOT gated on hasPlan: a whole-plan ask (from the rail's
+          empty state) must work during the grill phase before a plan exists. Its
+          submit paths key on `composer.anchor`, null for a whole-plan question,
+          which `ask` posts via postQuestion(session.id, null, body). */}
+      {composer !== null && !readOnly && (
+        <Composer
+          key={composerSeq.current}
+          state={composer}
+          onClose={() => setComposer(null)}
+          onStack={stack}
+          onSendNow={sendNow}
+          onAsk={ask}
+        />
+      )}
+      {/* The selection bar, the section ⋯ menu, and the drawer are comment-on-plan
+          affordances: they need plan text / a rendered plan, so they stay gated
+          on hasPlan (and not read-only). */}
       {hasPlan && !readOnly && (
         <>
           {selection !== null && composer === null && (
@@ -838,16 +868,6 @@ function ReviewLoop({
               onComment={() => menuCompose("comment")}
               onAsk={() => menuCompose("ask")}
               onClose={() => setMenu(null)}
-            />
-          )}
-          {composer !== null && (
-            <Composer
-              key={composerSeq.current}
-              state={composer}
-              onClose={() => setComposer(null)}
-              onStack={stack}
-              onSendNow={sendNow}
-              onAsk={ask}
             />
           )}
           <CommentDrawer
@@ -875,7 +895,7 @@ function ReviewLoop({
 }
 
 export function SessionScreen({ id }: { id: string }) {
-  const { session, threads, transcript, stream, missing, cleaned, connected } = useSession(id);
+  const { session, threads, transcript, stream, missing, cleaned } = useSession(id);
   // One ticking clock for the presence dot + activity/relative timestamps, so
   // they stay honest while the screen idles between SSE frames.
   const now = useNow(30_000);
@@ -918,9 +938,9 @@ export function SessionScreen({ id }: { id: string }) {
   }, [session]);
 
   // A `removed` frame landed while this screen was open (approval and archive lifecycle): the
-  // session left the registry — `otacon clean` archived an approved one, or it
-  // was deleted from review while pending. The frame carries no reason, so the
-  // copy covers both. A terminal state, not an error — the stream is closed, and
+  // session left the registry (`otacon clean` removed a finished one, or it
+  // was deleted from review). The frame carries no reason, so the copy covers
+  // both. A terminal state, not an error: the stream is closed, and
   // the app shell (sidebar ≥960px, the ☰ session sheet below it) still offers
   // every live session.
   // Because the shell provides session switching + the home link on every route,
@@ -932,8 +952,9 @@ export function SessionScreen({ id }: { id: string }) {
         <main className="empty">
           <p className="empty-title">session closed</p>
           <p className="empty-body">
-            This session left the codec — approved and cleaned, or deleted from review. Any
-            approved plan stays preserved in the home archive (<code>~/.otacon/sessions/</code>).
+            This session left the codec: approved and cleaned, or deleted from review. Its home
+            folder is gone for good. An approved plan survives as the saved copy in your project (or
+            in the PR for Implement plans).
           </p>
         </main>
       </div>
@@ -973,7 +994,6 @@ export function SessionScreen({ id }: { id: string }) {
         threads={threads}
         transcript={transcript}
         stream={stream}
-        connected={connected}
         now={now}
       />
     </div>

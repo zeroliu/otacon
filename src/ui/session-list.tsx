@@ -120,9 +120,10 @@ function SessionRow({
   const { glyph, word } = stateOf(session);
   const unread = unreadCount(session.id, session.revision);
   const href = `/s/${session.id}`;
-  // Any session can be deleted (review UI): over (terminal) ones are archived
-  // (recoverable), still-live ones hard-deleted — the daemon gates on the same
-  // terminal set, so this only drives the confirm copy.
+  // Any session can be deleted (review UI): all deletes permanently remove the
+  // home folder (`~/.otacon/sessions/<id>/`). `over` only drives the confirm
+  // copy: for a terminal session the durable copy survives elsewhere (the Save
+  // copy under plans.dir, or the PR for Implement plans).
   const over = isOver(session.status);
   const [deleting, setDeleting] = useState(false);
   // Plain left-click navigates in-app (and lets a host close its drawer);

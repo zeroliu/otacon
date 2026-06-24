@@ -120,10 +120,10 @@ function parseState(raw: unknown): SessionStateFile | undefined {
 }
 
 /** Highest r<N>.md snapshot on disk — the revision counter's source of truth. */
-function recoverRevision(repo: string, id: string): number {
+function recoverRevision(id: string): number {
   let max = 0;
   try {
-    for (const name of readdirSync(paths.sessionDir(repo, id))) {
+    for (const name of readdirSync(paths.sessionDir(id))) {
       const match = /^r(\d+)\.md$/.exec(name);
       if (match) max = Math.max(max, Number(match[1]));
     }
@@ -140,13 +140,13 @@ function recoverRevision(repo: string, id: string): number {
  * loosely (no thread validation): a half-corrupt file should still surrender
  * every id it can.
  */
-function recoverCounters(repo: string, id: string): SessionStateFile["counters"] {
+function recoverCounters(id: string): SessionStateFile["counters"] {
   const counters = { batch: 0, thread: 0, question: 0, eventSeq: 0 };
   const see = (key: keyof typeof counters, raw: unknown, re: RegExp): void => {
     const match = typeof raw === "string" ? re.exec(raw) : null;
     if (match) counters[key] = Math.max(counters[key], Number(match[1]));
   };
-  const threadsRaw = readJsonOr(paths.threadsPath(repo, id)) as { threads?: unknown[] } | undefined;
+  const threadsRaw = readJsonOr(paths.threadsPath(id)) as { threads?: unknown[] } | undefined;
   for (const t of Array.isArray(threadsRaw?.threads) ? threadsRaw.threads : []) {
     const thread = t as { id?: unknown; batch?: unknown };
     see("thread", thread?.id, /^t(\d+)$/);
@@ -154,13 +154,13 @@ function recoverCounters(repo: string, id: string): SessionStateFile["counters"]
     see("batch", thread?.batch, /^b(\d+)$/);
   }
   // Agent grill questions share the q counter with user-question threads.
-  const transcriptRaw = readJsonOr(paths.transcriptPath(repo, id)) as
+  const transcriptRaw = readJsonOr(paths.transcriptPath(id)) as
     | { entries?: unknown[] }
     | undefined;
   for (const e of Array.isArray(transcriptRaw?.entries) ? transcriptRaw.entries : []) {
     see("question", (e as { id?: unknown })?.id, /^q(\d+)$/);
   }
-  const eventsRaw = readJsonOr(paths.eventsPath(repo, id)) as { events?: unknown[] } | undefined;
+  const eventsRaw = readJsonOr(paths.eventsPath(id)) as { events?: unknown[] } | undefined;
   for (const e of Array.isArray(eventsRaw?.events) ? eventsRaw.events : []) {
     const event = e as { seq?: unknown; payload?: { batch?: unknown; id?: unknown; items?: unknown[] } };
     if (typeof event?.seq === "number") {
@@ -186,9 +186,10 @@ export interface CreateSessionInput {
 }
 
 /**
- * Owns `$OTACON_HOME/registry.json` plus each session's `.otacon/<id>/` state in
- * its repo. Event seqs and the b/t/q stable ids are minted here (bumpCounter)
- * so they survive queue drains and daemon restarts.
+ * Owns `$OTACON_HOME/registry.json` plus each session's working state in the
+ * home store (`~/.otacon/sessions/<id>/`). Event seqs and the b/t/q stable ids
+ * are minted here (bumpCounter) so they survive queue drains and daemon
+ * restarts.
  */
 export class Store {
   private readonly registryFile: string;
@@ -205,8 +206,9 @@ export class Store {
       this.registry = parsed;
       return;
     }
-    // Sessions registered there are forgotten (their .otacon/ dirs survive for
-    // manual recovery); the alternative is a daemon that can never boot again.
+    // Sessions registered there are forgotten (their ~/.otacon/sessions/<id>/
+    // dirs survive for manual recovery); the alternative is a daemon that can
+    // never boot again.
     quarantineCorruptFile(this.registryFile, "session registry");
     this.registry = { version: 1, sessions: {} };
     this.flushRegistry();
@@ -235,16 +237,17 @@ export class Store {
       updatedAt: now,
     };
     // State files first, registry entry last: the registry is the commit point.
-    // A crash in between leaves an orphan .otacon/<id>/ dir (harmless), never a
-    // registered session whose state files are missing (wedged forever).
+    // A crash in between leaves an orphan ~/.otacon/sessions/<id>/ dir
+    // (harmless), never a registered session whose state files are missing
+    // (wedged forever).
     const state: SessionStateFile = {
       id,
       revision: 0,
       lastReviewedRevision: 0,
       counters: { batch: 0, thread: 0, question: 0, eventSeq: 0 },
     };
-    writeFileAtomic(paths.sessionStatePath(input.repo, id), stringify(state));
-    writeFileAtomic(paths.eventsPath(input.repo, id), stringify({ version: 1, events: [] }));
+    writeFileAtomic(paths.sessionStatePath(id), stringify(state));
+    writeFileAtomic(paths.eventsPath(id), stringify({ version: 1, events: [] }));
     this.registry.sessions[id] = session;
     this.flushRegistry();
     return { ...session };
@@ -262,8 +265,8 @@ export class Store {
   }
 
   /**
-   * Remove a session from the registry (otacon clean, approval and archive lifecycle); the
-   * .otacon/<id>/ dir in its repo is the CLI's to archive afterwards.
+   * Remove a session from the registry (otacon clean, approval and archive lifecycle); its home
+   * dir `~/.otacon/sessions/<id>/` is the CLI's/daemon's to remove afterwards.
    */
   deleteSession(id: string): RegistrySession {
     const session = this.require(id);
@@ -273,39 +276,19 @@ export class Store {
   }
 
   /**
-   * Hard-remove a session's working dir `.otacon/<id>/` (the UI deleting a
-   * *pending* session, approval and archive lifecycle): permanent, no archive — for a session
-   * with no committed artifact. `repo` is passed explicitly because the caller
-   * deregisters first, so require() would already throw. Idempotent: a missing
-   * dir is fine (force).
+   * Permanently remove a session's home dir `~/.otacon/sessions/<id>/` (UI delete
+   * and `otacon clean`, all statuses): no archive, nothing recoverable from
+   * otacon itself. The durable copies are the Save copy under `plans.dir` and
+   * (for Implement plans) the PR. Called after the caller deregisters, so it
+   * takes the id directly. Idempotent: a missing dir is fine (force).
    */
-  removeSessionDir(repo: string, id: string): void {
-    rmSync(paths.sessionDir(repo, id), { recursive: true, force: true });
-  }
-
-  /**
-   * Archive a session's working dir `.otacon/<id>/` → `.otacon/archive/<id>/`
-   * in its repo (numeric suffix on name collision); returns the destination, or
-   * null when there was no dir. The recoverable counterpart to removeSessionDir,
-   * for a session whose plan is already preserved in the home archive (approved):
-   * `otacon clean` and the UI's delete of an approved session both archive
-   * through here. `repo` is
-   * passed explicitly because the caller deregisters first (require() throws).
-   */
-  archiveSessionDir(repo: string, id: string): string | null {
-    const source = paths.sessionDir(repo, id);
-    if (!existsSync(source)) return null;
-    const base = join(paths.otaconDir(repo), "archive");
-    mkdirSync(base, { recursive: true });
-    let dest = join(base, id);
-    for (let n = 2; existsSync(dest); n++) dest = join(base, `${id}-${n}`);
-    renameSync(source, dest);
-    return dest;
+  removeSessionDir(id: string): void {
+    rmSync(paths.sessionDir(id), { recursive: true, force: true });
   }
 
   readState(id: string): SessionStateFile {
-    const session = this.require(id);
-    const path = paths.sessionStatePath(session.repo, id);
+    this.require(id);
+    const path = paths.sessionStatePath(id);
     if (existsSync(path)) {
       const parsed = parseState(readJsonOr(path));
       if (parsed && parsed.id === id) return parsed;
@@ -319,9 +302,9 @@ export class Store {
     // degrades to "previous revision", which the user can re-select.
     const state: SessionStateFile = {
       id,
-      revision: recoverRevision(session.repo, id),
+      revision: recoverRevision(id),
       lastReviewedRevision: 0,
-      counters: recoverCounters(session.repo, id),
+      counters: recoverCounters(id),
     };
     writeFileAtomic(path, stringify(state));
     return state;
@@ -333,11 +316,10 @@ export class Store {
    * backwards — older baselines stay reachable via the diff endpoint's ?from=.
    */
   markReviewed(id: string, n: number): number {
-    const session = this.require(id);
-    const state = this.readState(id);
+    const state = this.readState(id); // throws on unknown id
     if (n > state.lastReviewedRevision) {
       state.lastReviewedRevision = Math.min(n, state.revision);
-      writeFileAtomic(paths.sessionStatePath(session.repo, id), stringify(state));
+      writeFileAtomic(paths.sessionStatePath(id), stringify(state));
     }
     return state.lastReviewedRevision;
   }
@@ -349,19 +331,17 @@ export class Store {
    * on session.json (not the registry) — daemon-owned detail, like the counters.
    */
   setPendingApproval(id: string, pendingApproval: { implement: boolean; threads: string[] }): void {
-    const session = this.require(id);
-    const state = this.readState(id);
+    const state = this.readState(id); // throws on unknown id
     state.pendingApproval = pendingApproval;
-    writeFileAtomic(paths.sessionStatePath(session.repo, id), stringify(state));
+    writeFileAtomic(paths.sessionStatePath(id), stringify(state));
   }
 
   /** Disarm the deferred approval once it has finalized (or been force-escaped). */
   clearPendingApproval(id: string): void {
-    const session = this.require(id);
-    const state = this.readState(id);
+    const state = this.readState(id); // throws on unknown id
     if (state.pendingApproval === undefined) return;
     delete state.pendingApproval;
-    writeFileAtomic(paths.sessionStatePath(session.repo, id), stringify(state));
+    writeFileAtomic(paths.sessionStatePath(id), stringify(state));
   }
 
   /** Increment one daemon-owned counter (review loop and daemon API stable ids) and persist it. */
@@ -378,12 +358,11 @@ export class Store {
     id: string,
     by: Partial<Record<keyof SessionStateFile["counters"], number>>,
   ): SessionStateFile["counters"] {
-    const session = this.require(id);
-    const state = this.readState(id);
+    const state = this.readState(id); // throws on unknown id
     for (const key of Object.keys(by) as (keyof SessionStateFile["counters"])[]) {
       state.counters[key] += by[key] ?? 0;
     }
-    writeFileAtomic(paths.sessionStatePath(session.repo, id), stringify(state));
+    writeFileAtomic(paths.sessionStatePath(id), stringify(state));
     return { ...state.counters };
   }
 
@@ -402,30 +381,30 @@ export class Store {
     const session = this.require(id);
     const state = this.readState(id);
     state.revision += 1;
-    writeFileAtomic(paths.revisionPath(session.repo, id, state.revision), content);
+    writeFileAtomic(paths.revisionPath(id, state.revision), content);
     writeFileAtomic(
-      paths.revisionWarningsPath(session.repo, id, state.revision),
+      paths.revisionWarningsPath(id, state.revision),
       stringify(warnings),
     );
     if (changelog !== undefined && changelog.trim() !== "") {
-      writeFileAtomic(paths.revisionChangelogPath(session.repo, id, state.revision), changelog);
+      writeFileAtomic(paths.revisionChangelogPath(id, state.revision), changelog);
     }
-    writeFileAtomic(paths.sessionStatePath(session.repo, id), stringify(state));
+    writeFileAtomic(paths.sessionStatePath(id), stringify(state));
     session.updatedAt = new Date().toISOString();
     this.flushRegistry();
     return state.revision;
   }
 
   readRevision(id: string, n: number): string {
-    const session = this.require(id);
-    return readFileSync(paths.revisionPath(session.repo, id, n), "utf8");
+    this.require(id); // throws on unknown id
+    return readFileSync(paths.revisionPath(id, n), "utf8");
   }
 
   /** The changelog submitted with r<n>.md; null when none was (r1, typically). */
   readRevisionChangelog(id: string, n: number): string | null {
-    const session = this.require(id);
+    this.require(id); // throws on unknown id
     try {
-      return readFileSync(paths.revisionChangelogPath(session.repo, id, n), "utf8");
+      return readFileSync(paths.revisionChangelogPath(id, n), "utf8");
     } catch {
       return null;
     }
@@ -436,34 +415,39 @@ export class Store {
    * badges are presentation metadata, never worth quarantine machinery.
    */
   readRevisionWarnings(id: string, n: number): LintIssue[] {
-    const session = this.require(id);
-    const raw = readJsonOr(paths.revisionWarningsPath(session.repo, id, n));
+    this.require(id); // throws on unknown id
+    const raw = readJsonOr(paths.revisionWarningsPath(id, n));
     return Array.isArray(raw) ? (raw as LintIssue[]) : [];
   }
 
   /** Where this session's SessionQueue persists — for the daemon to wire queues. */
   eventsPath(id: string): string {
-    return paths.eventsPath(this.require(id).repo, id);
+    this.require(id); // throws on unknown id
+    return paths.eventsPath(id);
   }
 
   /** Where this session's review threads persist (src/daemon/threads.ts). */
   threadsPath(id: string): string {
-    return paths.threadsPath(this.require(id).repo, id);
+    this.require(id); // throws on unknown id
+    return paths.threadsPath(id);
   }
 
   /** Where this session's grill transcript persists (src/daemon/transcript.ts). */
   transcriptPath(id: string): string {
-    return paths.transcriptPath(this.require(id).repo, id);
+    this.require(id); // throws on unknown id
+    return paths.transcriptPath(id);
   }
 
   /** Where this session's live-activity feed persists (src/daemon/activity.ts). */
   activityPath(id: string): string {
-    return paths.activityPath(this.require(id).repo, id);
+    this.require(id); // throws on unknown id
+    return paths.activityPath(id);
   }
 
   /** Where this session's normalized live-activity stream persists (src/daemon/capture/stream-store.ts). */
   streamPath(id: string): string {
-    return paths.streamPath(this.require(id).repo, id);
+    this.require(id); // throws on unknown id
+    return paths.streamPath(id);
   }
 
   private require(id: string): RegistrySession {

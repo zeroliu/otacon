@@ -97,9 +97,9 @@ export class SessionQueue {
   /**
    * Detach from disk forever (DELETE /api/sessions/:id evicted this instance):
    * flush and requeue become no-ops. A delivered-but-unacked event's
-   * post-response ack callback can fire after `otacon clean` archives the
-   * session dir — writing then would recreate .otacon/<id>/ next to the
-   * archive (writeFileAtomic mkdirs). The events file leaves with the dir.
+   * post-response ack callback can fire after the delete removes the home
+   * session dir: writing then would recreate ~/.otacon/sessions/<id>/
+   * (writeFileAtomic mkdirs). The events file leaves with the dir.
    */
   close(): void {
     this.closed = true;
@@ -107,10 +107,10 @@ export class SessionQueue {
 
   /**
    * Detach from disk AND wake every parked waiter with one terminal event
-   * (DELETE of a *pending* session, approval and archive lifecycle): set `closed` first so
-   * flush/requeue/dispatch all become no-ops — the synthetic event is never
+   * (DELETE of a live session, approval and archive lifecycle): set `closed` first so
+   * flush/requeue/dispatch all become no-ops (the synthetic event is never
    * persisted or requeued, and a late post-response ack can't recreate the
-   * `.otacon/<id>/` dir the caller is about to hard-remove — then hand each
+   * `~/.otacon/sessions/<id>/` dir the caller is about to remove), then hand each
    * parked waiter the same payload so its long-poll resolves cleanly instead of
    * 404ing on the next call. No waiter parked = nobody to wake (an agent that
    * is not parked discovers the delete via its next call's 404). The synthetic

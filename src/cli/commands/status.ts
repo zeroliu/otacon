@@ -49,7 +49,7 @@ export async function statusCommand(argv: string[]): Promise<number> {
   const owners = worktreeOwners(all, cwd);
   const owner = owners.length === 1 ? owners[0] : undefined;
   const resumeCandidate = owner
-    ? { id: owner.id, title: owner.title, status: owner.status, plan: planPath(owner.repo, owner.id) }
+    ? { id: owner.id, title: owner.title, status: owner.status, plan: planPath(owner.id) }
     : undefined;
 
   printJson({

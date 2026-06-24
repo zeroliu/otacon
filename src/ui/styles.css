@@ -13,6 +13,14 @@
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --mono: ui-monospace, "SF Mono", SFMono-Regular, "Cascadia Code", Menlo, Consolas, monospace;
 
+  /* Type-scale floor (DECISIONS.md "12px type-scale floor"): nothing renders
+   * below 12px. The telemetry character now comes from mono + uppercase +
+   * tracking + color, not sub-12px size. Color-scheme independent, so defined
+   * once here and not duplicated in the dark-mode :root. */
+  --fs-prose: 16px; /* the reading column: body base + .md prose + .md h1..h4 */
+  --fs-body: 14px; /* readable + interactive text: button labels, bodies, inputs */
+  --fs-label: 12px; /* the mono telemetry labels: chips, badges, ids, meta rows */
+
   --bg: #f2f1ec;
   --surface: #fbfaf7;
   --ink: #211f1a;
@@ -109,7 +117,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font: 15px/1.5 var(--sans);
+  font: var(--fs-prose)/1.5 var(--sans);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -162,28 +170,6 @@ body::before {
   mask: var(--wordmark) center / contain no-repeat;
 }
 
-.link-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font: 11px/1 var(--mono);
-  letter-spacing: 0.12em;
-  color: var(--ink-soft);
-  padding-bottom: 2px;
-}
-
-.link-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--line-strong);
-}
-
-.is-live .link-dot {
-  background: var(--live);
-  animation: live-pulse 2.4s ease-out infinite;
-}
-
 @keyframes live-pulse {
   0% {
     box-shadow: 0 0 0 0 color-mix(in srgb, var(--live) 45%, transparent);
@@ -195,14 +181,13 @@ body::before {
 }
 
 /* Agent presence (review UI, D4): a small live/offline dot beside the
- * status chips — the "is the agent on the line?" signal. Deliberately distinct
- * from .link-state (the browser↔daemon link): a hollow ring that fills + pulses
- * when live, vs the link dot's solid fill. Labelled "agent" vs "link". */
+ * status chips — the "is the agent on the line?" signal. A hollow ring that
+ * fills + pulses when live. Labelled "agent". */
 .agent-dot {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font: 10px/1 var(--mono);
+  font: var(--fs-label)/1 var(--mono);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--ink-soft);
@@ -230,7 +215,7 @@ body::before {
   display: flex;
   justify-content: space-between;
   margin: 24px 2px 12px;
-  font: 11px/1 var(--mono);
+  font: var(--fs-label)/1 var(--mono);
   letter-spacing: 0.2em;
   text-transform: uppercase;
   color: var(--ink-soft);
@@ -320,7 +305,7 @@ body::before {
 
 .badge {
   flex: none;
-  font: 600 11px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
@@ -331,7 +316,7 @@ body::before {
 
 .card-where {
   margin: 5px 0 12px;
-  font: 12px/1.4 var(--mono);
+  font: var(--fs-label)/1.4 var(--mono);
   color: var(--ink-soft);
   white-space: nowrap;
   overflow: hidden;
@@ -346,13 +331,13 @@ body::before {
 
 /* The session accent, carried as a mono tag now the left blade is gone. */
 .card-sig {
-  font: 13px/1 var(--mono);
+  font: var(--fs-body)/1 var(--mono);
   color: var(--accent);
 }
 
 .card-time {
   margin-left: auto;
-  font: 11px/1 var(--mono);
+  font: var(--fs-label)/1 var(--mono);
   letter-spacing: 0.04em;
   color: var(--ink-soft);
   white-space: nowrap;
@@ -362,7 +347,7 @@ body::before {
  * beside the chip — leaving the codec for GitHub, so the ↗ + new tab. */
 .card-pr {
   flex: none;
-  font: 600 10.5px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--accent);
@@ -385,10 +370,6 @@ body::before {
   outline-offset: 2px;
 }
 
-.session-meta .card-time {
-  margin-left: 0;
-}
-
 /* Approved sessions, collapsed by default on home (review UI): the same
  * disclosure idiom as the activity panel, holding a nested .cards grid. */
 .approved-group {
@@ -406,7 +387,7 @@ body::before {
   border: none;
   background: none;
   color: var(--ink-soft);
-  font: 600 11px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.2em;
   text-transform: uppercase;
   cursor: pointer;
@@ -458,7 +439,7 @@ body::before {
   gap: 6px;
   padding: 4px 9px;
   border-radius: 999px;
-  font: 600 10.5px/1.2 var(--mono);
+  font: 600 var(--fs-label)/1.2 var(--mono);
   letter-spacing: 0.09em;
   text-transform: uppercase;
   transition: background 0.3s ease, color 0.3s ease;
@@ -562,7 +543,7 @@ body::before {
 
 .empty-title {
   margin: 0 0 12px;
-  font: 600 12px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.22em;
   text-transform: uppercase;
 }
@@ -570,20 +551,20 @@ body::before {
 .empty-body {
   max-width: 44ch;
   margin: 0 auto;
-  font-size: 14px;
+  font-size: var(--fs-body);
   line-height: 1.65;
 }
 
 .empty-offline {
   margin: 16px 0 0;
-  font: 12px/1.4 var(--mono);
+  font: var(--fs-label)/1.4 var(--mono);
   color: var(--chip-await-ink);
 }
 
 .loading {
   margin-top: 40px;
   text-align: center;
-  font: 12px/1 var(--mono);
+  font: var(--fs-label)/1 var(--mono);
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--ink-soft);
@@ -601,7 +582,7 @@ code {
 .backlink {
   display: inline-block;
   margin-bottom: 18px;
-  font: 12px/1 var(--mono);
+  font: var(--fs-label)/1 var(--mono);
   letter-spacing: 0.08em;
   color: var(--ink-soft);
   text-decoration: none;
@@ -667,11 +648,24 @@ code {
   gap: 10px;
 }
 
-/* The ☰ "show sessions" button sits at the bar's end (<960px), where the
- * switcher used to. Hidden at ≥960px (the sidebar is the list) by the shell
- * media query below. */
+/* The ☰ "show sessions" button. Rendered only <960px (hidden at ≥960px by the
+ * shell media query below, where the sidebar is the list). At <960px it is the
+ * single session-list affordance in the header, so it takes the top-left slot
+ * the back link held: `order: -1` sorts it before the identity. The back link
+ * is hidden <960px (media query below), so the two never both show: exactly one
+ * top-left control per breakpoint. */
 .review-header .rh-menu {
   flex: none;
+  order: -1;
+}
+
+/* <960px the ☰ is the session-list affordance, so the back link (a duplicate
+ * way to the list) folds away. Complementary to the ≥960px rule below that hides
+ * the ☰: exactly one of the two shows per breakpoint. */
+@media (max-width: 959px) {
+  .review-header .backlink {
+    display: none;
+  }
 }
 
 .session-title {
@@ -688,12 +682,12 @@ code {
 }
 
 .review-header.compact .session-title {
-  font-size: 15px;
+  font-size: var(--fs-prose);
 }
 
 .session-rev {
   flex: none;
-  font: 700 13px/1 var(--mono);
+  font: 700 var(--fs-body)/1 var(--mono);
   color: var(--accent);
 }
 
@@ -716,7 +710,7 @@ code {
 
 .session-where {
   margin: 0 0 8px;
-  font: 12px/1.4 var(--mono);
+  font: var(--fs-label)/1.4 var(--mono);
   color: var(--ink-soft);
   white-space: nowrap;
   overflow: hidden;
@@ -730,17 +724,13 @@ code {
   gap: 10px 14px;
 }
 
-.session-meta .link-state {
-  margin-left: auto;
-}
-
 .review-wait {
   margin-top: 20px;
   padding: 22px;
   border: 1px dashed var(--line-strong);
   border-top: 2px solid color-mix(in srgb, var(--accent) 60%, var(--line-strong));
   color: var(--ink-soft);
-  font-size: 14px;
+  font-size: var(--fs-body);
   line-height: 1.65;
   animation: card-in 0.4s cubic-bezier(0.22, 0.7, 0.3, 1) 60ms both;
 }
@@ -754,7 +744,7 @@ code {
 }
 
 .wait-line {
-  font: 12px/1 var(--mono);
+  font: var(--fs-label)/1 var(--mono);
   letter-spacing: 0.06em;
   color: color-mix(in srgb, var(--accent) 75%, var(--ink-soft));
 }
@@ -799,7 +789,7 @@ code {
 
 .section-title {
   margin: 0;
-  font: 700 12px/1 var(--mono);
+  font: 700 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.24em;
   text-transform: uppercase;
   white-space: nowrap;
@@ -849,7 +839,7 @@ code {
 /* The slug each section answers to — M2c anchors comments here. Quietly
  * present on hover/focus so the contract is discoverable but never noisy. */
 .anchor-slug {
-  font: 11px/1 var(--mono);
+  font: var(--fs-label)/1 var(--mono);
   color: var(--ink-soft);
   white-space: nowrap;
   opacity: 0;
@@ -864,7 +854,7 @@ code {
 /* ── prose (sanitized markdown) ── */
 
 .md {
-  font-size: 15px;
+  font-size: var(--fs-prose);
   line-height: 1.65;
   overflow-wrap: anywhere;
 }
@@ -939,7 +929,7 @@ code {
  * anchor (the body text below carries the anchor instead). */
 .callout-label {
   margin: 0 0 0.4em;
-  font: 600 10.5px/1.2 var(--mono);
+  font: 600 var(--fs-label)/1.2 var(--mono);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--callout-ink);
@@ -1004,7 +994,7 @@ code {
 
 .gwt-n {
   flex: none;
-  font: 600 10.5px/1.7 var(--mono);
+  font: 600 var(--fs-label)/1.7 var(--mono);
   color: var(--ink-soft);
 }
 
@@ -1015,7 +1005,7 @@ code {
 
 .gwt-step {
   margin: 0 0 0.25em;
-  font-size: 14px;
+  font-size: var(--fs-body);
   line-height: 1.5;
 }
 
@@ -1026,7 +1016,7 @@ code {
 .gwt-kw {
   display: inline-block;
   min-width: 3.4em;
-  font: 600 10.5px var(--mono);
+  font: 600 var(--fs-label) var(--mono);
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
@@ -1048,7 +1038,7 @@ code {
 .md h3,
 .md h4 {
   margin: 1.1em 0 0.45em;
-  font-size: 15px;
+  font-size: var(--fs-prose);
   font-weight: 650;
   letter-spacing: -0.01em;
 }
@@ -1062,7 +1052,7 @@ code {
 .md table {
   border-collapse: collapse;
   margin: 0 0 0.85em;
-  font-size: 13.5px;
+  font-size: var(--fs-body);
   display: block;
   overflow-x: auto;
 }
@@ -1075,7 +1065,7 @@ code {
 }
 
 .md th {
-  font: 600 11px/1.4 var(--mono);
+  font: 600 var(--fs-label)/1.4 var(--mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--ink-soft);
@@ -1148,7 +1138,7 @@ code {
 }
 
 .field-label {
-  font: 600 10.5px/1.9 var(--mono);
+  font: 600 var(--fs-label)/1.9 var(--mono);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--ink-soft);
@@ -1164,7 +1154,7 @@ code {
 }
 
 .field-files .field-value .md {
-  font: 13px/1.75 var(--mono);
+  font: var(--fs-body)/1.75 var(--mono);
 }
 
 .field-files .field-value .md ul {
@@ -1205,7 +1195,7 @@ code {
   cursor: pointer;
   user-select: none;
   list-style: none;
-  font: 600 12px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
 }
 
 .details-summary::-webkit-details-marker {
@@ -1243,7 +1233,7 @@ code {
   border-radius: 999px;
   background: var(--chip-await-bg);
   color: var(--chip-await-ink);
-  font: 600 10.5px/1.2 var(--mono);
+  font: 600 var(--fs-label)/1.2 var(--mono);
   letter-spacing: 0.04em;
   white-space: nowrap;
 }
@@ -1276,7 +1266,7 @@ code {
 .fence-head {
   padding: 6px 11px;
   border-bottom: 1px solid var(--line);
-  font: 600 10px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--ink-soft);
@@ -1286,7 +1276,7 @@ code {
   margin: 0;
   padding: 12px 14px;
   overflow-x: auto;
-  font: 12.5px/1.6 var(--mono);
+  font: var(--fs-body)/1.6 var(--mono);
 }
 
 .fence code {
@@ -1310,7 +1300,7 @@ code {
 }
 
 .diagram-pending {
-  font: 11px/1 var(--mono);
+  font: var(--fs-label)/1 var(--mono);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--ink-soft);
@@ -1500,7 +1490,7 @@ code {
 
 .sel-slug {
   padding: 0 4px 0 12px;
-  font: 10px/1 var(--mono);
+  font: var(--fs-label)/1 var(--mono);
   letter-spacing: 0.08em;
   color: var(--accent-on-ink);
   max-width: 12ch;
@@ -1517,7 +1507,7 @@ code {
   border: none;
   background: none;
   color: inherit;
-  font: 600 11px/1 var(--mono);
+  font: 600 var(--fs-body)/1 var(--mono);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   cursor: pointer;
@@ -1530,7 +1520,7 @@ code {
 }
 
 .sel-key {
-  font: 600 10px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   padding: 2px 5px;
   border: 1px solid color-mix(in srgb, var(--bg) 35%, transparent);
   border-radius: 4px;
@@ -1582,7 +1572,7 @@ code {
   align-items: baseline;
   gap: 7px;
   margin-bottom: 9px;
-  font: 600 10px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.18em;
   text-transform: uppercase;
 }
@@ -1600,12 +1590,12 @@ code {
 
 .composer-close {
   margin-left: auto;
-  padding: 2px 6px;
+  padding: 4px 7px;
   border: 1px solid var(--line-strong);
   border-radius: 4px;
   background: none;
   color: var(--ink-soft);
-  font: 600 9.5px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   cursor: pointer;
@@ -1622,7 +1612,7 @@ code {
   margin: 0 0 9px;
   padding: 1px 0 1px 9px;
   border-left: 2px solid color-mix(in srgb, var(--accent) 55%, var(--line-strong));
-  font-size: 12px;
+  font-size: var(--fs-label);
   line-height: 1.5;
   color: var(--ink-soft);
   display: -webkit-box;
@@ -1640,7 +1630,7 @@ code {
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--ink);
-  font: 14px/1.5 var(--sans);
+  font: var(--fs-body)/1.5 var(--sans);
   resize: vertical;
 }
 
@@ -1657,7 +1647,7 @@ code {
 }
 
 .composer-hint {
-  font: 10.5px/1.3 var(--mono);
+  font: var(--fs-label)/1.3 var(--mono);
   letter-spacing: 0.04em;
   color: var(--ink-soft);
 }
@@ -1677,7 +1667,7 @@ code {
 .btn {
   padding: 7px 13px;
   border-radius: 7px;
-  font: 600 11px/1 var(--mono);
+  font: 600 var(--fs-body)/1 var(--mono);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   cursor: pointer;
@@ -1768,7 +1758,7 @@ code {
   border-radius: 6px;
   background: none;
   color: var(--ink-soft);
-  font: 600 10.5px/1 var(--mono);
+  font: 600 var(--fs-body)/1 var(--mono);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   cursor: pointer;
@@ -1787,7 +1777,7 @@ code {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font: 600 10.5px/1 var(--mono);
+  font: 600 var(--fs-body)/1 var(--mono);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--ink-soft);
@@ -1806,7 +1796,7 @@ code {
 }
 
 .tally-glyph {
-  font-size: 9px;
+  font-size: var(--fs-label);
   color: color-mix(in srgb, var(--accent) 80%, var(--ink-soft));
 }
 
@@ -1819,11 +1809,11 @@ code {
   border-radius: 999px;
   background: var(--accent);
   color: var(--accent-contrast);
-  font: 700 11px/1 var(--mono);
+  font: 700 var(--fs-label)/1 var(--mono);
 }
 
 .drawer-failed {
-  font: 10.5px/1.3 var(--mono);
+  font: var(--fs-label)/1.3 var(--mono);
   color: var(--chip-await-ink);
 }
 
@@ -1851,7 +1841,7 @@ code {
 }
 
 .pending-slug {
-  font: 600 10px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.08em;
   color: var(--ink-soft);
   overflow: hidden;
@@ -1865,7 +1855,7 @@ code {
   border-radius: 5px;
   background: none;
   color: var(--ink-soft);
-  font: 600 9.5px/1 var(--mono);
+  font: 600 var(--fs-body)/1 var(--mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   cursor: pointer;
@@ -1903,7 +1893,7 @@ code {
   border: 1px solid transparent;
   border-radius: 6px;
   color: var(--ink);
-  font: 13.5px/1.5 var(--sans);
+  font: var(--fs-body)/1.5 var(--sans);
   resize: none;
 }
 
@@ -1929,7 +1919,7 @@ code {
   display: flex;
   justify-content: space-between;
   padding: 0 2px;
-  font: 600 11px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.2em;
   text-transform: uppercase;
   color: var(--ink-soft);
@@ -1939,13 +1929,35 @@ code {
   color: var(--ink);
 }
 
+/* The empty-state placeholder: a centered column (glyph + copy + optional ask
+   control) so a thread-less rail reads as a deliberate placeholder, never a
+   blank column. The dashed frame echoes the old one-liner's quiet treatment. */
 .rail-empty {
+  display: grid;
+  justify-items: center;
+  gap: 11px;
   margin: 0;
-  padding: 18px 14px;
+  padding: 26px 16px;
   border: 1px dashed var(--line-strong);
-  font: 11px/1.7 var(--mono);
+  text-align: center;
+}
+
+.rail-empty-glyph {
+  font-size: 22px;
+  line-height: 1;
+  color: color-mix(in srgb, var(--ink-soft) 55%, transparent);
+}
+
+.rail-empty-copy {
+  margin: 0;
+  max-width: 22ch;
+  font: var(--fs-label)/1.7 var(--mono);
   letter-spacing: 0.04em;
   color: var(--ink-soft);
+}
+
+.rail-empty-ask {
+  margin-top: 2px;
 }
 
 .thread {
@@ -1960,7 +1972,7 @@ code {
   align-items: baseline;
   gap: 7px;
   margin-bottom: 7px;
-  font: 600 10px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.08em;
   color: var(--ink-soft);
 }
@@ -1982,7 +1994,7 @@ code {
 
 .thread-body {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--fs-body);
   line-height: 1.55;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -1998,7 +2010,7 @@ code {
 .thread-answer-label {
   display: block;
   margin-bottom: 4px;
-  font: 600 9.5px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--accent);
@@ -2006,7 +2018,7 @@ code {
 
 .thread-answer-body {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--fs-body);
   line-height: 1.55;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -2015,7 +2027,7 @@ code {
 /* The codec cursor blinks while the agent types. */
 .thread-answering {
   margin: 9px 0 0;
-  font: 600 11px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.1em;
   color: color-mix(in srgb, var(--accent) 80%, var(--ink-soft));
 }
@@ -2050,7 +2062,7 @@ code {
 
 .thread-followup-q {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--fs-body);
   line-height: 1.55;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -2058,7 +2070,7 @@ code {
 
 .thread-followup-label {
   margin-right: 6px;
-  font: 600 9.5px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--ink-soft);
@@ -2071,7 +2083,7 @@ code {
   padding: 7px 10px;
   border: 1px dashed var(--line-strong);
   background: none;
-  font: 600 10px/1 var(--mono);
+  font: 600 var(--fs-body)/1 var(--mono);
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--ink-soft);
@@ -2103,7 +2115,7 @@ code {
   border-radius: 8px;
   background: var(--surface);
   color: var(--ink);
-  font: 13px/1.5 var(--sans);
+  font: var(--fs-body)/1.5 var(--sans);
   resize: vertical;
 }
 
@@ -2221,7 +2233,7 @@ code {
   border: none;
   background: none;
   color: var(--ink-soft);
-  font: 600 10.5px/1 var(--mono);
+  font: 600 var(--fs-body)/1 var(--mono);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   cursor: pointer;
@@ -2246,7 +2258,7 @@ code {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font: 600 10.5px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--ink-soft);
@@ -2264,7 +2276,7 @@ code {
   top: 50%;
   transform: translateY(-50%);
   pointer-events: none;
-  font-size: 9px;
+  font-size: var(--fs-label);
   color: var(--ink-soft);
 }
 
@@ -2276,7 +2288,7 @@ code {
   border-radius: 7px;
   background: var(--surface);
   color: var(--ink);
-  font: 600 11px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.06em;
   cursor: pointer;
 }
@@ -2290,7 +2302,7 @@ code {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font: 600 10.5px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--chip-await-ink);
@@ -2308,7 +2320,7 @@ code {
 }
 
 .tally-keys kbd {
-  font: 600 10px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   padding: 2px 4px;
   border: 1px solid var(--line-strong);
   border-radius: 4px;
@@ -2327,7 +2339,7 @@ code {
   border-radius: 7px;
   background: none;
   color: var(--ink-soft);
-  font: 600 10.5px/1 var(--mono);
+  font: 600 var(--fs-body)/1 var(--mono);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   cursor: pointer;
@@ -2359,7 +2371,7 @@ code {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  font: 700 11px/1 var(--mono);
+  font: 700 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--accent);
@@ -2376,7 +2388,7 @@ code {
 
 .rev-changelog {
   margin: 9px 0 0;
-  font-size: 14px;
+  font-size: var(--fs-body);
   line-height: 1.6;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -2406,7 +2418,7 @@ code {
   position: absolute;
   left: -15px;
   top: 1px;
-  font: 700 13px/1 var(--mono);
+  font: 700 var(--fs-label)/1 var(--mono);
   color: var(--chip-await-ink);
   animation: card-in 0.3s ease-out both;
 }
@@ -2425,7 +2437,7 @@ code {
 
 .diff-legend {
   margin: 22px 2px 0;
-  font: 600 11px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--ink);
@@ -2449,7 +2461,7 @@ code {
 }
 
 .diff-status {
-  font: 600 10px/1.2 var(--mono);
+  font: 600 var(--fs-label)/1.2 var(--mono);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   white-space: nowrap;
@@ -2491,7 +2503,7 @@ code {
 .dline {
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr);
-  font: 12.5px/1.7 var(--mono);
+  font: var(--fs-body)/1.7 var(--mono);
 }
 
 .dline-op {
@@ -2538,7 +2550,7 @@ code {
   margin: 7px 14px;
   padding-top: 6px;
   border-top: 1px dashed var(--line-strong);
-  font: 600 10px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.3em;
   color: var(--ink-soft);
   user-select: none;
@@ -2559,7 +2571,7 @@ code {
   cursor: pointer;
   user-select: none;
   list-style: none;
-  font: 600 10px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.08em;
   color: var(--ink-soft);
 }
@@ -2576,7 +2588,7 @@ code {
 
 .resolved-check {
   color: var(--chip-approved-ink);
-  font-size: 11px;
+  font-size: var(--fs-label);
 }
 
 .resolved-word {
@@ -2629,7 +2641,7 @@ code {
 .thread-quote-detached {
   margin-right: 6px;
   color: var(--ink-soft);
-  font-size: 11px;
+  font-size: var(--fs-label);
 }
 
 /* ───────────────────────── the grill: agent question cards ─────────────────
@@ -2666,7 +2678,7 @@ code {
   gap: 8px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--line);
-  font: 600 10px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--accent);
@@ -2716,7 +2728,7 @@ code {
   border-radius: 11px;
   background: var(--surface);
   color: var(--ink);
-  font: 15px/1.3 var(--sans);
+  font: var(--fs-body)/1.3 var(--sans);
   text-align: left;
   cursor: pointer;
   transition: border-color 0.12s ease, background 0.12s ease, transform 0.08s ease;
@@ -2754,7 +2766,7 @@ code {
 }
 
 .grill-rec-word {
-  font: 600 9.5px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--accent);
@@ -2790,7 +2802,7 @@ code {
   border: 1.5px solid var(--line-strong);
   border-radius: 11px;
   color: var(--ink);
-  font: 15px/1.5 var(--sans);
+  font: var(--fs-body)/1.5 var(--sans);
   resize: vertical;
 }
 
@@ -2811,7 +2823,7 @@ code {
   border-radius: 6px;
   background: none;
   color: var(--ink-soft);
-  font: 600 10.5px/1 var(--mono);
+  font: 600 var(--fs-body)/1 var(--mono);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   cursor: pointer;
@@ -2864,7 +2876,7 @@ code {
 
 .settled-check {
   color: var(--chip-approved-ink);
-  font-size: 11px;
+  font-size: var(--fs-body);
 }
 
 .settled-word {
@@ -2874,14 +2886,14 @@ code {
 
 .grill-question-settled {
   margin-top: 7px;
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-weight: 500;
   color: var(--ink-soft);
 }
 
 .settled-answer {
   margin: 6px 0 0;
-  font-size: 14px;
+  font-size: var(--fs-body);
   line-height: 1.5;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -2904,7 +2916,7 @@ code {
   border-radius: 999px;
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: var(--accent);
-  font: 700 11px/1 var(--mono);
+  font: 700 var(--fs-body)/1 var(--mono);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   cursor: pointer;
@@ -2921,7 +2933,7 @@ code {
 }
 
 .grill-undo-glyph {
-  font-size: 13px;
+  font-size: var(--fs-label);
   line-height: 1;
 }
 
@@ -2946,7 +2958,7 @@ code {
   border: none;
   background: none;
   color: var(--ink-soft);
-  font: 600 11px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.18em;
   text-transform: uppercase;
   cursor: pointer;
@@ -3017,7 +3029,7 @@ code {
   border-bottom: 1px solid var(--line-strong);
   background: color-mix(in srgb, var(--accent) 4%, var(--surface));
   color: var(--ink);
-  font: 13px/1.3 var(--mono);
+  font: var(--fs-body)/1.3 var(--mono);
   text-align: left;
   cursor: pointer;
   transition: background 0.18s ease;
@@ -3063,7 +3075,7 @@ code {
  * tabular so the digits don't jitter as they advance. */
 .np-timer {
   flex: none;
-  font: 11px/1 var(--mono);
+  font: var(--fs-label)/1 var(--mono);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
   color: var(--accent);
@@ -3081,7 +3093,7 @@ code {
   padding: 2px 6px;
   border: 1px solid var(--line-strong);
   border-radius: 3px;
-  font: 600 9px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--ink-soft);
@@ -3147,7 +3159,7 @@ code {
   border-radius: 3px;
   background: none;
   color: var(--ink-soft);
-  font: 600 10px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   cursor: pointer;
@@ -3212,7 +3224,7 @@ code {
 .lc-empty {
   margin: 0;
   padding: 14px;
-  font: 12px/1.4 var(--mono);
+  font: var(--fs-body)/1.4 var(--mono);
   color: var(--ink-soft);
 }
 
@@ -3236,7 +3248,7 @@ code {
   border: none;
   background: none;
   color: var(--ink);
-  font: 12.5px/1.4 var(--mono);
+  font: var(--fs-body)/1.4 var(--mono);
   text-align: left;
   cursor: pointer;
 }
@@ -3281,7 +3293,7 @@ code {
   border-radius: 3px;
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   color: var(--accent);
-  font: 600 10px/1.3 var(--mono);
+  font: 600 var(--fs-label)/1.3 var(--mono);
   font-variant-numeric: tabular-nums;
 }
 
@@ -3308,7 +3320,7 @@ code {
 
 .lc-when {
   flex: none;
-  font: 10px/1.4 var(--mono);
+  font: var(--fs-label)/1.4 var(--mono);
   color: var(--ink-soft);
 }
 
@@ -3335,7 +3347,7 @@ code {
 .lc-highlight-body {
   flex: 1 1 auto;
   min-width: 0;
-  font: 13px/1.45 var(--sans);
+  font: var(--fs-body)/1.45 var(--sans);
   color: var(--ink);
   overflow-wrap: anywhere;
 }
@@ -3351,7 +3363,7 @@ code {
   border: 1px solid var(--line);
   border-radius: 4px;
   background: color-mix(in srgb, var(--ink) 3%, var(--surface));
-  font: 11.5px/1.5 var(--mono);
+  font: var(--fs-body)/1.5 var(--mono);
   color: var(--ink-soft);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -3369,7 +3381,7 @@ code {
 .iv-zone-label {
   margin: 0;
   padding: 0 2px;
-  font: 700 10px/1 var(--mono);
+  font: 700 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.2em;
   text-transform: uppercase;
   color: var(--ink-soft);
@@ -3390,7 +3402,7 @@ code {
 /* Open question: the codec cursor blinks until the answer lands. */
 .iv-awaiting {
   margin: 9px 0 0;
-  font: 600 11px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.1em;
   color: color-mix(in srgb, var(--accent) 80%, var(--ink-soft));
 }
@@ -3429,7 +3441,7 @@ code {
   border-radius: 999px;
   background: var(--chip-await-bg);
   color: var(--chip-await-ink);
-  font: 600 10px/1.4 var(--mono);
+  font: 600 var(--fs-label)/1.4 var(--mono);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   vertical-align: 1px;
@@ -3452,7 +3464,7 @@ code {
   border-radius: 7px;
   background: none;
   color: var(--chip-approved-ink);
-  font: 600 10.5px/1 var(--mono);
+  font: 600 var(--fs-body)/1 var(--mono);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   cursor: pointer;
@@ -3524,7 +3536,7 @@ code {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  font: 700 11px/1 var(--mono);
+  font: 700 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--chip-approved-ink);
@@ -3552,14 +3564,14 @@ code {
 
 .approve-copy {
   margin: 11px 0 0;
-  font-size: 15px;
+  font-size: var(--fs-prose);
   line-height: 1.55;
   overflow-wrap: anywhere;
 }
 
 .approve-sub {
   margin: 7px 0 0;
-  font-size: 12.5px;
+  font-size: var(--fs-body);
   line-height: 1.6;
   color: var(--ink-soft);
 }
@@ -3656,8 +3668,8 @@ code {
 /* The trailing ✕ on a pending index card — muted until hover/focus. */
 .card-delete {
   flex: none;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3665,7 +3677,7 @@ code {
   border-radius: 6px;
   background: none;
   color: var(--ink-soft);
-  font: 12px/1 var(--mono);
+  font: var(--fs-body)/1 var(--mono);
   cursor: pointer;
   opacity: 0.5;
   transition: opacity 0.12s ease, color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
@@ -3694,7 +3706,7 @@ code {
   border-radius: 6px;
   background: none;
   color: var(--ink-soft);
-  font: 600 10.5px/1 var(--mono);
+  font: 600 var(--fs-body)/1 var(--mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   cursor: pointer;
@@ -3723,7 +3735,7 @@ code {
   border: 1px dashed color-mix(in srgb, var(--chip-approved-ink) 45%, var(--line-strong));
   border-top: 2px solid color-mix(in srgb, var(--chip-approved-ink) 55%, var(--line));
   background: color-mix(in srgb, var(--chip-approved-ink) 5%, transparent);
-  font: 600 11.5px/1.5 var(--mono);
+  font: 600 var(--fs-label)/1.5 var(--mono);
   letter-spacing: 0.04em;
   color: var(--chip-approved-ink);
   animation: card-in 0.35s cubic-bezier(0.22, 0.7, 0.3, 1) both;
@@ -3744,7 +3756,7 @@ code {
   color: var(--ink-soft);
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  font-size: 10px;
+  font-size: var(--fs-label);
 }
 
 /* The read-only finalizing notice (comment & approve, approval and archive lifecycle, D2): the agent is
@@ -3761,7 +3773,7 @@ code {
   border: 1px dashed color-mix(in srgb, var(--chip-implementing-ink) 45%, var(--line-strong));
   border-top: 2px solid color-mix(in srgb, var(--chip-implementing-ink) 55%, var(--line));
   background: color-mix(in srgb, var(--chip-implementing-ink) 5%, transparent);
-  font: 600 11.5px/1.5 var(--mono);
+  font: 600 var(--fs-label)/1.5 var(--mono);
   letter-spacing: 0.04em;
   color: var(--chip-implementing-ink);
   animation: card-in 0.35s cubic-bezier(0.22, 0.7, 0.3, 1) both;
@@ -3785,7 +3797,7 @@ code {
   padding: 5px 10px;
   background: var(--chip-await-bg);
   color: var(--chip-await-ink);
-  font: 600 10.5px/1 var(--mono);
+  font: 600 var(--fs-body)/1 var(--mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   cursor: pointer;
@@ -3903,7 +3915,7 @@ code {
   align-items: baseline;
   gap: 8px;
   padding: 2px 6px 8px;
-  font: 600 10px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--accent);
@@ -3952,7 +3964,7 @@ code {
 
 .sec-hint {
   margin-left: auto;
-  font: 500 9.5px/1 var(--mono);
+  font: 500 var(--fs-body)/1 var(--mono);
   letter-spacing: 0.12em;
   color: var(--ink-soft);
 }
@@ -4075,7 +4087,7 @@ code {
     border-radius: 999px;
     background: var(--accent);
     color: var(--accent-contrast);
-    font: 700 11px/1 var(--mono);
+    font: 700 var(--fs-label)/1 var(--mono);
   }
 
   .bar-approve {
@@ -4088,7 +4100,7 @@ code {
     border-radius: 9px;
     background: none;
     color: var(--chip-approved-ink);
-    font: 600 10.5px/1 var(--mono);
+    font: 600 var(--fs-body)/1 var(--mono);
     letter-spacing: 0.1em;
     text-transform: uppercase;
     cursor: pointer;
@@ -4161,7 +4173,7 @@ code {
 
 .settings-title {
   margin: 0;
-  font: 600 13px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--ink-soft);
@@ -4182,7 +4194,7 @@ code {
   padding: 8px 18px;
   background: var(--surface);
   color: var(--ink-soft);
-  font: 600 11px/1 var(--mono);
+  font: 600 var(--fs-body)/1 var(--mono);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   cursor: pointer;
@@ -4211,7 +4223,7 @@ code {
 }
 
 .repo-picker-label {
-  font: 600 10.5px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--ink-soft);
@@ -4229,7 +4241,7 @@ code {
   top: 50%;
   transform: translateY(-50%);
   pointer-events: none;
-  font-size: 9px;
+  font-size: var(--fs-label);
   color: var(--ink-soft);
 }
 
@@ -4242,7 +4254,7 @@ code {
   border-radius: 8px;
   background: var(--surface);
   color: var(--ink);
-  font: 12px/1.2 var(--mono);
+  font: var(--fs-body)/1.2 var(--mono);
   cursor: pointer;
 }
 
@@ -4266,14 +4278,14 @@ code {
 }
 
 .path-banner-label {
-  font: 600 10px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: color-mix(in srgb, var(--accent) 75%, var(--ink-soft));
 }
 
 .path-banner-path {
-  font: 12.5px/1.4 var(--mono);
+  font: var(--fs-body)/1.4 var(--mono);
   color: var(--ink);
   word-break: break-all;
 }
@@ -4285,7 +4297,7 @@ code {
   padding: 16px;
   border: 1px dashed var(--line-strong);
   border-radius: 8px;
-  font: 13px/1.5 var(--sans);
+  font: var(--fs-body)/1.5 var(--sans);
   color: var(--ink-soft);
   text-align: center;
 }
@@ -4303,7 +4315,7 @@ code {
   margin: 0 0 4px;
   padding-bottom: 6px;
   border-bottom: 1px solid var(--line);
-  font: 600 11px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--accent);
@@ -4339,7 +4351,7 @@ code {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font: 14px/1.3 var(--sans);
+  font: var(--fs-body)/1.3 var(--sans);
   color: var(--ink);
 }
 
@@ -4353,7 +4365,7 @@ code {
 }
 
 .field-desc {
-  font: 12px/1.4 var(--sans);
+  font: var(--fs-body)/1.4 var(--sans);
   color: var(--ink-soft);
 }
 
@@ -4365,7 +4377,7 @@ code {
  * so it carries the accent ink to draw the eye. */
 .field-inherit,
 .field-override {
-  font: 600 10px/1.3 var(--mono);
+  font: 600 var(--fs-label)/1.3 var(--mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -4381,7 +4393,7 @@ code {
 /* The 422 message for this field — the del-red the palette reserves for true
  * faults, sat right under the label so the offending input is unambiguous. */
 .field-error {
-  font: 11.5px/1.4 var(--mono);
+  font: var(--fs-body)/1.4 var(--mono);
   letter-spacing: 0.02em;
   color: var(--diff-del);
 }
@@ -4402,7 +4414,7 @@ code {
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   color: var(--ink);
-  font: 13px/1.3 var(--mono);
+  font: var(--fs-body)/1.3 var(--mono);
 }
 
 .field-input:focus-visible {
@@ -4429,7 +4441,7 @@ code {
   border-radius: 6px;
   background: none;
   color: var(--ink-soft);
-  font: 600 9.5px/1 var(--mono);
+  font: 600 var(--fs-body)/1 var(--mono);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   cursor: pointer;
@@ -4467,7 +4479,7 @@ code {
  * (lowercase, no weight, dimmed) so it reads as documentation, not feedback. */
 .settings-autosave-note {
   margin: 9px 2px 0;
-  font: 11px/1 var(--mono);
+  font: var(--fs-label)/1 var(--mono);
   letter-spacing: 0.06em;
   color: color-mix(in srgb, var(--ink-soft) 70%, var(--surface));
 }
@@ -4506,7 +4518,7 @@ code {
 
 /* The in-flight tick while a save is on the wire. */
 .settings-saving {
-  font: 600 11px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--ink-soft);
@@ -4514,7 +4526,7 @@ code {
 
 /* "saved ✓" — the approved green; the toast wrapper owns the entrance motion. */
 .settings-saved {
-  font: 600 11px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--chip-approved-ink);
@@ -4522,7 +4534,7 @@ code {
 
 /* A top-level save failure (400/network, or "fix the fields below" for a 422). */
 .settings-save-error {
-  font: 12px/1.4 var(--mono);
+  font: var(--fs-body)/1.4 var(--mono);
   color: var(--diff-del);
 }
 
@@ -4607,7 +4619,7 @@ code {
   width: 1.2em;
   text-align: center;
   color: var(--accent);
-  font: 13px/1 var(--mono);
+  font: var(--fs-body)/1 var(--mono);
 }
 
 /* Title over subline, both ellipsized so a long name or deep repo path can't
@@ -4621,7 +4633,7 @@ code {
 }
 
 .sl-title {
-  font: 650 13px/1.25 var(--sans);
+  font: 650 var(--fs-body)/1.25 var(--sans);
   letter-spacing: -0.01em;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4629,7 +4641,7 @@ code {
 }
 
 .sl-where {
-  font: 11px/1.3 var(--mono);
+  font: var(--fs-label)/1.3 var(--mono);
   color: var(--ink-soft);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4642,7 +4654,7 @@ code {
 
 .sl-unread {
   flex: none;
-  font: 700 10.5px/1 var(--mono);
+  font: 700 var(--fs-label)/1 var(--mono);
   color: var(--accent);
   letter-spacing: 0.04em;
   white-space: nowrap;
@@ -4652,8 +4664,8 @@ code {
  * focused (keyboard reach is preserved), mirroring the home card's .card-delete. */
 .sl-delete {
   flex: none;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -4661,7 +4673,7 @@ code {
   border-radius: 6px;
   background: none;
   color: var(--ink-soft);
-  font: 11px/1 var(--mono);
+  font: var(--fs-body)/1 var(--mono);
   cursor: pointer;
   opacity: 0.5;
   transition: opacity 0.12s ease, color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
@@ -4709,7 +4721,7 @@ code {
   border: none;
   background: none;
   color: var(--ink-soft);
-  font: 600 11px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.16em;
   text-transform: uppercase;
   cursor: pointer;
@@ -4802,8 +4814,10 @@ code {
 
   /* The review header's back-link and ☰ menu are redundant when the sidebar
    * provides both (home link via the wordmark, switching via the list), so they
-   * fold away at the desktop sidebar width. They stay rendered for <960px, where
-   * the ☰ menu opens the session sheet — the only session-switching face there. */
+   * fold away at the desktop sidebar width. For <960px the ☰ menu stays rendered
+   * and opens the session sheet, the only session-switching face there. The back
+   * link duplicated the ☰, so it now folds at every width (the <960px rule above
+   * hides it on mobile; this rule hides it on desktop). */
   .review-header .backlink,
   .review-header .rh-menu {
     display: none;
@@ -5046,7 +5060,7 @@ code {
   gap: 7px;
   margin-bottom: 4px;
   padding: 0 4px;
-  font: 600 10px/1 var(--mono);
+  font: 600 var(--fs-label)/1 var(--mono);
   letter-spacing: 0.18em;
   text-transform: uppercase;
 }

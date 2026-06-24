@@ -60,7 +60,7 @@ test("a pending delete can be cancelled, leaving the session untouched", async (
   await expect(card).toBeVisible();
 });
 
-test("an approved session is deletable too, and its sheet says it is archived", async ({
+test("an approved session is deletable too, and its sheet says removal is permanent", async ({
   page,
   request,
 }) => {
@@ -75,11 +75,12 @@ test("an approved session is deletable too, and its sheet says it is archived", 
   const card = cardFor(page, session);
   await expect(card.locator(".chip")).toHaveText("approved");
 
-  // Approved sessions also carry the ✕, but the sheet promises archive (not purge).
+  // Approved sessions also carry the ✕; delete is now a permanent removal of the
+  // home folder (the durable copy survives elsewhere: the saved plan / PR).
   await card.locator(".card-delete").click();
   const sheet = page.locator(".delete-sheet");
   await expect(sheet).toBeVisible();
-  await expect(sheet).toContainText("recoverable");
+  await expect(sheet).toContainText("can't be undone");
   await sheet.locator(".btn-delete").click();
   await expect(card).toHaveCount(0);
 });

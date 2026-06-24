@@ -1,11 +1,11 @@
 // The approve flow: a deliberate control —
 // no keyboard shortcut exists, on purpose — opening a confirm sheet whose
 // copy is honest about what happens. Two primary actions:
-//   • save plan — the daemon writes the approved plan to your home archive
+//   • save plan: the daemon writes the approved plan to your home store
 //     (~/.otacon/sessions/) AND a copy into this project's plans dir (default
 //     .otacon/plans). You commit the project copy if you want it in git. The
 //     session is over.
-//   • implement — same finalize, but the plan stays in the home archive only
+//   • implement: same finalize, but the plan stays in the home store only
 //     (nothing into the project) and the same agent builds it (worktree →
 //     per-phase implement+review loop → PR); the session stays live as
 //     `implementing` rather than ending, and asks you on the first blocker.
@@ -41,7 +41,7 @@ type Stage =
  * `force` caller never bounces to the warn stage: a forced approve drops the
  * open threads on purpose, so its 409 surfaces as an error, not a second warn.
  * `approved` carries both the reported `path` (Save = the project copy, Implement
- * = the home copy) and the absolute `home` archive path, so the note is honest
+ * = the home copy) and the absolute `home` copy path, so the note is honest
  * about every place the plan landed.
  */
 export type ApproveMove =
@@ -88,7 +88,7 @@ export function ApproveDialog({
   onClose: () => void;
   /**
    * Receives the saved plan's reported path (Save = the project copy, Implement
-   * = the home copy) plus the absolute `home` archive path, so the approved note
+   * = the home copy) plus the absolute `home` copy path, so the approved note
    * can name both. The session frame flips the UI; `implement` is the chosen
    * variant — the caller leaves the screen interactive for it (the `implementing`
    * frame drives the UI), read-only for a plain Save end.
@@ -243,10 +243,10 @@ export function ApproveDialog({
               yourself if you want. Either save the plan, or hand the same agent the build.
             </p>
             <p className="approve-sub">
-              <strong>Save Plan</strong> writes the plan to your home archive (
+              <strong>Save Plan</strong> writes the plan to your home store (
               <code>~/.otacon/sessions/</code>) and a copy into this project&apos;s plans dir
               (default <code>.otacon/plans</code>); the session is over.{" "}
-              <strong>Implement</strong> keeps the plan in the home archive (nothing into the
+              <strong>Implement</strong> keeps the plan in the home store (nothing into the
               project) and hands the same agent the build: it opens a worktree and walks the phases
               (implement → review → fix), opening a PR when every phase is green. The session stays
               live as <em>implementing</em> and asks you on the first blocker.
@@ -382,8 +382,8 @@ export function ApproveDialog({
 /**
  * The quiet post-approve notice (review UI): the saved plan's location right after
  * approving (this tab heard the response) — the project copy under the plans
- * dir, plus the home archive. otacon never commits it; after a reload the live
- * path is gone, so the notice falls back to naming the home archive folder.
+ * dir, plus the home copy. otacon never commits it; after a reload the live
+ * path is gone, so the notice falls back to naming the home copy folder.
  */
 export function ApprovedNote({ path, home }: { path: string | null; home?: string | null }) {
   return (
@@ -393,8 +393,8 @@ export function ApprovedNote({ path, home }: { path: string | null; home?: strin
       </span>
       <span className="approved-word">approved</span>
       <span className="approved-path">
-        → {path ?? "~/.otacon/sessions/ (home archive)"}
-        {path !== null && home ? ` · archived in ${home}` : ""}
+        → {path ?? "~/.otacon/sessions/ (home copy)"}
+        {path !== null && home ? ` · saved in ${home}` : ""}
       </span>
       <span className="approved-over">session over · read-only</span>
     </aside>

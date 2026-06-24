@@ -169,7 +169,7 @@ export interface SessionDetail {
    */
   stream: StreamEvent[];
   missing: boolean;
-  /** True once a `removed` frame lands: the session was cleaned/archived or deleted. */
+  /** True once a `removed` frame lands: the session was cleaned or deleted (home folder removed). */
   cleaned: boolean;
   connected: boolean;
 }
@@ -273,7 +273,7 @@ export function useSession(id: string): SessionDetail {
           on<{ session: string; events: StreamEvent[] }>(source, "stream", ({ events }) =>
             setStream((prev) => [...prev, ...events].slice(-STREAM_VIEW_CAP)),
           );
-          // Terminal: this session left the registry (clean/archive or a delete).
+          // Terminal: this session left the registry (clean or a delete).
           // Close the stream — a reconnect would 404-loop against the deregistered
           // id — and let the screen render its closed state.
           on<{ session: string }>(source, "removed", () => {
@@ -432,7 +432,7 @@ export function postAnswer(id: string, draft: AnswerDraft): Promise<boolean> {
 /**
  * The approve outcome: a finalize-now success carries
  * the saved `path` (Save = the project copy, Implement = the home copy) plus the
- * absolute `home` archive path, so the note is honest about every place the plan
+ * absolute `home` copy path, so the note is honest about every place the plan
  * landed; a **comment & approve** success carries `finalizing:true` instead (no
  * artifact yet — the agent's fold-in submit writes it, and the SSE `finalizing`
  * frame drives the screen). E_UNRESOLVED_THREADS carries `unresolved` (the warn

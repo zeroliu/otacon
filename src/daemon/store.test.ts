@@ -66,10 +66,13 @@ describe("Store session CRUD", () => {
     expect(registry.sessions[session.id].title).toBe("auth refactor");
   });
 
-  test("createSession seeds session.json and events.json in the repo", () => {
+  test("createSession seeds session.json and events.json under the home store", () => {
     const store = new Store();
     const { id } = store.createSession({ title: "t", repo, branch: "main", quick: true });
-    const dir = sessionDir(repo, id);
+    const dir = sessionDir(id);
+    // Working state lives in the home store (~/.otacon/sessions/<id>/), keyed by
+    // id, not in the repo (confine-otacon-dir-to-config-and-plans).
+    expect(dir).toBe(join(home, "sessions", id));
     const state = JSON.parse(readFileSync(join(dir, "session.json"), "utf8"));
     expect(state).toEqual({
       lastReviewedRevision: 0,
@@ -81,6 +84,22 @@ describe("Store session CRUD", () => {
     expect(events).toEqual({ version: 1, events: [] });
     expect(store.getSession(id)?.branch).toBe("main");
     expect(store.getSession(id)?.quick).toBe(true);
+    // Nothing was created under <repo>/.otacon/ (it holds config + plans only).
+    expect(existsSync(join(repo, ".otacon"))).toBe(false);
+  });
+
+  test("removeSessionDir permanently deletes the home dir (idempotent)", () => {
+    const store = new Store();
+    const { id } = store.createSession({ title: "t", repo });
+    store.saveRevision(id, "# v1\n");
+    const dir = sessionDir(id);
+    expect(existsSync(dir)).toBe(true);
+    // Deregister first (as the daemon does), then remove the home folder.
+    store.deleteSession(id);
+    store.removeSessionDir(id);
+    expect(existsSync(dir)).toBe(false);
+    // A second removal is a no-op (force), never a throw.
+    expect(() => store.removeSessionDir(id)).not.toThrow();
   });
 
   test("minted ids are unique within a registry", () => {
@@ -180,13 +199,13 @@ describe("Store counters and revisions", () => {
     const { id } = store.createSession({ title: "t", repo });
     store.saveRevision(id, "# v1\n");
     store.saveRevision(id, "# v2\n");
-    const statePath = join(sessionDir(repo, id), "session.json");
+    const statePath = join(sessionDir(id), "session.json");
     writeFileSync(statePath, "{nope");
     const state = store.readState(id);
     // revision comes back from r2.md — restarting at 0 would overwrite history
     expect(state.revision).toBe(2);
     expect(state.counters).toEqual({ batch: 0, thread: 0, question: 0, eventSeq: 0 });
-    const names = readdirSync(sessionDir(repo, id));
+    const names = readdirSync(sessionDir(id));
     expect(names.some((f) => f.startsWith("session.json.corrupt-"))).toBe(true);
     // the rebuilt state is persisted and keeps working
     expect(JSON.parse(readFileSync(statePath, "utf8")).revision).toBe(2);
@@ -197,7 +216,7 @@ describe("Store counters and revisions", () => {
   test("wrong-shape and wrong-id session.json are quarantined too", () => {
     const store = new Store();
     const { id } = store.createSession({ title: "t", repo });
-    const statePath = join(sessionDir(repo, id), "session.json");
+    const statePath = join(sessionDir(id), "session.json");
     writeFileSync(statePath, JSON.stringify({ id })); // missing revision + counters
     expect(store.readState(id).revision).toBe(0);
     writeFileSync(statePath, JSON.stringify({ id, revision: 0, counters: {} }));
@@ -213,7 +232,7 @@ describe("Store counters and revisions", () => {
     );
     expect(store.readState(id).id).toBe(id);
     expect(
-      readdirSync(sessionDir(repo, id)).filter((f) => f.startsWith("session.json.corrupt-")),
+      readdirSync(sessionDir(id)).filter((f) => f.startsWith("session.json.corrupt-")),
     ).toHaveLength(3);
   });
 
@@ -221,7 +240,7 @@ describe("Store counters and revisions", () => {
     const store = new Store();
     const { id } = store.createSession({ title: "t", repo });
     store.saveRevision(id, "# v1\n");
-    rmSync(join(sessionDir(repo, id), "session.json"));
+    rmSync(join(sessionDir(id), "session.json"));
     expect(store.readState(id)).toEqual({
       id,
       revision: 1,
@@ -235,7 +254,7 @@ describe("Store counters and revisions", () => {
     const { id } = store.createSession({ title: "t", repo });
     expect(store.saveRevision(id, "# plan v1\n")).toBe(1);
     expect(store.saveRevision(id, "# plan v2\n")).toBe(2);
-    expect(existsSync(join(sessionDir(repo, id), "r1.md"))).toBe(true);
+    expect(existsSync(join(sessionDir(id), "r1.md"))).toBe(true);
     expect(store.readRevision(id, 1)).toBe("# plan v1\n");
     expect(store.readRevision(id, 2)).toBe("# plan v2\n");
     expect(store.readState(id).revision).toBe(2);
@@ -260,7 +279,7 @@ describe("Store counters and revisions", () => {
     expect(store.readRevisionWarnings(id, 1)).toEqual([warning]);
     expect(store.readRevisionWarnings(id, 2)).toEqual([]);
     // A corrupt warnings file degrades to [] — badges are presentation metadata.
-    writeFileSync(join(sessionDir(repo, id), "r1.warnings.json"), "{nope");
+    writeFileSync(join(sessionDir(id), "r1.warnings.json"), "{nope");
     expect(store.readRevisionWarnings(id, 1)).toEqual([]);
   });
 });
@@ -306,7 +325,7 @@ describe("Store pendingApproval (comment & approve)", () => {
   test("a malformed pendingApproval is dropped, not flowed through", () => {
     const store = new Store();
     const { id } = store.createSession({ title: "t", repo });
-    const statePath = join(sessionDir(repo, id), "session.json");
+    const statePath = join(sessionDir(id), "session.json");
     // implement must be a boolean and threads a string[]; a wrong shape is
     // dropped (defaulting beats quarantining a recoverable, valid-otherwise file).
     writeFileSync(
@@ -381,12 +400,12 @@ describe("markReviewed and changelog persistence (M3)", () => {
   test("a pre-M3 session.json without lastReviewedRevision reads as 0, not corrupt", () => {
     const store = new Store();
     const { id } = store.createSession({ title: "t", repo });
-    const statePath = join(sessionDir(repo, id), "session.json");
+    const statePath = join(sessionDir(id), "session.json");
     const state = JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>;
     delete state.lastReviewedRevision;
     writeFileSync(statePath, JSON.stringify(state));
     expect(store.readState(id).lastReviewedRevision).toBe(0);
-    expect(readdirSync(sessionDir(repo, id)).some((f) => f.includes(".corrupt-"))).toBe(false);
+    expect(readdirSync(sessionDir(id)).some((f) => f.includes(".corrupt-"))).toBe(false);
   });
 
   test("a hand-edited lastReviewedRevision is clamped into 0..revision, not trusted", () => {
@@ -397,7 +416,7 @@ describe("markReviewed and changelog persistence (M3)", () => {
     const { id } = store.createSession({ title: "t", repo });
     store.saveRevision(id, "# v1\n");
     store.saveRevision(id, "# v2\n");
-    const statePath = join(sessionDir(repo, id), "session.json");
+    const statePath = join(sessionDir(id), "session.json");
     const tamper = (value: unknown): void => {
       const state = JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>;
       state.lastReviewedRevision = value;
@@ -409,7 +428,7 @@ describe("markReviewed and changelog persistence (M3)", () => {
     expect(store.readState(id).lastReviewedRevision).toBe(0);
     tamper(-3); // negative → restart at 0
     expect(store.readState(id).lastReviewedRevision).toBe(0);
-    expect(readdirSync(sessionDir(repo, id)).some((f) => f.includes(".corrupt-"))).toBe(false);
+    expect(readdirSync(sessionDir(id)).some((f) => f.includes(".corrupt-"))).toBe(false);
   });
 
   test("saveRevision stores the changelog; readRevisionChangelog returns null when none", () => {
@@ -421,7 +440,7 @@ describe("markReviewed and changelog persistence (M3)", () => {
     expect(store.readRevisionChangelog(id, 2)).toBe(
       "Tightened phase 1 per t1; dropped the cache idea.",
     );
-    expect(existsSync(join(sessionDir(repo, id), "r2.changelog.md"))).toBe(true);
+    expect(existsSync(join(sessionDir(id), "r2.changelog.md"))).toBe(true);
     // Blank changelogs are not written.
     store.saveRevision(id, "# v3\n", [], "   ");
     expect(store.readRevisionChangelog(id, 3)).toBeNull();
@@ -432,7 +451,7 @@ describe("counter recovery high-water scans threads and events (M3)", () => {
   test("rebuilt counters never re-mint ids present in threads.json or events.json", () => {
     const store = new Store();
     const { id } = store.createSession({ title: "t", repo });
-    const dir = sessionDir(repo, id);
+    const dir = sessionDir(id);
     writeFileSync(
       join(dir, "threads.json"),
       JSON.stringify({
@@ -488,7 +507,7 @@ describe("counter recovery high-water scans threads and events (M3)", () => {
   test("corrupt or missing scan sources degrade to zeros, never throw", () => {
     const store = new Store();
     const { id } = store.createSession({ title: "t", repo });
-    const dir = sessionDir(repo, id);
+    const dir = sessionDir(id);
     writeFileSync(join(dir, "threads.json"), "{nope");
     writeFileSync(join(dir, "events.json"), JSON.stringify({ version: 1, events: "x" }));
     writeFileSync(join(dir, "session.json"), "{nope");

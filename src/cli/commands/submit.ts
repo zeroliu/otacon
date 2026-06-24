@@ -1,6 +1,6 @@
 // otacon submit [plan.md] [--resolutions res.json] [--session id] — read the
-// plan (default: .otacon/<session>/plan.md in the session's repo) and POST it
-// for linting. A 422 prints the daemon's lint issues JSON and exits 1 so the
+// plan (default: ~/.otacon/sessions/<session>/plan.md in the home store) and
+// POST it for linting. A 422 prints the daemon's lint issues JSON and exits 1 so the
 // agent fixes and resubmits. The resolutions file is the
 // revision-accompaniment document:
 // {"changelog": "...", "threads": {"t1": "reply", ...}} — required by L5 on
@@ -26,7 +26,7 @@ export async function submitCommand(argv: string[]): Promise<number> {
   const session = resolveSession(await listSessions(), values.session, realpathOr(process.cwd()));
 
   const path =
-    positionals[0] !== undefined ? resolve(positionals[0]) : planPath(session.repo, session.id);
+    positionals[0] !== undefined ? resolve(positionals[0]) : planPath(session.id);
   let plan: string;
   try {
     plan = readFileSync(path, "utf8");

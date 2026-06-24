@@ -9,10 +9,10 @@
 // the comments route. Each open conversation carries a collapsed "Follow up"
 // reply box and a **Resolve** button (the reviewer closes the whole conversation;
 // an un-replied comment's Resolve doubles as withdraw). Once the reviewer
-// resolves: a question conversation shows its inline ✓ mark with the resolved
-// revision; a comment conversation collapses to a ✓ summary (keyed on the close)
-// that expands to its turns + replies. Either kind then offers a **Reopen** (the
-// same Resolve seam in reverse) to re-open the conversation, hidden read-only.
+// resolves, either kind (question or comment) collapses to a ✓ summary (keyed
+// on the close) that expands to its turns + replies. The collapsed card then
+// offers a **Reopen** (the same Resolve seam in reverse) to re-open the
+// conversation, hidden read-only.
 // A detached conversation — whose quoted
 // text no longer exists in the current revision (plan structure, lint, and
 // anchoring) — stays inline in the same list as everything else. Its quote
@@ -74,6 +74,8 @@ export const ThreadsRail = memo(function ThreadsRail({
   onFollowup,
   onResolve,
   focus,
+  hasPlan,
+  onAsk,
 }: {
   threads: Thread[];
   onJump: Jump;
@@ -83,6 +85,10 @@ export const ThreadsRail = memo(function ThreadsRail({
   onResolve?: Resolve;
   /** Tap-a-lit-span → focus its rail thread (review UI); null = no target. */
   focus?: FocusTarget | null;
+  /** Whether a plan revision exists yet; varies the empty-state copy. */
+  hasPlan: boolean;
+  /** Open a whole-plan ask composer; absent read-only so the CTA hides. */
+  onAsk?: () => void;
 }) {
   const railRef = useRef<HTMLElement>(null);
   // Scroll the tapped thread's card into view and pulse it. Re-fires on every
@@ -113,15 +119,19 @@ export const ThreadsRail = memo(function ThreadsRail({
         <span className="rail-count">{groups.length}</span>
       </div>
       {threads.length === 0 ? (
-        <p className="rail-empty">no threads yet — select plan text to comment or ask</p>
+        <RailEmpty hasPlan={hasPlan} onAsk={onAsk} />
       ) : (
         groups.map((group) => {
-          // A reviewer-resolved COMMENT conversation collapses to its ✓ summary
-          // card (keyed on the close), expanding to its turns + replies. Every
-          // other conversation — open comments, all questions — renders through
-          // the shared open conversation card.
+          // A reviewer-resolved conversation (question OR comment) collapses to
+          // its ✓ summary card (keyed on the close), expanding to its turns +
+          // replies. Every open conversation renders through the shared open card.
+          // The `replyTo === undefined` guard keeps a degraded "root gone" unit
+          // (a follow-up promoted to its own unit by groupThreads when its root is
+          // missing) out of ResolvedCard, which assumes a real root with a
+          // Reopen seam; such a unit falls through to ConversationCard, which
+          // suppresses the close/reply controls for it.
           const root = group.root;
-          if (root.kind === "comment" && root.resolved) {
+          if (root.resolved && root.replyTo === undefined) {
             return (
               <ResolvedCard
                 key={root.id}
@@ -147,6 +157,34 @@ export const ThreadsRail = memo(function ThreadsRail({
     </aside>
   );
 });
+
+/**
+ * The empty-state placeholder: the rail is always present, so a thread-less
+ * session shows a centered glyph + a line of copy rather than a blank column.
+ * The copy varies by whether a plan exists yet, and when `onAsk` is provided
+ * (a live, editable session) it offers an ask control so the reviewer can put a
+ * whole-plan question to the agent at any point, including during the grill
+ * phase before a plan exists. Absent `onAsk` (read-only) the control is dropped.
+ */
+function RailEmpty({ hasPlan, onAsk }: { hasPlan: boolean; onAsk?: () => void }) {
+  return (
+    <div className="rail-empty">
+      <span className="rail-empty-glyph" aria-hidden="true">
+        ⊙
+      </span>
+      <p className="rail-empty-copy">
+        {hasPlan
+          ? "No threads yet. Select plan text to comment or ask."
+          : "No plan yet. The agent is still working; threads appear here once it is up."}
+      </p>
+      {onAsk && (
+        <button type="button" className="btn btn-ghost rail-empty-ask" onClick={onAsk}>
+          ask the agent
+        </button>
+      )}
+    </div>
+  );
+}
 
 /**
  * The reviewer's Resolve/Reopen action — the same seam in both directions. With
@@ -297,8 +335,8 @@ function ConversationHead({ root, onJump }: { root: Thread; onJump: Jump }) {
  * question (agent text = `answer.body`, follow-ups post to the questions route)
  * and an open comment (agent text = `reply.body`, follow-ups post to the comments
  * route); the routing is decided in session-screen by the root's kind. A
- * reviewer-resolved QUESTION collapses to its inline ✓ mark here; a resolved
- * COMMENT is routed to ResolvedCard before reaching this card.
+ * reviewer-resolved conversation (question OR comment) is routed to ResolvedCard
+ * before reaching this card, so this card only ever renders the OPEN state.
  */
 function ConversationCard({
   root,
@@ -325,25 +363,16 @@ function ConversationCard({
           <TurnResponse thread={followup} />
         </div>
       ))}
-      {/* root.replyTo is set only on a degraded "root gone" card (groupThreads);
+      {/* Only the OPEN state renders here: a reviewer-resolved root (question or
+          comment) is routed to ResolvedCard upstream and never reaches this card.
+          root.replyTo is set only on a degraded "root gone" unit (groupThreads);
           don't offer a reply box / Resolve there — they'd link to a missing root. */}
-      {root.replyTo === undefined &&
-        (root.resolved ? (
-          <>
-            <p className="thread-resolved-mark">
-              <span className="resolved-check" aria-hidden="true">
-                ✓
-              </span>
-              resolved <span className="resolved-rev">r{root.resolved.revision}</span>
-            </p>
-            <ResolveButton threadId={root.id} onResolve={onResolve} target={false} />
-          </>
-        ) : (
-          <>
-            {onFollowup && <FollowupBox rootId={root.id} kind={root.kind} onFollowup={onFollowup} />}
-            <ResolveButton threadId={root.id} onResolve={onResolve} />
-          </>
-        ))}
+      {root.replyTo === undefined && (
+        <>
+          {onFollowup && <FollowupBox rootId={root.id} kind={root.kind} onFollowup={onFollowup} />}
+          <ResolveButton threadId={root.id} onResolve={onResolve} />
+        </>
+      )}
     </article>
   );
 }
@@ -439,13 +468,15 @@ function FollowupBox({
 }
 
 /**
- * A reviewer-resolved comment conversation: collapsed to its ✓ summary line
- * (keyed on the reviewer's close), expanding to the whole conversation — the
- * quote, the root note + the agent's reply, then each follow-up turn + its reply
- * (a withdrawn comment with no reply just shows the note). The summary carries
- * the resolved revision; an un-resolve offer (Reopen) rides the same Resolve
- * seam, hidden read-only. Resolving the root withdraws every turn at once, so the
- * whole chain lives under one ✓ card.
+ * A reviewer-resolved conversation (question OR comment): collapsed to its ✓
+ * summary line (keyed on the reviewer's close), expanding to the whole
+ * conversation: the quote, the root body + the agent's response, then each
+ * follow-up turn + its response (a withdrawn comment with no reply just shows the
+ * note). TurnResponse, ConversationQuote, and the follow-up rendering are
+ * kind-agnostic: a question shows `answer.body`, a comment shows `reply.body`.
+ * The summary carries the resolved revision; an un-resolve offer (Reopen) rides
+ * the same Resolve seam, hidden read-only. Resolving the root closes every turn
+ * at once, so the whole chain lives under one ✓ card.
  */
 function ResolvedCard({
   root,
@@ -460,8 +491,9 @@ function ResolvedCard({
 }) {
   const { anchor, resolved } = root;
   if (!resolved) return null; // callers only route reviewer-resolved conversations here
+  const kindClass = root.kind === "question" ? "thread-question" : "thread-comment";
   return (
-    <details className="thread thread-comment thread-resolved" data-thread={root.id}>
+    <details className={`thread ${kindClass} thread-resolved`} data-thread={root.id}>
       <summary className="resolved-summary">
         <span className="resolved-check" aria-hidden="true">
           ✓

@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { Window } from "happy-dom";
 import { createElement } from "react";
 import { ThreadsRail } from "./rail.js";
 import type { Thread } from "../api";
@@ -28,11 +31,17 @@ const question = (id: string, extra: Partial<Extract<Thread, { kind: "question" 
 const noop = async () => true;
 
 /** Render the rail to static markup (effects skipped — the focus effect
- *  early-returns without a focus target). `onResolve`/`onFollowup` default
- *  present (a live session); pass `null` to drop them (read-only/session-over). */
+ *  early-returns without a focus target). `onResolve`/`onFollowup`/`onAsk`
+ *  default present (a live session); pass `null` to drop them
+ *  (read-only/session-over). `hasPlan` defaults true (a plan exists). */
 function render(
   threads: Thread[],
-  opts: { onResolve?: typeof noop | null; onFollowup?: typeof noop | null } = {},
+  opts: {
+    onResolve?: typeof noop | null;
+    onFollowup?: typeof noop | null;
+    onAsk?: (() => void) | null;
+    hasPlan?: boolean;
+  } = {},
 ): string {
   return renderToStaticMarkup(
     createElement(ThreadsRail, {
@@ -40,6 +49,8 @@ function render(
       onJump: () => undefined,
       onFollowup: opts.onFollowup === null ? undefined : (opts.onFollowup ?? noop),
       onResolve: opts.onResolve === null ? undefined : (opts.onResolve ?? noop),
+      onAsk: opts.onAsk === null ? undefined : (opts.onAsk ?? (() => undefined)),
+      hasPlan: opts.hasPlan ?? true,
     }),
   );
 }
@@ -169,22 +180,48 @@ describe("ThreadsRail question conversations", () => {
     expect(html).toContain("thread-resolve-btn");
   });
 
-  test("a reviewer-resolved question conversation shows its inline ✓ mark + a Reopen control, not the collapsed comment card", () => {
+  test("a reviewer-resolved question conversation collapses to a ✓ summary (like a resolved comment), expanding to its body + the agent answer", () => {
     const html = render([
       question("q1", {
         answer: { body: "settled", answeredAt: AT },
         resolved: { revision: 4, at: AT },
       }),
     ]);
-    // Inline resolved mark inside the still-open conversation article…
-    expect(html).toContain("thread-resolved-mark");
+    // Collapsed ✓ summary card (a <details>/summary), keyed on the close…
+    expect(html).toContain("thread-resolved");
+    expect(html).toContain("resolved-summary");
+    expect(html).toContain("<details");
     expect(html).toContain("r4");
-    // …not the collapsed comment ✓ summary, and no follow-up box…
-    expect(html).not.toContain("resolved-summary");
+    // …carrying the question kind class (not the comment one)…
+    expect(html).toContain("thread-question");
+    // …NOT the always-open inline mark, and NOT the open follow-up box.
+    expect(html).not.toContain("thread-resolved-mark");
     expect(html).not.toContain("thread-followup-open");
-    // …but it offers Reopen (re-open the resolved conversation).
+    // It expands to the question body + the agent's answer.
+    expect(html).toContain("question q1");
+    expect(html).toContain("settled");
+    // And it offers Reopen (re-open the resolved conversation), target=false.
     expect(html).toContain("thread-resolve-btn");
     expect(html).toContain("reopen");
+  });
+
+  test("a reviewer-resolved question with a follow-up turn collapses the whole chain under one ✓ card", () => {
+    const html = render([
+      question("q1", { answer: { body: "settled", answeredAt: AT }, resolved: { revision: 4, at: AT } }),
+      question("q2", {
+        replyTo: "q1",
+        body: "and the edge case?",
+        answer: { body: "handled", answeredAt: AT },
+        createdAt: "2026-06-21T00:01:00.000Z",
+      }),
+    ]);
+    // One collapsed ✓ card for the whole conversation…
+    expect(html).toContain("resolved-summary");
+    // …expanding to the root answer + the follow-up turn + its answer.
+    expect(html).toContain("settled");
+    expect(html).toContain("and the edge case?");
+    expect(html).toContain("handled");
+    expect(html).toContain("thread-followup-turn");
   });
 
   test("a resolved question conversation hides Reopen when the session is over (read-only)", () => {
@@ -192,7 +229,9 @@ describe("ThreadsRail question conversations", () => {
       [question("q1", { answer: { body: "settled", answeredAt: AT }, resolved: { revision: 4, at: AT } })],
       { onResolve: null, onFollowup: null },
     );
-    expect(html).toContain("thread-resolved-mark");
+    // Still the collapsed ✓ card (read-only), but no Reopen control.
+    expect(html).toContain("resolved-summary");
+    expect(html).toContain("settled");
     expect(html).not.toContain("thread-resolve-btn");
     expect(html).not.toContain("reopen");
   });
@@ -274,5 +313,87 @@ describe("ThreadsRail comment conversations", () => {
     // …but no Resolve button and no follow-up box.
     expect(html).not.toContain("thread-resolve-btn");
     expect(html).not.toContain("thread-followup-open");
+  });
+});
+
+describe("ThreadsRail empty state", () => {
+  test("with no threads pre-plan, it shows the placeholder + the ask control", () => {
+    const html = render([], { hasPlan: false });
+    // The centered placeholder, not the bare one-liner: glyph + copy + control.
+    expect(html).toContain("rail-empty");
+    expect(html).toContain("rail-empty-glyph");
+    expect(html).toContain("rail-empty-copy");
+    // The pre-plan copy variant.
+    expect(html).toContain("No plan yet");
+    expect(html).toContain("threads appear here once it is up");
+    // The ask control is offered (onAsk provided = a live, editable session).
+    expect(html).toContain("rail-empty-ask");
+    expect(html).toContain("ask the agent");
+    // The count is zero (no conversations).
+    expect(html).toContain('class="rail-count">0<');
+  });
+
+  test("with no threads but a plan present, it shows the with-plan copy + ask control", () => {
+    const html = render([], { hasPlan: true });
+    expect(html).toContain("rail-empty");
+    // The with-plan copy variant.
+    expect(html).toContain("No threads yet");
+    expect(html).toContain("Select plan text to comment or ask");
+    expect(html).not.toContain("No plan yet");
+    // The ask control is still offered.
+    expect(html).toContain("rail-empty-ask");
+    expect(html).toContain("ask the agent");
+  });
+
+  test("when onAsk is undefined (read-only), the ask control is not rendered", () => {
+    const html = render([], { hasPlan: true, onAsk: null });
+    // The placeholder + copy still render…
+    expect(html).toContain("rail-empty");
+    expect(html).toContain("No threads yet");
+    // …but no ask control.
+    expect(html).not.toContain("rail-empty-ask");
+    expect(html).not.toContain("ask the agent");
+  });
+
+  test("clicking the ask control calls onAsk", async () => {
+    // The one interactive check: mount into a happy-dom DOM and click the
+    // control, asserting the passed-through handler fires.
+    const win = new Window();
+    const prevDocument = (globalThis as { document?: unknown }).document;
+    const prevWindow = (globalThis as { window?: unknown }).window;
+    // react-dom/client reads the global document/window; point them at happy-dom.
+    (globalThis as { document?: unknown }).document = win.document;
+    (globalThis as { window?: unknown }).window = win;
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    let asked = 0;
+    try {
+      const host = win.document.createElement("div");
+      win.document.body.appendChild(host);
+      const root = createRoot(host as unknown as Element);
+      await act(async () => {
+        root.render(
+          createElement(ThreadsRail, {
+            threads: [],
+            onJump: () => undefined,
+            hasPlan: false,
+            onAsk: () => {
+              asked += 1;
+            },
+          }),
+        );
+      });
+      const btn = host.querySelector(".rail-empty-ask") as unknown as HTMLElement | null;
+      expect(btn).not.toBeNull();
+      await act(async () => {
+        btn?.click();
+      });
+      expect(asked).toBe(1);
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      (globalThis as { document?: unknown }).document = prevDocument;
+      (globalThis as { window?: unknown }).window = prevWindow;
+    }
   });
 });

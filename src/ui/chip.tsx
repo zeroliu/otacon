@@ -92,10 +92,9 @@ export function agentLive(parked: boolean, lastContactAt: number | undefined, no
 /**
  * The agent-presence dot (review UI, D4): a small live/offline mark beside
  * the status chip — the subtle "is the agent still on the line?" signal, with
- * the chips staying the primary "your turn" cue. Visually distinct from
- * LinkState (the browser↔daemon link) — labelled "agent" vs "link". Hidden on
- * terminal sessions: the agent's job is done there, by design. It stays visible
- * while `implementing` — the agent is on the line building the approved plan.
+ * the chips staying the primary "your turn" cue. Hidden on terminal sessions:
+ * the agent's job is done there, by design. It stays visible while
+ * `implementing` — the agent is on the line building the approved plan.
  */
 export function AgentDot({
   status,
@@ -121,18 +120,6 @@ export function AgentDot({
     >
       <span className="agent-dot-mark" aria-hidden="true" />
       {label && "agent"}
-    </span>
-  );
-}
-
-export function LinkState({ connected }: { connected: boolean }) {
-  return (
-    <span
-      className={connected ? "link-state is-live" : "link-state"}
-      title={connected ? "daemon link live" : "daemon link offline"}
-    >
-      <span className="link-dot" aria-hidden="true" />
-      link
     </span>
   );
 }
