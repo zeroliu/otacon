@@ -1,0 +1,92 @@
+name: PR
+
+# Gates every pull request to `main` on the asserting suites so a broken change
+# cannot merge. (Release publishing stays in release.yml, triggered on `v*` tags.)
+# `workflow_dispatch` allows a manual run from the Actions tab.
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel an in-progress run when a newer commit is pushed to the same PR ref, so
+# only the latest revision of a PR is verified.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Typecheck, unit tests, build, then the hermetic bash suites. The bash suites
+  # invoke `node dist/...`, so `bun run build` must run before them; each suite is
+  # a discrete step so a failure names the offending suite.
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # Third-party actions are pinned to a commit SHA (not a mutable tag); the
+      # SHAs here mirror release.yml. Bump the SHA + comment together.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun test
+
+      - name: Build
+        run: bun run build
+
+      - name: Smoke
+        run: bun run smoke
+
+      - name: Acceptance
+        run: bun run accept
+
+      - name: E2E daemon
+        run: bun run e2e
+
+      - name: E2E cli
+        run: bun run e2e:cli
+
+      - name: E2E revise
+        run: bun run e2e:revise
+
+      - name: E2E grill
+        run: bun run e2e:grill
+
+      - name: E2E install
+        run: bun run e2e:install
+
+  # Playwright UI e2e in its own job so the browser download doesn't slow `checks`.
+  # `e2e:ui` runs `bun run build && playwright test` itself; the build here is the
+  # one that feeds the real daemon the spec boots (playwright.config.ts webServer).
+  e2e-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # playwright.config.ts configures a single `chromium` project; install only
+      # that browser (plus its OS deps).
+      - name: Install Playwright chromium
+        run: bunx playwright install --with-deps chromium
+
+      - name: E2E ui
+        run: bun run e2e:ui

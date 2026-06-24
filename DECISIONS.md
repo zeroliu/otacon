@@ -3408,3 +3408,22 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Agents provide a native enforceable pre-edit permission hook for
   otacon sessions, or the CLI gains a daemon-side lease that can block write-capable
   phases until the review UI sends Implement.
+
+## PR CI gate runs the asserting suites on every pull request (2026-06-24)
+
+- **Decision:** A new `.github/workflows/pr.yml` runs on `pull_request` to `main` (plus
+  `workflow_dispatch`) and executes the full asserting set: `typecheck`, `bun test`,
+  `build`, then the hermetic bash suites (`smoke`, `accept`, `e2e`, `e2e:cli`,
+  `e2e:revise`, `e2e:grill`, `e2e:install`) in one `checks` job, and `e2e:ui`
+  (Playwright) in a separate `e2e-ui` job. Until now `release.yml` (tags `v*`) was the
+  only workflow, so PRs ran nothing.
+- **Why:** Changes were merging unverified — the motivating failures were a staging-gate
+  drift and an unverified rendering fix, both of which the existing suites would have
+  caught had they run pre-merge. The runner setup (pinned `oven-sh/setup-bun` /
+  `actions/checkout` SHAs, node 22, `bun install --frozen-lockfile`) mirrors release.yml
+  so the gate and the publish path verify on identical ground. Each suite is its own step
+  so a red check names the failing suite; `concurrency` with `cancel-in-progress` drops
+  superseded runs on a PR ref; Playwright is split out so its browser download doesn't
+  serialize behind the cheap `checks` job.
+- **Revisit when:** PR wall-clock becomes painful — then gate the heavy `e2e:ui` behind a
+  label (run it on demand rather than on every push).
