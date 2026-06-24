@@ -33,12 +33,17 @@ export interface UpdateCommandDeps {
   fetch: typeof fetchDistTag;
   runNpmUpdate: typeof runNpmUpdate;
   sourceRun: () => boolean;
+  // The installed version this command reports/compares against. Defaults to the
+  // module `VERSION`; tests inject a fixed value because a staging release builds
+  // against a `-staging.` VERSION (which would flip the derived channel).
+  installedVersion: string;
 }
 
 const REAL_DEPS: UpdateCommandDeps = {
   fetch: fetchDistTag,
   runNpmUpdate,
   sourceRun: isSourceRun,
+  installedVersion: VERSION,
 };
 
 export async function updateCommand(
@@ -53,34 +58,34 @@ export async function updateCommand(
   // Dev-run refusal (D6): a source checkout has no global package to update.
   if (deps.sourceRun()) {
     notice("running otacon from a source checkout; nothing to update");
-    printJson({ ok: true, source: true, version: VERSION });
+    printJson({ ok: true, source: true, version: deps.installedVersion });
     return 0;
   }
 
-  // Channel (derived from the installed VERSION): a `-staging.` build tracks the
+  // Channel (derived from the installed version): a `-staging.` build tracks the
   // `staging` dist-tag, anything else `latest`, the same derivation as the start-time gate.
-  const channel = channelOf(VERSION);
+  const channel = channelOf(deps.installedVersion);
 
   // Fail-open (D5): a transient registry blip is not a hard error — report that
   // we couldn't check and exit 0, exactly as the start-time gate proceeds.
   const latest = await deps.fetch(channel);
   if (latest === undefined) {
     notice("could not reach the npm registry to check for updates; try again later");
-    printJson({ ok: true, current: VERSION, latest: null, outdated: false });
+    printJson({ ok: true, current: deps.installedVersion, latest: null, outdated: false });
     return 0;
   }
 
-  const outdated = isNewer(latest, VERSION);
+  const outdated = isNewer(latest, deps.installedVersion);
 
   // --check never installs: it's the dry run.
   if (values.check === true) {
-    printJson({ ok: true, current: VERSION, latest, outdated });
+    printJson({ ok: true, current: deps.installedVersion, latest, outdated });
     return 0;
   }
 
   // Already current: nothing to do.
   if (!outdated) {
-    printJson({ ok: true, current: VERSION, latest, outdated: false, updated: false });
+    printJson({ ok: true, current: deps.installedVersion, latest, outdated: false, updated: false });
     return 0;
   }
 
@@ -102,8 +107,8 @@ export async function updateCommand(
   // runs the freshly-installed binary and trips the version handshake. We report
   // that accurately rather than claim a restart that didn't happen (D12).
   notice(
-    `updated otacon ${VERSION} → ${latest}; the daemon and any open tabs update on your next otacon command`,
+    `updated otacon ${deps.installedVersion} → ${latest}; the daemon and any open tabs update on your next otacon command`,
   );
-  printJson({ ok: true, updated: true, from: VERSION, to: latest });
+  printJson({ ok: true, updated: true, from: deps.installedVersion, to: latest });
   return 0;
 }
