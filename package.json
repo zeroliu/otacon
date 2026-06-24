@@ -1,6 +1,6 @@
 {
   "name": "otacon",
-  "version": "0.1.4-staging.20260624135622",
+  "version": "0.1.5-staging.20260624152031",
   "description": "Plan review surface for coding agents — mission support over codec.",
   "type": "module",
   "license": "MIT",
