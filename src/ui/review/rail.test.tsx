@@ -169,22 +169,48 @@ describe("ThreadsRail question conversations", () => {
     expect(html).toContain("thread-resolve-btn");
   });
 
-  test("a reviewer-resolved question conversation shows its inline ✓ mark + a Reopen control, not the collapsed comment card", () => {
+  test("a reviewer-resolved question conversation collapses to a ✓ summary (like a resolved comment), expanding to its body + the agent answer", () => {
     const html = render([
       question("q1", {
         answer: { body: "settled", answeredAt: AT },
         resolved: { revision: 4, at: AT },
       }),
     ]);
-    // Inline resolved mark inside the still-open conversation article…
-    expect(html).toContain("thread-resolved-mark");
+    // Collapsed ✓ summary card (a <details>/summary), keyed on the close…
+    expect(html).toContain("thread-resolved");
+    expect(html).toContain("resolved-summary");
+    expect(html).toContain("<details");
     expect(html).toContain("r4");
-    // …not the collapsed comment ✓ summary, and no follow-up box…
-    expect(html).not.toContain("resolved-summary");
+    // …carrying the question kind class (not the comment one)…
+    expect(html).toContain("thread-question");
+    // …NOT the always-open inline mark, and NOT the open follow-up box.
+    expect(html).not.toContain("thread-resolved-mark");
     expect(html).not.toContain("thread-followup-open");
-    // …but it offers Reopen (re-open the resolved conversation).
+    // It expands to the question body + the agent's answer.
+    expect(html).toContain("question q1");
+    expect(html).toContain("settled");
+    // And it offers Reopen (re-open the resolved conversation), target=false.
     expect(html).toContain("thread-resolve-btn");
     expect(html).toContain("reopen");
+  });
+
+  test("a reviewer-resolved question with a follow-up turn collapses the whole chain under one ✓ card", () => {
+    const html = render([
+      question("q1", { answer: { body: "settled", answeredAt: AT }, resolved: { revision: 4, at: AT } }),
+      question("q2", {
+        replyTo: "q1",
+        body: "and the edge case?",
+        answer: { body: "handled", answeredAt: AT },
+        createdAt: "2026-06-21T00:01:00.000Z",
+      }),
+    ]);
+    // One collapsed ✓ card for the whole conversation…
+    expect(html).toContain("resolved-summary");
+    // …expanding to the root answer + the follow-up turn + its answer.
+    expect(html).toContain("settled");
+    expect(html).toContain("and the edge case?");
+    expect(html).toContain("handled");
+    expect(html).toContain("thread-followup-turn");
   });
 
   test("a resolved question conversation hides Reopen when the session is over (read-only)", () => {
@@ -192,7 +218,9 @@ describe("ThreadsRail question conversations", () => {
       [question("q1", { answer: { body: "settled", answeredAt: AT }, resolved: { revision: 4, at: AT } })],
       { onResolve: null, onFollowup: null },
     );
-    expect(html).toContain("thread-resolved-mark");
+    // Still the collapsed ✓ card (read-only), but no Reopen control.
+    expect(html).toContain("resolved-summary");
+    expect(html).toContain("settled");
     expect(html).not.toContain("thread-resolve-btn");
     expect(html).not.toContain("reopen");
   });
