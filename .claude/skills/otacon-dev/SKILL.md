@@ -244,6 +244,16 @@ or callout.
   ```
   Capped at 6 scenarios per block; must sit under `Verification`.
 
+When plan content is shaped as a hierarchy or tree (a taxonomy, a doc or file
+structure, a nested option space, a state hierarchy, a decision tree), draw it as a
+```mermaid diagram, not as a monospace nested outline in a ```text fence: an outline
+forces the reviewer to reconstruct the shape line by line, while a diagram shows it at a
+glance. `graph TD` (a top-down flowchart) is the natural default; pick whatever shape
+reads best (a mindmap, a state diagram, etc. when they fit). Put the tree diagram in the
+section that owns that structure (Contract, Impact, or a phase's Details); `mermaid`
+diagrams no longer count toward the per-section fence cap, so a lead diagram and a
+structural one can coexist.
+
 Callouts and matrices are budget-exempt but capped (default 2 per read-path
 section); pills are free. Reach for a visual when it carries the point better
 than a sentence — never as decoration.

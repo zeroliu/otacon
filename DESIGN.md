@@ -224,6 +224,14 @@ A before/after pair is two adjacent fences whose info strings carry `before` and
 them side-by-side on desktop, stacked on phones; an unpaired tag renders as an
 ordinary fence. The plan stays plain renderable markdown everywhere else.
 
+Tree- or hierarchy-shaped content (a taxonomy, a doc or file structure, a nested
+option space, a state hierarchy, a decision tree) is expressed as a ` ```mermaid `
+diagram (the agent picks the shape, `graph TD` by default), not a monospace nested
+outline in a ` ```text ` fence: a diagram shows the shape at a glance where an outline
+forces the reviewer to reconstruct it line by line. This is part of the visuals
+vocabulary the wrapper teaches; the renderer already validates such diagrams (L8) and
+exempts them from the fence cap, so a structural tree can sit alongside the lead diagram.
+
 **Review visuals (markdown-native).** Beyond fences, a set of primitives the renderer
 styles from plain markdown — so each stays comment-anchorable, diff-able, and degrades
 to readable text if rendering ever fails:
