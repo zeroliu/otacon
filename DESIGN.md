@@ -972,6 +972,14 @@ treatment: chips (with the `★rec` star and on/off states), buttons, inputs, an
 are hit targets, not container chrome, and are unchanged. The index is a top-ruled
 telemetry list rather than a stack of boxes.
 
+**Type scale: a 12px floor.** Nothing renders below 12px, text or glyph: 12px is the
+floor for the mono telemetry labels (chips, badges, ids, section titles, field labels,
+meta rows), 14px is the norm for readable and interactive text (button labels, thread
+and answer bodies, table cells, inputs), and 16px is the reading column (the plan prose
+and its headings). The telemetry character comes from mono plus uppercase plus tracking
+plus color, not from sub-12px size; icon-only controls keep an adequate hit box. Three
+`--fs-prose` / `--fs-body` / `--fs-label` tokens carry these sizes.
+
 **Callouts** apply this vocabulary to plan prose: a `> [!risk]` blockquote becomes a
 flat panel with a 2px top rule and a glyph+label inked in the type's hue — risk amber,
 note blue, decision accent, assumption muted — no fill, no radius, drawn only from the

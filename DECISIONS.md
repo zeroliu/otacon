@@ -3458,3 +3458,20 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** Agents keep shipping monospace-outline trees despite the guidance, at
   which point a soft lint nudge (warning, never blocking) on indented-outline fences in
   read-path sections is the next step up.
+
+## A 12px type-scale floor, enforced by a unit guard (2026-06-24)
+
+- **Decision:** The React UI's stylesheet honors a hard type scale: 12px floor for the
+  mono telemetry labels (`--fs-label`), 14px norm for readable and interactive text
+  (`--fs-body`), 16px for the prose reading column (`--fs-prose`). Nothing renders below
+  12px, text or glyph; icon-only controls keep an adequate hit box. The three sizes are
+  CSS custom-property tokens defined once, and `src/ui/styles.test.ts` reads styles.css
+  and fails if any `font`/`font-size` declaration specifies a px size below 12.
+- **Why:** Legibility. The earlier "hairline telemetry" sizing let labels and icon
+  glyphs fall as small as 9px, which is hard to read and a poor tap target. This revises
+  only the sizes: the codec character now comes from mono plus uppercase plus tracking
+  plus color, not from sub-12px size, so the look holds while the floor lifts. The guard
+  keeps a future edit from silently reintroducing a sub-12px literal.
+- **Revisit when:** The codec density needs rebalancing (e.g. a denser desktop layout
+  wants a smaller label tier), at which point the tokens and the guard's floor move
+  together.
