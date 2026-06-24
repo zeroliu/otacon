@@ -4,7 +4,6 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { updateCachePath } from "../shared/paths.js";
-import { VERSION } from "../shared/version.js";
 import {
   type AutoUpdateDeps,
   channelOf,
@@ -258,8 +257,12 @@ describe("runNpmUpdate", () => {
 });
 
 describe("maybeAutoUpdate", () => {
-  // A version strictly newer than the installed VERSION, so isNewer fires.
+  // A version strictly newer than the installed version, so isNewer fires.
   const NEWER = "99.0.0";
+  // The pinned, clean installed version the tests inject, decoupled from the
+  // module VERSION so a staging release (which builds a `-staging.` VERSION)
+  // can't flip the derived channel out from under these assertions.
+  const INSTALLED = "0.1.0";
   let home: string;
   const savedHome = process.env.OTACON_HOME;
   const savedUpdated = process.env.OTACON_UPDATED;
@@ -280,6 +283,7 @@ describe("maybeAutoUpdate", () => {
     installStatus?: number; // status for the `npm install` spawn
     installError?: Error; // spawn error for `npm install` (e.g. ENOENT)
     sourceRun?: boolean;
+    installedVersion?: string;
   }): Harness {
     const spawnCalls: SpawnCall[] = [];
     const exitCalls: number[] = [];
@@ -287,6 +291,7 @@ describe("maybeAutoUpdate", () => {
     let fetchCalls = 0;
     const deps: AutoUpdateDeps = {
       sourceRun: () => over.sourceRun ?? false,
+      installedVersion: over.installedVersion ?? INSTALLED,
       nowMs: () => 1_000_000_000,
       fetch: async (tag: string) => {
         fetchCalls++;
@@ -380,7 +385,7 @@ describe("maybeAutoUpdate", () => {
   });
 
   test("not newer than installed returns without spawning", async () => {
-    const h = harness({ latest: VERSION });
+    const h = harness({ latest: INSTALLED });
     await maybeAutoUpdate([], h.deps);
     expect(h.fetchCalls).toBe(1);
     expect(h.spawnCalls).toHaveLength(0);
@@ -405,6 +410,20 @@ describe("maybeAutoUpdate", () => {
     expect(reexec?.args).toEqual([process.argv[1] ?? "", "start", "--title", "x", "--quick"]);
     expect(reexec?.env?.OTACON_UPDATED).toBe("1");
     expect(h.exitCalls).toEqual([0]);
+  });
+
+  test("a -staging. installed version tracks the staging channel (fetch + install)", async () => {
+    // A staging build (e.g. what a staging release compiles VERSION into) must
+    // derive the `staging` channel from the INSTALLED version, not `latest`.
+    // NEWER (99.0.0) outranks 0.1.0-staging.5 so the install path fires.
+    const h = harness({ installStatus: 0, installedVersion: "0.1.0-staging.5" });
+    await expect(maybeAutoUpdate(["--title", "x"], h.deps)).rejects.toThrow("__exit__");
+
+    expect(h.fetchTags).toEqual(["staging"]);
+    expect(h.spawnCalls[0]).toMatchObject({
+      cmd: "npm",
+      args: ["install", "-g", "otacon@staging"],
+    });
   });
 
   test("newer + npm non-zero status notices and returns (no re-exec, no exit)", async () => {
