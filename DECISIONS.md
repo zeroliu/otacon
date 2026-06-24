@@ -1782,6 +1782,23 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Notification volume grows enough that the lines become noise, or
   a structured/leveled daemon log channel replaces ad-hoc stderr writes.
 
+## Daemon tests injected the real notifier; fixed with a no-op sink, not a guard
+
+- **Decision:** Every `createApp(...)` in `src/daemon/app.test.ts` now passes a
+  `notify` option (the recorder for the shared app, a no-op `() => {}` in helpers
+  that do not assert on notifications). Previously `tailedApp`, the `bare`, and the
+  `beating` apps omitted it and fell through to the real `createDesktopNotifier()`,
+  so `bun test` fired live macOS banners titled by throwaway session titles such as
+  "t". Fixed surgically; no env kill-switch or bunfig test preload was added.
+- **Why:** the leak was a missing injection against an already-established
+  convention, so restoring it where it lapsed is the smallest correct fix. A central
+  guard (an env switch honored by the notifier, set via a test preload) was weighed
+  and declined (q3) to avoid adding production surface for a test-hygiene bug. The
+  residual risk (a future helper forgets the inject) is accepted and called out in
+  the plan's Risks.
+- **Revisit when:** a third helper leaks a real banner, at which point the central
+  guard (env kill-switch + preload) earns its keep.
+
 ## Banner suppression keys on visibility, not on a live SSE connection
 
 - **Decision:** A desktop banner is suppressed only while that session's review is

@@ -30,9 +30,11 @@ let savedHome: string | undefined;
 let store: Store;
 let app: Hono<{ Bindings: NodeBindings }>;
 let shutdowns: number;
-// A recorder notify sink: every test uses it, so the real macOS notifier never
-// fires a banner during `bun test` on the dev Mac. The desktop-notify suite
-// covers the real tool selection.
+// A recorder notify sink for the shared app. Every createApp call in this file
+// injects a notify (this recorder, or a no-op sink in helpers that don't assert
+// on notifications), so the real macOS notifier never fires a banner during
+// `bun test` on the dev Mac. The desktop-notify suite covers the real tool
+// selection.
 let notifyCalls: DesktopNotification[];
 let presence: Presence;
 
@@ -916,7 +918,7 @@ describe("SPA shell and static assets", () => {
   });
 
   test("without a UI build the browser pages answer 503, never a crash", async () => {
-    const bare = createApp({ store, uiDir: null });
+    const bare = createApp({ store, uiDir: null, notify: () => {} });
     expect((await bare.request("/")).status).toBe(503);
     expect((await bare.request("/s/otc_zzzzzz")).status).toBe(503);
     expect((await bare.request("/assets/app-abc123.js")).status).toBe(404);
@@ -1029,7 +1031,7 @@ describe("UI SSE streams", () => {
   });
 
   test("heartbeat comments keep flowing on an idle stream", async () => {
-    const beating = createApp({ store, uiDir: null, sseHeartbeatMs: 15 });
+    const beating = createApp({ store, uiDir: null, sseHeartbeatMs: 15, notify: () => {} });
     const reader = sseReader(await beating.request("/api/stream"));
     await reader.next(); // snapshot
     expect((await reader.next()).comment).toBe("hb");
@@ -1796,6 +1798,7 @@ describe("transcript tailer lifecycle (live-progress-activity-redesign)", () => 
       store,
       uiDir,
       presence,
+      notify: () => {},
       makeTailer: () => {
         const stub: Stub = {
           started: 0,
