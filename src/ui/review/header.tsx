@@ -2,7 +2,7 @@
 // pinned to `top: 0` that compacts on scroll and re-expands at the top. It
 // subsumes the old `.topbar` (back + switcher) and the scroll-away
 // `SessionHead` hero. Expanded it carries the full identity — title, revision,
-// repo/branch, status, agent + link dots — plus the clean⇄diff toggle and
+// repo/branch, status, the agent dot — plus the clean⇄diff toggle and
 // Approve; scrolled past a small threshold it collapses the detail rows to a
 // tight one-line bar (DECISIONS.md "Sticky header: one element compacts on
 // scroll"). Because it is a single persistent element there is no second
@@ -17,7 +17,7 @@
 import type { MouseEvent } from "react";
 import { useEffect, useState } from "react";
 import type { LiveSession } from "../api";
-import { AgentDot, LinkState, StatusChip } from "../chip";
+import { AgentDot, StatusChip } from "../chip";
 import { relativeTime, repoName } from "../format";
 import { navigate } from "../router";
 import { SessionMenuButton } from "../session-sheet";
@@ -68,7 +68,6 @@ export function BackLink() {
 
 export function ReviewHeader({
   session,
-  connected,
   now,
   view,
   onView,
@@ -77,7 +76,6 @@ export function ReviewHeader({
   onDelete,
 }: {
   session: LiveSession;
-  connected: boolean;
   /** A ticking clock (useNow) so the agent dot + timestamp stay honest. */
   now: number;
   view: ReviewView;
@@ -134,7 +132,6 @@ export function ReviewHeader({
             now={now}
           />
           <span className="card-time">{relativeTime(session.updatedAt, now)}</span>
-          <LinkState connected={connected} />
           {onDelete && (
             <button type="button" className="session-delete" title="delete session" onClick={onDelete}>
               ✕ delete
