@@ -3730,3 +3730,32 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** A non-version input begins to drive the channel (the seam should then
   carry that instead), or the release stops stamping `version.ts` before the gates run (the
   coupling would no longer exist).
+
+## Symlink user-scope wrappers to the packaged file; project-scope copies (2026-06-25)
+
+- **Decision:** `otacon install` SYMLINKS a user-scope wrapper to the packaged
+  `SKILL.md` shipped in the npm package (`dist/skills/otacon/SKILL.md`, materialized
+  from `skillMd()` at build time by `scripts/gen-skill-asset.ts`). It falls back to
+  COPYING the current text in two cases: the symlink call throws (filesystem/privilege
+  unsupported, e.g. Windows or a cross-device link), or there is no stable packaged file
+  to point at (`packagedSkillPath()` is `undefined`: a source run, or an ephemeral npx
+  cache it already rejected). A project-scope wrapper (`otacon install --project`) ALWAYS
+  copies. `ensureWrapper(path, scope, pkgPath?, symlink?)` owns the decision, converges
+  idempotently (a correct symlink or a matching copy is a no-op; a scope/availability
+  change self-heals by removing what is in the way first), and returns the resulting
+  `mode` for the install JSON. The injected `symlink` argument is a test seam to force the
+  copy fallback without a real unsupported filesystem.
+- **Why:** Copy-only wrappers go stale silently when the binary auto-updates: the
+  installed text keeps teaching an old protocol until the user happens to reinstall.
+  Pointing the wrapper at a real file the new build overwrites refreshes every user-scope
+  skill for free on upgrade (the gstack-style "install a pointer, not a snapshot"
+  rationale). But that only works when the target is a stable, machine-local path, which
+  rules out two surfaces: a committed/shared `--project` wrapper must be machine
+  INDEPENDENT, so it cannot symlink to a global path a teammate or CI lacks; and there is
+  nothing durable to link to from source or a transient npx cache. In all three the copy
+  is the correct artifact, and a later install self-heals it back to a symlink once a
+  stable package path exists, so the wrapper still ends up fresh.
+- **Revisit when:** A packaged-asset hash or version stamp lets us detect a stale COPY and
+  rewrite it on the next command (closing the gap that copy-mode users do not auto-refresh
+  on upgrade), or the package ships the wrapper at a path stable enough that even
+  project/npx installs could safely link to it.

@@ -8,7 +8,7 @@
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { parseArgs } from "node:util";
-import { skillMd, STOP_HOOK_SCRIPT } from "../install/assets.js";
+import { STOP_HOOK_SCRIPT } from "../install/assets.js";
 import {
   claudeHookScriptPath,
   claudeSettingsPath,
@@ -19,6 +19,7 @@ import {
   opencodeSkillPath,
   settingsRegisterStopHook,
 } from "../install/locations.js";
+import { ensureWrapper, type WrapperMode } from "../install/wrapper.js";
 import { fail, notice, printJson, usageError } from "../output.js";
 import { findRepoRoot } from "../session.js";
 
@@ -30,11 +31,17 @@ function writeManaged(path: string, content: string): void {
   writeFileSync(path, content);
 }
 
-function installAgent(agent: Agent, scope: InstallScope): { agent: Agent; files: string[] } {
+function installAgent(
+  agent: Agent,
+  scope: InstallScope,
+): { agent: Agent; files: string[]; mode: WrapperMode } {
   switch (agent) {
     case "claude": {
       const skill = claudeSkillPath(scope);
-      writeManaged(skill, skillMd());
+      // The skill wrapper is symlinked at user scope (auto-refreshes on binary
+      // upgrade) and copied at project scope (a committed file must be machine
+      // independent); ensureWrapper decides and reports which.
+      const { mode } = ensureWrapper(skill, scope.kind);
       // The Stop hook script lives in the user home only — it is never written at
       // project scope (DECISIONS.md "Stop hook deferred at project scope"), so a
       // committed `.claude/` ships an inert skill wrapper, never a hook pointing at
@@ -42,17 +49,19 @@ function installAgent(agent: Agent, scope: InstallScope): { agent: Agent; files:
       if (scope.kind === "user") {
         writeManaged(claudeHookScriptPath(), STOP_HOOK_SCRIPT);
         chmodSync(claudeHookScriptPath(), 0o755);
-        return { agent, files: [skill, claudeHookScriptPath()] };
+        return { agent, files: [skill, claudeHookScriptPath()], mode };
       }
-      return { agent, files: [skill] };
+      return { agent, files: [skill], mode };
     }
     case "codex": {
-      writeManaged(codexSkillPath(scope), skillMd());
-      return { agent, files: [codexSkillPath(scope)] };
+      const skill = codexSkillPath(scope);
+      const { mode } = ensureWrapper(skill, scope.kind);
+      return { agent, files: [skill], mode };
     }
     case "opencode": {
-      writeManaged(opencodeSkillPath(scope), skillMd());
-      return { agent, files: [opencodeSkillPath(scope)] };
+      const skill = opencodeSkillPath(scope);
+      const { mode } = ensureWrapper(skill, scope.kind);
+      return { agent, files: [skill], mode };
     }
   }
 }

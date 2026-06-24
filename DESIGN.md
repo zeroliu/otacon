@@ -1645,7 +1645,21 @@ each agent's skill location: Claude Code `~/.claude/skills/otacon/SKILL.md` plus
 Stop hook script `~/.claude/hooks/otacon-stop.sh`; Codex
 `$CODEX_HOME/skills/otacon/SKILL.md` (default `~/.codex/`); OpenCode
 `$XDG_CONFIG_HOME/opencode/skills/otacon/SKILL.md`. All three are the same SKILL.md
-skill folder. Wrappers are managed files — reinstall overwrites them. The Stop hook registration in
+skill folder. Wrappers are managed files (reinstall overwrites them).
+
+A **user-scope** wrapper is a **symlink** to the `SKILL.md` shipped inside the package
+(`dist/skills/otacon/SKILL.md`, generated from the one protocol source at build time),
+so a binary upgrade refreshes the installed skill text for free without a reinstall.
+Two cases fall back to **copying** the current text instead: when symlinks are
+unsupported on the filesystem (e.g. Windows without the privilege, or a cross-device
+link), and when there is no stable packaged file to point at (a source run, or an
+ephemeral npx cache that a later invocation may prune). A **project-scope** wrapper
+(`otacon install --project`) is **always copied**: it is committed and shared, so it
+must be machine-independent and cannot point at a machine-local global path a teammate
+does not have. Install is idempotent in every mode: an already-correct symlink or an
+already-current copy is left untouched, and a scope or availability change self-heals
+(a stale symlink becomes a copy, and the reverse, on the next install). The per-agent
+JSON reports each wrapper's resulting `mode` (`"symlink"` or `"copy"`). The Stop hook registration in
 `~/.claude/settings.json` is optional, applied only by `--hooks`: an additive,
 idempotent merge that preserves every existing key and backs the file up before the
 first change (unparseable settings are refused, never clobbered). The hook is a

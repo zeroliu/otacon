@@ -79,6 +79,11 @@ describe("install --project", () => {
     expect(out.hooks).toBeUndefined();
     const claude = out.installed.find((i: { agent: string }) => i.agent === "claude");
     expect(claude.files).toEqual([join(cwd, ".claude", REL)]);
+    // Project-scope wrappers are always copied (a committed file cannot symlink to a
+    // machine-local global path), so every reported mode is "copy".
+    for (const entry of out.installed as { mode: string }[]) {
+      expect(entry.mode).toBe("copy");
+    }
   });
 
   test("--project --agent claude writes only the project skill wrapper", async () => {
