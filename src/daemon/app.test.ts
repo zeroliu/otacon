@@ -69,6 +69,22 @@ afterEach(() => {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Capture process.stderr.write across an async body, then restore it. Returns the joined output. */
+async function captureStderr(fn: () => Promise<void>): Promise<string> {
+  const orig = process.stderr.write;
+  let captured = "";
+  process.stderr.write = ((chunk: unknown) => {
+    captured += String(chunk);
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    await fn();
+  } finally {
+    process.stderr.write = orig;
+  }
+  return captured;
+}
+
 function mintSession(): RegistrySession {
   return store.createSession({ title: "e2e plan", repo });
 }
@@ -2978,6 +2994,41 @@ describe("desktop attention notifications (M6)", () => {
     expect((await presencePost(session.id, "yes")).status).toBe(400);
     expect((await presencePost(session.id, undefined)).status).toBe(400);
     expect((await presencePost("otc_zzzzzz", true)).status).toBe(404);
+  });
+
+  test("audit: an attention moment writes a notify dispatch line", async () => {
+    const session = mintSession();
+    const log = await captureStderr(async () => {
+      await ask(session.id, { question: "RS256 or HS256?", options: ["RS256", "HS256"] });
+    });
+    expect(log).toContain(
+      `otacond: notify dispatch session=${session.id} kind=question title=${JSON.stringify(session.title)} message=${JSON.stringify("RS256 or HS256?")}\n`,
+    );
+  });
+
+  test("audit: a config-disabled repo writes reason=config-disabled and fires no notify", async () => {
+    mkdirSync(join(repo, ".otacon"), { recursive: true });
+    writeFileSync(
+      repoLocalConfigPath(repo),
+      JSON.stringify({ notifications: { desktop: false } }),
+    );
+    const session = mintSession();
+    const log = await captureStderr(async () => {
+      await ask(session.id, { question: "anything?" });
+    });
+    expect(log).toContain(
+      `otacond: notify skip session=${session.id} reason=config-disabled\n`,
+    );
+    expect(notifyCalls).toEqual([]);
+  });
+
+  test("audit: a watched session writes reason=watched", async () => {
+    const session = mintSession();
+    expect((await presencePost(session.id, true)).status).toBe(200);
+    const log = await captureStderr(async () => {
+      await ask(session.id, { question: "anybody home?" });
+    });
+    expect(log).toContain(`otacond: notify skip session=${session.id} reason=watched\n`);
   });
 });
 

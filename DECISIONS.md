@@ -1764,6 +1764,24 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Linux/Windows desktop support is wanted (add `notify-send` /
   toast equivalents behind the same seam), or terminal-notifier's CLI changes.
 
+## Every notification decision is logged to daemon.log (always-on audit trail)
+
+- **Decision:** The daemon logs one stderr line per notification decision, landing
+  in `$OTACON_HOME/daemon.log`. `maybeNotify` (`src/daemon/app.ts`) writes a `notify
+  dispatch` line (session, kind, title, message) when a banner fires and a `notify
+  skip` line (reason `config-disabled` or `watched`) when one is suppressed; the
+  notifier (`src/daemon/desktop-notify.ts`) writes a `notify backend` line recording
+  the backend (`terminal-notifier`/`osascript`/`none-non-darwin`) and a `clickable`
+  flag. Always on — no debug flag, no separate log file.
+- **Why:** "Why did otacon send this banner, and why does clicking it do nothing?"
+  was unanswerable after the fact. One line per decision at the single `maybeNotify`
+  chokepoint plus the backend reuses the existing stderr→`daemon.log` routing (zero
+  new surface), and notification volume is low so always-on is free. A debug flag
+  would have the trail off in exactly the moment a user hits the surprise. The
+  `clickable=false` lines also surface the osascript no-click limitation directly.
+- **Revisit when:** Notification volume grows enough that the lines become noise, or
+  a structured/leveled daemon log channel replaces ad-hoc stderr writes.
+
 ## Banner suppression keys on visibility, not on a live SSE connection
 
 - **Decision:** A desktop banner is suppressed only while that session's review is
