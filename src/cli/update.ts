@@ -195,6 +195,10 @@ export interface AutoUpdateDeps {
   exit: (code: number) => never;
   nowMs: () => number;
   sourceRun: () => boolean;
+  // The installed version this gate compares against. Defaults to the module
+  // `VERSION`; tests inject a fixed value because a staging release builds
+  // against a `-staging.` VERSION (which would flip the derived channel).
+  installedVersion: string;
 }
 
 const REAL_DEPS: AutoUpdateDeps = {
@@ -203,6 +207,7 @@ const REAL_DEPS: AutoUpdateDeps = {
   exit: (code) => process.exit(code),
   nowMs: () => Date.now(),
   sourceRun: isSourceRun,
+  installedVersion: VERSION,
 };
 
 /**
@@ -252,10 +257,10 @@ export async function maybeAutoUpdate(
 
   // 5. Fetch + compare (D5): look up the installed version's channel dist-tag,
   // fail-open on no answer; only act if strictly newer.
-  const channel = channelOf(VERSION);
+  const channel = channelOf(deps.installedVersion);
   const latest = await deps.fetch(channel);
   if (latest === undefined) return;
-  if (!isNewer(latest, VERSION)) return;
+  if (!isNewer(latest, deps.installedVersion)) return;
 
   // 6. Update (D7): npm install -g via the shared helper; fail-open on any error.
   if (!runNpmUpdate(channel, deps.spawnSync).ok) {
@@ -270,7 +275,7 @@ export async function maybeAutoUpdate(
   // Success: re-exec the same `start` invocation on the freshly-installed CLI.
   // OTACON_UPDATED=1 trips the loop guard above; stdio is inherited so the child
   // prints the single JSON line on stdout, preserving the start contract.
-  notice(`updated otacon ${VERSION} → ${latest}; restarting`);
+  notice(`updated otacon ${deps.installedVersion} → ${latest}; restarting`);
   const child = deps.spawnSync(
     process.execPath,
     [process.argv[1] ?? "", "start", ...argv],

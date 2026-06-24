@@ -6,12 +6,15 @@
 // is nothing to stub for it — the absence of those gates is the behavior.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { VERSION } from "../../shared/version.js";
 import type { UpdateCommandDeps } from "./update.js";
 import { updateCommand } from "./update.js";
 
-// A version strictly newer than the installed VERSION, so isNewer fires.
+// A version strictly newer than the installed version, so isNewer fires.
 const NEWER = "99.0.0";
+// The pinned, clean installed version the tests inject, decoupled from the
+// module VERSION so a staging release (which builds a `-staging.` VERSION)
+// can't flip the derived channel out from under these assertions.
+const INSTALLED = "0.1.0";
 
 let out: string[];
 let writeSpy: typeof process.stdout.write;
@@ -39,11 +42,13 @@ function harness(over: {
   latest?: string | undefined;
   installOk?: boolean;
   sourceRun?: boolean;
+  installedVersion?: string;
 }): { deps: UpdateCommandDeps; npmCalls: string[]; fetchTags: string[] } {
   const npmCalls: string[] = [];
   const fetchTags: string[] = [];
   const deps: UpdateCommandDeps = {
     sourceRun: () => over.sourceRun ?? false,
+    installedVersion: over.installedVersion ?? INSTALLED,
     fetch: async (tag: string) => {
       fetchTags.push(tag);
       return "latest" in over ? over.latest : NEWER;
@@ -60,26 +65,26 @@ test("--check reports outdated:true and never installs", async () => {
   const h = harness({ latest: NEWER });
   const code = await updateCommand(["--check"], h.deps);
   expect(code).toBe(0);
-  expect(printed()).toEqual({ ok: true, current: VERSION, latest: NEWER, outdated: true });
+  expect(printed()).toEqual({ ok: true, current: INSTALLED, latest: NEWER, outdated: true });
   expect(h.npmCalls).toHaveLength(0);
 });
 
 test("--check reports outdated:false when current is latest, never installs", async () => {
-  const h = harness({ latest: VERSION });
+  const h = harness({ latest: INSTALLED });
   const code = await updateCommand(["--check"], h.deps);
   expect(code).toBe(0);
-  expect(printed()).toEqual({ ok: true, current: VERSION, latest: VERSION, outdated: false });
+  expect(printed()).toEqual({ ok: true, current: INSTALLED, latest: INSTALLED, outdated: false });
   expect(h.npmCalls).toHaveLength(0);
 });
 
 test("not outdated (no --check) reports updated:false and does not install", async () => {
-  const h = harness({ latest: VERSION });
+  const h = harness({ latest: INSTALLED });
   const code = await updateCommand([], h.deps);
   expect(code).toBe(0);
   expect(printed()).toEqual({
     ok: true,
-    current: VERSION,
-    latest: VERSION,
+    current: INSTALLED,
+    latest: INSTALLED,
     outdated: false,
     updated: false,
   });
@@ -90,8 +95,8 @@ test("outdated install success reports {updated, from, to}", async () => {
   const h = harness({ latest: NEWER, installOk: true });
   const code = await updateCommand([], h.deps);
   expect(code).toBe(0);
-  expect(printed()).toEqual({ ok: true, updated: true, from: VERSION, to: NEWER });
-  // VERSION is clean → the command queried the `latest` tag and installed `otacon@latest`.
+  expect(printed()).toEqual({ ok: true, updated: true, from: INSTALLED, to: NEWER });
+  // INSTALLED is clean → the command queried the `latest` tag and installed `otacon@latest`.
   expect(h.fetchTags).toEqual(["latest"]);
   expect(h.npmCalls).toEqual(["latest"]);
 });
@@ -111,7 +116,7 @@ test("a source checkout refuses with source:true and never installs", async () =
   const h = harness({ sourceRun: true });
   const code = await updateCommand([], h.deps);
   expect(code).toBe(0);
-  expect(printed()).toEqual({ ok: true, source: true, version: VERSION });
+  expect(printed()).toEqual({ ok: true, source: true, version: INSTALLED });
   expect(h.npmCalls).toHaveLength(0);
 });
 
@@ -119,7 +124,7 @@ test("a registry blip (latest undefined) fails open: latest:null, no install", a
   const h = harness({ latest: undefined });
   const code = await updateCommand([], h.deps);
   expect(code).toBe(0);
-  expect(printed()).toEqual({ ok: true, current: VERSION, latest: null, outdated: false });
+  expect(printed()).toEqual({ ok: true, current: INSTALLED, latest: null, outdated: false });
   expect(h.npmCalls).toHaveLength(0);
 });
 
@@ -127,6 +132,27 @@ test("fail-open applies to --check too", async () => {
   const h = harness({ latest: undefined });
   const code = await updateCommand(["--check"], h.deps);
   expect(code).toBe(0);
-  expect(printed()).toEqual({ ok: true, current: VERSION, latest: null, outdated: false });
+  expect(printed()).toEqual({ ok: true, current: INSTALLED, latest: null, outdated: false });
   expect(h.npmCalls).toHaveLength(0);
+});
+
+test("a -staging. installed version queries + installs the staging channel", async () => {
+  // A staging build (e.g. what a staging release compiles VERSION into) must
+  // derive the `staging` channel from the installed version, not `latest`.
+  const h = harness({ latest: NEWER, installOk: true, installedVersion: "0.1.0-staging.5" });
+  const code = await updateCommand([], h.deps);
+  expect(code).toBe(0);
+  expect(h.fetchTags).toEqual(["staging"]);
+  expect(h.npmCalls).toEqual(["staging"]);
+});
+
+test("a -staging. install failure reports E_UPDATE_FAILED for otacon@staging", async () => {
+  const h = harness({ latest: NEWER, installOk: false, installedVersion: "0.1.0-staging.5" });
+  const code = await updateCommand([], h.deps);
+  expect(code).toBe(1);
+  expect(printed()).toEqual({
+    ok: false,
+    error: { code: "E_UPDATE_FAILED", message: "npm install -g otacon@staging failed" },
+  });
+  expect(h.npmCalls).toEqual(["staging"]);
 });
