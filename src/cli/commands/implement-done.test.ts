@@ -111,8 +111,14 @@ test("--pr reports a PR and prints the daemon's implemented outcome", async () =
   const { code, printed } = await run(["--pr", "https://example.test/pr/7", "--session", SESSION_ID]);
 
   expect(code).toBe(0);
-  // The POST carries exactly the PR; no `failed` key when the flag is absent.
-  expect(fake.body).toEqual({ pr: "https://example.test/pr/7" });
+  // The POST carries the PR; no `failed` key when the flag is absent. A success
+  // report also computes the build's changed source files for drift
+  // reconciliation (Phase 3): the harness runs inside otacon's own git checkout,
+  // so `changed` is present (the branch diff) — advisory, so we assert it is a
+  // string[] rather than coupling to its live contents.
+  const { changed, ...rest } = fake.body as { changed?: unknown };
+  expect(rest).toEqual({ pr: "https://example.test/pr/7" });
+  expect(changed === undefined || Array.isArray(changed)).toBe(true);
   expect(fake.path).toBe(`/api/sessions/${SESSION_ID}/implement-done`);
   // It prints the daemon's response verbatim — the {ok, session, status, prUrl} shape.
   expect(printed).toEqual({ ok: true, session, status: "implemented", prUrl: "https://example.test/pr/7" });
@@ -155,8 +161,11 @@ test("a 409 E_NOT_IMPLEMENTING surfaces as a CliError, not a crash", async () =>
   expect(thrown).toBeInstanceOf(CliError);
   expect((thrown as CliError).code).toBe("E_NOT_IMPLEMENTING");
   expect((thrown as CliError).exitCode).toBe(1);
-  // A bare report (no flags) still posts {} — the daemon defaults to implemented.
-  expect(fake.body).toEqual({});
+  // A bare report (no flags) posts only the advisory `changed` set (the harness
+  // runs in otacon's own git checkout) — the daemon defaults to implemented.
+  const { changed, ...rest } = fake.body as { changed?: unknown };
+  expect(rest).toEqual({});
+  expect(changed === undefined || Array.isArray(changed)).toBe(true);
 });
 
 test("no active session for the repo refuses E_NO_SESSION (no --session, foreign repo)", async () => {

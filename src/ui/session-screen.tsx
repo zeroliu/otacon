@@ -748,6 +748,7 @@ function ReviewLoop({
                         warnings={payload.warnings}
                         changedIds={changedIds}
                         verificationLedger={payload.verificationLedger}
+                        shippedBeyondPlan={(payload.shippedBeyondPlan ?? []).join("\n")}
                         onRendered={onRendered}
                       />
                     </Suspense>

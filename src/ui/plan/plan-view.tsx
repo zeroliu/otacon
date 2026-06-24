@@ -261,6 +261,34 @@ function SectionBlock({
   );
 }
 
+/**
+ * The advisory drift callout (Phase 3): when the build changed source files no
+ * phase's `Files:` cited, the reviewer sees them flagged at the top of the
+ * dossier as "shipped beyond the plan, review these". Reuses the risk-callout
+ * ink (a flat top rule + label, no fill); the copy makes plain it is advisory,
+ * not a gate. Degrades to nothing when there is no drift (the caller guards).
+ */
+function ShippedBeyondPlan({ files }: { files: string[] }) {
+  return (
+    <div className="callout callout-risk shipped-beyond" role="note">
+      <p className="callout-label">▲ Shipped beyond the plan</p>
+      <div className="callout-body">
+        <p>
+          The build changed {files.length} file{files.length === 1 ? "" : "s"} no phase's Files list
+          named. Review these (advisory; it never blocked the build):
+        </p>
+        <ul>
+          {files.map((f) => (
+            <li key={f}>
+              <code>{f}</code>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
 // memo'd so the review loop's state churn (selection tracking, drawer edits)
 // never re-renders the dossier: a re-render rewrites the .md innerHTML (see
 // markdown.tsx), which would collapse the very selection being anchored. The
@@ -273,6 +301,7 @@ export default memo(function PlanView({
   warnings,
   changedIds = "",
   verificationLedger,
+  shippedBeyondPlan = "",
   onRendered,
 }: {
   markdown: string;
@@ -283,6 +312,11 @@ export default memo(function PlanView({
    *  build is reported done — renders a per-scenario badge. From the revision
    *  payload, so a stable identity for a given revision (the memo survives). */
   verificationLedger?: Ledger;
+  /** Newline-joined uncited changed files (Phase 3 drift): when non-empty,
+   *  renders an advisory "shipped beyond the plan" callout. A string (not an
+   *  array) so a fresh array identity per parent render can't defeat the memo,
+   *  mirroring `changedIds`. Empty (the default) renders nothing. */
+  shippedBeyondPlan?: string;
   /** Fired after each commit so the persistent thread marks can repaint once
    *  the (memo'd) dossier's DOM lands — a new revision swaps the whole subtree.
    *  Must be a stable identity (a parent useCallback) or it defeats the memo. */
@@ -293,6 +327,10 @@ export default memo(function PlanView({
     () => new Set(changedIds.split(" ").filter(Boolean)),
     [changedIds],
   );
+  const drift = useMemo(
+    () => shippedBeyondPlan.split("\n").filter(Boolean),
+    [shippedBeyondPlan],
+  );
   // Runs after every PlanView commit (mount + each revision/diff prop change) —
   // the memo means that is exactly when planRef's DOM is (re)written.
   useLayoutEffect(() => {
@@ -300,6 +338,7 @@ export default memo(function PlanView({
   });
   return (
     <article className="plan">
+      {drift.length > 0 && <ShippedBeyondPlan files={drift} />}
       {doc.preamble.length > 0 && (
         <div className="plan-preamble">
           <Blocks blocks={doc.preamble} />

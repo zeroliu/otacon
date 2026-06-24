@@ -3452,3 +3452,29 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Scenarios gain a stable id (e.g. an explicit `@id` tag), or phases get
   reordered/renumbered between approval and build such that the heading number is no
   longer a reliable key — then key by id and drop the flat-index convention.
+
+## Drift reconciliation is advisory, not a gate (2026-06-24)
+
+- **Decision:** A success `implement-done` reconciles the build's changed source files
+  (computed CLI-side: `git diff --name-only <merge-base default-branch HEAD> HEAD`)
+  against the approved plan's per-phase `Files:` lists and surfaces the uncited ones as
+  `reconciliation = { shippedBeyondPlan }`: in the response and as a review-UI callout.
+  It is computed best-effort and NEVER blocks the terminal flip: a non-repo/detached cwd,
+  a missing merge-base, or any parse error degrades to an empty report. Coverage matching
+  is deliberately lenient (exact path, cited-directory prefix, or a simple `*`/`**` glob,
+  with a bare `*.ext` glob also matching a basename). Only the verification ledger
+  hard-blocks (§12); drift only informs.
+- **Why:** This addresses the motivating failure (a "staging" branch-gate shipped that
+  the plan never mentioned) by making out-of-plan implementation *visible* to the
+  reviewer. But it must not be a gate: the changed-file set over-reports on a rebase
+  (unrelated upstream commits enter the merge-base diff) and under-reports on a squash
+  (history collapses), so enforcing it would block honest builds on git mechanics the
+  agent does not control. Leniency is the same calculus inverted: a false "shipped beyond
+  plan" flag erodes trust in an advisory signal faster than a missed one, and the plan's
+  `Files:` lists name directories and globs as often as exact paths, so prefix/glob
+  coverage matches author intent. The pure parse/match (`citedPaths`/`reconcile`, in
+  `src/cli/drift.ts`) is the single source of truth the daemon imports; the git probe
+  (`changedFiles`) stays CLI-side because only the CLI runs in the build worktree.
+- **Revisit when:** Drift proves noisy enough that reviewers ignore it (then tighten
+  matching or scope it to source dirs), or a future hard "no unplanned files" policy is
+  wanted (then promote it to a gate behind an explicit opt-in, never the default).

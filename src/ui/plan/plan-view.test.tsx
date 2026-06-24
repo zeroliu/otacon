@@ -10,6 +10,16 @@ function render(markdown: string, verificationLedger?: Ledger): string {
   );
 }
 
+function renderDrift(shippedBeyondPlan: string): string {
+  // A bare Phases shell so nothing routes through the Markdown renderer
+  // (DOMPurify is unavailable under the headless test runtime) — only the
+  // drift callout this test cares about renders.
+  const markdown = ["## Phases", "", "### Phase 1 — x", "", "Verification:", ""].join("\n");
+  return renderToStaticMarkup(
+    createElement(PlanView, { markdown, warnings: [], shippedBeyondPlan }),
+  );
+}
+
 const SCEN = (g: string) => `Given ${g}\nWhen the agent runs it\nThen it passes`;
 
 describe("PlanView verify-before-merge badge keying", () => {
@@ -59,5 +69,23 @@ describe("PlanView verify-before-merge badge keying", () => {
     // Exactly one badge renders (for the first field's scenario).
     expect(html.match(/gwt-badge-verified/g) ?? []).toHaveLength(1);
     expect(html).toContain('title="first assertion covered"');
+  });
+});
+
+describe("PlanView shipped-beyond-plan drift callout (Phase 3)", () => {
+  // Scenario 1 (UI): the advisory callout renders the uncited changed file.
+  test("renders the advisory callout listing each uncited changed file", () => {
+    const html = renderDrift("src/foo.ts\nsrc/daemon/staging-gate.ts");
+    expect(html).toContain("shipped-beyond");
+    expect(html).toContain("Shipped beyond the plan");
+    expect(html).toContain("<code>src/foo.ts</code>");
+    expect(html).toContain("<code>src/daemon/staging-gate.ts</code>");
+    // The copy makes clear it is advisory, not a gate.
+    expect(html).toContain("advisory");
+  });
+
+  // Scenario 2 (UI): no drift → the callout degrades to nothing.
+  test("renders nothing when there is no drift", () => {
+    expect(renderDrift("")).not.toContain("shipped-beyond");
   });
 });

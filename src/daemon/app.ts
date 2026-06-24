@@ -39,6 +39,7 @@ import type {
   Ledger,
   QuestionSpec,
   QueuedEvent,
+  Reconciliation,
   RegistrySession,
   Resolutions,
   RevisionPayload,
@@ -62,6 +63,11 @@ import { diffPlans } from "./diff.js";
 import { lint } from "./linter/index.js";
 import { expectedScenarioKeys, validateLedger } from "./linter/ledger.js";
 import { parsePlan, slugify } from "./linter/parse.js";
+// The drift reconciliation's pure core (Phase 3): the daemon owns the approved
+// plan, so it extracts the cited paths and matches them against the changed
+// files the CLI computed. Only the pure functions cross over; `changedFiles`
+// (git I/O) stays CLI-side.
+import { citedPaths, reconcile } from "../cli/drift.js";
 import { Notifier } from "./notify.js";
 import { Presence } from "./presence.js";
 import type { ParkHandle } from "./queue.js";
@@ -342,6 +348,24 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     if (tailer === undefined) return;
     tailer.stop();
     tailers.delete(id);
+  };
+  /**
+   * The drift reconciliation for a success implement-done (Phase 3): the
+   * changed files (computed by the CLI in the build worktree, sent verbatim)
+   * that no phase's `Files:` cited in the approved (latest) revision. ADVISORY:
+   * the whole thing is best-effort and returns `{ shippedBeyondPlan: [] }`
+   * (never throws, never undefined-by-error) so it can NEVER block the terminal
+   * flip; a non-array `changed`, or any read/parse failure, degrades to empty.
+   */
+  const computeReconciliation = (id: string, changed: unknown): Reconciliation => {
+    try {
+      const files = Array.isArray(changed) ? changed.filter((f): f is string => typeof f === "string") : [];
+      if (files.length === 0) return { shippedBeyondPlan: [] };
+      const cited = citedPaths(store.readRevision(id, store.readState(id).revision));
+      return reconcile(files, cited);
+    } catch {
+      return { shippedBeyondPlan: [] };
+    }
   };
   // Re-attach tailers to sessions that were already active when the daemon
   // started (a restart mid-build): the registry survives the restart, so the
@@ -1674,7 +1698,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
         409,
       );
     }
-    const { pr, failed, ledger } = body;
+    const { pr, failed, ledger, changed } = body;
     if (pr !== undefined && (typeof pr !== "string" || pr.trim() === "")) {
       return badRequest(c, "pr must be a non-empty string");
     }
@@ -1715,13 +1739,37 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     if (failed !== true && ledger !== undefined) {
       store.setVerificationLedger(session.id, ledger as Ledger);
     }
+    // Drift reconciliation (Phase 3): flag changed source files no phase's
+    // `Files:` cited (implementation that exceeds the approved plan). ADVISORY
+    // and reviewer-facing: it must NEVER block the terminal flip, so the whole
+    // computation is best-effort (a bad `changed`, a parse hiccup → empty
+    // report, never a throw). Only on a SUCCESS report; matched against the
+    // approved (latest) revision the build was based on.
+    if (failed !== true) {
+      // Persistence itself is best-effort too: a disk write failure here must
+      // not throw out of the handler and abort the terminal flip below.
+      try {
+        store.setReconciliation(session.id, computeReconciliation(session.id, changed));
+      } catch {
+        // advisory signal lost for this run; the build still completes.
+      }
+    }
     const updated = store.updateSession(session.id, {
       status,
       ...(typeof pr === "string" ? { prUrl: pr } : {}),
     });
     stopTailer(session.id); // build is over (both outcomes terminal): stop tailing
     publishSession(updated); // the chip flips + the PR link appears live
-    return c.json({ ok: true, session: updated, status, prUrl: updated.prUrl });
+    // Echo the advisory reconciliation so the agent's implement-done output
+    // names what shipped beyond the plan (the reviewer also sees the UI callout).
+    const shippedBeyondPlan = store.readState(session.id).reconciliation?.shippedBeyondPlan;
+    return c.json({
+      ok: true,
+      session: updated,
+      status,
+      prUrl: updated.prUrl,
+      ...(shippedBeyondPlan && shippedBeyondPlan.length > 0 ? { shippedBeyondPlan } : {}),
+    });
   });
 
   app.get("/api/sessions/:id/revisions/:n", (c) => {
@@ -1749,6 +1797,12 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
         // surface its per-scenario badges on that revision (verify-before-merge).
         ...(state.verificationLedger && n === state.revision
           ? { verificationLedger: state.verificationLedger }
+          : {}),
+        // The reconciliation was computed against the latest (approved)
+        // revision too; surface its uncited-files callout only there (Phase 3).
+        // An empty list is omitted; the UI shows nothing when there is no drift.
+        ...(state.reconciliation?.shippedBeyondPlan.length && n === state.revision
+          ? { shippedBeyondPlan: state.reconciliation.shippedBeyondPlan }
           : {}),
       };
       return c.json(payload);

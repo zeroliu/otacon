@@ -363,7 +363,25 @@ export interface SessionStateFile {
    * attestation as a per-scenario badge. Absent until a build is reported done.
    */
   verificationLedger?: Ledger;
+  /**
+   * The drift reconciliation persisted by a successful `implement-done` (Phase
+   * 3): the source files the build changed that NO phase's `Files:` list cites
+   * (implementation that exceeds the approved plan). ADVISORY and
+   * reviewer-facing; computed once at implement-done against the approved
+   * (latest) revision and surfaced (response + a UI callout); never enforced,
+   * it must never block the terminal flip. Absent until a build is reported
+   * done; `{ shippedBeyondPlan: [] }` when every change was covered.
+   */
+  reconciliation?: Reconciliation;
 }
+
+/**
+ * The drift reconciliation (Phase 3): the changed source files the approved
+ * plan never cited. ADVISORY: it informs the reviewer that the build shipped
+ * beyond the plan; it never gates `implement-done` (drift over-/under-reports
+ * on rebases and squash merges, so only the verification ledger hard-blocks).
+ */
+export type Reconciliation = { shippedBeyondPlan: string[] };
 
 /**
  * The verify-before-merge attestation, supplied by `implement-done --ledger`.
@@ -416,6 +434,14 @@ export interface RevisionPayload {
    * the approved (latest) revision the ledger was attested against.
    */
   verificationLedger?: Ledger;
+  /**
+   * The drift reconciliation's uncited changed files (Phase 3), present only on
+   * the approved (latest) revision once the build is reported done: the review
+   * UI renders an advisory "shipped beyond the plan" callout from it. Absent
+   * pre-implementation; an empty array means every change was covered (the UI
+   * shows nothing). Advisory, never a gate.
+   */
+  shippedBeyondPlan?: string[];
 }
 
 /** One line of a diff hunk. */

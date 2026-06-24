@@ -321,6 +321,35 @@ describe("Store pendingApproval (comment & approve)", () => {
     );
     expect(store.readState(id).pendingApproval).toBeUndefined();
   });
+
+  test("setReconciliation round-trips across a daemon restart (Phase 3)", () => {
+    const store = new Store();
+    const { id } = store.createSession({ title: "t", repo });
+    store.setReconciliation(id, { shippedBeyondPlan: ["src/foo.ts", "src/bar.ts"] });
+    // A brand-new Store (restart) reads it back off session.json.
+    expect(new Store().readState(id).reconciliation).toEqual({
+      shippedBeyondPlan: ["src/foo.ts", "src/bar.ts"],
+    });
+  });
+
+  test("a malformed reconciliation is dropped, not flowed through", () => {
+    const store = new Store();
+    const { id } = store.createSession({ title: "t", repo });
+    const statePath = join(sessionDir(repo, id), "session.json");
+    // shippedBeyondPlan must be a string[]; a wrong shape is dropped (defaulting
+    // beats quarantining a recoverable file) — and an absent callout is harmless.
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        id,
+        revision: 0,
+        lastReviewedRevision: 0,
+        counters: { batch: 0, thread: 0, question: 0, eventSeq: 0 },
+        reconciliation: { shippedBeyondPlan: [1, 2] },
+      }),
+    );
+    expect(store.readState(id).reconciliation).toBeUndefined();
+  });
 });
 
 describe("end to end: store + queue across instances", () => {

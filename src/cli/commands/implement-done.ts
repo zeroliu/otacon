@@ -16,8 +16,9 @@
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { api, ensureDaemon } from "../client.js";
+import { changedFiles } from "../drift.js";
 import { fail, printJson, usageError } from "../output.js";
-import { listSessions, realpathOr, resolveSession } from "../session.js";
+import { findRepoRoot, listSessions, realpathOr, resolveSession } from "../session.js";
 
 export async function implementDoneCommand(argv: string[]): Promise<number> {
   const { values } = parseArgs({
@@ -48,17 +49,28 @@ export async function implementDoneCommand(argv: string[]): Promise<number> {
     }
   }
 
+  // Drift reconciliation input (Phase 3): the source files this build changed
+  // vs its merge-base with the default branch, computed in the worktree the
+  // agent runs in. The daemon reconciles them against the approved plan's
+  // `Files:` and flags any it never cited. ADVISORY — `changedFiles` fails soft
+  // (returns [] on any git error), so a non-repo/detached/no-merge-base cwd just
+  // sends an empty list and never breaks the report. Only on a SUCCESS report:
+  // an aborted build has no implementation to reconcile against the plan.
+  const cwd = realpathOr(process.cwd());
+  const changed = values.failed === true ? [] : changedFiles(findRepoRoot(cwd) ?? cwd);
+
   // Omit absent keys: a bare `implement-done` posts {} (success), the daemon
   // defaults to `implemented`. --failed and --pr are independent — an aborted
   // build can still carry the PR of a partial branch if the agent opened one.
-  const payload: { pr?: string; failed?: boolean; ledger?: unknown } = {
+  const payload: { pr?: string; failed?: boolean; ledger?: unknown; changed?: string[] } = {
     ...(values.pr !== undefined ? { pr: values.pr } : {}),
     ...(values.failed === true ? { failed: true } : {}),
     ...(ledger !== undefined ? { ledger } : {}),
+    ...(changed.length > 0 ? { changed } : {}),
   };
 
   await ensureDaemon();
-  const session = resolveSession(await listSessions(), values.session, realpathOr(process.cwd()));
+  const session = resolveSession(await listSessions(), values.session, cwd);
 
   const response = await api("POST", `/api/sessions/${session.id}/implement-done`, payload);
   if (response.status === 200) {

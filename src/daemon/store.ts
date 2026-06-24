@@ -11,7 +11,14 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import * as paths from "../shared/paths.js";
-import type { Ledger, LintIssue, RegistryFile, RegistrySession, SessionStateFile } from "../shared/types.js";
+import type {
+  Ledger,
+  LintIssue,
+  Reconciliation,
+  RegistryFile,
+  RegistrySession,
+  SessionStateFile,
+} from "../shared/types.js";
 
 let tmpSerial = 0;
 let quarantineSerial = 0;
@@ -122,7 +129,23 @@ function parseState(raw: unknown): SessionStateFile | undefined {
   // missing/garbled ledger costs at most a few absent UI badges, never the file.
   const ledger = file.verificationLedger as unknown;
   if (!isValidLedger(ledger)) delete file.verificationLedger;
+  // The drift reconciliation (Phase 3) is optional, same rationale as the
+  // ledger: it is advisory presentation metadata for terminal sessions, so a
+  // missing/garbled value costs at most an absent UI callout, never the file.
+  const reconciliation = file.reconciliation as unknown;
+  if (!isValidReconciliation(reconciliation)) delete file.reconciliation;
   return file;
+}
+
+/** Structural check for a persisted reconciliation: `{ shippedBeyondPlan: string[] }`. */
+function isValidReconciliation(value: unknown): boolean {
+  const r = value as { shippedBeyondPlan?: unknown };
+  return (
+    typeof r === "object" &&
+    r !== null &&
+    Array.isArray(r.shippedBeyondPlan) &&
+    r.shippedBeyondPlan.every((f) => typeof f === "string")
+  );
 }
 
 /** Structural check for a persisted/supplied verification ledger:
@@ -401,6 +424,19 @@ export class Store {
     const session = this.require(id);
     const state = this.readState(id);
     state.verificationLedger = ledger;
+    writeFileAtomic(paths.sessionStatePath(session.repo, id), stringify(state));
+  }
+
+  /**
+   * Persist the drift reconciliation on a successful implement-done (Phase 3):
+   * the changed files no phase's `Files:` cited. Advisory: the route computes
+   * it best-effort and never lets a failure here block the terminal flip.
+   * Stored on session.json beside the ledger (daemon-owned detail).
+   */
+  setReconciliation(id: string, reconciliation: Reconciliation): void {
+    const session = this.require(id);
+    const state = this.readState(id);
+    state.reconciliation = reconciliation;
     writeFileAtomic(paths.sessionStatePath(session.repo, id), stringify(state));
   }
 

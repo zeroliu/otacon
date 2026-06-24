@@ -954,6 +954,23 @@ code {
   margin-bottom: 0;
 }
 
+/* Advisory drift callout (Phase 3): the uncited changed files the build shipped
+ * beyond the plan. Leans on the risk callout's ink; the file list is mono so a
+ * path scans as a path. Spaced from the dossier below it. */
+.shipped-beyond {
+  margin-bottom: 1.4em;
+}
+
+.shipped-beyond .callout-body ul {
+  margin: 0.3em 0 0;
+  padding-left: 1.2em;
+}
+
+.shipped-beyond .callout-body code {
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
 /* ── inline scope pills (plan structure, lint, and anchoring) ──
  * Bracket tokens like `[new]` become small mono tags inline in prose, hue per
  * scope, from the tested chip/diff palette. Rendered inline (not inline-block)

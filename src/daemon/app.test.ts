@@ -2515,6 +2515,116 @@ describe("implement-done verification ledger gate (verify-before-merge)", () => 
   });
 });
 
+describe("implement-done drift reconciliation (shipped-beyond-plan, Phase 3)", () => {
+  const implementDone = (id: string, body: unknown = {}) =>
+    postJson(`/api/sessions/${id}/implement-done`, body);
+
+  // A prose-Verification plan (so the ledger gate is vacuous and this isolates
+  // the drift logic) whose two phases cite a handful of files — including a
+  // directory (`src/ui`) and a glob (`*.test.ts`) to exercise lenient coverage.
+  const planWithFiles = (id: string) =>
+    [
+      "---",
+      "title: drift",
+      `session: ${id}`,
+      "revision: 1",
+      "status: draft",
+      "created: 2026-06-24",
+      "---",
+      "",
+      "## Summary",
+      "",
+      "A plan.",
+      "",
+      "## Phases",
+      "",
+      "### Phase 1 — core",
+      "",
+      "Goal: g",
+      "Files:",
+      "- `src/auth/issuer.ts` [new] — the issuer",
+      "- src/ui",
+      "Verification: prose only, no gwt.",
+      "",
+      "### Phase 2 — tests",
+      "",
+      "Goal: g2",
+      "Files:",
+      "- `*.test.ts`",
+      "Verification: prose only.",
+      "",
+    ].join("\n");
+
+  const implementing = (): RegistrySession => {
+    const session = mintSession();
+    store.saveRevision(session.id, planWithFiles(session.id));
+    store.updateSession(session.id, { status: "implementing" });
+    return session;
+  };
+
+  test("Scenario 1: a changed file no phase Files cites is flagged shipped-beyond-plan", async () => {
+    const session = implementing();
+    const res = await implementDone(session.id, {
+      changed: ["src/auth/issuer.ts", "src/daemon/staging-gate.ts"],
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { status: string; shippedBeyondPlan?: string[] };
+    expect(body.status).toBe("implemented");
+    // The uncited file surfaces in the response …
+    expect(body.shippedBeyondPlan).toEqual(["src/daemon/staging-gate.ts"]);
+    // … is persisted on session.json …
+    expect(store.readState(session.id).reconciliation).toEqual({
+      shippedBeyondPlan: ["src/daemon/staging-gate.ts"],
+    });
+    // … and surfaces on the latest revision's JSON payload (the UI's source).
+    const detail = await app.request(`/api/sessions/${session.id}/revisions/1`, {
+      headers: { accept: "application/json" },
+    });
+    const payload = (await detail.json()) as { shippedBeyondPlan?: string[] };
+    expect(payload.shippedBeyondPlan).toEqual(["src/daemon/staging-gate.ts"]);
+  });
+
+  test("Scenario 2: every changed file is cited (exact, dir-prefix, glob) → empty report", async () => {
+    const session = implementing();
+    const res = await implementDone(session.id, {
+      changed: [
+        "src/auth/issuer.ts", // exact
+        "src/ui/plan/plan-view.tsx", // under the src/ui directory prefix
+        "src/cli/drift.test.ts", // *.test.ts glob
+      ],
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { shippedBeyondPlan?: string[] };
+    // No drift → the response omits the key …
+    expect(body.shippedBeyondPlan).toBeUndefined();
+    // … the stored reconciliation is the empty report …
+    expect(store.readState(session.id).reconciliation).toEqual({ shippedBeyondPlan: [] });
+    // … and the empty list is omitted from the revision payload (UI shows nothing).
+    const detail = await app.request(`/api/sessions/${session.id}/revisions/1`, {
+      headers: { accept: "application/json" },
+    });
+    const payload = (await detail.json()) as { shippedBeyondPlan?: string[] };
+    expect(payload.shippedBeyondPlan).toBeUndefined();
+  });
+
+  test("advisory: a missing/garbled `changed` never blocks the terminal flip", async () => {
+    const session = implementing();
+    // No `changed` key at all (the CLI sends none when git fails soft).
+    const res = await implementDone(session.id, {});
+    expect(res.status).toBe(200);
+    expect(store.getSession(session.id)?.status).toBe("implemented");
+    expect(store.readState(session.id).reconciliation).toEqual({ shippedBeyondPlan: [] });
+  });
+
+  test("--failed reports no reconciliation (an aborted build has nothing to reconcile)", async () => {
+    const session = implementing();
+    const res = await implementDone(session.id, { failed: true, changed: ["src/foo.ts"] });
+    expect(res.status).toBe(200);
+    expect(store.getSession(session.id)?.status).toBe("implement_failed");
+    expect(store.readState(session.id).reconciliation).toBeUndefined();
+  });
+});
+
 describe("reopen a terminal session (resurrect-plan-amend)", () => {
   const submitValid = async (id: string) => {
     const res = await app.request(`/api/sessions/${id}/submit`, {
