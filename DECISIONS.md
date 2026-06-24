@@ -3569,3 +3569,23 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** The codec density needs rebalancing (e.g. a denser desktop layout
   wants a smaller label tier), at which point the tokens and the guard's floor move
   together.
+
+## Update-channel tests inject the installed version, not the build-time VERSION (2026-06-24)
+
+- **Decision:** `AutoUpdateDeps` and `UpdateCommandDeps` carry an `installedVersion` seam
+  (default `VERSION` in each module's `REAL_DEPS`); `maybeAutoUpdate` and `updateCommand`
+  derive the channel and compare against `deps.installedVersion`, never the module-level
+  `VERSION`. The update-channel tests pin a clean `INSTALLED` version and add positive
+  staging-channel coverage to both modules. Production is byte-for-byte unchanged because
+  the default is `VERSION`. Builds on the channel-aware auto-update decision above.
+- **Why:** A staging release runs `npm version <base>-staging.<stamp>`, whose `version`
+  lifecycle hook regenerates `src/shared/version.ts`, so in CI the checked-out tag builds
+  against a `-staging.` `VERSION`. `channelOf(VERSION)` then returns `staging`, and tests
+  that hardcoded the `latest` channel went red at the workflow's Test gate and blocked the
+  publish (run 28103822140). Reading the installed version through a seam lets each test
+  assert a channel against a pinned version instead of the ambient build, so the suite is
+  green on both clean and staging builds, and the staging route finally has its own
+  coverage, the gap that let this ship.
+- **Revisit when:** A non-version input begins to drive the channel (the seam should then
+  carry that instead), or the release stops stamping `version.ts` before the gates run (the
+  coupling would no longer exist).
