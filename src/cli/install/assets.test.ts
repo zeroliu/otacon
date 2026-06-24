@@ -73,6 +73,17 @@ describe("single-source wrappers (D7)", () => {
     }
   });
 
+  test("every wrapper makes implementation wait for explicit Implement approval", () => {
+    for (const text of [skillMd(), dogfoodSkillMd()]) {
+      expect(text).toContain("## Hard implementation gate");
+      expect(text).toContain("MUST NOT create, edit, delete, or format project");
+      expect(text).toContain('{"event":"approved",...,"implement":true}');
+      expect(text).toContain("Approval is not implied by the original request");
+      expect(text).toContain("After a clean submit, stop all implementation work");
+      expect(text).toContain("If you notice you edited project files before `approved implement:true`");
+    }
+  });
+
   test("every wrapper teaches the resume-from-worktree bootstrap and amend-in-place", () => {
     for (const text of [skillMd(), dogfoodSkillMd()]) {
       // The start bootstrap: a resumeCandidate from status means an amendment is
