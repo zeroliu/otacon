@@ -1,9 +1,11 @@
 // otacon start --title <t> [--quick] — mint and register a session:
-// POST /api/sessions, print the session id and review URL. No local session
-// pointer — the daemon registry is the single source of truth.
+// POST /api/sessions, print the session id, review URL, and the plan draft path
+// (~/.otacon/sessions/<id>/plan.md, where the agent writes the plan). No local
+// session pointer — the daemon registry is the single source of truth.
 
 import { parseArgs } from "node:util";
 import type { RegistrySession } from "../../shared/types.js";
+import { planPath } from "../../shared/paths.js";
 import { api, baseUrl, ensureDaemon } from "../client.js";
 import { fail, notice, printJson, usageError } from "../output.js";
 import { currentBranch, findRepoRoot, realpathOr } from "../session.js";
@@ -53,6 +55,7 @@ export async function startCommand(argv: string[]): Promise<number> {
     branch: session.branch,
     quick: session.quick,
     url: `${baseUrl()}/s/${session.id}`,
+    plan: planPath(session.id),
   });
   return 0;
 }

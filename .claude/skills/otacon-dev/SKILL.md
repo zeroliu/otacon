@@ -13,9 +13,9 @@ This repo **is** otacon. You plan features for it by running otacon's own CLI fr
 source via the `./bin/otacon` shim, so every command below exercises the code in
 this checkout. That shim runs the CLI from `src/` via bun — no build needed; it
 always reflects current source. The daemon auto-spawns from source on the first
-command. Working state lives in `.otacon/`; the approved plan is archived in the
-home store (`~/.otacon/sessions/<id>/`) and, on Save, copied into the repo under
-`plans.dir` (default `.otacon/plans`).
+command. Working state lives in the home store (`~/.otacon/sessions/<id>/`); on
+Save the approved plan is also copied into the repo under `plans.dir` (default
+`.otacon/plans`). `<repo>/.otacon/` itself holds only config and those Save copies.
 
 After editing **daemon** source (`src/daemon/**`) mid-session, restart the running
 daemon so your change loads: `./bin/otacon restart` (the next command respawns it
@@ -43,7 +43,7 @@ Before that event, allowed actions are only:
 - `./bin/otacon start` / `./bin/otacon status` / `./bin/otacon open` / `./bin/otacon progress` /
   `./bin/otacon ask` / `./bin/otacon wait` / `./bin/otacon submit` / `./bin/otacon answer`.
 - Read-only research commands.
-- Writing the plan and resolutions files under `.otacon/<session>/`.
+- Writing the plan and resolutions files under the session's home dir (`~/.otacon/sessions/<id>/`, the `plan` path `start` prints).
 
 A user request phrased as "can you make/fix/implement..." is still a plan-review
 request when this skill is active. Approval is not implied by the original request.
@@ -73,7 +73,8 @@ spawning a second worktree.
 ## The loop
 
 1. `./bin/otacon start --title <kebab-title>` **first, before you research** — it mints
-   the session and prints the review URL. Tell the user to open it (`./bin/otacon open`
+   the session and prints the review URL plus the `plan` draft path (under
+   `~/.otacon/sessions/<id>/`). Tell the user to open the URL (`./bin/otacon open`
    launches it in their browser) so they can watch the whole thing from the first second.
    `--quick` skips the interview — only when the user explicitly asks.
 2. **Research the codebase.** On supported agents the daemon now auto-streams your
@@ -102,7 +103,7 @@ spawning a second worktree.
      still go one at a time.
    - Park for the answer: `./bin/otacon wait --timeout 540` (set the Bash tool timeout
      to 600000 ms). The answer arrives as `{"event":"answer","question":"q<n>",...}`.
-4. **Draft** the plan at `.otacon/<session>/plan.md` in the schema below, then
+4. **Draft** the plan at the `plan` path `start` printed (`~/.otacon/sessions/<id>/plan.md`) in the schema below, then
    `./bin/otacon submit`. On exit 1, fix every reported lint issue and resubmit until
    accepted. After a clean submit, stop all implementation work and park in
    `./bin/otacon wait`; only an `approved` event with `implement:true` enters the
