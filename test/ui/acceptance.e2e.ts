@@ -109,7 +109,8 @@ test("UI acceptance: the whole agent/reviewer loop renders and round-trips in th
     dir,
     richBase.replace("- D1: RS256 over HS256 [assumed]", `- D1: RS256 over HS256 ← ${qid}`),
   );
-  await expect(page.locator(".session-rev")).toHaveText("r1");
+  // The fresh new-revision banner carries the landed revision (the r0 header pill is gone).
+  await expect(page.locator(".rev-fresh .rev-label")).toHaveText("r1 received");
   // Schema-aware structure, not markdown soup.
   await expect(page.locator("#summary .section-title")).toHaveText("Summary");
   await expect(page.locator("#phase-1 .phase-name")).toHaveText("Token issuance");

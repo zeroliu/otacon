@@ -10,6 +10,7 @@
 
 import { useEffect, useState } from "react";
 import { postDelete } from "../api";
+import { Portal } from "../portal";
 
 export function DeleteDialog({
   sessionId,
@@ -54,12 +55,13 @@ export function DeleteDialog({
   };
 
   return (
-    <div
-      className="approve-overlay"
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
+    <Portal>
+      <div
+        className="approve-overlay"
+        onClick={(event) => {
+          if (event.target === event.currentTarget) onClose();
+        }}
+      >
       <div
         className="approve-sheet delete-sheet"
         role="dialog"
@@ -95,6 +97,7 @@ export function DeleteDialog({
           </button>
         </div>
       </div>
-    </div>
+      </div>
+    </Portal>
   );
 }

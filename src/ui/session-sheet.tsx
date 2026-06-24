@@ -14,6 +14,7 @@
 
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { Portal } from "./portal";
 import { usePath } from "./router";
 import { useScrollLock } from "./review/keyboard";
 import { SessionList } from "./session-list";
@@ -88,22 +89,24 @@ function SessionSheet({ currentId, onClose }: { currentId?: string; onClose: () 
   }, [onClose]);
 
   return (
-    <div
-      className="ss-overlay"
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      <div className="ss-sheet" role="dialog" aria-modal="true" aria-label="sessions">
-        <div className="ss-head">
-          <span className="ss-title">sessions</span>
-          <button type="button" className="composer-close" onClick={onClose}>
-            esc
-          </button>
+    <Portal>
+      <div
+        className="ss-overlay"
+        onClick={(event) => {
+          if (event.target === event.currentTarget) onClose();
+        }}
+      >
+        <div className="ss-sheet" role="dialog" aria-modal="true" aria-label="sessions">
+          <div className="ss-head">
+            <span className="ss-title">sessions</span>
+            <button type="button" className="composer-close" onClick={onClose}>
+              esc
+            </button>
+          </div>
+          <SessionList current={currentId} onNavigate={onClose} />
         </div>
-        <SessionList current={currentId} onNavigate={onClose} />
       </div>
-    </div>
+    </Portal>
   );
 }
 

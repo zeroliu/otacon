@@ -1552,6 +1552,27 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Plans grow anchor targets below section granularity (paragraph
   ids), which would want a finer menu or a different gesture.
 
+## Modal dialogs portal to document.body for top-tier stacking
+
+- **Decision:** Every modal overlay (the approve/delete confirm dialogs, the section
+  ⋯ menu, the mobile session sheet) renders through a tiny `Portal`
+  (`src/ui/portal.tsx`, a `createPortal(children, document.body)` wrapper) instead of
+  inline where it is triggered. The confirm overlay sits at `z-index: 60`, above the
+  session sheet (50) and section menu (41); because the overlays now live on body,
+  those z-indexes are global rather than local to a trapped subtree.
+- **Why:** The `DeleteDialog` (and the approve dialog) can be opened from a sidebar
+  row, and `<aside class="app-sidebar">` is `position: sticky` (a stacking context),
+  painted *before* `<main class="app-content">`. An inline overlay is trapped inside
+  that sidebar context, so the main column's grill cards paint above it no matter how
+  high its z-index climbs: raising z-index alone cannot escape a stacking context, the
+  value only orders siblings *within* it. Portaling to body lifts the overlay out of
+  every ancestor stacking context, so a single global z-index actually wins. React has
+  no automatic top-layer; `createPortal` is the standard escape, and a one-line shared
+  component keeps every dialog honest about it.
+- **Revisit when:** We adopt the native `<dialog>` element / the CSS top-layer (which
+  would supersede the portal), or a dialog needs to stay scoped to a subtree (focus
+  trapping or inert-background handling that the portal would complicate).
+
 ## The sticky bar is the drawer, augmented at the phone breakpoint
 
 - **Decision:** The §10 phone sticky bar is not a new component: the comment drawer
@@ -2060,28 +2081,33 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 ## Sticky session header: one element that compacts, not a separate reveal bar
 
-- **Decision:** The review screen's masthead is a single sticky header (`ReviewHeader`,
-  `position: sticky; top: 0`) that subsumes the old `.topbar` (back + switcher) and the
-  scroll-away `SessionHead` hero. It always renders the full content — title, revision,
-  repo/branch, status, switcher, clean⇄diff toggle, Approve — and **compacts** to a
-  one-line bar past a small scroll threshold (`nextCompact`, rAF-throttled in
-  `useCompactOnScroll`), re-expanding at the top. The rejected alternative was a hero
-  plus a separate condensed bar that fades in once the hero scrolls past. On phone the
-  header is lean (title + switcher chips + the clean⇄diff toggle); the revision and
-  Approve are CSS-hidden below 640px, with Approve living solely in the fixed bottom
-  bar. (The plan's q3 settled the phone header as "chips only"; we keep the toggle
-  because hiding it removed the only phone path into diff view — a regression an
-  existing 375px e2e test caught — and the toggle, unlike Approve, carries no
-  shown-in-two-places hazard.)
+- **Decision:** The review screen's masthead is a single always-on sticky header
+  (`ReviewHeader`, `position: sticky; top: 0`) that subsumes the old `.topbar` (back +
+  switcher) and the scroll-away `SessionHead` hero. One `.rh-bar` carries everything on a
+  single wrapping line: the identity ("Title - repo · branch"), the status pill, the
+  agent-presence dot, the "updated Xm ago" timestamp, the delete button, and the clean⇄diff
+  toggle (+ Approve on desktop only). There is **no separate detail row to collapse**:
+  compaction past a small scroll threshold (`nextCompact`, rAF-throttled in
+  `useCompactOnScroll`) now only tightens the padding and title-font size, re-expanding at
+  the top. The revision pill is gone. The rejected alternative was a hero plus a separate
+  condensed bar that fades in once the hero scrolls past. On phone the bar wraps to keep
+  everything visible (including the status pill, which the old "phone header is chips-only,
+  detail hidden" behavior wrongly hid below 640px); only Approve is CSS-hidden there, living
+  solely in the fixed bottom bar. (We keep the toggle on phone because hiding it removed the
+  only phone path into diff view, a regression an existing 375px e2e test caught, and the
+  toggle, unlike Approve, carries no shown-in-two-places hazard.)
 - **Why:** Two elements (hero + reveal bar) means an IntersectionObserver to gate the
   reveal and **two copies of the title/Approve** that can disagree or briefly both show
   — the exact double-render the §10 "Approve never shown twice" rule forbids. One
   element is always complete and consistent by construction: a dropped or coalesced
-  scroll frame merely leaves it in its last state (it fails to *expanded*, fully usable),
-  never to a half-rendered or duplicated bar. rAF-throttling matches the selection
-  reposition so the compact transition never janks per scroll frame. Hiding Approve in
-  the phone header (rather than duplicating it) preserves the never-twice rule while the
-  bottom bar stays the one-thumb control surface.
+  scroll frame merely leaves it in its last state (still fully usable), never a
+  half-rendered or duplicated bar. Folding the detail row's contents up into the one
+  always-on bar (rather than collapsing it on scroll and hiding it on phone) extends that
+  "one element can't disagree with itself" property to the status pill: it is now always
+  visible, on every breakpoint, instead of vanishing on phones. rAF-throttling matches the
+  selection reposition so the compact transition never janks per scroll frame. Keeping
+  Approve out of the phone header (rather than duplicating it) preserves the never-twice
+  rule while the bottom bar stays the one-thumb control surface.
 - **Revisit when:** The header needs content that genuinely cannot fit a single morphing
   element, or scroll-driven compaction proves janky on a real low-end device (a
   scroll-timeline / `content-visibility` approach would be the next lever).
@@ -3510,10 +3536,13 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 
 - **Decision:** The "agent on the line" pinned card queue (`GrillQueue`, rendered
   above the plan) is deleted. The collapsible **Interview** panel is now the only
-  grill surface: two labeled zones, each newest-first, an "open" group on top
-  where unanswered questions are answered inline (the same interactive card the
-  queue used) and an "answered" group below, with a divider between them when both
-  are non-empty. Answering, undo, and the deep-link flash all happen in the panel.
+  grill surface: two labeled zones, each ordered oldest-first (q1 -> qN, the
+  order the questions were asked), an "open" group on top where unanswered
+  questions are answered inline (the same interactive card the queue used) and an
+  "answered" group below, with a divider between them when both are non-empty.
+  Answering, undo, and the deep-link flash all happen in the panel. (The zones
+  were originally newest-first; the reviewer asked for ask-order so live questions
+  read q1, q2, q3 down the panel - see `orderZones` in `interview.tsx`.)
 - **Why:** With both surfaces live, an answered card was duplicated (once settled
   in the queue and again in the Interview panel), so a reviewer saw the same Q&A
   twice and had to learn two layouts that did the same thing. One surface is
