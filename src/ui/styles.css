@@ -4736,8 +4736,13 @@ code {
 }
 
 /* Scoped to .sl-row so the review header's .agent-dot is untouched: a short fade
- * so the dot can swap out for the hover-revealed ✕ (below) without a hard cut. */
+ * so the dot can swap out for the hover-revealed ✕ (below) without a hard cut.
+ * A fixed 28×28 control slot, matching .sl-delete, so the hover-revealed ✕
+ * overlays the dot at the same centre instead of sitting left of it. */
 .sl-row .agent-dot {
+  width: 28px;
+  height: 28px;
+  justify-content: center;
   transition: opacity 0.12s ease;
 }
 
@@ -4763,10 +4768,11 @@ code {
 }
 
 /* Where hover exists, take the ✕ out of flow (reserving no slot at rest) and
- * float it over the agent dot at the row's right edge, matching .sl-row's 6px
- * right padding, vertically centred. At rest the dot shows; on hover the dot
- * fades and the ✕ fades in where it was. Focus reveals it too (keyboard reach),
- * even without hover. */
+ * float it over the agent dot's 28×28 slot at the row's right edge — same box
+ * (right: 6px, matching .sl-row's right padding), so the ✕ and dot share a
+ * centre. At rest the dot shows; on hover the dot fades and the ✕ fades in
+ * exactly where it was. Focus reveals it too (keyboard reach), even without
+ * hover. */
 @media (hover: hover) {
   .sl-delete {
     position: absolute;
