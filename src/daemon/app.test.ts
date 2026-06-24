@@ -22,6 +22,7 @@ import { createApp } from "./app.js";
 import type { DesktopNotification } from "./desktop-notify.js";
 import { Presence } from "./presence.js";
 import { Store } from "./store.js";
+import { Viewers } from "./viewers.js";
 
 let home: string;
 let repo: string;
@@ -35,6 +36,11 @@ let shutdowns: number;
 // covers the real tool selection.
 let notifyCalls: DesktopNotification[];
 let presence: Presence;
+// The live-tab tracker (open-tab reuse) on a hand-cranked clock + short TTL, so
+// the heartbeat tests drive expiry deterministically instead of waiting 90s.
+let viewers: Viewers;
+let viewerNow: number;
+const VIEWER_TTL = 1_000;
 
 beforeEach(() => {
   savedHome = process.env.OTACON_HOME;
@@ -50,12 +56,15 @@ beforeEach(() => {
   shutdowns = 0;
   notifyCalls = [];
   presence = new Presence();
+  viewerNow = 10_000;
+  viewers = new Viewers(() => viewerNow, VIEWER_TTL);
   app = createApp({
     store,
     onShutdown: () => (shutdowns += 1),
     uiDir,
     notify: (n) => notifyCalls.push(n),
     presence,
+    viewers,
   });
 });
 
@@ -113,10 +122,15 @@ function eventsOnDisk(id: string): unknown[] {
 }
 
 describe("health and shutdown", () => {
-  test("GET /api/health reports app, version, and pid", async () => {
+  test("GET /api/health reports app, version, pid, and viewers", async () => {
     const res = await app.request("/api/health");
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ app: "otacond", version: VERSION, pid: process.pid });
+    expect(await res.json()).toEqual({
+      app: "otacond",
+      version: VERSION,
+      pid: process.pid,
+      viewers: 0,
+    });
   });
 
   test("POST /api/shutdown responds ok and invokes the shutdown hook", async () => {
@@ -1035,6 +1049,47 @@ describe("UI SSE streams", () => {
     await reader.next(); // snapshot
     expect((await reader.next()).comment).toBe("hb");
     await reader.cancel();
+  });
+});
+
+// The live-tab heartbeat (open-tab reuse): the SPA POSTs /api/viewers/heartbeat
+// and /api/health.viewers reports the live count so `otacon open` can skip a
+// duplicate tab. A TTL self-heals a closed/crashed tab; a `gone` beacon drops a
+// cleanly-closed one immediately. The tracker rides a hand-cranked clock here.
+describe("live-tab heartbeat (open-tab reuse)", () => {
+  async function liveViewers(): Promise<number> {
+    return ((await (await app.request("/api/health")).json()) as { viewers: number }).viewers;
+  }
+
+  test("a heartbeat makes /api/health.viewers report a live tab", async () => {
+    expect(await liveViewers()).toBe(0);
+    const res = await postJson("/api/viewers/heartbeat", { clientId: "tab-a" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(await liveViewers()).toBe(1);
+  });
+
+  test("a tab self-expires once its heartbeat passes the TTL", async () => {
+    await postJson("/api/viewers/heartbeat", { clientId: "tab-a" });
+    expect(await liveViewers()).toBe(1);
+    viewerNow += VIEWER_TTL; // now - lastSeen === TTL: the tab is stale
+    expect(await liveViewers()).toBe(0);
+  });
+
+  test("a `gone` beacon drops the tab immediately", async () => {
+    await postJson("/api/viewers/heartbeat", { clientId: "tab-a" });
+    expect(await liveViewers()).toBe(1);
+    const res = await postJson("/api/viewers/heartbeat", { clientId: "tab-a", gone: true });
+    expect(res.status).toBe(200);
+    expect(await liveViewers()).toBe(0);
+  });
+
+  test("a missing or empty clientId is a 400", async () => {
+    const missing = await postJson("/api/viewers/heartbeat", {});
+    expect(missing.status).toBe(400);
+    expect(((await missing.json()) as { error: { code: string } }).error.code).toBe("E_BAD_REQUEST");
+    const empty = await postJson("/api/viewers/heartbeat", { clientId: "" });
+    expect(empty.status).toBe(400);
   });
 });
 
