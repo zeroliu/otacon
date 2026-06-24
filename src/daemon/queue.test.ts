@@ -224,12 +224,12 @@ describe("SessionQueue at-least-once delivery", () => {
 });
 
 describe("SessionQueue close (DELETE eviction)", () => {
-  test("flush after close never touches disk — a late ack cannot recreate the archived file", () => {
+  test("flush after close never touches disk: a late ack cannot recreate the removed file", () => {
     const q = new SessionQueue(file);
     q.enqueue(payload(1), 1);
     const taken = q.take() as QueuedEvent;
     q.close();
-    rmSync(file); // otacon clean archived the session dir
+    rmSync(file); // delete permanently removed the home session dir
     q.flush(taken); // the post-response ack callback fires late
     expect(existsSync(file)).toBe(false);
   });

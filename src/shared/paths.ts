@@ -36,20 +36,20 @@ export function updateCachePath(): string {
 }
 
 /**
- * The canonical home plan archive root (`<OTACON_HOME>/sessions`): every
- * approved plan lands here keyed by its session id, regardless of the repo.
- * This store is permanent — `otacon clean` never touches it — so a plan is
- * always recoverable even after its repo working state is archived.
+ * The canonical home session root (`<OTACON_HOME>/sessions`): every session's
+ * working state lives here keyed by its session id, regardless of the repo, and
+ * the approved plan lands here too. Deleting a session (UI or `otacon clean`)
+ * removes its `<id>/` folder outright.
  */
 export function homeSessionsDir(): string {
   return join(otaconHome(), "sessions");
 }
 
 /**
- * One session's home archive dir (`<OTACON_HOME>/sessions/<id>`). The session
- * id is a globally-unique hash, so this never collides across repos — mirroring
- * the repo-local `.otacon/<id>/` layout. The approved plan lands here as
- * `<date>-<slug>.md`.
+ * One session's home dir (`<OTACON_HOME>/sessions/<id>`). The session id is a
+ * globally-unique hash, so this never collides across repos. It is the
+ * per-session working dir (state, events, threads, revisions) AND where the
+ * approved plan lands as `<date>-<slug>.md`.
  */
 export function homeSessionDir(id: string): string {
   return join(homeSessionsDir(), id);
@@ -85,56 +85,67 @@ export function otaconDir(repoRoot: string): string {
   return join(repoRoot, ".otacon");
 }
 
-export function sessionDir(repoRoot: string, id: string): string {
-  return join(otaconDir(repoRoot), id);
+/**
+ * One session's working+archive dir. Lives in the home store
+ * (`~/.otacon/sessions/<id>/`), not in the repo: state, events, threads,
+ * revisions, and the approved plan all share this id-keyed, repo-independent
+ * folder. Equals homeSessionDir(id).
+ */
+export function sessionDir(id: string): string {
+  return homeSessionDir(id);
 }
 
-export function planPath(repoRoot: string, id: string): string {
-  return join(sessionDir(repoRoot, id), "plan.md");
+/** The draft plan markdown (home store `~/.otacon/sessions/<id>/plan.md`). */
+export function planPath(id: string): string {
+  return join(sessionDir(id), "plan.md");
 }
 
-export function sessionStatePath(repoRoot: string, id: string): string {
-  return join(sessionDir(repoRoot, id), "session.json");
+/** The session state file (home store `~/.otacon/sessions/<id>/session.json`). */
+export function sessionStatePath(id: string): string {
+  return join(sessionDir(id), "session.json");
 }
 
-export function eventsPath(repoRoot: string, id: string): string {
-  return join(sessionDir(repoRoot, id), "events.json");
+/** The persisted event queue (home store `~/.otacon/sessions/<id>/events.json`). */
+export function eventsPath(id: string): string {
+  return join(sessionDir(id), "events.json");
 }
 
-/** Comment + question threads for the review UI's rail (threaded review and revision, approval and archive lifecycle). */
-export function threadsPath(repoRoot: string, id: string): string {
-  return join(sessionDir(repoRoot, id), "threads.json");
+/** Comment + question threads for the review UI's rail, in the home store `~/.otacon/sessions/<id>/threads.json` (threaded review and revision, approval and archive lifecycle). */
+export function threadsPath(id: string): string {
+  return join(sessionDir(id), "threads.json");
 }
 
-/** The grill Q&A transcript (interview questions) — appended to the approved artifact. */
-export function transcriptPath(repoRoot: string, id: string): string {
-  return join(sessionDir(repoRoot, id), "transcript.json");
+/** The grill Q&A transcript (interview questions), in the home store `~/.otacon/sessions/<id>/transcript.json`: appended to the approved artifact. */
+export function transcriptPath(id: string): string {
+  return join(sessionDir(id), "transcript.json");
 }
 
-/** The append-only live-activity feed: `otacon progress` notes. */
-export function activityPath(repoRoot: string, id: string): string {
-  return join(sessionDir(repoRoot, id), "activity.json");
+/** The append-only live-activity feed (`otacon progress` notes), in the home store `~/.otacon/sessions/<id>/activity.json`. */
+export function activityPath(id: string): string {
+  return join(sessionDir(id), "activity.json");
 }
 
 /**
- * The append-only normalized live-activity stream (JSONL): captured agent
- * activity plus `otacon progress` highlights. Ephemeral, capped, one event per
- * line — distinct from the legacy `activity.json` (the draft-chip feed).
+ * The append-only normalized live-activity stream (JSONL), in the home store
+ * `~/.otacon/sessions/<id>/stream.jsonl`: captured agent activity plus `otacon
+ * progress` highlights. Ephemeral, capped, one event per line, distinct from
+ * the legacy `activity.json` (the draft-chip feed).
  */
-export function streamPath(repoRoot: string, id: string): string {
-  return join(sessionDir(repoRoot, id), "stream.jsonl");
+export function streamPath(id: string): string {
+  return join(sessionDir(id), "stream.jsonl");
 }
 
-export function revisionPath(repoRoot: string, id: string, n: number): string {
-  return join(sessionDir(repoRoot, id), `r${n}.md`);
+/** A revision snapshot (home store `~/.otacon/sessions/<id>/r<n>.md`). */
+export function revisionPath(id: string, n: number): string {
+  return join(sessionDir(id), `r${n}.md`);
 }
 
-/** Lint warnings recorded when r<n>.md was accepted (the UI's L6 badges). */
-export function revisionWarningsPath(repoRoot: string, id: string, n: number): string {
-  return join(sessionDir(repoRoot, id), `r${n}.warnings.json`);
+/** Lint warnings recorded when r<n>.md was accepted (the UI's L6 badges), in the home store `~/.otacon/sessions/<id>/r<n>.warnings.json`. */
+export function revisionWarningsPath(id: string, n: number): string {
+  return join(sessionDir(id), `r${n}.warnings.json`);
 }
 
-/** The agent's changelog submitted with r<n>.md (threaded review and revision layer 1). */
-export function revisionChangelogPath(repoRoot: string, id: string, n: number): string {
-  return join(sessionDir(repoRoot, id), `r${n}.changelog.md`);
+/** The agent's changelog submitted with r<n>.md, in the home store `~/.otacon/sessions/<id>/r<n>.changelog.md` (threaded review and revision layer 1). */
+export function revisionChangelogPath(id: string, n: number): string {
+  return join(sessionDir(id), `r${n}.changelog.md`);
 }

@@ -6,7 +6,7 @@ import { approveMove } from "./approve.js";
 // "Send & approve" flush-then-fold path share — every UI branch (close, defer,
 // warn, error) is decided here, so it carries the dialog's whole control flow.
 describe("approveMove", () => {
-  test("a finalize-now success carries the saved path + home archive through to approved", () => {
+  test("a finalize-now success carries the saved path + home copy through to approved", () => {
     const result: ApproveResult = {
       ok: true,
       path: ".otacon/plans/2026-06-16-x.md",
