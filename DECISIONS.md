@@ -1552,6 +1552,27 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Plans grow anchor targets below section granularity (paragraph
   ids), which would want a finer menu or a different gesture.
 
+## Modal dialogs portal to document.body for top-tier stacking
+
+- **Decision:** Every modal overlay (the approve/delete confirm dialogs, the section
+  ⋯ menu, the mobile session sheet) renders through a tiny `Portal`
+  (`src/ui/portal.tsx`, a `createPortal(children, document.body)` wrapper) instead of
+  inline where it is triggered. The confirm overlay sits at `z-index: 60`, above the
+  session sheet (50) and section menu (41); because the overlays now live on body,
+  those z-indexes are global rather than local to a trapped subtree.
+- **Why:** The `DeleteDialog` (and the approve dialog) can be opened from a sidebar
+  row, and `<aside class="app-sidebar">` is `position: sticky` (a stacking context),
+  painted *before* `<main class="app-content">`. An inline overlay is trapped inside
+  that sidebar context, so the main column's grill cards paint above it no matter how
+  high its z-index climbs: raising z-index alone cannot escape a stacking context, the
+  value only orders siblings *within* it. Portaling to body lifts the overlay out of
+  every ancestor stacking context, so a single global z-index actually wins. React has
+  no automatic top-layer; `createPortal` is the standard escape, and a one-line shared
+  component keeps every dialog honest about it.
+- **Revisit when:** We adopt the native `<dialog>` element / the CSS top-layer (which
+  would supersede the portal), or a dialog needs to stay scoped to a subtree (focus
+  trapping or inert-background handling that the portal would complicate).
+
 ## The sticky bar is the drawer, augmented at the phone breakpoint
 
 - **Decision:** The §10 phone sticky bar is not a new component: the comment drawer

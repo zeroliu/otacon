@@ -7,6 +7,7 @@
 // range; on desktop it drops as a popover under the ⋯ button it came from.
 
 import { useEffect, useRef } from "react";
+import { Portal } from "../portal";
 
 export interface SectionMenuState {
   /** The slug id of the section/phase the ⋯ belongs to. */
@@ -49,42 +50,44 @@ export function SectionMenu({
           top: at.y + 8,
         };
   return (
-    <div
-      className="sec-overlay"
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
+    <Portal>
       <div
-        ref={menuRef}
-        className={sheet ? "sec-sheet" : "sec-pop"}
-        style={style}
-        role="menu"
-        aria-label={`actions for #${state.id}`}
+        className="sec-overlay"
+        onClick={(event) => {
+          if (event.target === event.currentTarget) onClose();
+        }}
       >
-        <div className="sec-head">
-          <span className="sec-slug">#{state.id}</span>
-          {sheet && (
-            <button type="button" className="composer-close" onClick={onClose}>
-              close
-            </button>
-          )}
+        <div
+          ref={menuRef}
+          className={sheet ? "sec-sheet" : "sec-pop"}
+          style={style}
+          role="menu"
+          aria-label={`actions for #${state.id}`}
+        >
+          <div className="sec-head">
+            <span className="sec-slug">#{state.id}</span>
+            {sheet && (
+              <button type="button" className="composer-close" onClick={onClose}>
+                close
+              </button>
+            )}
+          </div>
+          <button type="button" className="sec-item" role="menuitem" onClick={onComment}>
+            <span className="sec-glyph" aria-hidden="true">
+              ✎
+            </span>
+            comment on section
+            <span className="sec-hint">→ drawer</span>
+          </button>
+          <button type="button" className="sec-item" role="menuitem" onClick={onAsk}>
+            <span className="sec-glyph" aria-hidden="true">
+              ?
+            </span>
+            ask about section
+            <span className="sec-hint">instant</span>
+          </button>
         </div>
-        <button type="button" className="sec-item" role="menuitem" onClick={onComment}>
-          <span className="sec-glyph" aria-hidden="true">
-            ✎
-          </span>
-          comment on section
-          <span className="sec-hint">→ drawer</span>
-        </button>
-        <button type="button" className="sec-item" role="menuitem" onClick={onAsk}>
-          <span className="sec-glyph" aria-hidden="true">
-            ?
-          </span>
-          ask about section
-          <span className="sec-hint">instant</span>
-        </button>
       </div>
-    </div>
+    </Portal>
   );
 }

@@ -998,7 +998,11 @@ mono `▍` tag in a card's meta row, a 2px rule along a panel's top edge, an acc
 glyph or label — not a 3–4px blade down the side. Containers drop their corner radius;
 in-flow cards (index rows, the grill card, the revision banner, threads, phases) carry
 no shadow, while floating overlays (the composer, the section menu, the approve and
-bottom sheets, the drawer) keep a shadow to lift off the page. Controls keep their own
+bottom sheets, the drawer) keep a shadow to lift off the page. The modal overlays (the
+approve/delete confirm dialogs, the section menu, the mobile session sheet) render
+through a portal to `document.body`, so they sit at the top layer above all page
+content no matter where they are triggered (escaping the sticky sidebar's stacking
+context). Controls keep their own
 treatment: chips (with the `★rec` star and on/off states), buttons, inputs, and pills
 are hit targets, not container chrome, and are unchanged. The index is a top-ruled
 telemetry list rather than a stack of boxes.

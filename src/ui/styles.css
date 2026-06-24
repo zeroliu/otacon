@@ -3486,10 +3486,14 @@ code {
   margin-left: 0;
 }
 
+/* These modal overlays portal to document.body (src/ui/portal.tsx), so they
+ * escape every ancestor stacking context and their z-index is global: the
+ * confirm dialog (60) sits above the session sheet (.ss-overlay, 50) and the
+ * section menu (.sec-overlay, 41), no matter where each is triggered. */
 .approve-overlay {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: 60;
   background: color-mix(in srgb, var(--ink) 32%, transparent);
   backdrop-filter: blur(2px);
   -webkit-backdrop-filter: blur(2px);
