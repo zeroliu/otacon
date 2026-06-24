@@ -101,34 +101,39 @@ otacon doctor
 Stable releases publish to the `latest` dist-tag (above). For preview builds testers can
 opt into without affecting `latest`, otacon has a `staging` dist-tag.
 
-Cut a staging build from a **clean `staging` branch checkout**:
+Staging builds are cut from the long-lived **`staging` branch** with the **same**
+`bun run release` command, which detects the branch and switches to the staging flow. Keep
+`staging` synced with `main`, then cut from a **clean `staging` checkout**:
 
 ```sh
-bun run release:staging            # next prerelease build (default)
-bun run release:staging minor      # or: minor / major (bump the base version line)
-bun run release:staging --dry-run  # rehearse: runs gates, prints commands, mutates nothing
+git checkout staging
+git merge --ff-only main    # keep staging synced with main
+bun run release             # next staging build (patch base, default)
+bun run release minor       # or: minor / major (bump the base version line)
+bun run release --dry-run   # rehearse: runs gates, prints the version + commands, mutates nothing
 ```
 
-`bun run release:staging [minor|major]` ([`scripts/release-staging.sh`](scripts/release-staging.sh))
-mirrors `bun run release`, but it guards that you are on the **`staging`** branch (not
-`main`) and bumps a **prerelease** version with `npm version <mode> --preid staging`:
+On the `staging` branch, `bun run release [patch|minor|major]`
+([`scripts/release.sh`](scripts/release.sh)) computes the version
+`<next-base>-staging.<UTC timestamp>`: it bumps the base version line by the kind
+(default `patch`; `minor`/`major` move the base first via
+[`scripts/staging-version.ts`](scripts/staging-version.ts)) and appends a numeric UTC
+timestamp build id (`date -u +%Y%m%d%H%M%S`). It then runs `npm version <version>`, which
+commits the bump on the `staging` branch and creates the annotated
+`vX.Y.Z-staging.<stamp>` tag, and `git push --follow-tags`.
 
-- no kind → `prerelease` (advances to the next patch line from a clean version, or
-  increments the `-staging.N` build counter when already on a staging prerelease)
-- `minor` → `preminor`, `major` → `premajor` (move the base version line first)
-
-It commits, creates the annotated `vX.Y.Z-staging.N` tag, and `git push --follow-tags`.
 The same `release.yml` workflow runs on the pushed tag, routes by version suffix to the
 **`staging`** dist-tag (`npm publish --tag staging`), and creates **no GitHub Release**
-(those are reserved for clean `latest` tags). Re-running `release:staging` increments the
-`-staging.N` build counter and moves the `staging` dist-tag to the newest build.
+(those are reserved for clean `latest` tags). Re-cutting yields a newer (higher) timestamp,
+which moves the `staging` dist-tag to the newest build. Keeping the bump commit on `staging`
+keeps prerelease history off `main`.
 
 Testers install from the staging channel:
 
 ```sh
-npm i -g otacon@staging          # newest staging build (the staging dist-tag)
-npm i -g otacon@0.1.4-staging.1  # pin an exact staging build
-npm i -g otacon@latest           # leave staging, back to the stable channel
+npm i -g otacon@staging                          # newest staging build (the staging dist-tag)
+npm i -g otacon@0.1.4-staging.20260624153012  # pin an exact staging build (UTC timestamp)
+npm i -g otacon@latest                           # leave staging, back to the stable channel
 ```
 
 ## Rollback / mistakes

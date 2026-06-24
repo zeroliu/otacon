@@ -2,8 +2,9 @@
 /**
  * Assembles the prerelease version string for a `staging` channel cut:
  * `<bumped-core>-staging.<stamp>`. This is the single source of truth for the
- * shape staging builds take; release-staging.sh will call the direct-run CLI
- * below (Phase 2) instead of stringing the version together in shell.
+ * shape staging builds take; the branch-detected scripts/release.sh calls the
+ * direct-run CLI below on the `staging` branch instead of stringing the version
+ * together in shell.
  *
  * The output is consumed by the channel-aware auto-updater in src/cli/update.ts:
  * `channelOf` only treats a build as `staging` when it matches `/-staging\./`
