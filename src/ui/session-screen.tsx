@@ -938,9 +938,9 @@ export function SessionScreen({ id }: { id: string }) {
   }, [session]);
 
   // A `removed` frame landed while this screen was open (approval and archive lifecycle): the
-  // session left the registry — `otacon clean` archived an approved one, or it
-  // was deleted from review while pending. The frame carries no reason, so the
-  // copy covers both. A terminal state, not an error — the stream is closed, and
+  // session left the registry (`otacon clean` removed a finished one, or it
+  // was deleted from review). The frame carries no reason, so the copy covers
+  // both. A terminal state, not an error: the stream is closed, and
   // the app shell (sidebar ≥960px, the ☰ session sheet below it) still offers
   // every live session.
   // Because the shell provides session switching + the home link on every route,
@@ -952,8 +952,9 @@ export function SessionScreen({ id }: { id: string }) {
         <main className="empty">
           <p className="empty-title">session closed</p>
           <p className="empty-body">
-            This session left the codec — approved and cleaned, or deleted from review. Any
-            approved plan stays preserved in the home archive (<code>~/.otacon/sessions/</code>).
+            This session left the codec: approved and cleaned, or deleted from review. Its home
+            folder is gone for good. An approved plan survives as the saved copy in your project (or
+            in the PR for Implement plans).
           </p>
         </main>
       </div>

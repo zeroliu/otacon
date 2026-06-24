@@ -1,7 +1,23 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { expandTilde, homeSessionDir, homeSessionsDir, updateCachePath } from "./paths.js";
+import {
+  activityPath,
+  eventsPath,
+  expandTilde,
+  homeSessionDir,
+  homeSessionsDir,
+  planPath,
+  revisionChangelogPath,
+  revisionPath,
+  revisionWarningsPath,
+  sessionDir,
+  sessionStatePath,
+  streamPath,
+  threadsPath,
+  transcriptPath,
+  updateCachePath,
+} from "./paths.js";
 
 let savedHome: string | undefined;
 
@@ -30,6 +46,54 @@ describe("home plan archive paths", () => {
     process.env.OTACON_HOME = "/tmp/otacon-other";
     expect(homeSessionsDir()).toBe(join("/tmp/otacon-other", "sessions"));
     expect(homeSessionDir("otc_zzz")).toBe(join("/tmp/otacon-other", "sessions", "otc_zzz"));
+  });
+});
+
+describe("per-session working state lives in the home store", () => {
+  // After confine-otacon-dir-to-config-and-plans, the per-session helpers take
+  // the session id only (no repo root) and resolve under
+  // <OTACON_HOME>/sessions/<id>/, equal to homeSessionDir(id).
+  const id = "otc_a1b2c3";
+  const dir = join("/tmp/otacon-home-test", "sessions", id);
+
+  test("sessionDir is the home session dir (id only, no repo root)", () => {
+    expect(sessionDir(id)).toBe(dir);
+    expect(sessionDir(id)).toBe(homeSessionDir(id));
+  });
+
+  test("every per-session file nests under the home session dir", () => {
+    expect(planPath(id)).toBe(join(dir, "plan.md"));
+    expect(sessionStatePath(id)).toBe(join(dir, "session.json"));
+    expect(eventsPath(id)).toBe(join(dir, "events.json"));
+    expect(threadsPath(id)).toBe(join(dir, "threads.json"));
+    expect(transcriptPath(id)).toBe(join(dir, "transcript.json"));
+    expect(activityPath(id)).toBe(join(dir, "activity.json"));
+    expect(streamPath(id)).toBe(join(dir, "stream.jsonl"));
+    expect(revisionPath(id, 2)).toBe(join(dir, "r2.md"));
+    expect(revisionWarningsPath(id, 2)).toBe(join(dir, "r2.warnings.json"));
+    expect(revisionChangelogPath(id, 2)).toBe(join(dir, "r2.changelog.md"));
+  });
+
+  test("no per-session path touches the repo root", () => {
+    process.env.OTACON_HOME = "/tmp/otacon-home-test";
+    const repoRoot = "/some/repo";
+    for (const p of [
+      sessionDir(id),
+      planPath(id),
+      sessionStatePath(id),
+      eventsPath(id),
+      threadsPath(id),
+      transcriptPath(id),
+      activityPath(id),
+      streamPath(id),
+      revisionPath(id, 1),
+      revisionWarningsPath(id, 1),
+      revisionChangelogPath(id, 1),
+    ]) {
+      expect(p.startsWith(join("/tmp/otacon-home-test", "sessions"))).toBe(true);
+      expect(p.includes(repoRoot)).toBe(false);
+      expect(p.includes(".otacon")).toBe(false);
+    }
   });
 });
 

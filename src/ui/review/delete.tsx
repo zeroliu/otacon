@@ -1,10 +1,12 @@
 // The delete flow: a deliberate control — like Approve, no
 // keyboard shortcut exists — opening a confirm sheet whose copy is honest about
-// the disposition, which depends on whether the session has committed value.
-// An **approved** session is archived (recoverable, like `otacon clean`); a
-// **pending** one is hard-removed (permanent). Either way the daemon publishes
-// the `removed` frame the screen already listens for. One stage, unlike
-// Approve's warn-then-force: there is nothing to reconcile, only to confirm.
+// the disposition. Delete permanently removes the session's home folder
+// (`~/.otacon/sessions/<id>/`) for every status: nothing is recoverable from
+// otacon itself. For an approved session the durable copy survives elsewhere
+// (the Save copy under the project's plans dir, or the PR for Implement plans);
+// a pending one has no committed plan to keep. The daemon publishes the
+// `removed` frame the screen already listens for. One stage, unlike Approve's
+// warn-then-force: there is nothing to reconcile, only to confirm.
 
 import { useEffect, useState } from "react";
 import { postDelete } from "../api";
@@ -16,7 +18,7 @@ export function DeleteDialog({
   onDeleted,
 }: {
   sessionId: string;
-  /** Approved → archived (recoverable); pending → hard-deleted. Drives the copy. */
+  /** Approved → durable copy survives elsewhere; pending → no committed plan. Drives the copy. */
   approved: boolean;
   onClose: () => void;
   /** Fires once the daemon confirms the delete; the `removed` frame closes the UI. */
@@ -73,14 +75,14 @@ export function DeleteDialog({
         <p className="approve-copy">Delete this session?</p>
         {approved ? (
           <p className="approve-sub">
-            Archives its review history to <code>.otacon/archive/</code> (recoverable) and removes
-            it from the index. The approved plan stays preserved in the home archive
-            (<code>~/.otacon/sessions/</code>).
+            Permanently removes its home folder (<code>~/.otacon/sessions/</code>) and drops it from
+            the index. This can't be undone. The approved plan still survives as the saved copy in
+            your project (or in the PR for Implement plans).
           </p>
         ) : (
           <p className="approve-sub">
-            Permanently removes the draft plan, grill, and comments. This can't be undone — there
-            is no approved plan to keep.
+            Permanently removes its home folder (<code>~/.otacon/sessions/</code>) with the draft
+            plan, grill, and comments. This can't be undone: there is no committed plan to keep.
           </p>
         )}
         <div className="approve-actions">

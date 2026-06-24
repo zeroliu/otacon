@@ -135,7 +135,7 @@ test("auto-detects the worktree owner and prints the enriched reopen body", asyn
     impl: { worktree, branch: "feat" },
     title: `t-${SESSION_ID}`,
     repo: MAIN_REPO,
-    plan: planPath(MAIN_REPO, SESSION_ID),
+    plan: planPath(SESSION_ID),
   });
 });
 
@@ -151,7 +151,7 @@ test("--session targets a session by id, bypassing cwd detection", async () => {
 
   expect(code).toBe(0);
   expect(fake.reopenPath).toBe(`/api/sessions/${SESSION_ID}/reopen`);
-  expect((printed as { plan: string }).plan).toBe(planPath(MAIN_REPO, SESSION_ID));
+  expect((printed as { plan: string }).plan).toBe(planPath(SESSION_ID));
 });
 
 test("--session not in the registry refuses E_UNKNOWN_SESSION before any POST", async () => {

@@ -117,7 +117,7 @@ test("surfaces a resumeCandidate when cwd is the recorded build worktree", async
     id,
     title: "amend me",
     status: "implemented",
-    plan: planPath(MAIN_REPO, id),
+    plan: planPath(id),
   });
 });
 
