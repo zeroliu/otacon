@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
-import { InterviewPanel } from "./interview.js";
+import { InterviewPanel, orderZones } from "./interview.js";
 import type { TranscriptEntry } from "../api";
 
 const AT = "2026-06-21T00:00:00.000Z";
@@ -48,6 +48,45 @@ describe("InterviewPanel open zone", () => {
     const html = render([entry({ options: ["A", "B"] })], false);
     expect(html).toContain("iv-awaiting");
     expect(html).not.toContain("grill-chips");
+  });
+
+  test("multiple open questions render oldest-first (q1, q2, q3)", () => {
+    const q1 = entry({ id: "q1", askedAt: "2026-06-21T00:00:01.000Z", options: ["A"] });
+    const q2 = entry({ id: "q2", askedAt: "2026-06-21T00:00:02.000Z", options: ["A"] });
+    const q3 = entry({ id: "q3", askedAt: "2026-06-21T00:00:03.000Z", options: ["A"] });
+    const html = render([q3, q1, q2], true); // deliberately out of order
+    expect(html.indexOf('data-iv="q1"')).toBeLessThan(html.indexOf('data-iv="q2"'));
+    expect(html.indexOf('data-iv="q2"')).toBeLessThan(html.indexOf('data-iv="q3"'));
+  });
+});
+
+describe("orderZones oldest-first", () => {
+  test("both zones sort by askedAt ascending (not by answeredAt)", () => {
+    const o1 = entry({ id: "q1", askedAt: "2026-06-21T00:00:01.000Z" });
+    const o2 = entry({ id: "q2", askedAt: "2026-06-21T00:00:02.000Z" });
+    // q3 was asked before q4 but answered AFTER it: ordering keys on askedAt.
+    const a3 = entry({
+      id: "q3",
+      askedAt: "2026-06-21T00:00:03.000Z",
+      answer: { answeredAt: "2026-06-21T02:00:00.000Z", choice: "A" },
+    });
+    const a4 = entry({
+      id: "q4",
+      askedAt: "2026-06-21T00:00:04.000Z",
+      answer: { answeredAt: "2026-06-21T01:00:00.000Z", choice: "B" },
+    });
+    const { open, answered } = orderZones([o2, a4, o1, a3]);
+    expect(open.map((e) => e.id)).toEqual(["q1", "q2"]);
+    expect(answered.map((e) => e.id)).toEqual(["q3", "q4"]);
+  });
+
+  test("does not mutate the input transcript", () => {
+    const input = [
+      entry({ id: "q2", askedAt: "2026-06-21T00:00:02.000Z" }),
+      entry({ id: "q1", askedAt: "2026-06-21T00:00:01.000Z" }),
+    ];
+    orderZones(input);
+    expect(input.map((e) => e.id)).toEqual(["q2", "q1"]);
   });
 });
 

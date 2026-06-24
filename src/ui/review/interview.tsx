@@ -21,6 +21,25 @@ export interface InterviewTarget {
 
 const FLASH_MS = 1700;
 
+/**
+ * Split the transcript into the panel's two zones, each ordered oldest-first
+ * (q1 -> qN, the order the questions were asked) so the reviewer reads them in
+ * the sequence they arrived. `filter` already copies, so sorting the result
+ * never mutates the incoming prop. `askedAt` is an ISO timestamp, so a string
+ * compare is chronological (and avoids `q10`-before-`q2` lexical id ordering).
+ */
+export function orderZones(transcript: TranscriptEntry[]): {
+  open: TranscriptEntry[];
+  answered: TranscriptEntry[];
+} {
+  const byAsked = (a: TranscriptEntry, b: TranscriptEntry) =>
+    a.askedAt.localeCompare(b.askedAt);
+  return {
+    open: transcript.filter((entry) => entry.answer === undefined).sort(byAsked),
+    answered: transcript.filter((entry) => entry.answer !== undefined).sort(byAsked),
+  };
+}
+
 // memo'd like the rail: the review loop re-renders per selection tick, while
 // transcript/open/target only change on SSE frames or explicit interaction.
 export const InterviewPanel = memo(function InterviewPanel({
@@ -59,13 +78,9 @@ export const InterviewPanel = memo(function InterviewPanel({
 
   if (transcript.length === 0) return null;
 
-  // Two zones, each newest first: the active/most-recent question leads. Reverse
-  // copies of the filtered arrays so the prop is never mutated. `open` is ordered
-  // by askedAt descending, `answered` by answeredAt descending.
-  const open$ = transcript.filter((entry) => entry.answer === undefined).reverse();
-  const answered$ = transcript
-    .filter((entry) => entry.answer !== undefined)
-    .sort((a, b) => b.answer!.answeredAt.localeCompare(a.answer!.answeredAt));
+  // Two zones, each oldest-first (q1 -> qN): the reviewer reads questions in the
+  // order they were asked. `orderZones` sorts copies, so the prop is never mutated.
+  const { open: open$, answered: answered$ } = orderZones(transcript);
   const answeredCount = answered$.length;
 
   return (

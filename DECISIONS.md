@@ -3531,10 +3531,13 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 
 - **Decision:** The "agent on the line" pinned card queue (`GrillQueue`, rendered
   above the plan) is deleted. The collapsible **Interview** panel is now the only
-  grill surface: two labeled zones, each newest-first, an "open" group on top
-  where unanswered questions are answered inline (the same interactive card the
-  queue used) and an "answered" group below, with a divider between them when both
-  are non-empty. Answering, undo, and the deep-link flash all happen in the panel.
+  grill surface: two labeled zones, each ordered oldest-first (q1 -> qN, the
+  order the questions were asked), an "open" group on top where unanswered
+  questions are answered inline (the same interactive card the queue used) and an
+  "answered" group below, with a divider between them when both are non-empty.
+  Answering, undo, and the deep-link flash all happen in the panel. (The zones
+  were originally newest-first; the reviewer asked for ask-order so live questions
+  read q1, q2, q3 down the panel - see `orderZones` in `interview.tsx`.)
 - **Why:** With both surfaces live, an answered card was duplicated (once settled
   in the queue and again in the Interview panel), so a reviewer saw the same Q&A
   twice and had to learn two layouts that did the same thing. One surface is
