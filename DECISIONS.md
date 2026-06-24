@@ -2363,31 +2363,50 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   package (removes the manual first-publish bootstrap), npm changes its OIDC/provenance
   contract, or a pinned action needs a SHA bump (update the SHA + its version comment).
 
-## Staging channel: `staging` dist-tag, suffix-routed inside the one release workflow
+## Staging channel: branch-detected `bun run release`, timestamp build id
 
-- **Decision:** Preview builds publish to a `staging` npm dist-tag from `-staging.N`
-  prerelease versions. `bun run release:staging [minor|major]` (`scripts/release-staging.sh`,
-  a near-copy of `release.sh`) cuts a `vX.Y.Z-staging.N` tag from the **`staging`** branch
-  (the guard requires it, not `main`) via `npm version <prerelease|preminor|premajor>
-  --preid staging`. The **same** `release.yml` workflow runs on the pushed tag (the
-  existing `v[0-9]*` trigger already matches), derives the dist-tag from the version
-  suffix (`-staging.` → `staging`, else `latest`), publishes `npm publish --tag <tag>`,
-  and skips the GitHub Release for staging tags. Testers run `npm i -g otacon@staging`
-  (newest) or `@0.1.4-staging.1` (pinned); re-cutting increments `-staging.N` and moves
-  the dist-tag.
+Supersedes the prior staging design (a separate `bun run release:staging` /
+`scripts/release-staging.sh` with a `staging`-branch *guard* and `npm version prerelease
+--preid staging` `-staging.N` counter).
+
+- **Decision:** Preview builds publish to a `staging` npm dist-tag from
+  `-staging.<UTC timestamp>` prerelease versions. There is **one** branch-detected command:
+  `bun run release [patch|minor|major]` (`scripts/release.sh`) inspects the current branch:
+  on the default branch (`main`) it cuts a prod build exactly as before; on the long-lived
+  **`staging`** branch it cuts a staging build; on any other branch it aborts (a `--dry-run`
+  downgrades that to a warning). The staging build version is
+  `<base-bumped-by-kind>-staging.<stamp>` where `stamp` is a numeric UTC timestamp
+  (`date -u +%Y%m%d%H%M%S`) and the base is bumped by the kind (default `patch`;
+  `minor`/`major` move the base line first), assembled by `scripts/staging-version.ts`. It
+  runs `npm version <exact-version>`, which commits the bump **on the `staging` branch** and
+  creates the `vX.Y.Z-staging.<stamp>` tag, then `git push --follow-tags`. The **same**
+  `release.yml` workflow runs on the pushed tag (the existing `v[0-9]*` trigger already
+  matches), derives the dist-tag from the version suffix (`-staging.` → `staging`, else
+  `latest`), publishes `npm publish --tag <tag>`, and skips the GitHub Release for staging
+  tags. Testers run `npm i -g otacon@staging` (newest) or `@0.1.4-staging.<stamp>` (pinned);
+  re-cutting yields a newer (higher) timestamp that moves the dist-tag.
 - **Why:** A dist-tag is npm's native opt-in preview channel: it never moves `latest`, so
-  regular users are untouched, while testers point at `@staging`. Routing by version
-  suffix inside the **one** existing workflow reuses the single npm Trusted Publisher
-  (configured per workflow filename) with **zero new npm setup**; a second workflow file
-  would need its own Trusted Publisher entry. `-staging.N` semver prereleases sort below
-  the stable line and let `prerelease` auto-increment the build counter, so cutting the
-  next build is one command with no manual version math. Cutting from a dedicated
-  `staging` branch keeps prerelease history off `main`. No GitHub Release for staging
-  keeps the Releases page a clean record of shipped stable versions.
-- **Revisit when:** A third channel is needed (e.g. `next` for release candidates), or
-  staging cadence justifies splitting into its own workflow + Trusted Publisher. (The CLI
-  auto-updater is now channel-aware, see "Channel-aware auto-update" below, so a staging
-  install tracks `staging` rather than pinning `@latest`.)
+  regular users are untouched, while testers point at `@staging`. Routing by version suffix
+  inside the **one** existing workflow reuses the single npm Trusted Publisher (configured
+  per workflow filename) with **zero new npm setup**; a second workflow file would need its
+  own Trusted Publisher entry. A timestamp build id is **stateless, monotonic, and unique**:
+  there is no counter to scan from prior tags or retain, and no reset when `main` advances.
+  This is what makes it scale (and is why the earlier tag-counter design was rejected in
+  review, since computing the next `-staging.N` means inspecting existing tags and the count
+  resets relative to the base). Folding staging into the one branch-detected command (rather
+  than a separate `release:staging` script that duplicated `release.sh`) reduces surface:
+  one script, one set of guards. The build id stays **numeric** and uses the literal
+  `-staging.` dot so the channel-aware auto-updater keeps working: `channelOf` keys on
+  `/-staging\./` and `isNewer` orders staging builds by the digits in `/-staging\.(\d+)/`; a
+  git SHA or a `-staging-` hyphen would break both. Keeping the bump commit on the `staging`
+  branch keeps prerelease history off `main`. No GitHub Release for staging keeps the
+  Releases page a clean record of shipped stable versions.
+- **Revisit when:** Cadence needs CI-assigned build numbers (a build counter handed out by
+  CI rather than a local timestamp), or sub-second cuts collide (two builds in the same
+  second share a stamp, so extend the stamp to milliseconds), or a third channel is needed
+  (e.g. `next` for release candidates) that justifies splitting into its own workflow +
+  Trusted Publisher. (The CLI auto-updater is channel-aware, see "Channel-aware auto-update"
+  below, so a staging install tracks `staging` rather than pinning `@latest`.)
 
 ## Channel-aware auto-update: derive the channel from the installed version suffix
 

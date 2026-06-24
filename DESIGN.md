@@ -1681,12 +1681,15 @@ looked in, and — when in a repo — mentions `--project` as an install option.
 
 otacon publishes to two npm dist-tags. **`latest`** is the stable channel a clean
 `vX.Y.Z` tag publishes to (and gets a GitHub Release). **`staging`** is a preview channel
-testers opt into with `npm i -g otacon@staging`: a `vX.Y.Z-staging.N` prerelease tag
-publishes there (and gets no GitHub Release). Both channels share one publish workflow,
-which routes by version suffix: a `-staging.` version goes to `staging`, anything else to
-`latest`, so a staging build never moves `latest` and never lands in front of regular
-users. Re-cutting a staging build increments the `-staging.N` build counter and moves the
-`staging` dist-tag to the newest build; the maintainer runbook is in RELEASING.md.
+testers opt into with `npm i -g otacon@staging`: a `vX.Y.Z-staging.<stamp>` prerelease tag
+publishes there (and gets no GitHub Release). A staging build is cut from the long-lived
+**`staging` branch** by the branch-detected `bun run release` (the same command, which
+switches flows by branch); its version carries a `-staging.<UTC timestamp>` suffix, a
+numeric build id. Both channels share one publish workflow, which routes by version
+suffix: a `-staging.` version goes to `staging`, anything else to `latest`, so a staging
+build never moves `latest` and never lands in front of regular users. Re-cutting a staging
+build yields a newer (higher) timestamp, which moves the `staging` dist-tag to the newest
+build; the maintainer runbook is in RELEASING.md.
 
 The CLI's self-update (below) is **channel-aware**: a staging install (its own version
 carries the `-staging.` suffix) tracks the `staging` dist-tag and auto-updates

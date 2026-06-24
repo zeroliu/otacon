@@ -5,9 +5,9 @@ name: Release
 # Gates (typecheck/test/build) run BEFORE publish so a failing gate stops the publish.
 #
 # One publish job, routed by version suffix: a clean `vX.Y.Z` tag publishes to the
-# `latest` dist-tag and creates a GitHub Release; a `vX.Y.Z-staging.N` tag (cut by
-# `bun run release:staging`, see scripts/release-staging.sh) publishes to the
-# `staging` dist-tag and creates NO GitHub Release.
+# `latest` dist-tag and creates a GitHub Release; a `vX.Y.Z-staging.<stamp>` tag (cut
+# by `bun run release` on the `staging` branch, see scripts/release.sh) publishes to
+# the `staging` dist-tag and creates NO GitHub Release.
 on:
   push:
     tags:
