@@ -47,13 +47,30 @@ rm -rf "$REPO"; mkdir -p "$REPO"
 git -C "$REPO" init -q -b main
 cd "$REPO"
 
-echo "# starting session ($FLAVOR) in $REPO"
-SID="$("$OTACON" start --title "demo: $FLAVOR" 2>/dev/null | jf .session)"
-[[ "$SID" == otc_* ]] || { echo "error: start did not return a session id" >&2; exit 1; }
+# Reap demo sessions left by prior runs so the home store doesn't accumulate:
+# the drafts below never reach a terminal status (so `otacon clean` won't reap
+# them) and each run mints fresh ids. The "demo: " title prefix scopes this
+# strictly to this script's own sessions — real sessions are never matched, even
+# from the main checkout where OTACON_HOME is the real ~/.otacon. `status` first
+# ensures the daemon is up before the curl.
 PORT="$("$OTACON" status 2>/dev/null | jf .daemon.port)"
 BASE="http://127.0.0.1:$PORT"
+for sid in $(curl -s "$BASE/api/sessions" \
+  | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8")).sessions.filter(s=>s.title.startsWith("demo: ")).map(s=>s.id).join("\n")'); do
+  curl -s -X DELETE "$BASE/api/sessions/$sid" >/dev/null
+done
+
+echo "# starting session ($FLAVOR) in $REPO"
+# `start` returns `plan`: the home-store path the agent must write the draft to
+# (~/.otacon/sessions/<id>/plan.md, isolated per worktree). The daemon reads the
+# draft from THERE, not from this scratch repo's .otacon/ — so derive SDIR from
+# it and write every plan there.
+START="$("$OTACON" start --title "demo: $FLAVOR" 2>/dev/null)"
+SID="$(printf '%s' "$START" | jf .session)"
+[[ "$SID" == otc_* ]] || { echo "error: start did not return a session id" >&2; exit 1; }
+SDIR="$(dirname "$(printf '%s' "$START" | jf .plan)")"
 URL="$BASE/s/$SID"
-mkdir -p ".otacon/$SID"
+mkdir -p "$SDIR"
 
 # ---- r1 ---------------------------------------------------------------------
 if [ "$FLAVOR" = visuals ]; then
@@ -63,7 +80,7 @@ if [ "$FLAVOR" = visuals ]; then
   # visual (callout/matrix) per section keeps it under any reasonable per-section
   # visual cap; inline pills are always free, and a ```gwt block is fence- and
   # visual-exempt (validated separately by the linter, plan structure, lint, and anchoring).
-  cat > ".otacon/$SID/plan.md" <<EOF
+  cat > "$SDIR/plan.md" <<EOF
 ---
 title: visuals-demo
 session: $SID
@@ -133,7 +150,7 @@ Verification: A ✓ row highlights the winner; links and \`[assumed]\` stay unto
 EOF
 else
   # The committed known-good fixture (passes the linter as-is).
-  sed "s/otc_test01/$SID/" "$FIXTURES/valid-plan.md" > ".otacon/$SID/plan.md"
+  sed "s/otc_test01/$SID/" "$FIXTURES/valid-plan.md" > "$SDIR/plan.md"
 fi
 
 # ---- grill (ask before drafting, mirroring the real loop) -------------------
@@ -169,7 +186,7 @@ else
   # ---- r2: edit the plan, delete t2's quote, submit with resolutions --------
   sed -e 's/key rotation\.$/scheduled re-issue./' \
       -e 's/Unit tests cover issuance and/Unit tests cover issuance, expiry, and/' \
-      ".otacon/$SID/plan.md" > ".otacon/$SID/plan.next" && mv ".otacon/$SID/plan.next" ".otacon/$SID/plan.md"
+      "$SDIR/plan.md" > "$SDIR/plan.next" && mv "$SDIR/plan.next" "$SDIR/plan.md"
   cat > "$REPO/res.json" <<'JSON'
 {
   "changelog": "Replaced key rotation with scheduled re-issue; verification now covers expiry.",
@@ -190,10 +207,12 @@ fi
 # what the UI does after its unresolved-thread warning; this is a plain Save, so
 # the project copy lands in the scratch repo's .otacon/plans/ (untracked, otacon
 # never commits it) and a canonical copy in the home archive (~/.otacon/sessions/).
-APPROVED_SID="$("$OTACON" start --title "demo: $FLAVOR (approved)" 2>/dev/null | jf .session)"
+APPROVED_START="$("$OTACON" start --title "demo: $FLAVOR (approved)" 2>/dev/null)"
+APPROVED_SID="$(printf '%s' "$APPROVED_START" | jf .session)"
 if [[ "$APPROVED_SID" == otc_* ]]; then
-  mkdir -p ".otacon/$APPROVED_SID"
-  sed "s/otc_test01/$APPROVED_SID/" "$FIXTURES/valid-plan.md" > ".otacon/$APPROVED_SID/plan.md"
+  APPROVED_SDIR="$(dirname "$(printf '%s' "$APPROVED_START" | jf .plan)")"
+  mkdir -p "$APPROVED_SDIR"
+  sed "s/otc_test01/$APPROVED_SID/" "$FIXTURES/valid-plan.md" > "$APPROVED_SDIR/plan.md"
   "$OTACON" submit --session "$APPROVED_SID" >/dev/null
   curl -s -X POST "$BASE/api/sessions/$APPROVED_SID/approve" \
     -H 'content-type: application/json' -d '{"force":true}' >/dev/null
@@ -225,7 +244,7 @@ case "$FLAVOR" in
       case "$key" in
         q|"") "$OTACON" ask --session "$SID" --question "Follow-up at $(date +%H:%M:%S) — proceed?" --options "yes|no" >/dev/null \
                 && echo "  -> grill question posted (watch for a banner)";;
-        r)    printf '\n<!-- nudge %s -->\n' "$(date +%s)" >> ".otacon/$SID/plan.md"
+        r)    printf '\n<!-- nudge %s -->\n' "$(date +%s)" >> "$SDIR/plan.md"
               "$OTACON" submit --session "$SID" --resolutions "$REPO/res.json" >/dev/null 2>&1 \
                 && echo "  -> revision submitted (watch for a banner)" \
                 || echo "  -> submit refused (likely needs fresh resolutions); try a question instead";;
