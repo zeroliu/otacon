@@ -1668,6 +1668,16 @@ not hand-edited, and a test (`assets.test.ts`) asserts the committed file equals
 output — so a protocol change can never silently drift between what `otacon install`
 writes elsewhere and what this repo runs.
 
+The build also **materializes** `skillMd()` into `dist/skills/otacon/SKILL.md`
+(`scripts/gen-skill-asset.ts`, run after `tsc` in the `build` chain; `files: ["dist"]`
+ships it), so the package carries the wrapper text as a real on-disk file. From the
+installed package `packagedSkillPath()` (`src/cli/install/wrapper.ts`) resolves that
+file's absolute path; it returns `undefined` when no stable packaged copy exists:
+running from source (the path lands at `src/skills/otacon/SKILL.md`, which never exists)
+or from an ephemeral npx cache (an `_npx` path segment, which a later invocation may
+prune). A test asserts the shipped file byte-equals `skillMd()`, the same generated-file
+discipline as the dogfood wrapper and the version mirror.
+
 **Single source for the version.** `package.json`'s `version` is authoritative;
 `src/shared/version.ts` (the `VERSION` the version handshake compares, §13) is
 **generated** from it by `scripts/gen-version.ts`, run automatically by the `npm

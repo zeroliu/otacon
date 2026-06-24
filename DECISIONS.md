@@ -2502,6 +2502,26 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Another consumer needs the version in a form a flat constant can't
   provide.
 
+## Ship `skillMd()` as a packaged file via build-time codegen
+
+- **Decision:** The `build` chain runs `scripts/gen-skill-asset.ts` after `tsc` to
+  write `skillMd()` into `dist/skills/otacon/SKILL.md`, shipped via `files: ["dist"]`.
+  `packagedSkillPath()` (`src/cli/install/wrapper.ts`) resolves that file's absolute
+  path from the installed package, or `undefined` when no stable copy exists (running
+  from source, or an `_npx` ephemeral cache). A test asserts the shipped file equals
+  `skillMd()`.
+- **Why:** `otacon install` copies the wrapper text today, so it goes stale when the
+  binary auto-updates. The fix is to SYMLINK the installed wrapper to a real in-package
+  file, so a binary upgrade refreshes the skill for free. A symlink needs a stable
+  on-disk target, but `skillMd()` is a function, not a file, so the build emits its
+  output once. Source/npx paths are unstable (the source asset never exists; an npx
+  cache may be pruned), so `packagedSkillPath()` returns `undefined` there and callers
+  copy instead. Mirrors the gen-version pattern, with the same equality test as a
+  backstop against the generator drifting from `skillMd()`.
+- **Revisit when:** The symlink install path lands (later phases consume
+  `packagedSkillPath()`), or a consumer needs the asset in a form the flat file can't
+  provide.
+
 ## npm trusted publishing (OIDC), no stored token; provenance + SHA-pinned actions
 
 - **Decision:** The release workflow publishes with `npm publish --access public` and
