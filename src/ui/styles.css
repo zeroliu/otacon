@@ -4735,8 +4735,16 @@ code {
   white-space: nowrap;
 }
 
+/* Scoped to .sl-row so the review header's .agent-dot is untouched: a short fade
+ * so the dot can swap out for the hover-revealed ✕ (below) without a hard cut. */
+.sl-row .agent-dot {
+  transition: opacity 0.12s ease;
+}
+
 /* The per-row delete: hidden until the row is hovered or the button itself is
- * focused (keyboard reach is preserved), mirroring the home card's .card-delete. */
+ * focused (keyboard reach is preserved), mirroring the home card's .card-delete.
+ * On touch (no hover) it stays an in-flow control at reduced opacity so it remains
+ * tappable; on hover-capable devices it overlays the dot's slot instead (below). */
 .sl-delete {
   flex: none;
   width: 28px;
@@ -4754,16 +4762,30 @@ code {
   transition: opacity 0.12s ease, color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
 }
 
-/* Where hover exists, keep the ✕ out of sight until the row is hovered or it
- * holds focus — the list stays calm, the control stays one reveal away. */
+/* Where hover exists, take the ✕ out of flow (reserving no slot at rest) and
+ * float it over the agent dot at the row's right edge, matching .sl-row's 6px
+ * right padding, vertically centred. At rest the dot shows; on hover the dot
+ * fades and the ✕ fades in where it was. Focus reveals it too (keyboard reach),
+ * even without hover. */
 @media (hover: hover) {
   .sl-delete {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
     opacity: 0;
+    pointer-events: none;
   }
 
   .sl-row:hover .sl-delete,
   .sl-delete:focus-visible {
     opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* Fade the dot out so the ✕ visually replaces it on hover. */
+  .sl-row:hover .agent-dot {
+    opacity: 0;
   }
 
   .sl-delete:hover {

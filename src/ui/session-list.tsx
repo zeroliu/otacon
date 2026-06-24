@@ -179,6 +179,13 @@ function SessionRow({
             {session.branch !== "" && <span className="sl-branch"> · {session.branch}</span>}
           </span>
         </span>
+        {unread > 0 && (
+          <span className="sl-unread" aria-label={`${unread} unread`}>
+            ●{unread}
+          </span>
+        )}
+        {/* Right-most flow element: on hover-capable devices the delete ✕ fades in
+            over the dot's slot (see styles.css), so render it last in flow. */}
         <AgentDot
           status={session.status}
           parked={session.parked}
@@ -186,11 +193,6 @@ function SessionRow({
           now={now}
           label={false}
         />
-        {unread > 0 && (
-          <span className="sl-unread" aria-label={`${unread} unread`}>
-            ●{unread}
-          </span>
-        )}
         <button
           type="button"
           className="sl-delete"

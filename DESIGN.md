@@ -1032,6 +1032,9 @@ the settings gear and a `«` collapse toggle grouped on the right; the column it
 **drag-resizable** (a right-edge separator, width persisted) and **collapsible**. Below
 the header, one condensed row per session: accent, status icon, title, repo + branch,
 agent-presence dot, an unread badge, and a hover-revealed delete. Click → review screen.
+On hover-capable devices the delete reserves no row space at rest: it overlays the agent
+dot's slot at the row's right edge, fading in (the dot fading out) on hover or focus. On
+touch it stays an in-flow control at reduced opacity so it remains tappable.
 
 **Status icons.** The leading indicator is a lucide icon whose meaning is derived
 liveness-aware (the same `questionsPending` / `agentLive` rules the review chips read,
