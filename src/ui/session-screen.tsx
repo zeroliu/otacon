@@ -48,6 +48,7 @@ import { Composer, SelectionBar, useSelection } from "./review/feedback";
 import { ReviewHeader } from "./review/header";
 import type { InterviewTarget } from "./review/interview";
 import { InterviewPanel } from "./review/interview";
+import { useInterviewOpen } from "./review/interview-open";
 import { useKeyboardInset, useScrollLock } from "./review/keyboard";
 import { isAgentActive } from "./review/console-model";
 import { LiveConsole } from "./review/live-console";
@@ -168,19 +169,17 @@ function ReviewLoop({
   // a number = the user picked another baseline from the diff controls.
   const [baseline, setBaseline] = useState<number | null>(null);
   const [changelogOpen, setChangelogOpen] = useState(false);
-  // The Interview panel is the single grill surface: default-expanded during the
-  // grill phase (draft) and auto-collapsed once grill is over, while a manual
-  // toggle still sticks within a phase. A decision citation (ivTarget) opens it
-  // regardless.
-  const grillPhase = session.status === "draft";
-  const [interviewOpen, setInterviewOpen] = useState(grillPhase);
-  const lastGrillPhase = useRef(grillPhase);
-  useEffect(() => {
-    if (grillPhase !== lastGrillPhase.current) {
-      lastGrillPhase.current = grillPhase;
-      setInterviewOpen(grillPhase);
-    }
-  }, [grillPhase]);
+  // The Interview panel is the single grill surface. useInterviewOpen owns its
+  // open state: default-expanded during the grill phase (draft), open on load if a
+  // question is already pending, and force-opened the instant a new unanswered
+  // question arrives in any phase past grill (e.g. an agent question during
+  // implementation), even over a manual collapse, so it is never missed. A manual
+  // toggle otherwise sticks within a phase; a decision citation (ivTarget) opens it
+  // regardless via the returned setter.
+  const [interviewOpen, setInterviewOpen, toggleInterview] = useInterviewOpen(
+    session.status === "draft",
+    transcript,
+  );
   // A decision citation sets `ivTarget` (nonce re-fires repeat clicks) and opens
   // the panel in the same commit, so the entry exists when its deep-link effect
   // runs.
@@ -656,8 +655,6 @@ function ReviewLoop({
     setInterviewOpen(true);
     if (firstOpen) setIvTarget({ id: firstOpen.id, nonce: (ivNonce.current += 1) });
   }, [transcript]);
-
-  const toggleInterview = useCallback(() => setInterviewOpen((value) => !value), []);
 
   // The rail's empty-state ask: open the ask composer on a null (whole-plan)
   // anchor, mirroring the drawer's `onWholePlan` but in ASK mode. `at:null`

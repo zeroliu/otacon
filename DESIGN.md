@@ -884,7 +884,12 @@ Structural integration:
   **"answered"** group below where each card shows only the answer (no option list) plus
   an **undo** control that reveals the full option chips to change it. The panel is
   **default-expanded during the grill phase** (status `draft`), still collapsible, and
-  **auto-collapses once grill is over** (the status leaves `draft`); a manual toggle
+  **auto-collapses once grill is over** (the status leaves `draft`) when nothing is
+  pending; a still-open question when grill ends keeps it open rather than collapsing. It
+  also **force-opens the moment a new unanswered question arrives in any phase past grill**
+  (for example an agent question asked during implementation), even over a manual collapse,
+  so the reviewer sees it without scrolling, and it **opens on page load whenever a question
+  is already pending** so a reload mid-question still shows it. A manual toggle otherwise
   sticks within a phase. Each decision in the plan deep-links to its originating answer
   ("why RS256?" answered in one tap, opening the panel and scrolling to the entry,
   including what the user said at the time); the ❓ jump opens the panel and lands on the
