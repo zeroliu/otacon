@@ -1659,7 +1659,23 @@ must be machine-independent and cannot point at a machine-local global path a te
 does not have. Install is idempotent in every mode: an already-correct symlink or an
 already-current copy is left untouched, and a scope or availability change self-heals
 (a stale symlink becomes a copy, and the reverse, on the next install). The per-agent
-JSON reports each wrapper's resulting `mode` (`"symlink"` or `"copy"`). The Stop hook registration in
+JSON reports each wrapper's resulting `mode` (`"symlink"` or `"copy"`).
+
+`otacon start` **self-heals already-installed wrappers** on every run, as the
+fallback/migration path for installs that predate the symlink era or could never
+symlink at all. It re-asserts each wrapper that is already present to its desired
+state: a user-scope copy (left by a copy-fallback install, or a legacy pre-symlink
+install) is promoted to a symlink to the packaged file, a dangling or wrong-target
+user symlink is repaired, and a committed/legacy project-scope copy whose text drifted
+is rewritten to the current protocol. It **never creates a wrapper that does not
+already exist** (it heals what is there, it does not install), it leaves a hand-written
+foreign `SKILL.md` untouched (only files carrying the managed marker, or a symlink at
+one of our own locations, are ours to re-assert), and it is a no-op for a correct
+symlink, so for the common symlink install it costs nothing. It is **skipped entirely
+on a source run** so this repo's committed `otacon-dev` dogfood wrapper is never
+rewritten, and it is best-effort and fail-open: a refresh never blocks `start`. Each
+heal that actually changes a file prints a one-line stderr notice (stdout stays the
+single JSON line). The Stop hook registration in
 `~/.claude/settings.json` is optional, applied only by `--hooks`: an additive,
 idempotent merge that preserves every existing key and backs the file up before the
 first change (unparseable settings are refused, never clobbered). The hook is a

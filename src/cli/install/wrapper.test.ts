@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   lstatSync,
   mkdtempSync,
@@ -11,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeSkillAsset } from "../../../scripts/gen-skill-asset.js";
 import { skillMd } from "./assets.js";
-import { ensureWrapper, packagedSkillPath } from "./wrapper.js";
+import { ensureWrapper, packagedSkillPath, refreshInstalledWrappers } from "./wrapper.js";
 
 // A unique temp scratch dir per test; the caller cleans it up in a finally.
 function scratch(): string {
@@ -140,5 +141,192 @@ test("ensureWrapper downgrades a symlink to a copy when the packaged path disapp
     expect(readFileSync(wrapper, "utf8")).toBe(skillMd());
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── refreshInstalledWrappers ────────────────────────────────────────────────
+//
+// These exercise the start-time self-heal pass in a CHILD process so the whole HOME
+// is hermetic. Under Bun os.homedir() is fixed at process start and does NOT track a
+// later process.env.HOME mutation, so an in-process $HOME override would not redirect
+// claudeSkillPath(), and the real ~/.claude could be touched. Spawning a fresh `bun`
+// with HOME / CODEX_HOME / XDG_CONFIG_HOME all pointed at a temp dir is the only way
+// to redirect every user-scope candidate at once, exactly as the install e2e does.
+//
+// The child sets up the fixture (env RF_* describe what to create), runs
+// refreshInstalledWrappers with the injected seams, and prints the returned list plus
+// post-state on stdout as one JSON line. isSourceRun() is true in this tree (no dist
+// sibling), so `sourceRun` is injected to drive the body except in the source-run test.
+
+// The child driver: a self-contained bun program. It reads RF_* env to build a
+// fixture (a user-scope wrapper under $HOME, or a project-scope wrapper under
+// RF_CWD's repo root), calls refreshInstalledWrappers, then reports JSON. Running
+// every case in the child keeps the real ~/.claude (and ~/.codex, ~/.config) off the
+// candidate list for the in-process suite: HOME/CODEX_HOME/XDG_CONFIG_HOME are all
+// temp here, and the project case's user candidates resolve to the empty temp HOME.
+const REFRESH_DRIVER = `
+import { lstatSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { skillMd } from ${JSON.stringify(join(import.meta.dir, "assets.ts"))};
+import { claudeSkillPath } from ${JSON.stringify(join(import.meta.dir, "locations.ts"))};
+import { refreshInstalledWrappers } from ${JSON.stringify(join(import.meta.dir, "wrapper.ts"))};
+
+const env = process.env;
+// Resolve a path WITHOUT following a final symlink: realpath the parent dir, rejoin
+// the basename. Lets us compare a wrapper that became a symlink by its own location,
+// not its link target (and absorbs /var -> /private/var on macOS for the repo root).
+const resolveSelf = (p) => join(realpathSync(dirname(p)), basename(p));
+const pkg = env.RF_PKG;
+// A user-scope wrapper roots at the child's temp HOME; a project-scope one roots at
+// RF_CWD (a temp repo with a .git dir), via claudeSkillPath's project branch.
+const wrapper = env.RF_CWD
+  ? claudeSkillPath({ kind: "project", root: env.RF_CWD })
+  : claudeSkillPath();
+mkdirSync(dirname(wrapper), { recursive: true });
+
+if (env.RF_FIXTURE === "copy") writeFileSync(wrapper, skillMd());
+else if (env.RF_FIXTURE === "stale-copy") writeFileSync(wrapper, "STALE PROTOCOL\\n" + skillMd());
+else if (env.RF_FIXTURE === "symlink") symlinkSync(pkg, wrapper);
+else if (env.RF_FIXTURE === "foreign") writeFileSync(wrapper, "# my own notes, not an otacon wrapper\\n");
+
+const deps = { pkgPath: pkg, sourceRun: () => env.RF_SOURCE_RUN === "1" };
+if (env.RF_CWD) deps.cwd = env.RF_CWD;
+
+const result = refreshInstalledWrappers(deps);
+
+// lstat the wrapper itself (does NOT follow the link), so a symlink reads as one.
+const info = lstatSync(wrapper, { throwIfNoEntry: false });
+const out = {
+  // Resolve list paths by their own location (not a link target); findRepoRoot
+  // realpath-resolves the project root, so a raw string compare would miss.
+  result: result.map((r) => ({ mode: r.mode, real: resolveSelf(r.path) })),
+  exists: info !== undefined,
+  isSymlink: info !== undefined && info.isSymbolicLink(),
+  content: info !== undefined ? readFileSync(wrapper, "utf8") : null,
+  // The link's TARGET (followed), to assert a promotion points at the package.
+  target: info !== undefined && info.isSymbolicLink() ? realpathSync(wrapper) : null,
+  // The wrapper's own resolved location, to match against result[].real.
+  wrapperReal: resolveSelf(wrapper),
+};
+process.stdout.write(JSON.stringify(out));
+`;
+
+interface RefreshChildOut {
+  result: { mode: string; real: string }[];
+  exists: boolean;
+  isSymlink: boolean;
+  content: string | null;
+  target: string | null;
+  wrapperReal: string;
+}
+
+// Spawn the driver under a hermetic temp HOME (every user-scope candidate roots
+// there). `fixture` names the pre-state to create; `sourceRun` forces the source-run
+// skip; `cwd` (a temp repo root) switches the fixture to project scope. Returns the
+// child's reported post-state. Cleans the temp HOME after.
+function runRefreshChild(opts: {
+  fixture: "copy" | "stale-copy" | "symlink" | "foreign";
+  sourceRun?: boolean;
+  pkg: string;
+  cwd?: string;
+}): RefreshChildOut {
+  const home = mkdtempSync(join(tmpdir(), "otacon-refresh-home-"));
+  try {
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: home,
+      CODEX_HOME: join(home, ".codex"),
+      XDG_CONFIG_HOME: join(home, ".config"),
+      RF_PKG: opts.pkg,
+      RF_FIXTURE: opts.fixture,
+      RF_SOURCE_RUN: opts.sourceRun ? "1" : "0",
+    };
+    if (opts.cwd !== undefined) env.RF_CWD = opts.cwd;
+    const child = spawnSync(process.execPath, ["-"], { input: REFRESH_DRIVER, encoding: "utf8", env });
+    if (child.status !== 0) {
+      throw new Error(`refresh child failed (${child.status}): ${child.stderr}`);
+    }
+    return JSON.parse(child.stdout) as RefreshChildOut;
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+// Source-run skip / dogfood safety: sourceRun true returns [] and leaves a present
+// stale wrapper UNTOUCHED, so a source-mode `start` never rewrites the committed file.
+test("refreshInstalledWrappers is a no-op on a source run", () => {
+  const dir = scratch();
+  try {
+    const out = runRefreshChild({ fixture: "stale-copy", sourceRun: true, pkg: pkgFile(dir) });
+    expect(out.result).toEqual([]);
+    expect(out.isSymlink).toBe(false); // still the stale copy, untouched
+    expect(out.content).toBe(`STALE PROTOCOL\n${skillMd()}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A stale user-scope COPY is promoted to a symlink to the packaged file, and the
+// returned list reports it (the copy-fallback / legacy migration the pass exists for).
+test("refreshInstalledWrappers promotes a user-scope copy to a symlink", () => {
+  const dir = scratch();
+  try {
+    const pkg = pkgFile(dir);
+    const out = runRefreshChild({ fixture: "copy", pkg });
+    expect(out.isSymlink).toBe(true);
+    expect(out.target).toBe(realpathSync(pkg));
+    expect(out.result).toContainEqual({ mode: "symlink", real: out.wrapperReal });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A correct user-scope symlink is INERT: nothing changes, it stays a symlink, and it
+// is not in the returned list (the common symlink-install case costs nothing).
+test("refreshInstalledWrappers leaves a correct symlink untouched", () => {
+  const dir = scratch();
+  try {
+    const pkg = pkgFile(dir);
+    const out = runRefreshChild({ fixture: "symlink", pkg });
+    expect(out.result).toEqual([]); // no change, not listed
+    expect(out.isSymlink).toBe(true);
+    expect(out.target).toBe(realpathSync(pkg));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A foreign SKILL.md (no managed marker) is left alone: the pass heals only files it
+// owns, never clobbering a hand-written wrapper the user happens to keep there.
+test("refreshInstalledWrappers ignores a foreign file", () => {
+  const dir = scratch();
+  try {
+    const foreign = "# my own notes, not an otacon wrapper\n";
+    const out = runRefreshChild({ fixture: "foreign", pkg: pkgFile(dir) });
+    expect(out.result).toEqual([]);
+    expect(out.isSymlink).toBe(false);
+    expect(out.content).toBe(foreign); // untouched
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A drifted PROJECT-scope copy is rewritten to current skillMd(), still a copy, never
+// a machine-local symlink. cwd points at a temp dir findRepoRoot accepts (has .git);
+// the .claude project wrapper there starts as a marker-bearing copy with OLD content.
+test("refreshInstalledWrappers rewrites a drifted project-scope copy", () => {
+  const dir = scratch();
+  const root = mkdtempSync(join(tmpdir(), "otacon-refresh-repo-"));
+  try {
+    // A real repo root: findRepoRoot runs `git rev-parse --show-toplevel`, which
+    // needs an actual git dir (a bare `.git` folder is not enough).
+    execFileSync("git", ["init", "-q", "-b", "main", root], { stdio: "ignore" });
+    const out = runRefreshChild({ fixture: "stale-copy", pkg: pkgFile(dir), cwd: root });
+    expect(out.content).toBe(skillMd()); // rewritten to current text
+    expect(out.isSymlink).toBe(false); // still a copy, never a machine-local symlink
+    expect(out.result).toContainEqual({ mode: "copy", real: out.wrapperReal });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
   }
 });

@@ -2522,6 +2522,36 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   `packagedSkillPath()`), or a consumer needs the asset in a form the flat file can't
   provide.
 
+## Self-heal installed wrappers on start (fallback + migration path)
+
+- **Decision:** `otacon start` calls `refreshInstalledWrappers()`
+  (`src/cli/install/wrapper.ts`) right after the auto-update gate: for every wrapper
+  that is ALREADY installed at a managed location, it re-asserts the desired state via
+  `ensureWrapper`: promoting a user-scope copy (or repairing a dangling/wrong-target
+  symlink) to a symlink to the packaged file, and rewriting a drifted project-scope
+  copy to the current `skillMd()`. It never creates a wrapper that does not already
+  exist, never touches a foreign (unmarked) file, skips entirely on a source run, and
+  is best-effort and fail-open (a refresh never blocks `start`); notices go to stderr.
+- **Why:** Once the install path symlinks user-scope wrappers, a fresh `otacon install`
+  is already correct, so the only installs that go stale on a binary upgrade are the
+  ones that could not symlink in the first place: copy-fallback installs
+  (Windows/npx), committed project copies, and legacy pre-symlink installs from before
+  this landed. A reinstall would fix them, but users do not reinstall; piggybacking a
+  re-assertion on `start` (which they run constantly) migrates those installs with zero
+  user action, while staying a true no-op for the common correct symlink. It is skipped
+  on a source run because this checkout's committed `otacon-dev` dogfood wrapper is
+  generated and test-guarded, so a source-mode `start` must never rewrite it. It fires
+  only on real drift (each wrapper is converged idempotently), and it heals only what
+  it owns (the managed marker, or a symlink at our own location) so a hand-written
+  SKILL.md is left alone. A project-scope rewrite **mutates the working tree** of the
+  repo the agent is in (accepted by design): a committed project wrapper that drifted
+  from the current protocol is stale and should be refreshed, and the change is an
+  ordinary tracked diff the user can see and commit or discard.
+- **Revisit when:** A project rewrite surprising a user (an unexpected working-tree
+  change) becomes a real complaint (then: gate project-scope heals behind a flag or a
+  prompt), or the fallback set shrinks to nothing because every install platform
+  symlinks reliably (then this pass can become install-only).
+
 ## npm trusted publishing (OIDC), no stored token; provenance + SHA-pinned actions
 
 - **Decision:** The release workflow publishes with `npm publish --access public` and
