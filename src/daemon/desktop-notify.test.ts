@@ -8,6 +8,22 @@ function recorder(): { calls: { bin: string; args: string[] }[]; spawn: SpawnFn 
   return { calls, spawn: (bin, args) => calls.push({ bin, args }) };
 }
 
+/** Capture process.stderr.write while `fn` runs, then restore it. Returns the joined output. */
+function captureStderr(fn: () => void): string {
+  const orig = process.stderr.write;
+  let captured = "";
+  process.stderr.write = ((chunk: unknown) => {
+    captured += String(chunk);
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    fn();
+  } finally {
+    process.stderr.write = orig;
+  }
+  return captured;
+}
+
 describe("createDesktopNotifier", () => {
   test("prefers terminal-notifier and passes -open for click-to-review", () => {
     const { calls, spawn } = recorder();
@@ -98,5 +114,55 @@ describe("createDesktopNotifier", () => {
     });
     notify({ title: "t", message: "m", url: "http://x" });
     expect(calls).toEqual([]);
+  });
+
+  test("audit: terminal-notifier with a url logs backend + clickable=true", () => {
+    const { spawn } = recorder();
+    const notify = createDesktopNotifier({
+      platform: "darwin",
+      findNotifier: () => "terminal-notifier",
+      spawn,
+    });
+    const log = captureStderr(() =>
+      notify({ title: "auth-refactor", message: "m", url: "http://127.0.0.1:4747/s/x" }),
+    );
+    expect(log).toBe(
+      'otacond: notify backend=terminal-notifier clickable=true title="auth-refactor"\n',
+    );
+  });
+
+  test("audit: terminal-notifier without a url logs clickable=false", () => {
+    const { spawn } = recorder();
+    const notify = createDesktopNotifier({
+      platform: "darwin",
+      findNotifier: () => "terminal-notifier",
+      spawn,
+    });
+    const log = captureStderr(() => notify({ title: "t", message: "m" }));
+    expect(log).toBe('otacond: notify backend=terminal-notifier clickable=false title="t"\n');
+  });
+
+  test("audit: osascript fallback logs backend=osascript clickable=false", () => {
+    const { spawn } = recorder();
+    const notify = createDesktopNotifier({
+      platform: "darwin",
+      findNotifier: () => undefined,
+      spawn,
+    });
+    const log = captureStderr(() =>
+      notify({ title: "auth-refactor", message: "m", url: "ignored" }),
+    );
+    expect(log).toBe('otacond: notify backend=osascript clickable=false title="auth-refactor"\n');
+  });
+
+  test("audit: off macOS logs backend=none-non-darwin", () => {
+    const { spawn } = recorder();
+    const notify = createDesktopNotifier({
+      platform: "linux",
+      findNotifier: () => "terminal-notifier",
+      spawn,
+    });
+    const log = captureStderr(() => notify({ title: "t", message: "m", url: "http://x" }));
+    expect(log).toBe('otacond: notify backend=none-non-darwin clickable=false title="t"\n');
   });
 });

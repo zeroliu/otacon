@@ -31,9 +31,11 @@ let savedHome: string | undefined;
 let store: Store;
 let app: Hono<{ Bindings: NodeBindings }>;
 let shutdowns: number;
-// A recorder notify sink: every test uses it, so the real macOS notifier never
-// fires a banner during `bun test` on the dev Mac. The desktop-notify suite
-// covers the real tool selection.
+// A recorder notify sink for the shared app. Every createApp call in this file
+// injects a notify (this recorder, or a no-op sink in helpers that don't assert
+// on notifications), so the real macOS notifier never fires a banner during
+// `bun test` on the dev Mac. The desktop-notify suite covers the real tool
+// selection.
 let notifyCalls: DesktopNotification[];
 let presence: Presence;
 // The live-tab tracker (open-tab reuse) on a hand-cranked clock + short TTL, so
@@ -77,6 +79,22 @@ afterEach(() => {
 });
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Capture process.stderr.write across an async body, then restore it. Returns the joined output. */
+async function captureStderr(fn: () => Promise<void>): Promise<string> {
+  const orig = process.stderr.write;
+  let captured = "";
+  process.stderr.write = ((chunk: unknown) => {
+    captured += String(chunk);
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    await fn();
+  } finally {
+    process.stderr.write = orig;
+  }
+  return captured;
+}
 
 function mintSession(): RegistrySession {
   return store.createSession({ title: "e2e plan", repo });
@@ -931,7 +949,7 @@ describe("SPA shell and static assets", () => {
   });
 
   test("without a UI build the browser pages answer 503, never a crash", async () => {
-    const bare = createApp({ store, uiDir: null });
+    const bare = createApp({ store, uiDir: null, notify: () => {} });
     expect((await bare.request("/")).status).toBe(503);
     expect((await bare.request("/s/otc_zzzzzz")).status).toBe(503);
     expect((await bare.request("/assets/app-abc123.js")).status).toBe(404);
@@ -1044,7 +1062,7 @@ describe("UI SSE streams", () => {
   });
 
   test("heartbeat comments keep flowing on an idle stream", async () => {
-    const beating = createApp({ store, uiDir: null, sseHeartbeatMs: 15 });
+    const beating = createApp({ store, uiDir: null, sseHeartbeatMs: 15, notify: () => {} });
     const reader = sseReader(await beating.request("/api/stream"));
     await reader.next(); // snapshot
     expect((await reader.next()).comment).toBe("hb");
@@ -1852,6 +1870,7 @@ describe("transcript tailer lifecycle (live-progress-activity-redesign)", () => 
       store,
       uiDir,
       presence,
+      notify: () => {},
       makeTailer: () => {
         const stub: Stub = {
           started: 0,
@@ -3043,6 +3062,41 @@ describe("desktop attention notifications (M6)", () => {
     expect((await presencePost(session.id, "yes")).status).toBe(400);
     expect((await presencePost(session.id, undefined)).status).toBe(400);
     expect((await presencePost("otc_zzzzzz", true)).status).toBe(404);
+  });
+
+  test("audit: an attention moment writes a notify dispatch line", async () => {
+    const session = mintSession();
+    const log = await captureStderr(async () => {
+      await ask(session.id, { question: "RS256 or HS256?", options: ["RS256", "HS256"] });
+    });
+    expect(log).toContain(
+      `otacond: notify dispatch session=${session.id} kind=question title=${JSON.stringify(session.title)} message=${JSON.stringify("RS256 or HS256?")}\n`,
+    );
+  });
+
+  test("audit: a config-disabled repo writes reason=config-disabled and fires no notify", async () => {
+    mkdirSync(join(repo, ".otacon"), { recursive: true });
+    writeFileSync(
+      repoLocalConfigPath(repo),
+      JSON.stringify({ notifications: { desktop: false } }),
+    );
+    const session = mintSession();
+    const log = await captureStderr(async () => {
+      await ask(session.id, { question: "anything?" });
+    });
+    expect(log).toContain(
+      `otacond: notify skip session=${session.id} reason=config-disabled\n`,
+    );
+    expect(notifyCalls).toEqual([]);
+  });
+
+  test("audit: a watched session writes reason=watched", async () => {
+    const session = mintSession();
+    expect((await presencePost(session.id, true)).status).toBe(200);
+    const log = await captureStderr(async () => {
+      await ask(session.id, { question: "anybody home?" });
+    });
+    expect(log).toContain(`otacond: notify skip session=${session.id} reason=watched\n`);
   });
 });
 
