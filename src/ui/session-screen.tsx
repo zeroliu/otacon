@@ -140,7 +140,6 @@ function ReviewLoop({
   threads,
   transcript,
   stream,
-  connected,
   now,
 }: {
   session: LiveSession;
@@ -148,7 +147,6 @@ function ReviewLoop({
   transcript: TranscriptEntry[];
   /** The normalized live-activity stream (§10a) powering the bar + console. */
   stream: StreamEvent[];
-  connected: boolean;
   /** A ticking clock for the presence dot + activity timestamps. */
   now: number;
 }) {
@@ -662,7 +660,6 @@ function ReviewLoop({
     <>
       <ReviewHeader
         session={session}
-        connected={connected}
         now={now}
         view={view}
         onView={setView}
@@ -875,7 +872,7 @@ function ReviewLoop({
 }
 
 export function SessionScreen({ id }: { id: string }) {
-  const { session, threads, transcript, stream, missing, cleaned, connected } = useSession(id);
+  const { session, threads, transcript, stream, missing, cleaned } = useSession(id);
   // One ticking clock for the presence dot + activity/relative timestamps, so
   // they stay honest while the screen idles between SSE frames.
   const now = useNow(30_000);
@@ -973,7 +970,6 @@ export function SessionScreen({ id }: { id: string }) {
         threads={threads}
         transcript={transcript}
         stream={stream}
-        connected={connected}
         now={now}
       />
     </div>

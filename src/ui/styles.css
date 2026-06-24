@@ -170,28 +170,6 @@ body::before {
   mask: var(--wordmark) center / contain no-repeat;
 }
 
-.link-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font: var(--fs-label)/1 var(--mono);
-  letter-spacing: 0.12em;
-  color: var(--ink-soft);
-  padding-bottom: 2px;
-}
-
-.link-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--line-strong);
-}
-
-.is-live .link-dot {
-  background: var(--live);
-  animation: live-pulse 2.4s ease-out infinite;
-}
-
 @keyframes live-pulse {
   0% {
     box-shadow: 0 0 0 0 color-mix(in srgb, var(--live) 45%, transparent);
@@ -203,9 +181,8 @@ body::before {
 }
 
 /* Agent presence (review UI, D4): a small live/offline dot beside the
- * status chips — the "is the agent on the line?" signal. Deliberately distinct
- * from .link-state (the browser↔daemon link): a hollow ring that fills + pulses
- * when live, vs the link dot's solid fill. Labelled "agent" vs "link". */
+ * status chips — the "is the agent on the line?" signal. A hollow ring that
+ * fills + pulses when live. Labelled "agent". */
 .agent-dot {
   display: inline-flex;
   align-items: center;
@@ -391,10 +368,6 @@ body::before {
 .card-pr:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-}
-
-.session-meta .card-time {
-  margin-left: 0;
 }
 
 /* Approved sessions, collapsed by default on home (review UI): the same
@@ -675,11 +648,24 @@ code {
   gap: 10px;
 }
 
-/* The ☰ "show sessions" button sits at the bar's end (<960px), where the
- * switcher used to. Hidden at ≥960px (the sidebar is the list) by the shell
- * media query below. */
+/* The ☰ "show sessions" button. Rendered only <960px (hidden at ≥960px by the
+ * shell media query below, where the sidebar is the list). At <960px it is the
+ * single session-list affordance in the header, so it takes the top-left slot
+ * the back link held: `order: -1` sorts it before the identity. The back link
+ * is hidden <960px (media query below), so the two never both show: exactly one
+ * top-left control per breakpoint. */
 .review-header .rh-menu {
   flex: none;
+  order: -1;
+}
+
+/* <960px the ☰ is the session-list affordance, so the back link (a duplicate
+ * way to the list) folds away. Complementary to the ≥960px rule below that hides
+ * the ☰: exactly one of the two shows per breakpoint. */
+@media (max-width: 959px) {
+  .review-header .backlink {
+    display: none;
+  }
 }
 
 .session-title {
@@ -736,10 +722,6 @@ code {
   align-items: center;
   flex-wrap: wrap;
   gap: 10px 14px;
-}
-
-.session-meta .link-state {
-  margin-left: auto;
 }
 
 .review-wait {
@@ -4810,8 +4792,10 @@ code {
 
   /* The review header's back-link and ☰ menu are redundant when the sidebar
    * provides both (home link via the wordmark, switching via the list), so they
-   * fold away at the desktop sidebar width. They stay rendered for <960px, where
-   * the ☰ menu opens the session sheet — the only session-switching face there. */
+   * fold away at the desktop sidebar width. For <960px the ☰ menu stays rendered
+   * and opens the session sheet, the only session-switching face there. The back
+   * link duplicated the ☰, so it now folds at every width (the <960px rule above
+   * hides it on mobile; this rule hides it on desktop). */
   .review-header .backlink,
   .review-header .rh-menu {
     display: none;
