@@ -77,14 +77,23 @@ export function createDesktopNotifier(options: NotifierOptions = {}): DesktopNot
   const findNotifier = options.findNotifier ?? findTerminalNotifier;
   const spawn = options.spawn ?? defaultSpawn;
   return ({ title, message, url }) => {
-    if (platform !== "darwin") return; // banners are macOS-only here
+    // One line per branch feeds the daemon.log audit trail (which backend ran,
+    // and whether the banner is clickable). Plain writes — never throws.
+    if (platform !== "darwin") {
+      process.stderr.write(`otacond: notify backend=none-non-darwin clickable=false title=${JSON.stringify(title)}\n`);
+      return; // banners are macOS-only here
+    }
     const terminalNotifier = findNotifier();
     if (terminalNotifier !== undefined) {
       const args = ["-title", title, "-message", message];
       if (url !== undefined) args.push("-open", url);
+      process.stderr.write(
+        `otacond: notify backend=terminal-notifier clickable=${url !== undefined} title=${JSON.stringify(title)}\n`,
+      );
       spawn(terminalNotifier, args);
       return;
     }
+    process.stderr.write(`otacond: notify backend=osascript clickable=false title=${JSON.stringify(title)}\n`);
     spawn("osascript", [
       "-e",
       `display notification ${osaQuote(message)} with title ${osaQuote(title)}`,

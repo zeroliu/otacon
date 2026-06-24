@@ -381,8 +381,14 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       | { kind: "revision"; revision: number },
   ): void => {
     try {
-      if (!loadConfig(session.repo).notifications.desktop) return;
-      if (presence.isWatched(session.id)) return;
+      if (!loadConfig(session.repo).notifications.desktop) {
+        process.stderr.write(`otacond: notify skip session=${session.id} reason=config-disabled\n`);
+        return;
+      }
+      if (presence.isWatched(session.id)) {
+        process.stderr.write(`otacond: notify skip session=${session.id} reason=watched\n`);
+        return;
+      }
       const message =
         moment.kind === "revision"
           ? `Revision r${moment.revision} ready for review`
@@ -391,6 +397,9 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
             : moment.text.length > 80
               ? `${moment.text.slice(0, 79)}…`
               : moment.text;
+      process.stderr.write(
+        `otacond: notify dispatch session=${session.id} kind=${moment.kind} title=${JSON.stringify(session.title)} message=${JSON.stringify(message)}\n`,
+      );
       notify({
         title: session.title,
         message,

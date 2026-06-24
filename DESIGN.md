@@ -718,6 +718,13 @@ On by default; toggle with a `notifications.desktop` boolean in
 personal `<repo>/.otacon/config.local.json` override it in turn, §16),
 mirroring the budgets config. Off macOS the banner is a silent no-op.
 
+Every notification decision is recorded to `daemon.log` as an audit trail: a
+`notify dispatch` line (session, kind, title, message) when a banner fires, a
+`notify skip` line with the reason (`config-disabled` or `watched`) when one is
+suppressed, and a `notify backend` line naming the backend chosen and whether it is
+`clickable`. So why a banner did or did not appear — and why a click does nothing
+under the osascript fallback — is always recoverable after the fact.
+
 ### The full loop
 
 The installed skill wrapper has a hard implementation gate: after the skill is
