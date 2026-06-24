@@ -35,9 +35,6 @@ export interface UiDeps {
   uiDir?: string | null;
   /** Test override; production keeps the 25s default. */
   heartbeatMs?: number;
-  /** Fired when ANY SSE stream opens / closes (index + every session): drives the daemon's live-tab gauge for open-tab reuse. */
-  onViewerOpen?: () => void;
-  onViewerClose?: () => void;
 }
 
 type UiContext = Context<{ Bindings: NodeBindings }>;
@@ -144,12 +141,6 @@ function sse(
         // stream stays open: other sessions keep flowing.
         if (onlySession !== undefined && event.type === "removed") close();
       });
-      // The connection is now established (snapshot built, subscription live):
-      // count this tab. snapshot() above can throw before we reach here, so the
-      // open is only ever counted once a stream truly exists, and cleanup's
-      // matching onViewerClose?.() runs at most once (dispose guards it), so
-      // open/close stay paired across cancel, abort, and reader-loss.
-      deps.onViewerOpen?.();
       const heartbeat = setInterval(
         () => send(encoder.encode(": hb\n\n")),
         deps.heartbeatMs ?? HEARTBEAT_MS,
@@ -160,7 +151,6 @@ function sse(
         unsubscribe();
         clearInterval(heartbeat);
         signal.removeEventListener("abort", onAbort);
-        deps.onViewerClose?.();
       };
       send(snapshotFrame);
       if (signal.aborted) close();

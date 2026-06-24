@@ -77,6 +77,7 @@ import {
 } from "./threads.js";
 import { answerEntry, appendEntries, appendEntry, readTranscript } from "./transcript.js";
 import { registerUiRoutes } from "./ui.js";
+import { Viewers } from "./viewers.js";
 
 /** Provided by @hono/node-server; absent under app.request() in tests. */
 export interface NodeBindings {
@@ -93,6 +94,8 @@ export interface AppOptions {
   sseHeartbeatMs?: number;
   /** Test override: visibility tracker (default: a fresh Presence with the 45s TTL). */
   presence?: Presence;
+  /** Test override: the live-tab tracker (default: a fresh Viewers with the 90s TTL). */
+  viewers?: Viewers;
   /** Test override: the desktop notify sink (default: the real macOS notifier, a no-op off darwin). */
   notify?: DesktopNotifier;
   /**
@@ -260,18 +263,6 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     lastContact.set(id, Date.now());
   };
 
-  // Live browser tabs watching this daemon (any session or the index), counted
-  // by SSE connection so `otacon open` can skip launching a duplicate tab
-  // (DECISIONS.md "reuse an existing open tab"). Ephemeral, in-memory: a restart
-  // starts at 0, and each connection self-balances via sse()'s dispose lifecycle.
-  let liveViewers = 0;
-  const viewerOpened = (): void => {
-    liveViewers += 1;
-  };
-  const viewerClosed = (): void => {
-    liveViewers = Math.max(0, liveViewers - 1);
-  };
-
   // UI pub/sub (DECISIONS.md "UI live updates"): every state mutation below
   // publishes, and the SSE routes in ui.ts fan the events out to browsers.
   const notifier = new Notifier();
@@ -364,6 +355,15 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   // (a no-op off darwin). Both are injectable for tests.
   const presence = options.presence ?? new Presence();
   const notify = options.notify ?? createDesktopNotifier();
+
+  // Live browser tabs watching this daemon (any session or the index), tracked
+  // by an explicit SPA heartbeat with a TTL so `otacon open` can skip launching a
+  // duplicate tab (DECISIONS.md "reuse an existing open tab"). A heartbeat rather
+  // than an SSE-connection count because the dogfood daemon runs under Bun, whose
+  // node:http does not detect a client disconnect, so a connection count leaks;
+  // the TTL self-heals a closed/crashed tab under both Node and Bun. Ephemeral,
+  // in-memory: a restart starts at 0, and live tabs re-beat on their next ping.
+  const viewers = options.viewers ?? new Viewers();
 
   /**
    * Fire a desktop banner for an attention moment unless the user is already
@@ -521,7 +521,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   );
 
   app.get("/api/health", (c) =>
-    c.json({ app: "otacond", version: VERSION, pid: process.pid, viewers: liveViewers }),
+    c.json({ app: "otacond", version: VERSION, pid: process.pid, viewers: viewers.count() }),
   );
 
   // The Settings UI's config surface (review loop and daemon API). GET returns the full
@@ -961,6 +961,22 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     if (body.visible) presence.markVisible(session.id);
     else presence.markHidden(session.id);
     return c.json({ ok: true, session: session.id, visible: body.visible });
+  });
+
+  // A browser tab reports its liveness here (open-tab reuse, DECISIONS.md "reuse
+  // an existing open tab"): one beat per tab on mount and a ~30s heartbeat, plus
+  // a `gone:true` beacon on tab close. Daemon-wide (NOT session-scoped): one tab,
+  // via the app-shell sidebar, reaches every session, so `otacon open` only needs
+  // to know whether ANY tab from this daemon is live. The 90s TTL self-expires a
+  // crashed/closed tab whose `gone` beacon never arrived.
+  app.post("/api/viewers/heartbeat", async (c) => {
+    const body = (await readJsonBody(c)) ?? {};
+    if (typeof body.clientId !== "string" || body.clientId.length === 0) {
+      return badRequest(c, "clientId must be a non-empty string");
+    }
+    if (body.gone) viewers.drop(body.clientId);
+    else viewers.beat(body.clientId);
+    return c.json({ ok: true });
   });
 
   // Structural diff between two stored revisions, defaulting to the last-reviewed baseline.
@@ -1744,8 +1760,6 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     getStream: (id) => readStream(store.streamPath(id), loadStreamCap(id)),
     uiDir: options.uiDir,
     heartbeatMs: options.sseHeartbeatMs,
-    onViewerOpen: viewerOpened,
-    onViewerClose: viewerClosed,
   });
 
   return app;

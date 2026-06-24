@@ -3476,33 +3476,42 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   wants a smaller label tier), at which point the tokens and the guard's floor move
   together.
 
-## Reuse an existing open tab: daemon-wide live-connection gauge (2026-06-24)
+## Reuse an existing open tab: daemon-wide live-tab heartbeat + TTL (2026-06-24)
 
-- **Decision:** The daemon keeps one in-memory gauge of its live SSE connections.
-  Every stream (the index and each per-session stream) bumps it on open and drops it
-  on close, riding `sse()`'s proven `dispose`/`cleanup` lifecycle, and the count is
-  exposed as `viewers` on `GET /api/health`. `otacon open` (Phase 2) reads it: `viewers
-  >= 1` means a tab from this daemon is already connected, so it skips launching a
-  duplicate. The gauge is daemon-wide (not per session) and counts by SSE connection,
-  not by visibility `Presence`. No `SessionSummary` / `shared/types` field: it lives
-  only on `/api/health`.
-- **Why:** One otacon tab, via the app-shell sidebar, can reach every session, so the
-  dedup only needs to know whether ANY live tab from this daemon exists. Keying on a
-  per-session count would re-launch for a different session and add state to every
-  summary. Counting SSE connections catches a backgrounded or hidden tab that the
-  visibility-based `Presence` signal would miss (a connected tab is the thing we must
-  not duplicate, whether or not it is focused). Piggybacking `cleanup` (which runs at
-  most once, guarded by `dispose`, across cancel, abort, and reader-loss) keeps
-  open/close perfectly paired, so the count cannot drift. It is a presence check, not
-  a precise tab count (a session tab holds ~2 connections), which is all dedup needs.
+- **Decision:** The daemon tracks its live browser tabs with an explicit SPA heartbeat
+  rather than an SSE-connection count. Each tab mints one clientId per page load and
+  POSTs `/api/viewers/heartbeat` ({clientId, gone?}) once on mount, on a ~30s interval,
+  and on becoming visible again; on tab close it sends a `gone:true` beacon. The daemon
+  keeps an in-memory `Viewers` map of clientId -> lastSeen and counts the ids seen
+  within a 90s TTL, exposed as `viewers` on `GET /api/health`. `otacon open` (Phase 2)
+  reads it: `viewers >= 1` means a tab from this daemon is live, so it skips launching a
+  duplicate. The tracker is daemon-wide (not per session) and is not visibility
+  `Presence`. No `SessionSummary` / `shared/types` field: it lives only on
+  `/api/health`. The field name and number type are unchanged from the gauge it
+  replaces, so the CLI dedup is untouched.
+- **Why:** A TTL heartbeat is used INSTEAD of counting live SSE connections because the
+  dogfood daemon runs under Bun (`bin/otacon` execs `bun run`, and the daemon is spawned
+  with that same runtime), and Bun's `node:http` emulation does not fire a request's
+  abort signal on client disconnect (nor throw on a write to a dead socket), so `sse()`'s
+  cleanup never runs and a connection count only ever climbs (it leaks). The heartbeat +
+  TTL self-heals under BOTH Node and Bun: a closed or crashed tab simply stops pinging
+  and lapses on the TTL, and a `gone` beacon drops a cleanly-closed tab immediately, so
+  the next `open` launches again. The 90s TTL comfortably exceeds the 30s interval even
+  when a background tab's timers are throttled (browsers clamp background intervals but
+  stay well under 90s), so a visible-then-backgrounded tab is not falsely reaped. One
+  otacon tab, via the app-shell sidebar, reaches every session, so the dedup only needs
+  to know whether ANY tab from this daemon is live; keying per session would re-launch
+  for a different session and add state to every summary.
 - **Revisit when:** A use case needs per-session tab awareness (e.g. focusing or
-  counting the tabs watching one specific session), at which point the gauge becomes a
-  per-session map and likely moves onto the session summary.
+  counting the tabs watching one specific session), at which point `Viewers` becomes a
+  per-session map and likely moves onto the session summary; or Bun's `node:http` gains
+  reliable disconnect detection (then a server-side count could return, though the
+  heartbeat is robust regardless).
 
 ## Reuse an existing open tab: `otacon open` dedup, no focus (2026-06-24)
 
 - **Decision:** `otacon open` reads `viewers` from the health response that
-  `ensureDaemon()` already returns (the daemon-wide gauge above) and, when `viewers >= 1`,
+  `ensureDaemon()` already returns (the daemon-wide heartbeat tracker above) and, when `viewers >= 1`,
   skips launching a browser tab (dedup only, with no attempt to focus, raise, or
   navigate the existing tab, D1). The skip applies to whichever url it would have opened,
   session or index (any open tab from this daemon, via its sidebar, already reaches every
@@ -3515,8 +3524,8 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   reliably raise a backgrounded tab across browsers, and OS-level focusing (AppleScript and
   friends) is fragile and platform-specific; the user's intent ("don't pile up duplicate
   tabs") is fully served by just not spawning another, so we stop there. D3, `config` opens
-  a different surface (Settings) that a review tab does not stand in for, and the connection
-  gauge is about review tabs, so leaving `config` untouched keeps each verb's contract clear.
+  a different surface (Settings) that a review tab does not stand in for, and the live-tab
+  signal is about review tabs, so leaving `config` untouched keeps each verb's contract clear.
   D4, the signal self-corrects (close the tab and the count drops to 0, so the next `open`
   launches again), which makes a manual override redundant and keeps the CLI surface minimal;
   a real need for "open another anyway" can add the flag later.

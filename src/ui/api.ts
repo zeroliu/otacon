@@ -93,10 +93,66 @@ export interface SessionsState {
 // at every call site (DECISIONS "Index stream is shared via a provider").
 const SessionsContext = createContext<SessionsState | null>(null);
 
+/**
+ * This tab's stable id, minted once per page load (open-tab reuse, DECISIONS.md
+ * "reuse an existing open tab"). The daemon counts distinct live ids to know
+ * whether any otacon tab is open, so a reload that re-mints the id is fine: the
+ * old id self-expires on its TTL while the fresh one keeps the tab counted.
+ */
+const CLIENT_ID = crypto.randomUUID();
+const VIEWER_HEARTBEAT_MS = 30_000;
+
+/**
+ * Tell the daemon this tab is alive (open-tab reuse): a ~30s heartbeat plus a
+ * `gone:true` beacon on tab close so `otacon open` can skip a duplicate tab. The
+ * TTL covers a crash that skips the beacon. Uses sendBeacon for the close path
+ * (it survives teardown where a keepalive fetch can still race) and a keepalive
+ * fetch otherwise. Errors are swallowed: liveness reporting must never break the
+ * UI, and a missed beat just lets the daemon's TTL lapse the tab.
+ */
+function postViewerHeartbeat(gone = false): void {
+  const payload = JSON.stringify({ clientId: CLIENT_ID, gone });
+  if (gone) {
+    navigator.sendBeacon?.(
+      "/api/viewers/heartbeat",
+      new Blob([payload], { type: "application/json" }),
+    );
+    return;
+  }
+  void fetch("/api/viewers/heartbeat", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: payload,
+    keepalive: true,
+  }).catch(() => undefined);
+}
+
 /** Owns the single `/api/stream` connection and feeds every `useSessions()` reader. */
 export function SessionsProvider({ children }: { children: ReactNode }) {
   const [byId, setById] = useState<SessionMap>(new Map());
   const [connected, setConnected] = useState(false);
+
+  // Heartbeat this tab's liveness to the daemon (open-tab reuse): one per tab,
+  // homed here because the provider mounts exactly once per page. Beat on mount,
+  // on a ~30s interval, and whenever the tab becomes visible again (the interval
+  // can be throttled while backgrounded; the 90s TTL comfortably outlasts that).
+  // Drop the tab immediately on close (`pagehide`) and on unmount.
+  useEffect(() => {
+    postViewerHeartbeat();
+    const interval = setInterval(() => postViewerHeartbeat(), VIEWER_HEARTBEAT_MS);
+    const onVisible = (): void => {
+      if (document.visibilityState === "visible") postViewerHeartbeat();
+    };
+    const onUnload = (): void => postViewerHeartbeat(true);
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("pagehide", onUnload);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("pagehide", onUnload);
+      postViewerHeartbeat(true);
+    };
+  }, []);
 
   useEffect(() => {
     const source = new EventSource("/api/stream");
