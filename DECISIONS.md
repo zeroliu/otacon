@@ -706,6 +706,37 @@ section and read down from the top.
 
 ## Plan schema & linter
 
+### The wrapper teaches tree-shaped content as a mermaid diagram, by prose (2026-06-24)
+
+- **Decision:** The protocol card's `## Visuals` block now tells the agent that
+  hierarchy- or tree-shaped content (a taxonomy, a doc or file structure, a nested option
+  space, a state hierarchy, a decision tree) should be drawn as a `mermaid` diagram, not
+  a monospace nested outline in a `text` fence. It ships as prose guidance, not a
+  tree-detection lint rule; the agent picks the diagram type (`graph TD` by default).
+- **Why:** The renderer already supports and validates `mermaid` trees (budget-exempt,
+  L8-checked), so the gap was purely guidance: agents reached for indented monospace
+  outlines that force the reviewer to reconstruct the shape line by line. A lint
+  heuristic for "this text is a tree" is too fuzzy to be reliable, and a hard rule would
+  block legitimate plain-text fences; prose in the card is the lowest-cost lever that
+  moves the behavior without false positives.
+- **Revisit when:** Agents keep shipping monospace-outline trees despite the guidance, at
+  which point a soft lint nudge (warning, never blocking) on indented-outline fences in
+  read-path sections is the next step up.
+
+### Mermaid diagrams are exempt from the per-section fence cap
+
+- **Decision:** A `mermaid` fence counts only toward `diagramCount` (the L7 lead-diagram
+  check), never toward `fenceCount` / `E_FENCE_CAP`. Code and before/after fences keep
+  the one-fence-per-read-path-section cap; the lead diagram no longer spends Summary's
+  fence allowance.
+- **Why:** otacon actively encourages diagrams, especially for tree- and hierarchy-shaped
+  content, so a one-fence-per-section cap conflicts with the common shape of a lead
+  diagram plus an in-section structural diagram. Diagrams are visual, not prose, and the
+  line budgets already keep sections scannable, so the cap's "no wall of text" job is
+  already done without charging diagrams against it.
+- **Revisit when:** Sections start stacking diagrams and reading cluttered; then
+  reintroduce a higher diagram-specific cap rather than the blanket exemption.
+
 ### L8 fails open on headless-setup failure
 
 - **Decision:** If the headless mermaid setup itself can't be stood up (bad import, missing
