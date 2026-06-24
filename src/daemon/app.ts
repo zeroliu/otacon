@@ -429,11 +429,13 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
    * Finalize an approval. Writes the composed
    * artifact (with the comment-&-approve `## Review notes` when `reviewNotes` are
    * present). It ALWAYS writes the canonical home copy
-   * (`~/.otacon/sessions/<id>/`, the permanent archive).
+   * (`~/.otacon/sessions/<id>/`, the session's home dir: removed when the
+   * session is deleted, so not a durable archive).
    * On **Save** (implement=false) it ALSO writes a project copy under the repo's
-   * configured `plans.dir`, and the event `path` points there. On **Implement**
-   * (implement=true) it writes home only, and `path` equals `home`. The home
-   * write is the crash-safe finalize point — file(s) before the status flip.
+   * configured `plans.dir` (the durable copy), and the event `path` points
+   * there. On **Implement** (implement=true) it writes home only, and `path`
+   * equals `home` (the durable copy then rides in the PR). The home write is the
+   * crash-safe finalize point: file(s) before the status flip.
    * Then flip the session to `approved` or `implementing`, disarm any deferred
    * approval, and queue the `approved` wake-up. Shared by plain/force approve and
    * the deferred fold-in submit so the artifact and event shapes are identical on
@@ -622,50 +624,44 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     return c.json(summarize(session));
   });
 
-  // DELETE removes a session from the registry, status-branched on whether its
-  // plan is already preserved. **Terminal** (approved, plus
-  // implemented/implement_failed once a build finishes): its plan + transcript
-  // are in the home archive (~/.otacon/sessions/<id>/, never touched here), so the
-  // working dir is *archived* to .otacon/archive/ (recoverable) — `otacon clean`
-  // and the UI's delete of an
-  // over session both take this path. Gated on TERMINAL_STATUSES so this split
-  // agrees with the UI's `over` (which passes `approved={isOver(status)}` to the
-  // confirm sheet) — otherwise an `implemented` delete would promise archival
-  // and silently hard-delete. **Non-terminal** (draft/in_review/revising, and a
-  // live `implementing` build): the working dir is *hard-removed* (permanent),
-  // and any parked agent is woken with a terminal `deleted` event so its `wait`
-  // loop stops cleanly. Both publish the same terminal `removed` frame; the
-  // response carries `archivedTo` (the archive path, or null for a hard-delete).
+  // DELETE permanently removes a session: it deregisters from the registry and
+  // `rmSync`s its home dir `~/.otacon/sessions/<id>/` outright, for ALL statuses
+  // (UI delete and `otacon clean` both drive this route). No archive: nothing
+  // is recoverable from otacon itself; the durable copies are the Save copy
+  // under the project's `plans.dir` and (for Implement plans) the PR. The only
+  // status branch left is waking a parked agent: a live (non-terminal) session
+  // may have an agent parked on `wait`, so it is woken with a terminal `deleted`
+  // event before deregistering, so its loop stops cleanly. Both branches publish
+  // the same terminal `removed` frame.
   app.delete("/api/sessions/:id", (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
     const queue = queueFor(session.id);
     const pendingEvents = queue.size;
     stopTailer(session.id); // the session is going away — stop watching its transcript
-    let archivedTo: string | null = null;
     if (TERMINAL_STATUSES.includes(session.status)) {
       // Deregister first — it can throw (registry flush), and an early queue
       // eviction would orphan in-flight ack tracking for a session that is in
-      // fact still registered. Close the evicted instance before the move so a
-      // late in-flight ack cannot recreate .otacon/<id>/ next to the archive.
+      // fact still registered. Close the evicted instance before the removal so
+      // a late in-flight ack cannot recreate ~/.otacon/sessions/<id>/.
       store.deleteSession(session.id);
       queue.close();
       queues.delete(session.id);
-      archivedTo = store.archiveSessionDir(session.repo, session.id);
+      store.removeSessionDir(session.id);
     } else {
       // Wake any parked agent BEFORE deregistering so its respondEvent still
       // resolves against a registered session; closeWith sets the queue closed
-      // first, so the hard-remove below can't be recreated by a late ack. Then
-      // deregister and permanently drop the working dir (no committed value).
+      // first, so the removal below can't be recreated by a late ack. Then
+      // deregister and permanently drop the home dir.
       queue.closeWith({ event: "deleted", session: session.id });
       queues.delete(session.id);
       store.deleteSession(session.id);
-      store.removeSessionDir(session.repo, session.id);
+      store.removeSessionDir(session.id);
     }
     // Terminal frame: the index and switcher drop the session live, and an
     // open review tab flips to its closed state instead of error-limbo.
     notifier.publish({ type: "removed", session: session.id, data: { session: session.id } });
-    return c.json({ ok: true, session: session.id, repo: session.repo, pendingEvents, archivedTo });
+    return c.json({ ok: true, session: session.id, repo: session.repo, pendingEvents });
   });
 
   app.get("/api/sessions/:id/events", (c) => {

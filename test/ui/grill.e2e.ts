@@ -5,7 +5,7 @@
 // before drafting), chip taps and free text wake a parked `otacon wait` with the
 // answer event and settle the card into the "answered" zone, decision citations
 // deep-link into the panel, and Approve warns on unresolved threads before a
-// force Save writes the .otacon/plans/ project copy (plus the home archive) and
+// force Save writes the .otacon/plans/ project copy (plus the home copy) and
 // locks the session.
 
 import { readFileSync } from "node:fs";
@@ -316,7 +316,7 @@ test("approve warns on unresolved threads, forces on confirm, locks the session,
   await page.locator(".ctrl-approve").click();
 
   // The confirm sheet is honest about what happens (review UI): otacon never commits;
-  // Save writes the home archive plus a project copy, session over.
+  // Save writes the home copy plus a project copy, session over.
   const sheet = page.locator(".approve-sheet");
   await expect(sheet).toContainText("Finalize r1");
   await expect(sheet).toContainText("never commits");

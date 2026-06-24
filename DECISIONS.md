@@ -8,7 +8,7 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 ## Storage: plain JSON files, not SQLite
 
 - **Decision:** All daemon state is plain JSON files (`~/.otacon/registry.json`,
-  `.otacon/<session>/{session,events}.json`), written atomically (tmp + rename).
+  `~/.otacon/sessions/<id>/{session,events}.json`), written atomically (tmp + rename).
 - **Why:** Zero native dependencies (better-sqlite3 needs node-gyp), state stays
   human-inspectable with `cat`, single-user write volumes are tiny, and corruption
   recovery is "quarantine one small file".
@@ -123,16 +123,23 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   extra sections are exactly where detail-smuggling would creep in.
 - **Revisit when:** A real recurring need for an optional section shows up.
 
-## `.otacon/` lives at the git repo root
+## `.otacon/` at the git repo root holds config + saved plans only
 
-- **Decision:** `otacon start` resolves `git rev-parse --show-toplevel` and puts
-  `.otacon/` there (the daemon writes session state under `.otacon/<id>/`); in non-git
-  directories it warns and uses the cwd. (otacon touches no `.gitignore` either way — see
-  "otacon manages no `.gitignore`" below.)
-- **Why:** Subdirectory invocations must resolve to the same repo root the registry
-  records, so the cwd's single active session is found from anywhere under it; separate
-  worktrees have distinct roots, which preserves worktree-parallel planning for free.
-  The non-git fallback keeps temp-dir testing trivial.
+- **Decision:** `otacon start` resolves `git rev-parse --show-toplevel` and uses that
+  repo root for the registry's `repo` field and for the repo-local `.otacon/` dir, which
+  now holds ONLY project config (`config.json` / `config.local.json`) and, on Save, the
+  `plans.dir` copies. Per-session working state moved to the home store
+  (`~/.otacon/sessions/<id>/`, see "Session working state lives in the home store"
+  below); the repo root no longer determines where session state is written. In non-git
+  directories `start` warns and uses the cwd as the repo root. (otacon touches no
+  `.gitignore` either way; see "otacon manages no `.gitignore`" below.)
+- **Why:** The repo-root resolution still matters for config (a subdirectory invocation
+  must find the same project config) and for the registry's single-active-session-per-repo
+  rule; separate worktrees have distinct roots, which preserves worktree-parallel planning
+  for free. But per-session state has no reason to live in the repo: keying it by the
+  globally-unique session id in the home store keeps `<repo>/.otacon/` clean (config +
+  saved plans) and makes session state repo-independent. The non-git fallback keeps
+  temp-dir testing trivial.
 - **Revisit when:** Monorepo sub-project sessions become a real use case.
 
 ## Frontmatter authority: the daemon owns `revision` and `status`
@@ -727,7 +734,7 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 ## Threads: one threads.json per session; answer is a question sub-resource
 
-- **Decision:** Comment and question threads persist in `.otacon/<id>/threads.json`
+- **Decision:** Comment and question threads persist in `~/.otacon/sessions/<id>/threads.json`
   (append on post; the agent's answer is written inline on its question thread,
   re-answers overwrite). The agent answers via
   `POST /api/sessions/:id/questions/:qid/answer`; non-question ids 404 with
@@ -1055,7 +1062,7 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 ## Grill transcript: its own transcript.json; q ids shared with user questions
 
-- **Decision:** Agent grill questions persist in `.otacon/<id>/transcript.json`
+- **Decision:** Agent grill questions persist in `~/.otacon/sessions/<id>/transcript.json`
   (`{version, entries: [{id, question, options?, recommend?, multi?, askedAt,
   answer?}]}`), not in threads.json — same atomic-write/quarantine posture, the
   user's answer is written inline on its entry, re-answers overwrite and re-queue
@@ -1173,10 +1180,14 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 ## Approve archives logically; the artifact appends an "## Interview" section
 
-> **Superseded** by "Home plan store + Save vs Implement; otacon never commits" —
-> the artifact now lands in `~/.otacon/sessions/<id>/` (canonical) plus, on Save, a
-> project copy under `plans.dir`; otacon no longer writes `docs/plans/` or commits.
-> The "## Interview" append and the collision-suffix naming still hold.
+> **Superseded** by "Home plan store + Save vs Implement; otacon never commits" and
+> "Session working state lives in the home store `~/.otacon/sessions/<id>/`":
+> the artifact now lands in `~/.otacon/sessions/<id>/` (canonical, alongside the
+> session's working state) plus, on Save, a project copy under `plans.dir`; otacon no
+> longer writes `docs/plans/` or commits. The home copy is no longer a permanent
+> archive: deleting the session (UI or `otacon clean`) removes the whole home folder
+> (see "Delete permanently removes the home session folder; no archive"). The
+> "## Interview" append and the collision-suffix naming still hold.
 
 - **Decision:** Approve writes `docs/plans/YYYY-MM-DD-<slug>.md` (local approve
   date; slug from the session title, `plan` fallback; name collisions suffix
@@ -1340,6 +1351,13 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 ## clean: daemon deregisters AND archives; undrained events leave with the dir
 
+> **Superseded** by "Delete permanently removes the home session folder; no archive":
+> `DELETE /api/sessions/:id` no longer archives to `.otacon/archive/`; it `rmSync`s the
+> session's home folder `~/.otacon/sessions/<id>/` outright for every status, and the
+> response no longer carries `archivedTo`. `Store.archiveSessionDir` was removed. The
+> daemon-owns-deregistration rationale, the queue-`close()`-before-removal ordering, and
+> the drop-undrained-events tradeoff below all still hold (the removal replaces the move).
+
 - **Decision:** `DELETE /api/sessions/:id` is **status-branched**; its **approved**
   branch is `otacon clean`'s path: it removes the registry entry, evicts the session's
   queue instance without draining it, and the **daemon** moves `.otacon/<id>/` to
@@ -1367,6 +1385,14 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 
 ## delete a session from the UI: any status; approved archives, pending hard-removes
 
+> **Superseded** by "Delete permanently removes the home session folder; no archive":
+> delete is now uniform: the daemon `rmSync`s the home folder `~/.otacon/sessions/<id>/`
+> for every status, with no archive branch. The parked-agent `{event:"deleted"}` wake,
+> the wake-before-deregister + `closeWith`-before-removal ordering, and the shared
+> `removed` SSE frame all still hold; only the approved-archives split is retired. The
+> confirm-sheet copy follows status to explain where the durable copy survives, not
+> whether the delete is recoverable.
+
 - **Decision:** Every session is deletable from the review UI (index card + session
   header) via `DELETE /api/sessions/:id`, status-branched on whether it has committed
   value. **Approved** → the clean path above (deregister + `archiveSessionDir`,
@@ -1393,6 +1419,67 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** users want an undo for the hard-delete (then: a soft-delete/trash with
   a TTL, not `rm -rf`), or deletion needs to reach an agent that is mid-call rather than
   parked (then: a per-session kill flag the next call checks, beyond the wake).
+
+## Session working state lives in the home store `~/.otacon/sessions/<id>/`
+
+- **Decision:** Every per-session file (`plan.md`, `session.json`, `events.json`,
+  `threads.json`, `transcript.json`, `activity.json`, `stream.jsonl`, the `rN.*`
+  revision snapshots, queues) lives in the home store under
+  `~/.otacon/sessions/<id>/`, keyed by the globally-unique session id and resolved with
+  no repo argument. This is the same folder the approved artifact already landed in, so
+  working state and the approved plan now share one home dir. The path helpers
+  (`paths.sessionDir(id)` and friends) take the id only; `Store` keeps the registry's
+  `RegistrySession.repo` for listing and the single-active-session-per-repo rule, but
+  path resolution no longer touches it. Config stays in the repo (`<repo>/.otacon/`).
+- **Why:** The session id is already globally unique, so keying state by it removes the
+  last reason to scatter working state across repo `.otacon/` dirs: `<repo>/.otacon/`
+  collapses to config + the Save plan copies (easy to track or ignore as one unit), and
+  session state becomes repo-independent (a build worktree and its main repo no longer
+  hold split halves of one session). It also unifies the storage model: the approved
+  artifact was already home-keyed, so working state simply joins it. The two phases that
+  did this (relocate state, then make delete remove the home folder) shipped in one
+  commit because they are coupled through the `sessionDir(id)` signature change.
+- **Revisit when:** Two machines need to share one session's live state (then the home
+  store needs a sync story, which a repo-relative layout would not have helped anyway), or
+  a session needs files large enough that `$HOME` placement matters.
+
+## Delete permanently removes the home session folder; no archive
+
+- **Decision:** `DELETE /api/sessions/:id` (UI delete + `otacon clean`) deregisters the
+  session and `rmSync`s its home folder `~/.otacon/sessions/<id>/` (`recursive, force`)
+  for **every** status. There is no `.otacon/archive/` move and the response carries no
+  `archivedTo`; `Store.archiveSessionDir` was deleted. A live (non-terminal) session's
+  parked agent is still woken with a terminal `{event:"deleted"}` before deregistration.
+  The durable copies are the Save copy under `plans.dir` and (for Implement plans) the PR.
+- **Why:** Once working state and the plan both live in one id-keyed home folder, "archive
+  the working dir but keep the home plan" no longer parses: they are the same folder.
+  Archiving every deleted session would just accrete copies of state the user explicitly
+  discarded, and the genuinely durable record already exists outside otacon (the committed
+  Save copy, or the PR). A uniform `rm` is simpler than a status-branched
+  archive/hard-remove split and matches what "delete" plainly means. Pre-release and home
+  state is gitignorable/global, so losing it on delete costs nothing a user expected to
+  keep.
+- **Revisit when:** Users need a recoverable trash (then: a soft-delete with a TTL and a
+  restore path, not an immediate `rm`).
+
+## No migration of pre-existing in-repo `.otacon/<id>/` dirs
+
+- **Decision:** The relocation is going-forward only: otacon ships no migration that moves
+  old `<repo>/.otacon/<id>/` working dirs into the home store. For any session whose state
+  was written in the repo before this change, the daemon simply rebuilds fresh state from
+  the (empty) home dir on next access: `readState` already recovers a missing
+  `session.json` to revision 0 with zeroed counters, which is the existing quarantine/
+  rebuild path. Stale `<repo>/.otacon/<id>/` dirs are inert and safe for the user to
+  delete by hand.
+- **Why:** otacon is pre-release and `.otacon/` working state is gitignorable, so no real
+  session history is at stake: a migration would be code (and a test surface) written to
+  preserve data nobody is depending on. The rebuild path already exists for corrupt/missing
+  state, so an orphaned old session degrades gracefully rather than wedging. Leaving stale
+  dirs in place (rather than auto-deleting them) keeps the change from ever touching repo
+  contents the user did not ask otacon to touch.
+- **Revisit when:** otacon has shipped to users with real in-repo session history worth
+  carrying forward (then: a one-time `otacon migrate` that moves dirs and re-points the
+  registry).
 
 ## doctor/expose: OTACON_TAILSCALE override, PATH + app-bundle lookup, serve-only automation
 
@@ -2595,19 +2682,26 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 
 ## Home-canonical plan store keyed by session id
 
-- **Decision:** Every approved plan is written to a **home archive** at
-  `~/.otacon/sessions/<id>/YYYY-MM-DD-<slug>.md` — always, on both Save and Implement.
-  The session id (a globally-unique hash) is the namespace, mirroring the repo-local
-  `.otacon/<id>/` layout, so plans from different repos never collide and need no
-  repo-basename/hash prefix. `homeSessionsDir()`/`homeSessionDir(id)` build the paths;
-  `otacon clean` and session deletion NEVER touch `~/.otacon/sessions/`.
+> **Amended** by "Session working state lives in the home store" and "Delete permanently
+> removes the home session folder; no archive": `~/.otacon/sessions/<id>/` is now the
+> per-session working dir too (not just the approved plan), and it is NO LONGER permanent:
+> `otacon clean` and UI delete `rmSync` the whole folder. The session-id namespacing
+> and always-write-the-home-copy parts below still hold; the "never touched by clean /
+> permanent archive" part is retired.
+
+- **Decision:** Every approved plan is written to the home store at
+  `~/.otacon/sessions/<id>/YYYY-MM-DD-<slug>.md`, always, on both Save and Implement.
+  The session id (a globally-unique hash) is the namespace, so plans from different repos
+  never collide and need no repo-basename/hash prefix. `homeSessionsDir()`/`homeSessionDir(id)`
+  build the paths. (Originally the home store was kept out of `otacon clean` as a
+  permanent archive; that no longer holds, see the Amended note above.)
 - **Why:** "Default zero footprint" (q1, q9) means the target repo gets nothing unless
-  the reviewer chooses Save — but otacon still needs one canonical, always-present copy a
-  downstream implementer (or a future you on another machine) can find. The home store is
-  that record. Keying by the existing session id reuses a unique namespace we already mint
-  (q11 leaned toward repo-basename+hash, but the id is simpler and already unique — t1),
-  and keeping it out of `otacon clean` makes it a permanent archive, not transient working
-  state that gets swept with the session dir.
+  the reviewer chooses Save, but otacon still needs one canonical, always-present copy
+  while the session lives, which the agent (on Implement) and the UI read back. The home
+  store is that copy. Keying by the existing session id reuses a unique namespace we
+  already mint (q11 leaned toward repo-basename+hash, but the id is simpler and already
+  unique, t1). The durable, post-delete record is the Save copy under `plans.dir` (or the
+  PR for Implement), not the home folder.
 - **Revisit when:** The home store grows unbounded enough to want pruning/retention, or a
   user wants the canonical location configurable (today it is fixed).
 
@@ -2615,10 +2709,10 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 
 - **Decision:** The approve action has two outcomes, both honoring the existing
   `{implement?}` POST flag. **Save** (implement=false) writes the artifact to the home
-  archive AND a project copy under the repo's `plans.dir`; the session ends (`approved`).
+  store AND a project copy under the repo's `plans.dir`; the session ends (`approved`).
   **Implement** (implement=true) writes the home copy only and flips to `implementing`;
   the agent builds from the home copy. The `approved` event carries `home` (absolute
-  archive path, always) and `path` (project copy on Save; home copy on Implement).
+  home-copy path, always) and `path` (project copy on Save; home copy on Implement).
   **otacon runs no git for the plan** — it only chooses where the file is written; the
   user commits the project copy themselves if they want it tracked.
 - **Why:** The grill (q7, q8) collapsed the earlier two-knob model (`dir` + `commit`,
@@ -2626,7 +2720,7 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   is the plan written?* Whether it lands in git is the user's call, not otacon's — so
   every `git add`/commit path and the ignore-check downgrade logic disappear. Save vs
   Implement maps cleanly onto "I want the plan in my repo" vs "build it now from the
-  archive," and matches Claude Code's instinct that plans live in a home store, not the
+  home copy," and matches Claude Code's instinct that plans live in a home store, not the
   project tree, by default (q6). Keeping `home` on the event lets the agent/UI always name
   the canonical copy even on Save.
 - **Revisit when:** A workflow needs otacon to commit (e.g. an unattended `snake` that
@@ -2637,7 +2731,7 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Decision:** One new `CONFIG_SCHEMA` path leaf `plans.dir` (default `.otacon/plans`,
   repo-relative) governs where **Save** writes the project copy. It renders in the
   Settings UI and resolves via `otacon config get plans.dir` for free, like
-  `worktree.dir`. The home archive location is NOT configurable. otacon writes the copy
+  `worktree.dir`. The home store location is NOT configurable. otacon writes the copy
   and leaves tracking to the user (it manages no `.gitignore`, see below), so the default
   lands a file under `.otacon/plans` the user can commit or leave alone; a team that
   wants it grouped with tracked plans sets `plans.dir=docs/plans` in the committed
@@ -2645,10 +2739,10 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Why:** Reusing the schema-driven config (single source of truth, guard test) means a
   one-line leaf gets validation, the Settings third scope, and the CLI lookup with no
   bespoke code (q6, q7). Making only the project-copy dir configurable — not the home
-  store — keeps the canonical archive predictable while letting each repo choose its
-  in-project convention. The default `.otacon/plans` keeps the copy beside the rest of
-  otacon's working state; `docs/plans` is the opt-in committed contract.
-- **Revisit when:** A repo wants per-session or templated plan paths, or the home archive
+  store, keeps the canonical home copy predictable while letting each repo choose its
+  in-project convention. The default `.otacon/plans` keeps the copy under otacon's repo
+  config dir; `docs/plans` is the opt-in committed contract.
+- **Revisit when:** A repo wants per-session or templated plan paths, or the home store
   location itself needs to move.
 
 ## Dropped the docs/plans archive step from the Implement loop
@@ -2659,7 +2753,7 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   `path`, and the finishing PR carries no plan file. The skill card (`assets.ts`) and the
   regenerated dogfood `SKILL.md` reflect this; DESIGN §6/§12 drop the archive narrative.
 - **Why:** With otacon never committing the plan (see Save vs Implement above) and the
-  plan living in the home archive on Implement, there is simply no committed plan in the
+  plan living in the home store on Implement, there is simply no committed plan in the
   repo to archive — the `git mv → docs/plans/archive/` step (q2) became dead. Branching
   off default-branch HEAD replaces "off the plan commit" because there is no plan commit;
   the home copy is the agent's source of truth for phases.
@@ -2932,7 +3026,7 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 ## Live-activity stream: daemon-side, ephemeral, JSONL (not the JSON activity feed)
 
 - **Decision:** The automatic, cross-agent live-activity stream is a separate
-  append-only **JSONL** file (`.otacon/<id>/stream.jsonl`), distinct from the existing
+  append-only **JSONL** file (`~/.otacon/sessions/<id>/stream.jsonl`), distinct from the existing
   `activity.json` feed. It holds normalized `StreamEvent`s (the daemon assigns a
   monotonic per-session `seq`, redacts + truncates every event before storing), is
   capped by rewriting to the newest N only when it overflows, tolerates corrupt lines by
@@ -3532,3 +3626,23 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** Browsers gain a reliable cross-platform way to focus an existing tab (then
   reuse could raise instead of merely skip), or a concrete workflow needs a second tab badly
   enough to justify a `--new` flag.
+
+## Update-channel tests inject the installed version, not the build-time VERSION (2026-06-24)
+
+- **Decision:** `AutoUpdateDeps` and `UpdateCommandDeps` carry an `installedVersion` seam
+  (default `VERSION` in each module's `REAL_DEPS`); `maybeAutoUpdate` and `updateCommand`
+  derive the channel and compare against `deps.installedVersion`, never the module-level
+  `VERSION`. The update-channel tests pin a clean `INSTALLED` version and add positive
+  staging-channel coverage to both modules. Production is byte-for-byte unchanged because
+  the default is `VERSION`. Builds on the channel-aware auto-update decision above.
+- **Why:** A staging release runs `npm version <base>-staging.<stamp>`, whose `version`
+  lifecycle hook regenerates `src/shared/version.ts`, so in CI the checked-out tag builds
+  against a `-staging.` `VERSION`. `channelOf(VERSION)` then returns `staging`, and tests
+  that hardcoded the `latest` channel went red at the workflow's Test gate and blocked the
+  publish (run 28103822140). Reading the installed version through a seam lets each test
+  assert a channel against a pinned version instead of the ambient build, so the suite is
+  green on both clean and staging builds, and the staging route finally has its own
+  coverage, the gap that let this ship.
+- **Revisit when:** A non-version input begins to drive the channel (the seam should then
+  carry that instead), or the release stops stamping `version.ts` before the gates run (the
+  coupling would no longer exist).

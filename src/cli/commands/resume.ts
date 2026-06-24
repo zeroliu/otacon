@@ -59,9 +59,9 @@ export async function resumeCommand(argv: string[]): Promise<number> {
 
   const response = await api("POST", `/api/sessions/${target.id}/reopen`, {});
   if (response.status === 200) {
-    // Enrich with where to edit: the plan lives under the session's repo (the
-    // MAIN repo, not this worktree), so the agent knows the exact file to amend.
-    printJson({ ...response.body, title: target.title, repo: target.repo, plan: planPath(target.repo, target.id) });
+    // Enrich with where to edit: the plan lives in the home store
+    // (~/.otacon/sessions/<id>/), so the agent knows the exact file to amend.
+    printJson({ ...response.body, title: target.title, repo: target.repo, plan: planPath(target.id) });
     return 0;
   }
   const code = (response.body.error as { code?: string } | undefined)?.code;

@@ -11,7 +11,7 @@
 //   • a resolved thread collapses, and a thread whose quote a later revision
 //     deletes lands in the orphan tray;
 //   • Approve from the UI flips the screen to its approved read-only state and
-//     surfaces the saved project copy under .otacon/plans (plus the home archive).
+//     surfaces the saved project copy under .otacon/plans (plus the home copy).
 // Three screenshots (desktop review, phone review, index) are captured to a
 // temp dir whose path the run prints, for the orchestrator to surface.
 //
