@@ -747,6 +747,7 @@ function ReviewLoop({
                         markdown={payload.markdown}
                         warnings={payload.warnings}
                         changedIds={changedIds}
+                        verificationLedger={payload.verificationLedger}
                         onRendered={onRendered}
                       />
                     </Suspense>

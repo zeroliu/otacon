@@ -15,7 +15,7 @@ import {
   revisionPath,
   sessionDir,
 } from "../shared/paths.js";
-import type { RegistrySession } from "../shared/types.js";
+import type { Ledger, RegistrySession } from "../shared/types.js";
 import { VERSION } from "../shared/version.js";
 import type { NodeBindings } from "./app.js";
 import { createApp } from "./app.js";
@@ -2370,6 +2370,148 @@ describe("Approve & Implement and the implement lifecycle (implement-approved-pl
     await submitValid(session.id);
     await approve(session.id);
     expect(store.getSession(session.id)?.impl).toBeUndefined();
+  });
+});
+
+describe("implement-done verification ledger gate (verify-before-merge)", () => {
+  const implementDone = (id: string, body: unknown = {}) =>
+    postJson(`/api/sessions/${id}/implement-done`, body);
+  const statusOf = (id: string): string | undefined => store.getSession(id)?.status;
+
+  // Phase 1 has THREE Verification scenarios (across two gwt fences), Phase 2
+  // has one — so the gate must cover (1,0),(1,1),(1,2),(2,0). Built directly in
+  // the store (the surface the route reads) so the test isolates the gate from
+  // the submit/approve linter, which the vacuous valid-plan fixture already
+  // exercises (its prose Verification yields no scenarios → no ledger needed).
+  const SCEN = (g: string) => `Given ${g}\nWhen the agent runs it\nThen it passes`;
+  const gwtPlan = [
+    "# p",
+    "",
+    "## Phases",
+    "",
+    "### Phase 1 — issuance",
+    "",
+    "Goal: g",
+    "Verification: covered by",
+    "```gwt",
+    SCEN("a token request"),
+    "",
+    SCEN("a rotated key"),
+    "```",
+    "```gwt",
+    SCEN("an expired key"),
+    "```",
+    "",
+    "### Phase 2 — middleware",
+    "",
+    "Goal: g2",
+    "Verification: covered by",
+    "```gwt",
+    SCEN("a protected route"),
+    "```",
+    "",
+  ].join("\n");
+
+  const fullLedger: Ledger = {
+    1: {
+      0: { status: "pass", evidence: "issuance test green" },
+      1: { status: "skip", evidence: "rotation deferred, tracked in #12" },
+      2: { status: "pass", evidence: "expired-key path covered" },
+    },
+    2: { 0: { status: "pass", evidence: "integration test green" } },
+  };
+
+  // Mint a session, snapshot the gwt plan as its revision, flip it implementing.
+  const implementingSession = (): RegistrySession => {
+    const session = mintSession();
+    store.saveRevision(session.id, gwtPlan);
+    store.updateSession(session.id, { status: "implementing" });
+    return session;
+  };
+
+  test("a ledger covering only 2 of 3 scenarios is refused 422 E_UNVERIFIED naming the unattested one", async () => {
+    const session = implementingSession();
+    const partial = {
+      1: {
+        0: { status: "pass", evidence: "issuance test green" },
+        2: { status: "pass", evidence: "expired-key path covered" },
+      },
+      2: { 0: { status: "pass", evidence: "integration test green" } },
+    };
+    const res = await implementDone(session.id, { ledger: partial });
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as {
+      ok: boolean;
+      error: { code: string; unverified: { kind: string; phase: number; scenarioIndex: number; label?: string }[] };
+    };
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe("E_UNVERIFIED");
+    expect(body.error.unverified).toEqual([
+      { kind: "missing", phase: 1, scenarioIndex: 1, label: "Given a rotated key" },
+    ]);
+    // The gate did NOT flip the session or persist a ledger.
+    expect(statusOf(session.id)).toBe("implementing");
+    expect(store.readState(session.id).verificationLedger).toBeUndefined();
+  });
+
+  test("empty-evidence is treated as unattested (422 E_UNVERIFIED)", async () => {
+    const session = implementingSession();
+    const blankEvidence = {
+      1: {
+        0: { status: "pass", evidence: "ok" },
+        1: { status: "pass", evidence: "   " },
+        2: { status: "pass", evidence: "ok" },
+      },
+      2: { 0: { status: "pass", evidence: "ok" } },
+    };
+    const res = await implementDone(session.id, { ledger: blankEvidence });
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as {
+      error: { code: string; unverified: { kind: string; phase: number; scenarioIndex: number; label?: string }[] };
+    };
+    expect(body.error.code).toBe("E_UNVERIFIED");
+    expect(body.error.unverified).toEqual([
+      { kind: "empty-evidence", phase: 1, scenarioIndex: 1, label: "Given a rotated key" },
+    ]);
+    expect(statusOf(session.id)).toBe("implementing");
+  });
+
+  test("a full pass|skip ledger with evidence flips to implemented and persists the ledger", async () => {
+    const session = implementingSession();
+    const res = await implementDone(session.id, { ledger: fullLedger, pr: "https://example.test/pr/7" });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; status: string };
+    expect(body.ok).toBe(true);
+    expect(body.status).toBe("implemented");
+    expect(statusOf(session.id)).toBe("implemented");
+    // The attestation is persisted on session.json …
+    expect(store.readState(session.id).verificationLedger).toEqual(fullLedger);
+    // … and surfaces on the latest revision's JSON payload (the UI's source).
+    const detail = await app.request(`/api/sessions/${session.id}/revisions/1`, {
+      headers: { accept: "application/json" },
+    });
+    const payload = (await detail.json()) as { verificationLedger?: typeof fullLedger };
+    expect(payload.verificationLedger).toEqual(fullLedger);
+  });
+
+  test("--failed bypasses the gate entirely (no ledger needed)", async () => {
+    const session = implementingSession();
+    const res = await implementDone(session.id, { failed: true });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { status: string }).status).toBe("implement_failed");
+    expect(statusOf(session.id)).toBe("implement_failed");
+    // No ledger was supplied or required, so none is persisted.
+    expect(store.readState(session.id).verificationLedger).toBeUndefined();
+  });
+
+  test("a plan with no Verification scenarios needs no ledger (the gate is vacuous)", async () => {
+    // The valid-plan fixture's Verification is prose, not gwt → zero scenarios.
+    const session = mintSession();
+    store.saveRevision(session.id, validPlanFor(session.id));
+    store.updateSession(session.id, { status: "implementing" });
+    const res = await implementDone(session.id, {});
+    expect(res.status).toBe(200);
+    expect(statusOf(session.id)).toBe("implemented");
   });
 });
 

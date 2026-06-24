@@ -3427,3 +3427,28 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   serialize behind the cheap `checks` job.
 - **Revisit when:** PR wall-clock becomes painful — then gate the heavy `e2e:ui` behind a
   label (run it on demand rather than on every push).
+
+## The verification ledger is keyed by (phase number, flat scenario index) (2026-06-24)
+
+- **Decision:** `implement-done`'s verify-before-merge ledger
+  (`{ [phase]: { [index]: { status: "pass"|"skip"; evidence } } }`) keys each behavioral
+  scenario by its `### Phase <n>` heading number and its **0-based flat index** within
+  that phase — all of the phase's `Verification` `gwt` scenarios flattened in document
+  order across every `gwt` fence. The exact same convention is computed once on the
+  daemon side (`linter/ledger.ts`, the gate) and again on the UI side
+  (`plan-view.tsx`/`scenario-card.tsx`, the per-scenario badge). The gate is vacuous when
+  the approved plan has no `gwt` scenarios, and `--failed` bypasses it entirely.
+- **Why:** `gwt` scenarios have no stable id (the shared `GwtScenario` is `{given, when,
+  then, valid}` — no key), and minting one would have to survive revisions/re-anchoring,
+  which is more machinery than a terminal attestation needs. Position *is* the identity
+  the reviewer already reads (the cards are numbered 01, 02, …), so (phase, flat index)
+  is the cheapest key that is unambiguous and reconstructible from the plan markdown
+  alone. Vacuous-when-empty keeps the gate from blocking the large class of prose-only
+  plans that predate `gwt` (and the all-prose `valid-plan` fixture); `--failed` bypasses
+  because a build that did *not* finish has nothing to attest — forcing a ledger there
+  would just block the honest failure report. Persisting the ledger *before* the terminal
+  flip means a crash between the two leaves the session retryable (`implementing`), never
+  terminal with a missing ledger.
+- **Revisit when:** Scenarios gain a stable id (e.g. an explicit `@id` tag), or phases get
+  reordered/renumbered between approval and build such that the heading number is no
+  longer a reliable key — then key by id and drop the flat-index convention.

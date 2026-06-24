@@ -354,7 +354,25 @@ export interface SessionStateFile {
    * agent has resolved them. Absent on a session not finalizing.
    */
   pendingApproval?: { implement: boolean; threads: string[] };
+  /**
+   * The verification ledger persisted by a successful `implement-done` (the
+   * verify-before-merge gate). The agent attests every behavioral scenario in
+   * the approved plan's per-phase `Verification` gwt blocks as `pass`|`skip`
+   * with non-empty evidence; the daemon gate refuses to flip the session
+   * `implemented` until the ledger covers them all. The review UI surfaces the
+   * attestation as a per-scenario badge. Absent until a build is reported done.
+   */
+  verificationLedger?: Ledger;
 }
+
+/**
+ * The verify-before-merge attestation, supplied by `implement-done --ledger`.
+ * Outer key = phase number (the `### Phase <n>` heading number); inner key =
+ * the scenario's 0-based flat index within that phase (all `Verification` gwt
+ * scenarios flattened in document order). Keyed by (phase, index) rather than a
+ * scenario id because gwt scenarios have no stable identity (DECISIONS.md).
+ */
+export type Ledger = Record<number, Record<number, { status: "pass" | "skip"; evidence: string }>>;
 
 export type LintSeverity = "error" | "warning";
 
@@ -391,6 +409,13 @@ export interface RevisionPayload {
   warnings: LintIssue[];
   /** The agent's changelog for this revision (threaded review and revision layer 1); null on r1. */
   changelog: string | null;
+  /**
+   * The verification ledger if the build has been reported done (the
+   * verify-before-merge gate): the review UI renders a per-scenario badge from
+   * it. Absent while the session is still pre-implementation. Only meaningful on
+   * the approved (latest) revision the ledger was attested against.
+   */
+  verificationLedger?: Ledger;
 }
 
 /** One line of a diff hunk. */

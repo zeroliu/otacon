@@ -1043,6 +1043,30 @@ code {
   color: var(--chip-approved-ink);
 }
 
+/* The verify-before-merge attestation chip (Phase 2): the agent's per-scenario
+   pass|skip verdict, sitting top-right of the scenario card with the evidence
+   on hover. Absent when there is no ledger (pre-implementation plan). */
+.gwt-badge {
+  flex: none;
+  align-self: flex-start;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font: 600 9.5px/1.7 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: help;
+}
+
+.gwt-badge-verified {
+  color: var(--chip-approved-ink);
+  background: var(--chip-approved-bg);
+}
+
+.gwt-badge-skipped {
+  color: var(--chip-draft-ink);
+  background: var(--chip-draft-bg);
+}
+
 .md h1,
 .md h2,
 .md h3,

@@ -36,6 +36,7 @@ import type {
   DiffPayload,
   EventPayload,
   GrillAnswer,
+  Ledger,
   QuestionSpec,
   QueuedEvent,
   RegistrySession,
@@ -59,7 +60,8 @@ import { createDesktopNotifier } from "./desktop-notify.js";
 import { validateDiagrams } from "./diagrams.js";
 import { diffPlans } from "./diff.js";
 import { lint } from "./linter/index.js";
-import { slugify } from "./linter/parse.js";
+import { expectedScenarioKeys, validateLedger } from "./linter/ledger.js";
+import { parsePlan, slugify } from "./linter/parse.js";
 import { Notifier } from "./notify.js";
 import { Presence } from "./presence.js";
 import type { ParkHandle } from "./queue.js";
@@ -1672,14 +1674,47 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
         409,
       );
     }
-    const { pr, failed } = body;
+    const { pr, failed, ledger } = body;
     if (pr !== undefined && (typeof pr !== "string" || pr.trim() === "")) {
       return badRequest(c, "pr must be a non-empty string");
     }
     if (failed !== undefined && typeof failed !== "boolean") {
       return badRequest(c, "failed must be a boolean");
     }
+    // The verify-before-merge gate (Phase 2): a SUCCESS report (not --failed)
+    // must attest every behavioral scenario in the approved plan's per-phase
+    // Verification gwt blocks. Mirrors how L5 blocks `submit` on open threads —
+    // applied to behavior. --failed reports a build that did NOT finish, so it
+    // bypasses the gate entirely. Vacuous when the plan has no gwt scenarios.
+    if (failed !== true) {
+      const state = store.readState(session.id);
+      const plan = parsePlan(store.readRevision(session.id, state.revision));
+      const expected = expectedScenarioKeys(plan);
+      const violations = validateLedger(expected, ledger as Ledger | undefined);
+      if (violations.length > 0) {
+        return c.json(
+          {
+            ok: false,
+            error: {
+              code: "E_UNVERIFIED",
+              message:
+                `implement-done refused: ${violations.length} verification ` +
+                `scenario(s) in the approved plan are not attested pass|skip ` +
+                `with evidence — fix the ledger and retry`,
+              unverified: violations,
+            },
+          },
+          422,
+        );
+      }
+    }
     const status = failed === true ? "implement_failed" : "implemented";
+    // Persist the attestation BEFORE the terminal flip, so a crash between the
+    // two leaves the session still `implementing` (retryable), never terminal
+    // with a missing ledger. The gate above guarantees `ledger` is complete.
+    if (failed !== true && ledger !== undefined) {
+      store.setVerificationLedger(session.id, ledger as Ledger);
+    }
     const updated = store.updateSession(session.id, {
       status,
       ...(typeof pr === "string" ? { prUrl: pr } : {}),
@@ -1703,12 +1738,18 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     // path). The web UI asks for JSON to get the lint warnings the revision
     // was accepted with alongside it (review loop and daemon API).
     if (c.req.header("accept")?.toLowerCase().includes("application/json")) {
+      const state = store.readState(session.id);
       const payload: RevisionPayload = {
         session: session.id,
         revision: n,
         markdown: store.readRevision(session.id, n),
         warnings: store.readRevisionWarnings(session.id, n),
         changelog: store.readRevisionChangelog(session.id, n),
+        // The ledger was attested against the latest (approved) revision; only
+        // surface its per-scenario badges on that revision (verify-before-merge).
+        ...(state.verificationLedger && n === state.revision
+          ? { verificationLedger: state.verificationLedger }
+          : {}),
       };
       return c.json(payload);
     }

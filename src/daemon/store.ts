@@ -11,7 +11,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import * as paths from "../shared/paths.js";
-import type { LintIssue, RegistryFile, RegistrySession, SessionStateFile } from "../shared/types.js";
+import type { Ledger, LintIssue, RegistryFile, RegistrySession, SessionStateFile } from "../shared/types.js";
 
 let tmpSerial = 0;
 let quarantineSerial = 0;
@@ -116,7 +116,34 @@ function parseState(raw: unknown): SessionStateFile | undefined {
   } else {
     delete file.pendingApproval;
   }
+  // The verify-before-merge ledger (Phase 2) is optional — pre-feature and any
+  // pre-implementation file lacks it. Drop a malformed value rather than
+  // quarantine: it is presentation metadata for already-terminal sessions, so a
+  // missing/garbled ledger costs at most a few absent UI badges, never the file.
+  const ledger = file.verificationLedger as unknown;
+  if (!isValidLedger(ledger)) delete file.verificationLedger;
   return file;
+}
+
+/** Structural check for a persisted/supplied verification ledger:
+ * `{ [phase]: { [index]: { status: "pass"|"skip"; evidence: string } } }`. */
+function isValidLedger(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  for (const phase of Object.values(value as Record<string, unknown>)) {
+    if (typeof phase !== "object" || phase === null) return false;
+    for (const entry of Object.values(phase as Record<string, unknown>)) {
+      const e = entry as { status?: unknown; evidence?: unknown };
+      if (
+        typeof e !== "object" ||
+        e === null ||
+        (e.status !== "pass" && e.status !== "skip") ||
+        typeof e.evidence !== "string"
+      ) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 /** Highest r<N>.md snapshot on disk — the revision counter's source of truth. */
@@ -361,6 +388,19 @@ export class Store {
     const state = this.readState(id);
     if (state.pendingApproval === undefined) return;
     delete state.pendingApproval;
+    writeFileAtomic(paths.sessionStatePath(session.repo, id), stringify(state));
+  }
+
+  /**
+   * Persist the verify-before-merge attestation on a successful implement-done
+   * (Phase 2): the agent's per-scenario pass|skip + evidence, validated by the
+   * route's gate before it lands here. Stored on session.json (not the
+   * registry) — daemon-owned detail, like pendingApproval and the counters.
+   */
+  setVerificationLedger(id: string, ledger: Ledger): void {
+    const session = this.require(id);
+    const state = this.readState(id);
+    state.verificationLedger = ledger;
     writeFileAtomic(paths.sessionStatePath(session.repo, id), stringify(state));
   }
 

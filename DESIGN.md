@@ -349,7 +349,7 @@ the model is suspended — no inference, no token spend.
 | `otacon ask --question "…" [--options "A\|B\|C"] [--recommend A] [--multi]` | Post agent question card to UI (or a batch of independent questions via `--batch <file\|->`); answer arrives via `wait` |
 | `otacon answer <question-id> (--body "…" \| --file f.md)`                   | Answer a user question; no revision                                           |
 | `otacon progress "<note>" [--session <id>]`                                 | Append a narration note to the live activity feed (UI-only; non-blocking, never parks, never an event) |
-| `otacon implement-done [--pr <url>] [--failed]`                             | End an `implementing` session: record the PR link and flip to `implemented`, or `--failed` → `implement_failed` (§12) |
+| `otacon implement-done [--ledger <file>] [--pr <url>] [--failed]`           | End an `implementing` session: record the PR link and flip to `implemented`, or `--failed` → `implement_failed` (§12). A success report (not `--failed`) must pass the **verification ledger gate**: `--ledger` is a JSON file attesting every behavioral scenario in the approved plan's per-phase `Verification` `gwt` blocks; the daemon refuses (exit 1, `E_UNVERIFIED`) unless each is `pass`\|`skip` with non-empty evidence (§5, §12) |
 | `otacon resume [--session <id>]`                                            | Reopen a finished session for amendment (flip terminal → `revising`): auto-detects the session that owns the cwd build worktree (its recorded `impl.worktree`), or `--session` names one. Prints the daemon's reopen body plus `title`, `repo`, `plan` (the file to amend, under the session's main repo) (§12) |
 | `otacon status [--all]`                                                     | Session state + undelivered event count (crash/resume entry point); also surfaces `resumeCandidate` (id, title, status, plan) when the cwd is inside a known build worktree |
 | `otacon open [--session <id>]`                                              | Open the review URL in the browser, or the index URL when no session resolves; `OTACON_NO_BROWSER` prints it instead of launching |
@@ -548,11 +548,23 @@ POST /api/sessions/:id/approve              approve: writes
                                             stays open as the manual escape.
                                             No revisions yet → 409 E_NO_REVISION
 POST /api/sessions/:id/implement-done       end an `implementing` build (otacon
-                                            implement-done): {pr?, failed?} → flips
-                                            `implemented` (default) or
+                                            implement-done): {pr?, failed?, ledger?} →
+                                            flips `implemented` (default) or
                                             `implement_failed` (failed:true), records
                                             `prUrl` on the summary; a session not
-                                            `implementing` → 409 E_NOT_IMPLEMENTING
+                                            `implementing` → 409 E_NOT_IMPLEMENTING.
+                                            On a SUCCESS report the verification ledger
+                                            gate runs first: the daemon parses the
+                                            approved (latest) revision, flattens every
+                                            per-phase Verification `gwt` scenario, and
+                                            requires `ledger` to cover each as
+                                            pass|skip + non-empty evidence — else 422
+                                            {ok:false, error:{code:"E_UNVERIFIED",
+                                            unverified:[…]}} and NO status change. On
+                                            pass the ledger is persisted to session.json
+                                            then the status flips. `--failed` bypasses
+                                            the gate; an all-prose (no-`gwt`) plan makes
+                                            it vacuous (no ledger required)
 POST /api/sessions/:id/reopen               reopen a finished (terminal) session for
                                             another review round (a `/otacon` run from
                                             inside the build worktree): flips it back to
@@ -1338,7 +1350,7 @@ Operational requirement: the Mac stays awake while a plan is in review
 
 | Location                                          | Contents                                                                                                       | Git                                        |
 | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `<repo>/.otacon/`                                 | Working state under `<id>/`: `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), threads (`threads.json`: comment + question threads with answers, agent replies, reviewer-resolve closes, and anchor states inline), the grill transcript (`transcript.json`), the capped live-activity feed (`activity.json`: the newest ~N `otacon progress` notes), the live-activity stream (`stream.jsonl`: the normalized, capped, append-only event stream, §10a), queues | the user's call — otacon manages no `.gitignore` |
+| `<repo>/.otacon/`                                 | Working state under `<id>/`: `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), daemon-owned detail state (`session.json`: `revision`, `lastReviewedRevision`, id counters, optional `pendingApproval`, and — once a build is reported done — the verify-before-merge `verificationLedger`, keyed by phase number → flat scenario index → `{status, evidence}`), threads (`threads.json`: comment + question threads with answers, agent replies, reviewer-resolve closes, and anchor states inline), the grill transcript (`transcript.json`), the capped live-activity feed (`activity.json`: the newest ~N `otacon progress` notes), the live-activity stream (`stream.jsonl`: the normalized, capped, append-only event stream, §10a), queues | the user's call — otacon manages no `.gitignore` |
 | `~/.otacon/worktrees/<slug>/`                     | Implement build's git worktree on branch `otacon/impl-<slug>` (base dir is `worktree.dir`, default `~/.otacon/worktrees` — outside the repo)                    | n/a (global, outside the repo)             |
 | `~/.otacon/sessions/<id>/YYYY-MM-DD-<slug>.md`    | Canonical approved plan, every session (`status: approved` frontmatter + grill transcript)                     | n/a (global, permanent archive)            |
 | `<repo>/<plans.dir>/YYYY-MM-DD-<slug>.md`         | Save-time project copy (default `.otacon/plans`; set `plans.dir=docs/plans` to group with tracked plans)       | yours to commit (or not)                   |
@@ -1471,9 +1483,24 @@ subagent (scoped to that phase's Goal/Files/Verification), then a separate
 the agent pauses with an `otacon ask` and parks. When every phase is green it opens a PR
 against the repo's **default branch** with `gh` (PR body = the plan summary + the
 per-phase log; it falls back to noting the local branch + path when there is no remote),
-then reports the outcome with `otacon implement-done --pr <url>` (or `--failed` on
-abort) — flipping the session to `implemented` / `implement_failed` and recording `prUrl`
-on the summary (surfaced as the home card's PR link, §10). `otacon clean` should prune a
+then reports the outcome with `otacon implement-done --ledger <file> --pr <url>` (or
+`--failed` on abort) — flipping the session to `implemented` / `implement_failed` and
+recording `prUrl` on the summary (surfaced as the home card's PR link, §10).
+
+**Verification ledger gate.** A *success* report must prove the build did what the
+approved plan promised: the `--ledger` JSON attests every behavioral `gwt` scenario in
+the plan's per-phase `Verification` blocks. Its shape is
+`{ [phaseNumber]: { [scenarioIndex]: { status: "pass" | "skip"; evidence } } }` — keyed
+by the `### Phase <n>` number and the scenario's **0-based flat index** (all of that
+phase's `Verification` `gwt` scenarios flattened in document order). On a success
+`implement-done` the daemon parses the approved (latest) revision, derives the expected
+keys, and refuses (exit 1, `E_UNVERIFIED`, naming the offending scenarios) unless the
+ledger covers **every** key as `pass`|`skip` with **non-empty** evidence — mirroring how
+the L5 rule blocks `submit` on unresolved threads, applied to behavior. A plan with no
+`gwt` scenarios makes the gate **vacuous** (no ledger required); `--failed` (reporting a
+build that did *not* finish) bypasses it entirely. On pass the ledger is persisted to
+`session.json` (`verificationLedger`, §12) and surfaced per-scenario in the review UI as
+a "verified"/"skipped" badge carrying the evidence. `otacon clean` should prune a
 finished or aborted build's impl worktree and branch alongside archiving its session
 state. The whole build runs in native in-session subagents (subscription-covered, §13);
 the daemon never spawns a model.

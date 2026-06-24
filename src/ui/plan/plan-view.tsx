@@ -7,13 +7,30 @@
 
 import type { CSSProperties } from "react";
 import { memo, useLayoutEffect, useMemo } from "react";
-import type { LintIssue } from "../../shared/types";
+import { parseGwt } from "../../shared/gwt";
+import type { Ledger, LintIssue } from "../../shared/types";
 import { CITATION_RE } from "../../shared/types";
 import { CodeFence, MermaidFigure, PairFences } from "./code";
 import { Markdown } from "./markdown";
 import type { Block, PlanDetails, PlanPhase, PlanSection } from "./parse";
 import { parsePlan } from "./parse";
 import { ScenarioCards } from "./scenario-card";
+
+/**
+ * Verify-before-merge context for a phase's Verification blocks (Phase 2): the
+ * phase number, the ledger keyed by it, and `base` — the flat scenario index
+ * this field's first gwt scenario occupies within the phase. `base` is non-zero
+ * only when a phase has more than one Verification field, so the per-phase flat
+ * index keeps accumulating across them, exactly as the daemon flattens every
+ * Verification gwt block of a phase into one 0-based list (ledger.ts). Carried
+ * only into Verification fields so a scenario card can find its attestation;
+ * absent everywhere else.
+ */
+interface GwtContext {
+  phase: number;
+  base: number;
+  ledger?: Ledger;
+}
 
 /**
  * The section/phase ⋯ menu affordance (review UI): always available, and
@@ -29,14 +46,32 @@ function MenuButton({ id }: { id: string }) {
   );
 }
 
-function Blocks({ blocks }: { blocks: Block[] }) {
+function Blocks({ blocks, gwt }: { blocks: Block[]; gwt?: GwtContext }) {
+  // Running flat scenario index across this field's gwt fences — the daemon's
+  // canonical (phase, flat index) key convention (ledger.ts) computed on the UI
+  // side so the badge lands on the right scenario when a phase has >1 gwt fence.
+  // Seeded from `gwt.base` so a second Verification field continues the phase's
+  // flat index rather than restarting at 0 (matching the daemon's flattening).
+  let scenarioBase = gwt?.base ?? 0;
   return (
     <>
       {blocks.map((block, i) => {
         if (block.kind === "markdown") return <Markdown key={i} source={block.text} />;
         if (block.kind === "pair") return <PairFences key={i} pair={block} />;
         if (block.lang === "mermaid") return <MermaidFigure key={i} code={block.code} />;
-        if (block.lang === "gwt") return <ScenarioCards key={i} fence={block} />;
+        if (block.lang === "gwt") {
+          const base = scenarioBase;
+          if (gwt) scenarioBase += parseGwt(block.code).scenarios.length;
+          return (
+            <ScenarioCards
+              key={i}
+              fence={block}
+              phase={gwt?.phase}
+              base={base}
+              ledger={gwt?.ledger}
+            />
+          );
+        }
         return <CodeFence key={i} fence={block} />;
       })}
     </>
@@ -80,12 +115,20 @@ function PhaseCard({
   phase,
   warnings,
   changed,
+  ledger,
 }: {
   phase: PlanPhase;
   warnings: LintIssue[];
   changed: ReadonlySet<string>;
+  ledger?: Ledger;
 }) {
   const l6 = warnings.find((w) => w.rule === "L6" && w.section === phase.id);
+  // gwt scenarios only count under Verification (the daemon's gate convention),
+  // so only that field's blocks carry the verify-before-merge context. The
+  // daemon flattens *every* Verification gwt block of a phase into one 0-based
+  // list (ledger.ts), so when a phase has more than one Verification field the
+  // flat index must keep climbing across them — track the running base here.
+  let verificationBase = 0;
   return (
     <section id={phase.id} className={changed.has(phase.id) ? "phase unit-changed" : "phase"}>
       <header className="phase-head">
@@ -99,14 +142,29 @@ function PhaseCard({
       {phase.body.length > 0 && <Blocks blocks={phase.body} />}
       {phase.fields.length > 0 && (
         <dl className="fields">
-          {phase.fields.map((field) => (
-            <div key={field.key} className={`field field-${field.key}`}>
-              <dt className="field-label">{field.label}</dt>
-              <dd className="field-value">
-                <Blocks blocks={field.blocks} />
-              </dd>
-            </div>
-          ))}
+          {phase.fields.map((field, fieldIndex) => {
+            let gwt: GwtContext | undefined;
+            if (field.key === "verification") {
+              gwt = { phase: phase.n, base: verificationBase, ledger };
+              // Advance the phase's running flat index past this field's gwt
+              // scenarios so a later Verification field keys off the right base.
+              for (const block of field.blocks) {
+                if (block.kind === "fence" && block.lang === "gwt") {
+                  verificationBase += parseGwt(block.code).scenarios.length;
+                }
+              }
+            }
+            return (
+              // Index in the key: a phase may repeat a field label (e.g. two
+              // Verification fields), so field.key alone is not unique.
+              <div key={`${field.key}-${fieldIndex}`} className={`field field-${field.key}`}>
+                <dt className="field-label">{field.label}</dt>
+                <dd className="field-value">
+                  <Blocks blocks={field.blocks} gwt={gwt} />
+                </dd>
+              </div>
+            );
+          })}
         </dl>
       )}
       {phase.details && <DetailsBlock details={phase.details} l6={l6} />}
@@ -162,11 +220,13 @@ function SectionBlock({
   index,
   warnings,
   changed,
+  ledger,
 }: {
   section: PlanSection;
   index: number;
   warnings: LintIssue[];
   changed: ReadonlySet<string>;
+  ledger?: Ledger;
 }) {
   const blocks =
     section.id === "decisions" ? decisionBlocks(section.blocks) : section.blocks;
@@ -195,7 +255,7 @@ function SectionBlock({
       </header>
       {blocks.length > 0 && <Blocks blocks={blocks} />}
       {section.phases.map((phase) => (
-        <PhaseCard key={phase.id} phase={phase} warnings={warnings} changed={changed} />
+        <PhaseCard key={phase.id} phase={phase} warnings={warnings} changed={changed} ledger={ledger} />
       ))}
     </section>
   );
@@ -212,12 +272,17 @@ export default memo(function PlanView({
   markdown,
   warnings,
   changedIds = "",
+  verificationLedger,
   onRendered,
 }: {
   markdown: string;
   warnings: LintIssue[];
   /** Space-joined slug ids changed vs the diff baseline (gutter markers, review UI). */
   changedIds?: string;
+  /** The verify-before-merge attestation for this revision (Phase 2), if the
+   *  build is reported done — renders a per-scenario badge. From the revision
+   *  payload, so a stable identity for a given revision (the memo survives). */
+  verificationLedger?: Ledger;
   /** Fired after each commit so the persistent thread marks can repaint once
    *  the (memo'd) dossier's DOM lands — a new revision swaps the whole subtree.
    *  Must be a stable identity (a parent useCallback) or it defeats the memo. */
@@ -247,6 +312,7 @@ export default memo(function PlanView({
           index={index}
           warnings={warnings}
           changed={changed}
+          ledger={verificationLedger}
         />
       ))}
     </article>
