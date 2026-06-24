@@ -1929,13 +1929,35 @@ code {
   color: var(--ink);
 }
 
+/* The empty-state placeholder: a centered column (glyph + copy + optional ask
+   control) so a thread-less rail reads as a deliberate placeholder, never a
+   blank column. The dashed frame echoes the old one-liner's quiet treatment. */
 .rail-empty {
+  display: grid;
+  justify-items: center;
+  gap: 11px;
   margin: 0;
-  padding: 18px 14px;
+  padding: 26px 16px;
   border: 1px dashed var(--line-strong);
+  text-align: center;
+}
+
+.rail-empty-glyph {
+  font-size: 22px;
+  line-height: 1;
+  color: color-mix(in srgb, var(--ink-soft) 55%, transparent);
+}
+
+.rail-empty-copy {
+  margin: 0;
+  max-width: 22ch;
   font: var(--fs-label)/1.7 var(--mono);
   letter-spacing: 0.04em;
   color: var(--ink-soft);
+}
+
+.rail-empty-ask {
+  margin-top: 2px;
 }
 
 .thread {
