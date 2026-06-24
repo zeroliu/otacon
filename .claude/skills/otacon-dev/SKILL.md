@@ -33,6 +33,21 @@ user reviews in a browser. Every `./bin/otacon`
 command prints exactly one JSON line on stdout. Exit 0 = proceed; exit 1 = a
 machine-readable error you can fix (read the JSON); exit 2 = you invoked it wrong.
 
+## Hard implementation gate
+
+When this skill is triggered, you MUST NOT create, edit, delete, or format project
+files, run code-modifying commands, or implement the requested change until a
+`./bin/otacon wait` event returns `{"event":"approved",...,"implement":true}`.
+
+Before that event, allowed actions are only:
+- `./bin/otacon start` / `./bin/otacon status` / `./bin/otacon open` / `./bin/otacon progress` /
+  `./bin/otacon ask` / `./bin/otacon wait` / `./bin/otacon submit` / `./bin/otacon answer`.
+- Read-only research commands.
+- Writing the plan and resolutions files under `.otacon/<session>/`.
+
+A user request phrased as "can you make/fix/implement..." is still a plan-review
+request when this skill is active. Approval is not implied by the original request.
+
 ## Starting: resume an amendment, or plan fresh
 
 Before `./bin/otacon start`, check where you are: run `./bin/otacon status`. If its output
@@ -89,7 +104,9 @@ spawning a second worktree.
      to 600000 ms). The answer arrives as `{"event":"answer","question":"q<n>",...}`.
 4. **Draft** the plan at `.otacon/<session>/plan.md` in the schema below, then
    `./bin/otacon submit`. On exit 1, fix every reported lint issue and resubmit until
-   accepted.
+   accepted. After a clean submit, stop all implementation work and park in
+   `./bin/otacon wait`; only an `approved` event with `implement:true` enters the
+   Implement loop.
 5. **Review loop** — park in `./bin/otacon wait --timeout 540` (Bash timeout 600000 ms)
    and handle the one event it prints:
    - `comments` → revise plan.md; write `resolutions.json` as
@@ -236,5 +253,8 @@ than a sentence — never as decoration.
 - Never use native plan mode, AskUserQuestion, or any built-in question UI while
   the session is open: every question goes through `./bin/otacon ask`. The sole exception
   is the resume-vs-new question at the very start, before any session exists.
+- If you notice you edited project files before `approved implement:true`, stop
+  immediately, disclose the mistake, and ask whether to revert or keep the
+  uncommitted changes.
 - Long review or build ahead? Remind the user to keep the Mac awake: `caffeinate -i`
   while the session runs.

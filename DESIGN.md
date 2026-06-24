@@ -682,6 +682,12 @@ mirroring the budgets config. Off macOS the banner is a silent no-op.
 
 ### The full loop
 
+The installed skill wrapper has a hard implementation gate: after the skill is
+triggered, the agent may research read-only and write only the session plan/resolution
+files until an `otacon wait` event returns `approved` with `implement:true`. A plain user
+request to "fix" or "implement" is not approval to edit project files inside an otacon
+session.
+
 1. **Start (first).** Skill triggers; `otacon start` mints the session and prints the
    review URL *before* research, so the user can watch from the first second. The
    agent then researches the codebase. On a supported agent the live-activity stream

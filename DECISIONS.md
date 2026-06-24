@@ -3393,3 +3393,18 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Questions asked in later phases (review-time grilling) need the
   panel to auto-open too, at which point the trigger would key on "an open question
   exists" rather than on the `draft` status.
+
+## The managed wrapper has a hard implementation gate before `implement:true` (2026-06-24)
+
+- **Decision:** The protocol card now explicitly forbids project file edits,
+  formatting, code-modifying commands, and implementation work until `wait` returns an
+  `approved` event with `implement:true`. Before then, the wrapper permits only otacon
+  loop commands, read-only research, and session plan/resolution files; if the agent
+  violates the gate, it must stop and ask whether to revert or keep the changes.
+- **Why:** Agents can otherwise treat a user request like "fix this" as ordinary
+  implementation approval after starting an otacon session, using otacon only as a
+  progress stream. The product contract is review-before-build: approval is represented
+  by the daemon event, not by the initial user wording.
+- **Revisit when:** Agents provide a native enforceable pre-edit permission hook for
+  otacon sessions, or the CLI gains a daemon-side lease that can block write-capable
+  phases until the review UI sends Implement.
