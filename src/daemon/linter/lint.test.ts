@@ -248,7 +248,7 @@ describe("optional Impact section", () => {
     expect(over).toMatchObject({ budget: 10, actual: 11, section: "impact" });
   });
 
-  test("a dependency mermaid rides the one-fence allowance", () => {
+  test("a dependency mermaid is exempt from the fence cap", () => {
     const impact = "## Impact\n\n- chain:\n\n```mermaid\nflowchart LR\n  a --> b\n```\n";
     const content = [FM, SUMMARY, DECISIONS, impact, PHASES, RISKS, OPEN].join("\n");
     expect(run(content).ok).toBeTrue();
@@ -300,6 +300,22 @@ describe("L2 budgets", () => {
     const result = run(doc({ summary }));
     const cap = result.errors.find((e) => e.code === "E_FENCE_CAP");
     expect(cap).toMatchObject({ section: "summary", budget: 1, actual: 2 });
+  });
+
+  test("two mermaid diagrams in a read-path section do not trip the fence cap", () => {
+    const summary =
+      "## Summary\n\nShip it.\n\n```mermaid\nflowchart LR\n  a --> b\n```\n\n```mermaid\nflowchart LR\n  c --> d\n```\n";
+    const result = run(doc({ summary }));
+    expect(result.errors.find((e) => e.code === "E_FENCE_CAP")).toBeUndefined();
+    expect(result.ok).toBeTrue();
+  });
+
+  test("a mermaid diagram alongside a code fence stays under the one-fence cap", () => {
+    const summary =
+      "## Summary\n\nShip it.\n\n```mermaid\nflowchart LR\n  a --> b\n```\n\n```ts\nconst x = 1;\n```\n";
+    const result = run(doc({ summary }));
+    expect(result.errors.find((e) => e.code === "E_FENCE_CAP")).toBeUndefined();
+    expect(result.ok).toBeTrue();
   });
 
   test("fence cap applies to a phase's read path but not Details", () => {

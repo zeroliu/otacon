@@ -56,6 +56,20 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   blast-radius file tree was cut from v1 for exactly this reason), or the cap default of
   2 proves wrong in real use.
 
+## Mermaid diagrams are exempt from the per-section fence cap
+
+- **Decision:** A `mermaid` fence counts only toward `diagramCount` (the L7 lead-diagram
+  check), never toward `fenceCount` / `E_FENCE_CAP`. Code and before/after fences keep
+  the one-fence-per-read-path-section cap; the lead diagram no longer spends Summary's
+  fence allowance.
+- **Why:** otacon actively encourages diagrams, especially for tree- and hierarchy-shaped
+  content, so a one-fence-per-section cap conflicts with the common shape of a lead
+  diagram plus an in-section structural diagram. Diagrams are visual, not prose, and the
+  line budgets already keep sections scannable, so the cap's "no wall of text" job is
+  already done without charging diagrams against it.
+- **Revisit when:** Sections start stacking diagrams and reading cluttered; then
+  reintroduce a higher diagram-specific cap rather than the blanket exemption.
+
 ## Plan parser: hand-rolled and line-based, no markdown/yaml libraries
 
 - **Decision:** The linter parses plans with a single-pass, line-oriented parser; no
