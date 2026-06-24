@@ -441,7 +441,9 @@ woken with it immediately rather than left to 404 on its next call.
 ### HTTP API (daemon, 127.0.0.1 only)
 
 ```
-GET  /api/health                            daemon identity + version (CLI handshake)
+GET  /api/health                            daemon identity + version (CLI handshake);
+                                            also `viewers`, the count of live SSE tabs
+                                            (open-tab reuse, below)
 POST /api/shutdown                          clean daemon exit
 GET  /api/config?repo=<root>                config surface for the Settings UI:
                                             {schema: CONFIG_SCHEMA, scopes} where
@@ -652,6 +654,14 @@ daemon ends the per-session stream after the frame (nothing can be published for
 session again, so a client that ignored the frame must not pin the connection; the
 index stream stays open) — with a comment heartbeat to keep idle proxies from
 closing the stream.
+The daemon also keeps one in-memory gauge of its live SSE connections: every
+stream (the index and each per-session stream) bumps it on open and drops it on
+close, and the count is exposed as `viewers` on `GET /api/health`. `viewers >= 1`
+means at least one otacon tab from this daemon is connected (any session or the
+index; the app-shell sidebar lets that one tab reach every session), which
+`otacon open` reads to skip launching a duplicate review tab. It is a daemon-wide
+presence check, never a precise tab count (a session tab holds ~2 connections),
+and it is ephemeral: a restart starts at 0 and live tabs re-count on reconnect.
 Session payloads (snapshot, `session` frames, session detail) carry
 `lastReviewedRevision` alongside `revision`, and `openQuestions` — the count of
 transcript entries still awaiting the user's answer, from which the index's

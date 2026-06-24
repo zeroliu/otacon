@@ -3475,3 +3475,26 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** The codec density needs rebalancing (e.g. a denser desktop layout
   wants a smaller label tier), at which point the tokens and the guard's floor move
   together.
+
+## Reuse an existing open tab: daemon-wide live-connection gauge (2026-06-24)
+
+- **Decision:** The daemon keeps one in-memory gauge of its live SSE connections.
+  Every stream (the index and each per-session stream) bumps it on open and drops it
+  on close, riding `sse()`'s proven `dispose`/`cleanup` lifecycle, and the count is
+  exposed as `viewers` on `GET /api/health`. `otacon open` (Phase 2) reads it: `viewers
+  >= 1` means a tab from this daemon is already connected, so it skips launching a
+  duplicate. The gauge is daemon-wide (not per session) and counts by SSE connection,
+  not by visibility `Presence`. No `SessionSummary` / `shared/types` field: it lives
+  only on `/api/health`.
+- **Why:** One otacon tab, via the app-shell sidebar, can reach every session, so the
+  dedup only needs to know whether ANY live tab from this daemon exists. Keying on a
+  per-session count would re-launch for a different session and add state to every
+  summary. Counting SSE connections catches a backgrounded or hidden tab that the
+  visibility-based `Presence` signal would miss (a connected tab is the thing we must
+  not duplicate, whether or not it is focused). Piggybacking `cleanup` (which runs at
+  most once, guarded by `dispose`, across cancel, abort, and reader-loss) keeps
+  open/close perfectly paired, so the count cannot drift. It is a presence check, not
+  a precise tab count (a session tab holds ~2 connections), which is all dedup needs.
+- **Revisit when:** A use case needs per-session tab awareness (e.g. focusing or
+  counting the tabs watching one specific session), at which point the gauge becomes a
+  per-session map and likely moves onto the session summary.

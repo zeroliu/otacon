@@ -113,10 +113,15 @@ function eventsOnDisk(id: string): unknown[] {
 }
 
 describe("health and shutdown", () => {
-  test("GET /api/health reports app, version, and pid", async () => {
+  test("GET /api/health reports app, version, pid, and viewers", async () => {
     const res = await app.request("/api/health");
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ app: "otacond", version: VERSION, pid: process.pid });
+    expect(await res.json()).toEqual({
+      app: "otacond",
+      version: VERSION,
+      pid: process.pid,
+      viewers: 0,
+    });
   });
 
   test("POST /api/shutdown responds ok and invokes the shutdown hook", async () => {
@@ -1018,6 +1023,37 @@ describe("UI SSE streams", () => {
     await reader.next(); // snapshot
     expect((await reader.next()).comment).toBe("hb");
     await reader.cancel();
+  });
+
+  // The live-viewer gauge (open-tab reuse): /api/health.viewers counts every
+  // open SSE connection so `otacon open` can skip a duplicate tab.
+  async function viewers(): Promise<number> {
+    return ((await (await app.request("/api/health")).json()) as { viewers: number }).viewers;
+  }
+
+  test("/api/health.viewers rises while an index stream is open and falls to 0 on close", async () => {
+    expect(await viewers()).toBe(0);
+    const reader = sseReader(await app.request("/api/stream"));
+    await reader.next(); // snapshot: the stream is now established and counted
+    expect(await viewers()).toBe(1);
+    await reader.cancel(); // cancel() -> dispose() -> cleanup() -> onViewerClose
+    expect(await viewers()).toBe(0);
+  });
+
+  test("/api/health.viewers also counts a per-session stream and clears on abort", async () => {
+    const session = mintSession();
+    expect(await viewers()).toBe(0);
+    // An AbortController's signal is how node-server materializes a client
+    // disconnect, the path sse() listens for (mirrors c.req.raw.signal in prod).
+    const controller = new AbortController();
+    const reader = sseReader(
+      await app.request(`/api/sessions/${session.id}/stream`, { signal: controller.signal }),
+    );
+    await reader.next(); // snapshot
+    expect(await viewers()).toBe(1);
+    controller.abort();
+    await sleep(0); // let the abort listener fire cleanup before re-reading
+    expect(await viewers()).toBe(0);
   });
 });
 

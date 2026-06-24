@@ -260,6 +260,18 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     lastContact.set(id, Date.now());
   };
 
+  // Live browser tabs watching this daemon (any session or the index), counted
+  // by SSE connection so `otacon open` can skip launching a duplicate tab
+  // (DECISIONS.md "reuse an existing open tab"). Ephemeral, in-memory: a restart
+  // starts at 0, and each connection self-balances via sse()'s dispose lifecycle.
+  let liveViewers = 0;
+  const viewerOpened = (): void => {
+    liveViewers += 1;
+  };
+  const viewerClosed = (): void => {
+    liveViewers = Math.max(0, liveViewers - 1);
+  };
+
   // UI pub/sub (DECISIONS.md "UI live updates"): every state mutation below
   // publishes, and the SSE routes in ui.ts fan the events out to browsers.
   const notifier = new Notifier();
@@ -509,7 +521,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   );
 
   app.get("/api/health", (c) =>
-    c.json({ app: "otacond", version: VERSION, pid: process.pid }),
+    c.json({ app: "otacond", version: VERSION, pid: process.pid, viewers: liveViewers }),
   );
 
   // The Settings UI's config surface (review loop and daemon API). GET returns the full
@@ -1732,6 +1744,8 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     getStream: (id) => readStream(store.streamPath(id), loadStreamCap(id)),
     uiDir: options.uiDir,
     heartbeatMs: options.sseHeartbeatMs,
+    onViewerOpen: viewerOpened,
+    onViewerClose: viewerClosed,
   });
 
   return app;
