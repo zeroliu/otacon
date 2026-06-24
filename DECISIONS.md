@@ -3478,3 +3478,24 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Drift proves noisy enough that reviewers ignore it (then tighten
   matching or scope it to source dirs), or a future hard "no unplanned files" policy is
   wanted (then promote it to a gate behind an explicit opt-in, never the default).
+
+## A Playwright e2e gates the rendered-output regression class (2026-06-24)
+
+- **Decision:** `test/ui/question-linebreaks.e2e.ts` asserts a multi-paragraph grill
+  question RENDERS with its line breaks preserved — measuring the rendered height
+  against a single-line question in the same render (the multi must be materially
+  taller) plus pinning `.grill-question`'s computed `white-space` to a `pre*` value.
+  It runs in the `e2e-ui` PR-CI job. Manual rendered-output checks use the browse/gstack
+  headless browser (recipe in `test/verify-branch.sh`): Playwright is the gated CI
+  assertion, browse is the fast manual aid (q5).
+- **Why:** `.grill-question` already carried `white-space: pre-wrap` — the styling fix
+  had shipped, but NOTHING verified the actual rendered output, so a regression
+  (dropping pre-wrap, or rendering the raw text un-wrapped) would silently collapse
+  paragraphs into one run-on line again. This was the motivating "unverified fix"
+  failure: a fix landed and was assumed sufficient without checking the end result. The
+  assertion is behavioral (height ratio), not a CSS snapshot, so it catches a collapse
+  however it is reintroduced; the computed-white-space check names the precise mechanism.
+  Verified to have teeth: forcing `white-space: normal` fails the spec.
+- **Revisit when:** The grill question gains real markdown rendering (then assert the
+  block structure the markdown produces instead of the pre-wrap height heuristic), or
+  the rendered-output class grows beyond questions (extend the spec to plan callouts).

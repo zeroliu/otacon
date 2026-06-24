@@ -14,6 +14,18 @@
 #   bun run verify:branch notify
 #   bun run verify:branch activity
 #
+# Rendered-output check (the browse/gstack manual recipe — Phase 4 of
+# verify-before-merge). The gated assertion lives in test/ui/question-linebreaks.e2e.ts,
+# but to eyeball the rendered-output class (line breaks, wrapping, callouts) on
+# this checkout's live session, drive the browse/gstack headless browser:
+#   1. bun run verify:branch visuals      # populate + open; copy the REVIEW url it prints
+#   2. /browse  (or the `browse` skill): navigate <REVIEW-url>
+#   3. screenshot .grill-question (or a callout/matrix); confirm paragraphs stay
+#      separated and nothing collapses to one run-on line
+#   4. before/after a change: browse's diff catches a rendering regression visually,
+#      the way the e2e catches it in CI. Playwright = gated assertion, browse = fast
+#      manual aid (the q5 split).
+#
 # Resolves the checkout root from the script's own location, so it works from any
 # subdirectory of the checkout.
 set -euo pipefail
