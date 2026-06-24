@@ -59,7 +59,8 @@ describe("parsePlan on the valid fixture", () => {
     const summary = plan.sections[0]!;
     expect(summary.startLine).toBe(11);
     expect(summary.budgetedLineCount).toBe(2);
-    expect(summary.fenceCount).toBe(1);
+    expect(summary.fenceCount).toBe(0); // the only fence is a mermaid diagram, exempt from the cap
+    expect(summary.diagramCount).toBe(1);
     expect(summary.listItems).toEqual([]);
   });
 
@@ -317,7 +318,7 @@ describe("lead diagram + opt-out detection", () => {
   test("the valid fixture's Summary mermaid is counted as a diagram", () => {
     const summary = parsePlan(validPlan).sections[0]!;
     expect(summary.diagramCount).toBe(1);
-    expect(summary.fenceCount).toBe(1); // still spends the one-fence allowance
+    expect(summary.fenceCount).toBe(0); // a mermaid diagram is exempt from the fence cap
     expect(summary.leadDiagramOptOut).toBeFalse();
   });
 
@@ -339,6 +340,50 @@ describe("lead diagram + opt-out detection", () => {
   test("a bare marker with no reason still opts out", () => {
     const summary = parsePlan(planWith("## Summary\n\n<!-- no-lead-diagram -->\n")).sections[0]!;
     expect(summary.leadDiagramOptOut).toBeTrue();
+  });
+});
+
+describe("mermaid is exempt from the fence cap", () => {
+  test("a section's mermaid fence counts as a diagram, never toward the fence cap", () => {
+    const summary = parsePlan(
+      planWith("## Summary\n\n```mermaid\ngraph TD\n  A --> B\n```\n"),
+    ).sections[0]!;
+    expect(summary.diagramCount).toBe(1);
+    expect(summary.fenceCount).toBe(0);
+  });
+
+  test("a mermaid fence and a code fence: only the code fence counts toward the cap", () => {
+    const summary = parsePlan(
+      planWith("## Summary\n\n```mermaid\ngraph TD\n  A --> B\n```\n\n```ts\nconst x = 1;\n```\n"),
+    ).sections[0]!;
+    expect(summary.fenceCount).toBe(1); // only the ```ts code fence
+    expect(summary.diagramCount).toBe(1);
+  });
+
+  test("two mermaid fences in a section: zero toward the cap, two diagrams", () => {
+    const summary = parsePlan(
+      planWith(
+        "## Summary\n\n```mermaid\ngraph TD\n  A --> B\n```\n\n```mermaid\nsequenceDiagram\n  X->>Y: hi\n```\n",
+      ),
+    ).sections[0]!;
+    expect(summary.fenceCount).toBe(0);
+    expect(summary.diagramCount).toBe(2);
+  });
+
+  test("a phase mermaid fence is exempt; a phase code fence still counts", () => {
+    const phaseMermaid = parsePlan(
+      planWith(
+        "## Phases\n\n### Phase 1 — x\n\nGoal: g\nFiles:\n- a.ts\nVerification: t\n```mermaid\ngraph TD\n  A --> B\n```\n",
+      ),
+    ).sections[0]!.phases![0]!;
+    expect(phaseMermaid.fenceCount).toBe(0);
+
+    const phaseCode = parsePlan(
+      planWith(
+        "## Phases\n\n### Phase 1 — x\n\nGoal: g\nFiles:\n- a.ts\nVerification: t\n```ts\nconst x = 1;\n```\n",
+      ),
+    ).sections[0]!.phases![0]!;
+    expect(phaseCode.fenceCount).toBe(1);
   });
 });
 

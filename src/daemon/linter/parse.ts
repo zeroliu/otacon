@@ -283,6 +283,7 @@ export function parsePlan(content: string): ParsedPlan {
       fenceOpenLine = lineNo;
       const lang = (fenceMatch[2] ?? "").trim().toLowerCase().split(/\s+/)[0];
       const isGwt = lang === "gwt";
+      const isMermaid = lang === "mermaid";
       quote = null;
       inTable = false;
       closeItem();
@@ -298,19 +299,24 @@ export function parsePlan(content: string): ParsedPlan {
         gwtStartLine = lineNo;
         gwtField = phase ? fieldName : null;
         gwtTarget = phase ? phase.gwtBlocks : section!.gwtBlocks;
-      } else if (phase) phase.fenceCount++;
-      else if (section) {
-        section.fenceCount++;
-        // A mermaid fence in a section read path is a candidate lead diagram
-        // (L7 reads Summary's count); it still spends the one-fence allowance.
-        // Buffer its body at this same seam so diagrams[] and diagramCount stay
-        // in lockstep — a later phase validates each captured fence renders.
-        if (lang === "mermaid") {
+      } else if (phase) {
+        // A mermaid diagram is exempt from the fence cap (like a diagram inside
+        // Details, which is already uncounted); only code and before/after fences
+        // spend a phase's one-fence allowance.
+        if (!isMermaid) phase.fenceCount++;
+      } else if (section) {
+        // A mermaid fence in a section read path is exempt from the fence cap; it
+        // counts only toward diagramCount (L7 reads Summary's count) and is never
+        // a candidate for E_FENCE_CAP. Buffer its body at this same seam so
+        // diagrams[] and diagramCount stay in lockstep; the L8 render check later
+        // validates each captured fence renders. Code and before/after fences keep
+        // spending the one-fence allowance.
+        if (isMermaid) {
           section.diagramCount++;
           mermaidBody = [];
           mermaidStartLine = lineNo;
           mermaidSection = section.id;
-        }
+        } else section.fenceCount++;
       }
       continue;
     }

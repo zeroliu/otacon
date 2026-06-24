@@ -96,6 +96,16 @@ describe("single-source wrappers (D7)", () => {
     }
   });
 
+  test("every wrapper tells the agent to draw tree-shaped content as a mermaid diagram", () => {
+    for (const text of [skillMd(), dogfoodSkillMd()]) {
+      // Tree/hierarchy-shaped content goes to a mermaid diagram, not a monospace
+      // outline; the agent picks the shape (graph TD is the default).
+      expect(text).toContain("When plan content is shaped as a hierarchy or tree");
+      expect(text).toContain("not as a monospace nested outline");
+      expect(text).toContain("`graph TD` (a top-down flowchart) is the natural default");
+    }
+  });
+
   test("every wrapper teaches the comment & approve fold-in batch (final:true)", () => {
     for (const text of [skillMd(), dogfoodSkillMd()]) {
       // A `final:true` comments batch ends the review: the next clean submit

@@ -157,8 +157,8 @@ not implementation steps). `## Contract` is the first: the interface / data-sche
 surface — inputs, outputs, types, errors — the reviewer signs off **instead of
 reading implementation**. `## Impact` is the second: the change's **blast radius** —
 the upstream modules it leans on and the downstream modules it can break —
-rendered as a compact dependency list (an optional dependency mermaid is allowed
-under the one-fence rule). The order check tolerates absent optionals (it compares
+rendered as a compact dependency list (an optional dependency mermaid is allowed and,
+like any diagram, exempt from the fence cap). The order check tolerates absent optionals (it compares
 the sections found against the canonical order filtered to those present), so
 omitting one never trips the ordering rule.
 
@@ -173,10 +173,11 @@ over 80 lines).
 A **lead diagram** — a ` ```mermaid ` state / sequence / flow chart placed directly
 under the `## Summary` headline — is **strongly recommended, not required** (~90% of
 plans, q6): the reviewer should grasp the change's shape before reading any prose. It is
-budget-exempt and rides Summary's one-fence allowance, so the ≤5-line headline is
-unaffected, and the review screen pins the Summary and its lead diagram as the first
-screen (§10). The headline stays the existing ≤5-line Summary — there is no forced
-one-line TL;DR, and phases stay expanded.
+exempt from both the line budget and the per-section fence cap; a `mermaid` diagram is
+not counted by the fence cap, so it never spends Summary's one-fence allowance and the
+≤5-line headline is unaffected, and the review screen pins the Summary and its lead
+diagram as the first screen (§10). The headline stays the existing ≤5-line Summary. There
+is no forced one-line TL;DR, and phases stay expanded.
 
 The linter checks **presence, never usefulness** (a diagram that merely restates the
 summary adds reading load): a Summary with no diagram earns a non-blocking nudge (lint
@@ -213,13 +214,23 @@ the linter (§5).
 
 Allowed: ` ```mermaid ` diagrams, syntax-highlighted code blocks, paired before/after
 code blocks (rendered side-by-side), ASCII wireframes in monospace fences. Fenced
-blocks are exempt from line budgets but capped at one fence per read-path section
-(tunable); unlimited inside Details. Images deferred to v2.
+blocks are exempt from line budgets. `mermaid` diagrams are also exempt from the fence
+cap (they count only toward the L7 lead-diagram check, never toward E_FENCE_CAP); code
+and before/after fences stay capped at one fence per read-path section (tunable).
+Everything is unlimited inside Details. Images deferred to v2.
 
 A before/after pair is two adjacent fences whose info strings carry `before` and
 `after` tags after the language (` ```ts before ` … ` ```ts after `). The UI renders
 them side-by-side on desktop, stacked on phones; an unpaired tag renders as an
 ordinary fence. The plan stays plain renderable markdown everywhere else.
+
+Tree- or hierarchy-shaped content (a taxonomy, a doc or file structure, a nested
+option space, a state hierarchy, a decision tree) is expressed as a ` ```mermaid `
+diagram (the agent picks the shape, `graph TD` by default), not a monospace nested
+outline in a ` ```text ` fence: a diagram shows the shape at a glance where an outline
+forces the reviewer to reconstruct it line by line. This is part of the visuals
+vocabulary the wrapper teaches; the renderer already validates such diagrams (L8) and
+exempts them from the fence cap, so a structural tree can sit alongside the lead diagram.
 
 **Review visuals (markdown-native).** Beyond fences, a set of primitives the renderer
 styles from plain markdown — so each stays comment-anchorable, diff-able, and degrades
@@ -240,15 +251,18 @@ to readable text if rendering ever fails:
   cards that double as the human's approve checklist — **Test-Driven Review**
   (§9, §10). The grammar is a single shared tokenizer used by both the linter and
   the UI, so what the agent must write and what the reviewer sees never drift. The
-  block is exempt from the one-fence rule (it is the verification surface, not a
-  diagram), capped at a scenario count (default 6), and must sit under Verification;
-  a malformed or misplaced block fails the lint.
+  block is exempt from the fence cap (it is the verification surface, not a code
+  fence), capped instead at a scenario count (default 6), and must sit under
+  Verification; a malformed or misplaced block fails the lint.
 
 The two block visuals are exempt from line budgets but counted against a
 per-read-path-section **visual cap** (default 2, tunable — the same shape as the
 one-fence rule, and uncapped inside Details), so a 2-line risk can _be_ a callout without
 a section becoming a wall of widgets. **Inline pills are always free** (never counted).
 The `gwt` block is exempt from the fence cap and tracked by its own scenario budget.
+`mermaid` diagrams are likewise exempt from the per-section fence cap (counted only
+toward the L7 lead-diagram check), so the fence cap now governs only code and
+before/after fences.
 
 ### Anchoring (for comments)
 
