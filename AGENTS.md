@@ -7,14 +7,23 @@ working in this repo.
 
 ## Documentation contract
 
-- **DESIGN.md describes product behavior in general** — a timeless spec of what otacon
-  is and how it behaves. Any change that alters decisions, architecture, protocol
-  shapes, CLI surface, lint rules, or storage layout MUST update DESIGN.md in the same
-  commit. Never put implementation sequencing, milestone status, or progress notes in
-  DESIGN.md.
-- **DECISIONS.md records why.** Every tradeoff decision — anything a future reader
-  could not reconstruct from the code alone — gets an entry there (**Decision / Why /
-  Revisit when**) in the same commit that makes it.
+DESIGN.md is the single normative source of product behavior; DECISIONS.md records
+only *why*. Keep both lean; these rules exist so neither rots into a changelog.
+
+- **DESIGN.md** is a timeless spec of what otacon is and how it behaves. Any change
+  that alters behavior, architecture, protocol shapes, CLI surface, lint rules, or
+  storage layout MUST update it in the same commit. It never carries rationale that
+  DECISIONS.md owns, nor implementation sequencing, milestone status, or progress notes.
+- **DECISIONS.md** records every tradeoff a future reader could not reconstruct from the
+  code alone, as a `### Decision / Why / Revisit when` entry, tight (no essays). It is
+  grouped under a fixed set of subsystem `##` sections; a new decision goes at the TOP of
+  its section (newest-first), in the same commit that makes it. It states rationale only,
+  never restating DESIGN.md's behavior.
+- **Superseding a decision deletes the old one.** When a new decision overrides an
+  earlier entry, DELETE that entry in the same commit (git keeps the full history) and
+  fold any still-true rationale into the new entry's Why. Never leave two entries that
+  disagree, and never tombstone or mark-superseded-in-place; the log holds only live
+  decisions.
 
 ## Change-size discipline
 
