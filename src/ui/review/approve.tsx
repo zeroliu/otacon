@@ -25,6 +25,7 @@
 import { useEffect, useState } from "react";
 import type { ApproveOptions, ApproveResult } from "../api";
 import { postApprove } from "../api";
+import { Portal } from "../portal";
 
 type Stage =
   | { kind: "confirm" }
@@ -206,12 +207,13 @@ export function ApproveDialog({
   const canSend = stage.kind === "warn" && stage.openComments > 0;
 
   return (
-    <div
-      className="approve-overlay"
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
+    <Portal>
+      <div
+        className="approve-overlay"
+        onClick={(event) => {
+          if (event.target === event.currentTarget) onClose();
+        }}
+      >
       <div
         className={
           stage.kind === "warn"
@@ -376,6 +378,7 @@ export function ApproveDialog({
         </div>
       </div>
     </div>
+    </Portal>
   );
 }
 

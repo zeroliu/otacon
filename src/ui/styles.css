@@ -685,31 +685,10 @@ code {
   font-size: var(--fs-prose);
 }
 
-.session-rev {
-  flex: none;
-  font: 700 var(--fs-body)/1 var(--mono);
-  color: var(--accent);
-}
-
-/* The detail rows (repo/branch + status meta) — shown expanded, collapsed to
- * nothing when compact. The transition is height/opacity only, no per-frame
- * layout of the children, so it stays cheap on every scroll frame. */
-.rh-detail {
-  overflow: hidden;
-  max-height: 120px;
-  margin-top: 10px;
-  opacity: 1;
-  transition: max-height 0.2s ease, opacity 0.18s ease, margin-top 0.2s ease;
-}
-
-.review-header.compact .rh-detail {
-  max-height: 0;
-  margin-top: 0;
-  opacity: 0;
-}
-
-.session-where {
-  margin: 0 0 8px;
+/* The "- repo · branch" locator beside the title in `.rh-ident`. Muted/mono and
+ * truncating, so as the bar narrows the title ellipsizes first and this second. */
+.rh-loc {
+  min-width: 0;
   font: var(--fs-label)/1.4 var(--mono);
   color: var(--ink-soft);
   white-space: nowrap;
@@ -717,8 +696,11 @@ code {
   text-overflow: ellipsis;
 }
 
-.session-meta {
-  display: flex;
+/* The read-only meta group (status pill + agent dot + timestamp): an inline
+ * flex cluster that wraps as a unit when the always-on bar wraps on narrow
+ * screens, keeping all three visible together. */
+.rh-meta {
+  display: inline-flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 10px 14px;
@@ -3486,10 +3468,14 @@ code {
   margin-left: 0;
 }
 
+/* These modal overlays portal to document.body (src/ui/portal.tsx), so they
+ * escape every ancestor stacking context and their z-index is global: the
+ * confirm dialog (60) sits above the session sheet (.ss-overlay, 50) and the
+ * section menu (.sec-overlay, 41), no matter where each is triggered. */
 .approve-overlay {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: 60;
   background: color-mix(in srgb, var(--ink) 32%, transparent);
   backdrop-filter: blur(2px);
   -webkit-backdrop-filter: blur(2px);
@@ -3991,13 +3977,12 @@ code {
     font-size: 16px;
   }
 
-  /* The sticky header goes lean on phone (review UI): title + the clean⇄diff
-   * toggle + the ☰ "show sessions" button. The revision and Approve fold away —
-   * Approve to the fixed bottom bar, so it is never shown in two places; the
-   * toggle stays, so diff review is still reachable on a phone. */
-  .review-header .session-rev,
-  .review-header .ctrl-approve,
-  .rh-detail {
+  /* On phone the always-on bar wraps to keep everything visible: title +
+   * "repo · branch" locator + status pill + agent dot + timestamp + delete +
+   * the clean⇄diff toggle. Only Approve folds away, to the fixed bottom bar, so
+   * it is never shown in two places; the toggle stays, so diff review is still
+   * reachable on a phone. */
+  .review-header .ctrl-approve {
     display: none;
   }
 

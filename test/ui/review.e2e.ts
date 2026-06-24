@@ -115,7 +115,9 @@ test("a new revision lands live over SSE, without a reload", async ({ page, requ
   const session = await createSession(request, uniqueTitle("liverev"));
   await submitRichPlan(request, session.id);
   await page.goto(`/s/${session.id}`);
-  await expect(page.locator(".session-rev")).toHaveText("r1");
+  // The fresh new-revision banner carries the landed revision (the r0 header
+  // pill is gone): r1 received on first load, then r2 when the revision lands.
+  await expect(page.locator(".rev-fresh .rev-label")).toHaveText("r1 received");
   await expect(page.locator("#summary .md")).toContainText("Replace session-cookie auth");
   await plantMarker(page);
 
@@ -123,7 +125,7 @@ test("a new revision lands live over SSE, without a reload", async ({ page, requ
     plan.replace("Replace session-cookie auth", "Revised again: replace session-cookie auth"),
   );
 
-  await expect(page.locator(".session-rev")).toHaveText("r2");
+  await expect(page.locator(".rev-fresh .rev-label")).toHaveText("r2 received");
   await expect(page.locator("#summary .md")).toContainText("Revised again");
   expect(await readMarker(page)).toBe(true); // no navigation happened
 });

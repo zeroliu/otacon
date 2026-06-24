@@ -1,16 +1,16 @@
 // The sticky session header (session registry and switcher, review UI): one always-present masthead
 // pinned to `top: 0` that compacts on scroll and re-expands at the top. It
 // subsumes the old `.topbar` (back + switcher) and the scroll-away
-// `SessionHead` hero. Expanded it carries the full identity — title, revision,
-// repo/branch, status, the agent dot — plus the clean⇄diff toggle and
-// Approve; scrolled past a small threshold it collapses the detail rows to a
-// tight one-line bar (DECISIONS.md "Sticky header: one element compacts on
-// scroll"). Because it is a single persistent element there is no second
-// condensed copy to gate — a dropped scroll frame merely leaves it expanded,
-// still fully usable. On phone it stays lean: title + the clean⇄diff toggle and
-// the ☰ "show sessions" button only; the revision and Approve fold away —
-// Approve to the fixed bottom bar (review UI — never shown in two places). The
-// ☰ button (<960px) opens the shell's mobile session sheet — the overflow menu
+// `SessionHead` hero. It is a single always-on `.rh-bar`: the identity (title +
+// the "- repo · branch" locator), the read-only meta (status pill, agent dot,
+// "updated Xm ago"), the delete button, the clean⇄diff toggle and Approve all
+// ride one wrapping line (DECISIONS.md "Sticky header: one element compacts on
+// scroll"). Compaction only tightens the padding and title size now: there is
+// no separate detail row to collapse, so a dropped scroll frame merely leaves
+// it in its last state, still fully usable. On phone the bar wraps to keep
+// everything visible (including the status pill) except Approve, which folds
+// away to the fixed bottom bar (review UI, never shown in two places). The ☰
+// button (<960px) opens the shell's mobile session sheet: the overflow menu
 // that replaced the old in-header switcher; at ≥960px the sidebar is the list,
 // so it's hidden (CSS).
 
@@ -97,29 +97,17 @@ export function ReviewHeader({
         <BackLink />
         <div className="rh-ident">
           <h1 className="session-title">{session.title}</h1>
-          <span className="session-rev">r{session.revision}</span>
+          {/* The "- repo · branch" locator: muted/mono, ellipsizes after the
+              title so identity stays readable as the bar narrows. */}
+          <span className="rh-loc" title={session.repo}>
+            {" - "}
+            {repoName(session.repo)}
+            {session.branch !== "" && <span> · {session.branch}</span>}
+          </span>
         </div>
-        {hasPlan && (
-          <div className="rh-actions">
-            <ViewToggle view={view} onView={onView} />
-            {onApprove && (
-              <button type="button" className="ctrl-approve" onClick={onApprove}>
-                <span aria-hidden="true">✓</span> approve
-              </button>
-            )}
-          </div>
-        )}
-        {/* The <960px overflow menu: opens the shell's bottom-sheet session list
-            (the switcher's replacement). Hidden at ≥960px, where the sidebar is
-            the list (CSS). Sits where the switcher used to, at the bar's end. */}
-        <SessionMenuButton className="rh-menu" />
-      </div>
-      <div className="rh-detail">
-        <p className="session-where" title={session.repo}>
-          {repoName(session.repo)}
-          {session.branch !== "" && <span> · {session.branch}</span>}
-        </p>
-        <div className="session-meta">
+        {/* The read-only meta, grouped so it wraps as one unit: status pill +
+            agent dot + "updated Xm ago". Visible at every breakpoint. */}
+        <div className="rh-meta">
           <StatusChip
             status={session.status}
             openQuestions={session.openQuestions}
@@ -132,12 +120,26 @@ export function ReviewHeader({
             now={now}
           />
           <span className="card-time">{relativeTime(session.updatedAt, now)}</span>
-          {onDelete && (
-            <button type="button" className="session-delete" title="delete session" onClick={onDelete}>
-              ✕ delete
-            </button>
-          )}
         </div>
+        {hasPlan && (
+          <div className="rh-actions">
+            <ViewToggle view={view} onView={onView} />
+            {onApprove && (
+              <button type="button" className="ctrl-approve" onClick={onApprove}>
+                <span aria-hidden="true">✓</span> approve
+              </button>
+            )}
+          </div>
+        )}
+        {onDelete && (
+          <button type="button" className="session-delete" title="delete session" onClick={onDelete}>
+            ✕ delete
+          </button>
+        )}
+        {/* The <960px overflow menu: opens the shell's bottom-sheet session list
+            (the switcher's replacement). Hidden at ≥960px, where the sidebar is
+            the list (CSS). Sits where the switcher used to, at the bar's end. */}
+        <SessionMenuButton className="rh-menu" />
       </div>
     </header>
   );
