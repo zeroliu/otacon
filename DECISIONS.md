@@ -3634,6 +3634,38 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   wants a smaller label tier), at which point the tokens and the guard's floor move
   together.
 
+## A 5-role semantic type scale (2026-06-25)
+
+- **Decision:** The three size tokens (`--fs-prose` 16 / `--fs-body` 14 / `--fs-label`
+  12) are replaced by a 5-role semantic scale, assigned by READING ROLE rather than by
+  mono/sans visual treatment: `--fs-meta` (12px) labels and telemetry, `--fs-ui` (14px)
+  controls plus monospace code and diff, `--fs-body` (16px) primary reading content,
+  `--fs-title` (18px) headings, `--fs-display` (22px) the one masthead title and the big
+  phase numeral. This first step is a value-preserving rename: meta/ui/body take over the
+  three old tokens at their old sizes (the reading column unifies onto `--fs-body`, and
+  monospace code/diff sits one notch below its sans equivalent, code at ui not body),
+  while title and display are introduced as defined-but-unwired tokens for the later
+  heading and masthead work that adopts them. The 12px floor still holds and is still
+  enforced by the existing
+  `src/ui/styles.test.ts` font-size guard; a second test in the same file now pins the
+  scale to exactly these five tokens at exactly these px values and fails if the retired
+  names (`--fs-prose` / `--fs-label`) reappear or if `--fs-body` is redefined off 16px.
+  (Note: `--fs-body` is reused for a NEW value, 16 instead of 14, so the rename is done
+  in the order body→ui, prose→body, label→meta to avoid a name collision.)
+- **Why:** From a grill (q1-q4). The old three-token scale keyed size off visual
+  treatment, which dumped real reading content (mono field values, callout bodies, table
+  cells) into the 12px telemetry tier simply because it was set in mono, so genuine
+  content read as hairline labels. Keying size off reading role instead lets the same
+  content sit at body size whether it is sans or mono, while labels stay at meta and the
+  one masthead earns a display tier. Splitting headings (title) and the masthead/numeral
+  (display) out of the old prose tier gives hierarchy the prior scale could not express.
+  Pinning the scale in a guard keeps a future edit from re-fragmenting it or quietly
+  reintroducing a retired token name.
+- **Revisit when:** A new surface needs a sixth role (e.g. a distinct caption or a
+  larger hero), at which point a token is added and the scale-pinning guard's expected
+  set is updated in the same commit; or the code-one-notch-down convention stops reading
+  well at some density, at which point code rejoins body.
+
 ## Reuse an existing open tab: daemon-wide live-tab heartbeat + TTL (2026-06-24)
 
 - **Decision:** The daemon tracks its live browser tabs with an explicit SPA heartbeat

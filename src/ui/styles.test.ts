@@ -5,7 +5,12 @@
 // scans only `font:`/`font-size:` declarations. Border/padding/width legitimately
 // use sub-12px px, so they are out of scope. Token definitions (`--fs-*: 12px`)
 // have property names that are not font/font-size, so they are skipped naturally;
-// token usages (`var(--fs-label)`) carry no px literal, so they pass.
+// token usages (`var(--fs-meta)`) carry no px literal, so they pass.
+//
+// A second test pins the 5-role semantic type scale (DECISIONS.md "5-role
+// semantic type scale") so the :root token set cannot silently drift: exactly
+// five tokens, exact px values, and the retired names (--fs-prose/--fs-label)
+// must never reappear.
 
 import { readFileSync } from "node:fs";
 import { test, expect } from "bun:test";
@@ -48,6 +53,53 @@ test("no font declaration renders below the 12px type-scale floor", () => {
   }
 
   expect(offenders, `sub-${FLOOR}px font sizes found:\n${offenders.join("\n")}`).toEqual([]);
+});
+
+test("the :root type scale is exactly the five semantic role tokens", () => {
+  // Isolate the first :root block so we read the canonical token definitions,
+  // not any var() usages or dark-mode overrides further down the file.
+  const rootMatch = /:root\s*\{([\s\S]*?)\}/.exec(css);
+  expect(rootMatch, ":root block not found in styles.css").not.toBeNull();
+  const root = rootMatch?.[1] ?? "";
+
+  // The retired names must not come back, in :root or anywhere else.
+  expect(css.includes("--fs-prose"), "retired token --fs-prose reappeared").toBe(false);
+  expect(css.includes("--fs-label"), "retired token --fs-label reappeared").toBe(false);
+
+  const EXPECTED = {
+    "--fs-meta": 12,
+    "--fs-ui": 14,
+    "--fs-body": 16,
+    "--fs-title": 18,
+    "--fs-display": 22,
+  };
+
+  // Collect every --fs-* definition (a property name, not a var() usage) from
+  // the canonical first :root into name -> px value, and confirm it is exactly
+  // the five-role scale at the five expected px values.
+  const DEF = /--fs-([a-z][a-z0-9-]*)\s*:\s*(\d+(?:\.\d+)?)px/g;
+  const scale: Record<string, number> = {};
+  let def: RegExpExecArray | null;
+  DEF.lastIndex = 0;
+  while ((def = DEF.exec(root)) !== null) {
+    const name = `--fs-${def[1]}`;
+    scale[name] = Number.parseFloat(def[2] ?? "");
+  }
+
+  expect(scale).toEqual(EXPECTED);
+
+  // A --fs-* token may be redefined later in the file (e.g. the dark-mode :root),
+  // but only ever to its canonical value. This catches an off-16 --fs-body (or any
+  // other off-scale redefinition) that sits at or above the 12px floor and so would
+  // slip past the floor guard above.
+  DEF.lastIndex = 0;
+  let anyDef: RegExpExecArray | null;
+  while ((anyDef = DEF.exec(css)) !== null) {
+    const name = `--fs-${anyDef[1]}` as keyof typeof EXPECTED;
+    const px = Number.parseFloat(anyDef[2] ?? "");
+    expect(EXPECTED[name], `unknown --fs token redefined: ${name}`).not.toBeUndefined();
+    expect(px, `${name} redefined off its canonical value`).toBe(EXPECTED[name]);
+  }
 });
 
 function countNewlines(s: string): number {

@@ -1013,13 +1013,23 @@ treatment: chips (with the `★rec` star and on/off states), buttons, inputs, an
 are hit targets, not container chrome, and are unchanged. The index is a top-ruled
 telemetry list rather than a stack of boxes.
 
-**Type scale: a 12px floor.** Nothing renders below 12px, text or glyph: 12px is the
-floor for the mono telemetry labels (chips, badges, ids, section titles, field labels,
-meta rows), 14px is the norm for readable and interactive text (button labels, thread
-and answer bodies, table cells, inputs), and 16px is the reading column (the plan prose
-and its headings). The telemetry character comes from mono plus uppercase plus tracking
-plus color, not from sub-12px size; icon-only controls keep an adequate hit box. Three
-`--fs-prose` / `--fs-body` / `--fs-label` tokens carry these sizes.
+**Type scale: a 5-role semantic scale on a 12px floor.** Size follows reading role,
+not the mono/sans visual treatment, so genuine reading content never lands in the
+telemetry tier just because it is set in mono. Five tokens carry the scale, ordered
+small to large: `--fs-meta` (12px) for labels and telemetry (eyebrows, chip and badge
+text, ids, repo·branch, timestamps, fence headers, field labels), `--fs-ui` (14px) for
+controls (buttons, inputs, tabs, menu items) and for monospace code and diff,
+`--fs-body` (16px) for primary reading content (prose, field values, callout bodies,
+table cells, quotes), `--fs-title` (18px) reserved for headings (card titles, phase
+names, grill questions, markdown h1/h2, icon-glyph buttons), and `--fs-display` (22px)
+reserved for the one masthead session title and the big phase numeral. The meta, ui, and
+body roles carry the rendered sizes; title and display are defined and wait on the
+heading and masthead work that adopts them. Monospace code and diff sit one notch below
+their sans equivalent (code at ui, not body), so a dense block reads as operational
+without crowding. Nothing renders below 12px, text or glyph: that floor holds, and the
+12px `--fs-meta` token is the smallest in the scale. The telemetry character comes from
+mono plus uppercase plus tracking plus color, not from sub-12px size; icon-only controls
+keep an adequate hit box.
 
 **Callouts** apply this vocabulary to plan prose: a `> [!risk]` blockquote becomes a
 flat panel with a 2px top rule and a glyph+label inked in the type's hue — risk amber,
