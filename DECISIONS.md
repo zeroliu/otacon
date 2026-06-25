@@ -2596,7 +2596,16 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   matches), derives the dist-tag from the version suffix (`-staging.` → `staging`, else
   `latest`), publishes `npm publish --tag <tag>`, and skips the GitHub Release for staging
   tags. Testers run `npm i -g otacon@staging` (newest) or `@0.1.4-staging.<stamp>` (pinned);
-  re-cutting yields a newer (higher) timestamp that moves the dist-tag.
+  re-cutting yields a newer (higher) timestamp that moves the dist-tag. The staging **base**
+  is the version of `origin/<default-branch>` (remote main), resolved after a **required**
+  `git fetch` (a real run aborts on fetch failure; a `--dry-run` warns and falls back).
+  `release.sh` reads it from `origin/<default>:package.json` and passes it to
+  `staging-version.ts` as the explicit `current` arg, so the TS stays pure (no remote
+  knowledge). Reading the local (staging) package.json was the bug: the prior cut already
+  committed a bumped `<core>-staging.<old>` there, so each re-cut stripped the suffix and
+  bumped the staging core again (0.1.4 → 0.1.5 → 0.1.6). origin/main's package.json equals
+  the latest prod tag by construction, so the base holds at the published prod line and only
+  the timestamp advances on re-cut.
 - **Why:** A dist-tag is npm's native opt-in preview channel: it never moves `latest`, so
   regular users are untouched, while testers point at `@staging`. Routing by version suffix
   inside the **one** existing workflow reuses the single npm Trusted Publisher (configured

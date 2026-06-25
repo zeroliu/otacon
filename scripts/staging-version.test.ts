@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
 // Cross-module contract pin: the staging string this helper emits is consumed by
 // the channel-aware auto-updater, so we assert against its real parsers.
@@ -66,6 +67,45 @@ describe("stagingVersion — cross-module contract pin", () => {
     const newer = stagingVersion({ current: "0.1.3", kind: "patch", stamp: s2 });
     expect(isNewer(newer, older)).toBe(true);
     expect(isNewer(older, newer)).toBe(false);
+  });
+});
+
+describe("staging-version CLI: base from explicit arg, else package.json", () => {
+  // The direct-run CLI takes an optional 3rd arg `current`: release.sh passes the
+  // origin/<default> version so repeated staging cuts bump a constant base. Spawn
+  // the real script so this covers the import.meta.main branch end to end.
+  // fileURLToPath (not URL.pathname) so a checkout dir with spaces/special chars
+  // decodes correctly instead of feeding bun a percent-encoded path.
+  const scriptPath = fileURLToPath(new URL("./staging-version.ts", import.meta.url));
+  const CLI_STAMP = "20260625120000";
+
+  const run = (...args: string[]) => {
+    const { stdout, exitCode } = Bun.spawnSync(["bun", scriptPath, ...args]);
+    return { out: stdout.toString().trim(), exitCode };
+  };
+
+  test("explicit current 0.1.4 + patch bumps the given base, not package.json", () => {
+    const { out, exitCode } = run("patch", CLI_STAMP, "0.1.4");
+    expect(exitCode).toBe(0);
+    expect(out).toBe(`0.1.5-staging.${CLI_STAMP}`);
+  });
+
+  test("explicit current 1.2.3 + minor bumps the given base", () => {
+    const { out, exitCode } = run("minor", CLI_STAMP, "1.2.3");
+    expect(exitCode).toBe(0);
+    expect(out).toBe(`1.3.0-staging.${CLI_STAMP}`);
+  });
+
+  test("no current arg falls back to package.json (shape only, not pinned)", () => {
+    const { out, exitCode } = run("patch", CLI_STAMP);
+    expect(exitCode).toBe(0);
+    expect(out).toMatch(new RegExp(`^\\d+\\.\\d+\\.\\d+-staging\\.${CLI_STAMP}$`));
+  });
+
+  test("empty-string current arg falls back to package.json, same shape", () => {
+    const { out, exitCode } = run("patch", CLI_STAMP, "");
+    expect(exitCode).toBe(0);
+    expect(out).toMatch(new RegExp(`^\\d+\\.\\d+\\.\\d+-staging\\.${CLI_STAMP}$`));
   });
 });
 

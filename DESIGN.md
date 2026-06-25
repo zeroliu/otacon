@@ -1819,7 +1819,10 @@ publishes there (and gets no GitHub Release). A staging build is cut from the lo
 switches flows by branch); its version carries a `-staging.<UTC timestamp>` suffix, a
 numeric build id. Both channels share one publish workflow, which routes by version
 suffix: a `-staging.` version goes to `staging`, anything else to `latest`, so a staging
-build never moves `latest` and never lands in front of regular users. Re-cutting a staging
+build never moves `latest` and never lands in front of regular users. A staging build's
+base version is read from `origin/<default-branch>` (the published prod version), fetched
+at cut time, not from the `staging` branch's own already-bumped package.json, so re-cutting
+holds the same base and only the timestamp advances. Re-cutting a staging
 build yields a newer (higher) timestamp, which moves the `staging` dist-tag to the newest
 build; the maintainer runbook is in RELEASING.md.
 

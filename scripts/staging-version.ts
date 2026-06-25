@@ -12,10 +12,13 @@
  * `/-staging\.(\d+)/`. So the output MUST contain `-staging.` and `stamp` MUST be
  * all decimal digits, or staging installs silently break — hence the throws here.
  *
- * Run directly: `bun scripts/staging-version.ts <kind> <stamp>` prints ONLY the
- * resulting version (kind defaults to "patch"; stamp is required). The current
- * version is read from the repo-root package.json, resolved relative to this
- * script (cwd-independent), exactly like scripts/gen-version.ts.
+ * Run directly: `bun scripts/staging-version.ts <kind> <stamp> [current]` prints
+ * ONLY the resulting version (kind defaults to "patch"; stamp is required). The
+ * optional 3rd arg `current` is the base version to bump: scripts/release.sh
+ * passes the version of `origin/<default-branch>` (published prod) so repeated
+ * staging cuts bump a constant base. When `current` is omitted or empty, it falls
+ * back to the repo-root package.json, resolved relative to this script
+ * (cwd-independent), exactly like scripts/gen-version.ts.
  */
 import { readFileSync } from "node:fs";
 
@@ -86,21 +89,34 @@ function parseKind(raw: string | undefined): Kind {
   throw new Error(`unknown kind ${JSON.stringify(raw)} — expected patch | minor | major`);
 }
 
-// Direct-run CLI: `bun scripts/staging-version.ts <kind> <stamp>`. Run only when
-// this file is executed directly (not when imported by the test), the bun/ESM
-// idiom of comparing import.meta.main.
+// Direct-run CLI: `bun scripts/staging-version.ts <kind> <stamp> [current]`. Run
+// only when this file is executed directly (not when imported by the test), the
+// bun/ESM idiom of comparing import.meta.main.
 if (import.meta.main) {
   const kind = parseKind(process.argv[2]);
   const stamp = process.argv[3];
   if (stamp === undefined) {
-    throw new Error("usage: bun scripts/staging-version.ts <kind> <stamp> — stamp is required");
+    throw new Error(
+      "usage: bun scripts/staging-version.ts <kind> <stamp> [current] (stamp is required)",
+    );
   }
-  // Resolve repo-root package.json relative to this script (scripts/ -> repo root),
-  // independent of the cwd, exactly like scripts/gen-version.ts.
-  const pkgUrl = new URL("../package.json", import.meta.url);
-  const pkg = JSON.parse(readFileSync(pkgUrl, "utf8")) as { version?: string };
-  if (typeof pkg.version !== "string" || pkg.version.length === 0) {
-    throw new Error("package.json is missing a non-empty `version` field");
+  // The optional 3rd arg is the base version to bump. release.sh passes the
+  // origin/<default-branch> version here so repeated staging cuts bump a constant
+  // base (the published prod line), not staging's own already-bumped package.json.
+  const currentArg = process.argv[4];
+  let current: string;
+  if (currentArg !== undefined && currentArg.length > 0) {
+    current = currentArg;
+  } else {
+    // No explicit base: fall back to the repo-root package.json, resolved relative
+    // to this script (scripts/ -> repo root), independent of the cwd, exactly like
+    // scripts/gen-version.ts.
+    const pkgUrl = new URL("../package.json", import.meta.url);
+    const pkg = JSON.parse(readFileSync(pkgUrl, "utf8")) as { version?: string };
+    if (typeof pkg.version !== "string" || pkg.version.length === 0) {
+      throw new Error("package.json is missing a non-empty `version` field");
+    }
+    current = pkg.version;
   }
-  process.stdout.write(`${stagingVersion({ current: pkg.version, kind, stamp })}\n`);
+  process.stdout.write(`${stagingVersion({ current, kind, stamp })}\n`);
 }

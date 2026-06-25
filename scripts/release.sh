@@ -117,8 +117,27 @@ bun run build
 
 # --- staging path: version = <bumped-base>-staging.<UTC timestamp> ------------
 if [ "$MODE" = "staging" ]; then
+  # The base comes from origin/<default-branch> (published prod main), NOT from
+  # this branch's package.json: the previous staging cut already committed a bumped
+  # `<core>-staging.<old>` here, so reading it locally would inflate the base on
+  # every re-cut. Fetch the default branch first (required) so the base is fresh.
+  if ! git fetch --quiet origin "$DEFAULT_BRANCH"; then
+    guard "could not fetch origin/$DEFAULT_BRANCH; a staging release needs it to compute the base version"
+  fi
+  # Read the version straight out of origin's package.json (node is already assumed
+  # available for the prod path below). The snippet prints the version only when it
+  # is a non-empty string, else nothing: a missing or non-string `version` field
+  # would otherwise stringify to "undefined"/a number, slip past the `-z` guard
+  # below, and surface as an opaque stack trace from staging-version.ts.
+  BASE_VERSION="$(git show "origin/$DEFAULT_BRANCH:package.json" 2>/dev/null | node -pe 'const v = JSON.parse(require("fs").readFileSync(0,"utf8")).version; typeof v === "string" && v.length > 0 ? v : ""' 2>/dev/null || true)"
+  if [ -z "$BASE_VERSION" ]; then
+    guard "could not read a version from origin/$DEFAULT_BRANCH:package.json"
+  fi
   STAMP="$(date -u +%Y%m%d%H%M%S)"
-  VERSION="$(bun scripts/staging-version.ts "$KIND" "$STAMP")"
+  # Pass the origin base as the explicit 3rd arg. In the degraded dry-run path where
+  # guard only warned and BASE_VERSION is empty, "" makes the CLI fall back to local
+  # package.json: acceptable because a real run aborts via guard before this point.
+  VERSION="$(bun scripts/staging-version.ts "$KIND" "$STAMP" "$BASE_VERSION")"
   if [ -z "$VERSION" ]; then
     echo "error: failed to compute staging version (empty output)" >&2
     exit 1
