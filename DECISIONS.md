@@ -3986,3 +3986,52 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** The enforcement phase needs the flag to carry more than a boolean (e.g.
   a grill intensity), or `quick` and `socratic` turn out to be mutually exclusive and want a
   single `mode` enum instead of two independent booleans.
+
+## Socratic mode is enforced at the grill/submit layer, not a new approve gate (2026-06-26)
+
+- **Decision:** The socratic guarantee is delivered by two existing seams: `otacon ask`
+  refuses answer-revealing chips (`--options`/`--recommend`) and the L3 linter bans
+  `[assumed]` and untraced citations. There is **no** new approve-time check, no
+  explain-back step, and no extra UI gate.
+- **Why:** We considered an approve-time "explain-back" gate (make the agent restate the
+  user's reasoning before approval). It is redundant once the grill itself is socratic:
+  if every question is free-text and every decision must trace to the user's own words,
+  the reasoning is already captured in the transcript and the plan by the time review
+  opens. A second gate would only re-check what the grill+submit layer already
+  guarantees, while adding a surface that can reject a plan the user is happy with.
+- **Revisit when:** Real use shows agents satisfying the letter of L3 (a free-text answer
+  exists) while the decision does not actually follow from it (the trace is present but
+  hollow), which a server-side, zero-cost linter cannot catch and might justify a
+  human-facing comprehension prompt at approve time.
+
+## Socratic `ask` is free-text only and `[assumed]` is banned (2026-06-26)
+
+- **Decision:** In a socratic session `otacon ask` rejects `--options` and `--recommend`
+  (single and batch) with `E_SOCRATIC_FREE_TEXT_ONLY`, and L3 turns two checks into
+  always-errors: `E_ASSUMED_NOT_ALLOWED` (no `[assumed]` escape) and
+  `E_DECISION_NOT_REASONED` (a cited `q<n>` must carry a free-text answer, not a bare chip).
+  Non-socratic sessions are unchanged: chips are fine and `[assumed]` stays a valid escape.
+- **Why:** The point of the mode is that the **user** reasons every decision. Chips and a
+  recommended answer let the agent hand over the conclusion, and `[assumed]` lets it decide
+  unilaterally; both defeat the posture. Forcing free text and banning the assume-escape
+  makes the user's own words the only path to a traced decision, so the transcript that
+  ships with the plan is genuinely theirs. Keeping non-socratic behavior untouched means
+  the default fast path (lead with a recommendation) is preserved for everyone who has not
+  opted in.
+- **Revisit when:** Free-text-only proves too heavy for trivially-bounded questions (e.g. a
+  yes/no), and a "free text required but chips allowed as a starting note" middle ground is
+  worth the added rule surface.
+
+## Socratic mode is immutable per session: no force, no downgrade (2026-06-26)
+
+- **Decision:** Once a session is socratic it stays socratic for its whole life. There is
+  no command to leave the mode and no override to push a plan past the socratic checks. To
+  plan without the posture, the user starts a fresh (non-socratic) session.
+- **Why:** A mid-session downgrade would let the agent escape the very enforcement the user
+  opted into, after some decisions were already made under socratic rules, leaving a plan
+  that is half-reasoned and half-assumed with no clean record of which is which. A session
+  is cheap to start; immutability keeps the transcript coherent (every decision in a
+  socratic session was reasoned by the user) at the cost of one new session when intent
+  changes. It also matches `quick`, which is likewise fixed at mint.
+- **Revisit when:** A real workflow needs to start loose and tighten partway (or vice
+  versa) often enough that a guarded, audit-logged mode switch beats starting over.

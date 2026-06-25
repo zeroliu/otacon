@@ -300,7 +300,7 @@ errors on stdout; the agent fixes and resubmits. Invalid revisions never reach t
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
 | L1   | Schema completeness: required sections present, in canonical order (absent optionals tolerated); phases have Goal/Files/Verification; `gwt` blocks well-formed and under Verification | error                                  |
 | L2   | Read-path budgets (Summary ≤5 lines, Goal ≤3, etc.)                                                                                              | error                                  |
-| L3   | Decision traceability: every `D<n>` cites a `q<n>` (`← q7` or `← q7, q9`; `<-` accepted) or `[assumed]`; cited ids must exist in the grill transcript | error (warning in `--quick` sessions)  |
+| L3   | Decision traceability: every `D<n>` cites a `q<n>` (`← q7` or `← q7, q9`; `<-` accepted) or `[assumed]`; cited ids must exist in the grill transcript. In a **socratic** session (§8) `[assumed]` is banned (`E_ASSUMED_NOT_ALLOWED`) and every citation must point at a free-text answer, not a chip (`E_DECISION_NOT_REASONED`) | error (warning in `--quick` sessions; the two socratic codes are always errors) |
 | L4   | Detail containment heuristics: file paths in Details must appear in that phase's Files; new dependency names in Details must appear in Decisions | warning                                |
 | L5   | Revision accompaniment: a submit must include a reply for every open comment thread that has none — a comment the reviewer has **resolved** (the close/withdraw verb) is skipped, never blocking the submit — and every revision ≥ 2 must carry a changelog | error                                  |
 | L6   | Detail soft caps (>80 lines/section)                                                                                                             | warning, surfaced as a badge in the UI |
@@ -899,6 +899,36 @@ Structural integration:
   `snake` inherits not just decisions but their reasoning.
 - Escape hatch: `otacon start --quick` skips the grill and downgrades L3 to a warning.
   The default is: no plan reaches review without surviving the interview.
+
+### Socratic mode (opt-in planning posture)
+
+A session can be born **socratic** (`otacon start --socratic`, or `socratic.default`
+config for a repo that wants it on every session). It is the inverse of the default
+grill posture: instead of leading with a recommended answer, the agent acts as a
+thinking-partner and professor. It surfaces the real situation, the genuine tradeoffs,
+and the relevant code, then asks the user to reason it out and decide themselves. The
+mode is **immutable for the session's life**: there is no downgrade and no force; to
+leave socratic mode the user starts a fresh (non-socratic) session.
+
+The mode is enforced entirely at the **grill and submit layers**, with no new
+approve-time gate:
+
+- **Free-text-only grill.** In a socratic session `otacon ask` refuses the
+  answer-revealing chips: `--options` and `--recommend` (single and batch) are rejected
+  with `E_SOCRATIC_FREE_TEXT_ONLY`. Every question is free text, so the user reasons in
+  their own words; a bounded choice set is named in the question prose, not handed over
+  as chips.
+- **Decisions must trace to reasoning** (lint L3, §5). `[assumed]` is banned
+  (`E_ASSUMED_NOT_ALLOWED`), since the agent may not decide for the user, and every
+  `← q<n>` citation must point at a question that carries a free-text answer, not a bare
+  chip pick (`E_DECISION_NOT_REASONED`). Both are always errors in a socratic session, regardless
+  of `--quick`. Non-socratic sessions keep `[assumed]` as a valid escape and chip answers
+  as valid citations.
+
+The agent-facing posture (recognize the request and pass `--socratic`, do not lead with
+the answer, feed context like a professor, challenge weak answers with `replyTo`
+follow-ups, never assume) is taught by the wrapper protocol card; the daemon only
+enforces the two mechanical guarantees above.
 
 ---
 

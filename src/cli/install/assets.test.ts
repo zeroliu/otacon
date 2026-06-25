@@ -106,6 +106,26 @@ describe("single-source wrappers (D7)", () => {
     }
   });
 
+  test("every wrapper teaches socratic mode (activation + free-text-only + decisions trace, no [assumed])", () => {
+    for (const text of [skillMd(), dogfoodSkillMd()]) {
+      // Activation is the agent's job: recognize the request and pass --socratic.
+      expect(text).toContain("--socratic");
+      expect(text).toContain("Socratic mode (opt-in)");
+      // Free-text-only enforcement: ask refuses option/recommend chips.
+      expect(text).toContain("E_SOCRATIC_FREE_TEXT_ONLY");
+      expect(text).toContain("Free-text only");
+      // Decisions must trace to the user's reasoning; [assumed] is banned.
+      expect(text).toContain("E_ASSUMED_NOT_ALLOWED");
+      expect(text).toContain("Decisions trace to their reasoning");
+      // Posture inversion + no downgrade are taught.
+      expect(text).toContain("not an answer vending");
+      expect(text).toContain("No downgrade");
+    }
+    // Each wrapper names its own command in the socratic start line (D7).
+    expect(skillMd()).toContain("otacon start --title <t> --socratic");
+    expect(dogfoodSkillMd()).toContain("./bin/otacon start --title <t> --socratic");
+  });
+
   test("every wrapper teaches the comment & approve fold-in batch (final:true)", () => {
     for (const text of [skillMd(), dogfoodSkillMd()]) {
       // A `final:true` comments batch ends the review: the next clean submit
