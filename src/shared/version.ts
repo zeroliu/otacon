@@ -1,4 +1,4 @@
 // Generated from package.json by scripts/gen-version.ts — do NOT hand-edit.
 // version.test.ts guards that this equals package.json's version. Bump the
 // version in package.json, then run `bun run gen:version` to regenerate.
-export const VERSION = "0.1.5-staging.20260624152031";
+export const VERSION = "0.1.6-staging.20260625014226";
