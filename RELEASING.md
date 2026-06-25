@@ -118,7 +118,9 @@ On the `staging` branch, `bun run release [patch|minor|major]`
 `<next-base>-staging.<UTC timestamp>`: it bumps the base version line by the kind
 (default `patch`; `minor`/`major` move the base first via
 [`scripts/staging-version.ts`](scripts/staging-version.ts)) and appends a numeric UTC
-timestamp build id (`date -u +%Y%m%d%H%M%S`). It then runs `npm version <version>`, which
+timestamp build id (`date -u +%Y%m%d%H%M%S`). A staging cut auto-fetches `origin`
+(network required) and bases the version on `origin/<default-branch>` (published prod), not
+on the `staging` branch's own package.json, so re-cutting holds the same base. It then runs `npm version <version>`, which
 commits the bump on the `staging` branch and creates the annotated
 `vX.Y.Z-staging.<stamp>` tag, and `git push --follow-tags`.
 
