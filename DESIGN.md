@@ -1666,7 +1666,37 @@ each agent's skill location: Claude Code `~/.claude/skills/otacon/SKILL.md` plus
 Stop hook script `~/.claude/hooks/otacon-stop.sh`; Codex
 `$CODEX_HOME/skills/otacon/SKILL.md` (default `~/.codex/`); OpenCode
 `$XDG_CONFIG_HOME/opencode/skills/otacon/SKILL.md`. All three are the same SKILL.md
-skill folder. Wrappers are managed files — reinstall overwrites them. The Stop hook registration in
+skill folder. Wrappers are managed files (reinstall overwrites them).
+
+A **user-scope** wrapper is a **symlink** to the `SKILL.md` shipped inside the package
+(`dist/skills/otacon/SKILL.md`, generated from the one protocol source at build time),
+so a binary upgrade refreshes the installed skill text for free without a reinstall.
+Two cases fall back to **copying** the current text instead: when symlinks are
+unsupported on the filesystem (e.g. Windows without the privilege, or a cross-device
+link), and when there is no stable packaged file to point at (a source run, or an
+ephemeral npx cache that a later invocation may prune). A **project-scope** wrapper
+(`otacon install --project`) is **always copied**: it is committed and shared, so it
+must be machine-independent and cannot point at a machine-local global path a teammate
+does not have. Install is idempotent in every mode: an already-correct symlink or an
+already-current copy is left untouched, and a scope or availability change self-heals
+(a stale symlink becomes a copy, and the reverse, on the next install). The per-agent
+JSON reports each wrapper's resulting `mode` (`"symlink"` or `"copy"`).
+
+`otacon start` **self-heals already-installed wrappers** on every run, as the
+fallback/migration path for installs that predate the symlink era or could never
+symlink at all. It re-asserts each wrapper that is already present to its desired
+state: a user-scope copy (left by a copy-fallback install, or a legacy pre-symlink
+install) is promoted to a symlink to the packaged file, a dangling or wrong-target
+user symlink is repaired, and a committed/legacy project-scope copy whose text drifted
+is rewritten to the current protocol. It **never creates a wrapper that does not
+already exist** (it heals what is there, it does not install), it leaves a hand-written
+foreign `SKILL.md` untouched (only files carrying the managed marker, or a symlink at
+one of our own locations, are ours to re-assert), and it is a no-op for a correct
+symlink, so for the common symlink install it costs nothing. It is **skipped entirely
+on a source run** so this repo's committed `otacon-dev` dogfood wrapper is never
+rewritten, and it is best-effort and fail-open: a refresh never blocks `start`. Each
+heal that actually changes a file prints a one-line stderr notice (stdout stays the
+single JSON line). The Stop hook registration in
 `~/.claude/settings.json` is optional, applied only by `--hooks`: an additive,
 idempotent merge that preserves every existing key and backs the file up before the
 first change (unparseable settings are refused, never clobbered). The hook is a
@@ -1688,6 +1718,16 @@ dogfood file is **generated** from `dogfoodSkillMd()`,
 not hand-edited, and a test (`assets.test.ts`) asserts the committed file equals that
 output — so a protocol change can never silently drift between what `otacon install`
 writes elsewhere and what this repo runs.
+
+The build also **materializes** `skillMd()` into `dist/skills/otacon/SKILL.md`
+(`scripts/gen-skill-asset.ts`, run after `tsc` in the `build` chain; `files: ["dist"]`
+ships it), so the package carries the wrapper text as a real on-disk file. From the
+installed package `packagedSkillPath()` (`src/cli/install/wrapper.ts`) resolves that
+file's absolute path; it returns `undefined` when no stable packaged copy exists:
+running from source (the path lands at `src/skills/otacon/SKILL.md`, which never exists)
+or from an ephemeral npx cache (an `_npx` path segment, which a later invocation may
+prune). A test asserts the shipped file byte-equals `skillMd()`, the same generated-file
+discipline as the dogfood wrapper and the version mirror.
 
 **Single source for the version.** `package.json`'s `version` is authoritative;
 `src/shared/version.ts` (the `VERSION` the version handshake compares, §13) is
