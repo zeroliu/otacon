@@ -1017,8 +1017,9 @@ telemetry list rather than a stack of boxes.
 not the mono/sans visual treatment, so genuine reading content never lands in the
 telemetry tier just because it is set in mono. Five tokens carry the scale, ordered
 small to large: `--fs-meta` (12px) for labels and telemetry (eyebrows, chip and badge
-text, ids, repo·branch, timestamps, fence headers, field labels), `--fs-ui` (14px) for
-controls (buttons, inputs, tabs, menu items) and for monospace code and diff,
+text, ids, repo·branch, timestamps, fence headers, field labels) and for mono control
+labels (buttons, tabs, toggles, menu and delete/approve actions), `--fs-ui` (14px) for
+sans text inputs and for monospace code and diff,
 `--fs-body` (16px) for primary reading content (prose, field values, callout bodies,
 table cells, quotes), `--fs-title` (18px) for headings (card titles, phase names, grill
 questions, markdown h1/h2, and the icon-glyph buttons that need presence), and
@@ -1036,7 +1037,11 @@ code and diff sit one notch below their sans equivalent (code at ui 14, not body
 dense block reads as operational without crowding the reading column. Icon-only glyph
 buttons that carry presence (the section ⋯ menu, the gear, the ☰ hamburger, the sidebar
 collapse and expand handles) take title (18); small inline status glyphs (the tally
-mark, the grill star) stay meta (12); text controls hold ui (14). The masthead session
+mark, the grill star) stay meta (12); mono control labels — uppercase, mono, and
+tracked, the same treatment the telemetry labels wear — also take meta (12) rather than
+ui, the one place size keys off the mono treatment, because at ui they optically
+out-shout the sans content beside them (see DECISIONS.md "Mono control labels join the
+meta tier"); sans text inputs hold ui (14). The masthead session
 title is the one display element that compacts: it shrinks from display (22) to title
 (18) on scroll and on the phone, never below a heading size. Nothing renders below 12px,
 text or glyph: that floor holds, and the 12px `--fs-meta` token is the smallest in the

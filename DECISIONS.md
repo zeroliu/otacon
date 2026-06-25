@@ -3722,6 +3722,37 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   content (then it joins code at ui), or the `max(12px, …)` clamp pattern needs a
   different floor (then the guard's `12px` literal moves with it).
 
+### Sub-note: mono control labels join the meta (12px) tier (2026-06-25)
+
+- **Decision:** Mono CONTROL labels render at `--fs-meta` (12px), not `--fs-ui` (14px):
+  buttons (`.btn`, `.sel-btn`, `.seg-btn`, `.ctrl-approve`, `.bar-approve`/`.bar-quest`,
+  the delete actions `.card-delete`/`.session-delete`/`.sl-delete`), tabs (`.scope-tab`),
+  toggles and action labels (`.grill-note-toggle`, `.ctrl-changelog`,
+  `.thread-followup-open`, `.drawer-whole`/`.drawer-tally`, `.approving-escape`,
+  `.grill-undo`, `.pending-act`), the section menu item (`.sec-item`), and the mono form
+  controls (`.field-input`, `.field-reset`, `.repo-picker-select select`). Mono *content*
+  stays at ui (14): code (`.fence pre`), diff (`.dline`), live-changelog/status text
+  (`.lc-main`, `.lc-detail-body`, `.lc-empty`, `.now-playing`), and path/hint/error labels
+  (`.path-banner-path`, `.sec-hint`, `.field-error`, `.settings-save-error`). All sans
+  rules are unchanged. No new token: this reuses `--fs-meta`, so the five-role scale and
+  its four guards in `src/ui/styles.test.ts` are untouched (12 sits on the floor, not
+  below it).
+- **Why:** A control label and the reading text beside it, both set at `--fs-ui` (14),
+  looked unequal — the button read distinctly larger. Both are genuinely 14px; the
+  difference is optical, from the control's uppercase (cap-height fills ~35% more than a
+  lowercase x-height), the mono face (wider, slightly larger glyphs than the sans), and
+  the 600 weight plus tracking. An uppercase-mono-tracked label cannot read the same as
+  lowercase sans body at the same px, so it drops one notch. We land on meta (12) rather
+  than a bespoke 13px because mono control labels already wear the exact uppercase + mono
+  + tracking treatment the telemetry labels wear, so they belong in that tier — reusing
+  the token avoids a sixth role and the scale drift it would invite. This narrowly revises
+  the "5-role semantic type scale" entry's "text controls take ui" claim: that holds for
+  *sans* text inputs; *mono* control labels now take meta. Scoped to controls so mono
+  code/diff content keeps its legibility at 14.
+- **Revisit when:** A mono control needs more prominence than the 12px label tier gives
+  (then it earns its own size, and the guard's expected token set is updated in the same
+  commit), or the 12px floor moves (then mono controls move with it).
+
 ## Reuse an existing open tab: daemon-wide live-tab heartbeat + TTL (2026-06-24)
 
 - **Decision:** The daemon tracks its live browser tabs with an explicit SPA heartbeat
