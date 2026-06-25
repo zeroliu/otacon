@@ -826,7 +826,7 @@ session's queue; a comment on plan A wakes only plan A's agent. N parked waits =
 HTTP requests, no contention.
 
 **UI switching.** The **app shell sidebar** is the persistent session list (§10): one
-condensed row per active session — accent, title, repo/branch, status glyph, agent dot,
+condensed row per active session — accent, title, repo/branch, status icon, agent dot,
 unread badge — with approved (and implemented / implement_failed) sessions folded into a
 collapsed `approved (n)` disclosure below, the same split the old index read. On desktop
 (≥960px) it's a drag-resizable, collapsible column (240px by default) wrapping every
@@ -1040,11 +1040,32 @@ The app shell's left sidebar is the persistent session list (the desktop index).
 Its header row carries the graphic OTACON wordmark (§3, the home link) on the left, with
 the settings gear and a `«` collapse toggle grouped on the right; the column itself is
 **drag-resizable** (a right-edge separator, width persisted) and **collapsible**. Below
-the header, one condensed row per session: accent, status glyph, title, repo + branch,
-agent-presence dot, an unread badge, and a hover-revealed delete. Click → review screen. The same status
-derivation drives the row glyph and the review chip: `awaiting your review` /
+the header, one condensed row per session: accent, status icon, title, repo + branch,
+agent-presence dot, an unread badge, and a hover-revealed delete. Click → review screen.
+On hover-capable devices the delete reserves no row space at rest: it overlays the agent
+dot's slot at the row's right edge, fading in (the dot fading out) on hover or focus. On
+touch it stays an in-flow control at reduced opacity so it remains tappable.
+
+**Status icons.** The leading indicator is a lucide icon whose meaning is derived
+liveness-aware (the same `questionsPending` / `agentLive` rules the review chips read,
+single-sourced so the row and the chip can never disagree). It falls into three groups:
+
+- **Attention** (your turn): these also lift the row with a subtle brighter
+  background so the set reads as a group at a glance, regardless of accent.
+  `answer needed` (unanswered grill questions, a question-bubble icon) and
+  `review needed` (`in_review`, an eye icon).
+- **Working** (the agent is producing or building the plan: `draft` / `revising` /
+  `finalizing` / `implementing`): a spinning loader **only while the agent is on the
+  line**. If the agent has gone quiet (offline past the presence threshold) the row
+  shows a warning triangle (`stalled`) instead, so a spinner never implies motion that
+  has stopped.
+- **Terminal** (static outcomes): `approved` and `implemented` read done (a check and
+  a double-check), `implement_failed` reads error (a circled cross in the palette's one
+  red).
+
+The review chip still carries the prose status (`awaiting your review` /
 `agent revising` / `questions pending` /
-`approved` / `implementing` / `implemented` / `implement failed`, plus an
+`approved` / `implementing` / `implemented` / `implement failed`), plus an
 **activity-driven draft chip**: while a session is in `draft`
 (it sits there through research + drafting, before revision 1 exists) the chip
 shows the latest `otacon progress` note (truncated), falling back to `agent
