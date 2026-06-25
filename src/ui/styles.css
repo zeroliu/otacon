@@ -303,7 +303,7 @@ body::before {
 
 .card-title {
   margin: 0;
-  font-size: 16px;
+  font-size: var(--fs-title);
   font-weight: 650;
   letter-spacing: -0.01em;
   line-height: 1.3;
@@ -550,7 +550,7 @@ body::before {
 
 .empty-title {
   margin: 0 0 12px;
-  font: 600 var(--fs-meta)/1 var(--mono);
+  font: 600 var(--fs-title)/1 var(--mono);
   letter-spacing: 0.22em;
   text-transform: uppercase;
 }
@@ -558,7 +558,7 @@ body::before {
 .empty-body {
   max-width: 44ch;
   margin: 0 auto;
-  font-size: var(--fs-ui);
+  font-size: var(--fs-body);
   line-height: 1.65;
 }
 
@@ -678,7 +678,7 @@ code {
 .session-title {
   margin: 0;
   min-width: 0;
-  font-size: 20px;
+  font-size: var(--fs-display);
   font-weight: 700;
   letter-spacing: -0.015em;
   line-height: 1.25;
@@ -689,7 +689,7 @@ code {
 }
 
 .review-header.compact .session-title {
-  font-size: var(--fs-body);
+  font-size: var(--fs-title);
 }
 
 /* The "- repo · branch" locator beside the title in `.rh-ident`. Muted/mono and
@@ -719,7 +719,7 @@ code {
   border: 1px dashed var(--line-strong);
   border-top: 2px solid color-mix(in srgb, var(--accent) 60%, var(--line-strong));
   color: var(--ink-soft);
-  font-size: var(--fs-ui);
+  font-size: var(--fs-body);
   line-height: 1.65;
   animation: card-in 0.4s cubic-bezier(0.22, 0.7, 0.3, 1) 60ms both;
 }
@@ -1027,9 +1027,19 @@ code {
 .md h3,
 .md h4 {
   margin: 1.1em 0 0.45em;
-  font-size: var(--fs-body);
   font-weight: 650;
   letter-spacing: -0.01em;
+}
+
+/* Heading step in the dossier prose: h1/h2 lift to title, h3/h4 hold body. */
+.md h1,
+.md h2 {
+  font-size: var(--fs-title);
+}
+
+.md h3,
+.md h4 {
+  font-size: var(--fs-body);
 }
 
 .md hr {
@@ -1095,7 +1105,7 @@ code {
 }
 
 .phase-n {
-  font: 700 21px/1 var(--mono);
+  font: 700 var(--fs-display)/1 var(--mono);
   letter-spacing: 0.02em;
   color: color-mix(in srgb, var(--accent) 75%, var(--ink));
   font-variant-numeric: tabular-nums;
@@ -1103,7 +1113,7 @@ code {
 
 .phase-name {
   margin: 0;
-  font-size: 17px;
+  font-size: var(--fs-title);
   font-weight: 650;
   letter-spacing: -0.01em;
   line-height: 1.3;
@@ -1601,8 +1611,7 @@ code {
   margin: 0 0 9px;
   padding: 1px 0 1px 9px;
   border-left: 2px solid color-mix(in srgb, var(--accent) 55%, var(--line-strong));
-  font-size: var(--fs-meta);
-  line-height: 1.5;
+  font: var(--fs-body)/1.5 var(--sans);
   color: var(--ink-soft);
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -1932,7 +1941,7 @@ code {
 }
 
 .rail-empty-glyph {
-  font-size: 22px;
+  font-size: var(--fs-display);
   line-height: 1;
   color: color-mix(in srgb, var(--ink-soft) 55%, transparent);
 }
@@ -1940,8 +1949,7 @@ code {
 .rail-empty-copy {
   margin: 0;
   max-width: 22ch;
-  font: var(--fs-meta)/1.7 var(--mono);
-  letter-spacing: 0.04em;
+  font: var(--fs-body)/1.7 var(--sans);
   color: var(--ink-soft);
 }
 
@@ -2298,7 +2306,7 @@ code {
 }
 
 .tally-mark {
-  font-size: 12px;
+  font-size: var(--fs-meta);
   line-height: 1;
 }
 
@@ -2674,7 +2682,7 @@ code {
 }
 
 .grill-glyph {
-  font-size: 12px;
+  font-size: var(--fs-meta);
 }
 
 .grill-mode {
@@ -2691,7 +2699,7 @@ code {
 
 .grill-question {
   margin: 11px 0 0;
-  font-size: 16px;
+  font-size: var(--fs-title);
   font-weight: 550;
   line-height: 1.5;
   letter-spacing: -0.005em;
@@ -2751,7 +2759,7 @@ code {
 
 .grill-rec {
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--fs-meta);
 }
 
 .grill-rec-word {
@@ -3564,7 +3572,7 @@ code {
 
 .approve-sub {
   margin: 7px 0 0;
-  font-size: var(--fs-ui);
+  font-size: var(--fs-body);
   line-height: 1.6;
   color: var(--ink-soft);
 }
@@ -3837,7 +3845,7 @@ code {
   border-radius: 7px;
   background: none;
   color: var(--ink-soft);
-  font: 700 15px/1 var(--mono);
+  font: 700 var(--fs-title)/1 var(--mono);
   cursor: pointer;
   transition: color 0.12s ease, border-color 0.12s ease;
 }
@@ -3935,7 +3943,7 @@ code {
   border-radius: 8px;
   background: none;
   color: var(--ink);
-  font: 600 12px/1.2 var(--mono);
+  font: 600 var(--fs-ui)/1.2 var(--mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   text-align: left;
@@ -3981,7 +3989,7 @@ code {
   .page input,
   .page textarea,
   .page select {
-    font-size: 16px;
+    font-size: var(--fs-body);
   }
 
   /* On phone the always-on bar wraps to keep everything visible: title +
@@ -3994,7 +4002,7 @@ code {
   }
 
   .review-header .session-title {
-    font-size: 16px;
+    font-size: var(--fs-title);
   }
 
   /* The ❓-queue jump (bottom bar, phone-only) deep-links the open question in
@@ -4037,7 +4045,7 @@ code {
   .drawer-whole {
     min-height: 44px;
     min-width: 44px;
-    font-size: 14px;
+    font-size: var(--fs-ui);
     color: var(--ink); /* glyph-only: too quiet at ink-soft on dark glass */
   }
 
@@ -4061,7 +4069,7 @@ code {
     border-radius: 9px;
     background: color-mix(in srgb, var(--accent) 9%, transparent);
     color: var(--accent);
-    font: 700 12px/1 var(--mono);
+    font: 700 var(--fs-ui)/1 var(--mono);
     cursor: pointer;
   }
 
@@ -4140,7 +4148,7 @@ code {
 
 /* The gear: a quiet glyph link, inked like the link-state, accent on hover. */
 .settings-link {
-  font-size: 17px;
+  font-size: var(--fs-title);
   line-height: 1;
   color: var(--ink-soft);
   text-decoration: none;
@@ -4963,7 +4971,7 @@ code {
   background: none;
   padding: 2px 4px;
   color: var(--ink-soft);
-  font: 14px/1 var(--mono);
+  font: var(--fs-title)/1 var(--mono);
   cursor: pointer;
 }
 
@@ -5034,7 +5042,7 @@ code {
     border-radius: 7px;
     background: var(--surface);
     color: var(--ink-soft);
-    font: 14px/1 var(--mono);
+    font: var(--fs-title)/1 var(--mono);
     cursor: pointer;
     box-shadow: var(--shadow);
   }
@@ -5067,7 +5075,7 @@ code {
   border-radius: 7px;
   background: none;
   color: var(--ink-soft);
-  font: 15px/1 var(--mono);
+  font: var(--fs-title)/1 var(--mono);
   cursor: pointer;
   transition: color 0.12s ease, border-color 0.12s ease;
 }

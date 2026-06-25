@@ -149,6 +149,70 @@ test("every sub-1em / sub-100% font size is clamped with max(12px, …)", () => 
   ).toEqual([]);
 });
 
+test("no font SIZE outside :root is a px literal (except max(12px, …) clamps)", () => {
+  // The final guard (DECISIONS.md "5-role semantic type scale"): once the scale
+  // is fully wired, every font SIZE outside the token block(s) must be a
+  // var(--fs-*) token or an intentional max(12px, …) inline floor, never a bare
+  // px literal. This is what keeps the five roles the single source of truth for
+  // size; a stray `font-size: 17px;` would silently fork the scale.
+  //
+  // Scope notes:
+  //  - The :root block(s) hold the canonical `--fs-*: <px>` definitions, so they
+  //    are stripped before scanning (they legitimately carry px). :root carries
+  //    no nested braces, so a `[^{}]*` body match removes each block cleanly.
+  //  - In a `font:` shorthand the px we care about is the SIZE, the token before
+  //    an optional `/<line-height>`. A px in the `/<lh>` position (e.g. the `/1`
+  //    in `var(--fs-display)/1` is a var, but a literal `16px/20px` line-height
+  //    px) is out of scope: only the SIZE must be tokenised. We isolate the size
+  //    by cutting the value at the first `/` that is not inside parentheses.
+  //  - max(12px, …) is the sanctioned inline clamp (code, pills, q-cite); a px
+  //    that lives inside such a max(…) is allowed.
+  const noRoot = css.replace(/:root\s*\{[^{}]*\}/g, "");
+
+  const offenders: string[] = [];
+  let lineNo = 1;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  FONT_DECL.lastIndex = 0;
+  while ((match = FONT_DECL.exec(noRoot)) !== null) {
+    lineNo += countNewlines(noRoot.slice(lastIndex, match.index));
+    lastIndex = match.index;
+
+    const prop = match[1] ?? "font";
+    const value = (match[2] ?? "").trim();
+
+    // Isolate the SIZE portion. For `font-size:` it is the whole value. For the
+    // `font:` shorthand the size is everything before the first top-level `/`
+    // (the size/line-height separator); a `/` nested inside parentheses, were
+    // one to appear, is skipped via a paren-depth counter.
+    let size = value;
+    if (prop === "font") {
+      let depth = 0;
+      for (let i = 0; i < value.length; i++) {
+        const ch = value[i];
+        if (ch === "(") depth++;
+        else if (ch === ")") depth--;
+        else if (ch === "/" && depth === 0) {
+          size = value.slice(0, i);
+          break;
+        }
+      }
+    }
+
+    // Remove every max(12px, …) clamp from the size so its 12px is not counted,
+    // then any surviving px in the size position is a forbidden literal.
+    const sizeNoClamp = size.replace(/max\(\s*12px\s*,[^)]*\)/g, "");
+    if (/\d+(?:\.\d+)?px/.test(sizeNoClamp)) {
+      offenders.push(`line ${lineNo}: ${prop}: ${value}; → size carries a px literal (use var(--fs-*) or max(12px, …))`);
+    }
+  }
+
+  expect(
+    offenders,
+    `px font sizes found outside :root:\n${offenders.join("\n")}`,
+  ).toEqual([]);
+});
+
 function countNewlines(s: string): number {
   let n = 0;
   for (let i = 0; i < s.length; i++) {

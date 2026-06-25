@@ -1597,7 +1597,10 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   initial-scale=1` — no `maximum-scale`/`user-scalable=no`), so pinch-zoom keeps
   working. iOS's *other* zoom — the auto-zoom that fires when you focus a field
   whose text is below 16px — is defeated instead by sizing every touch input
-  (`input`/`textarea`/`select`) to 16px at the ≤639px breakpoint. CSS only.
+  (`input`/`textarea`/`select`) to `var(--fs-body)` (16px) at the ≤639px breakpoint.
+  CSS only; the override rides the body token rather than a hardcoded 16px, so the
+  anti-zoom floor and the reading-content size are one value (see "A 5-role semantic type
+  scale": lowering `--fs-body` below 16 reinstates the zoom).
 - **Why:** The two zooms are different mechanisms and only one is the bug.
   `maximum-scale=1` would kill both, but pinch-zoom is a baseline accessibility
   affordance (low-vision users magnify), so suppressing it to fix a focus jank is
@@ -1606,7 +1609,9 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   without touching the meta. The grill interview reversed the initial
   "disable both" answer for exactly this a11y reason.
 - **Revisit when:** A field must render below 16px on a phone for layout reasons
-  (then: scope the rule, or accept the zoom there), or iOS changes the threshold.
+  (then: scope the rule, or accept the zoom there), or iOS changes the threshold, or
+  `--fs-body` is lowered below 16 (which would silently reinstate the focus-zoom, since
+  the override now tracks that token).
 
 ## Keyboard-aware sheets: VisualViewport inset + a body scroll-lock, one shared mechanism
 
@@ -3637,34 +3642,56 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 ## A 5-role semantic type scale (2026-06-25)
 
 - **Decision:** The three size tokens (`--fs-prose` 16 / `--fs-body` 14 / `--fs-label`
-  12) are replaced by a 5-role semantic scale, assigned by READING ROLE rather than by
-  mono/sans visual treatment: `--fs-meta` (12px) labels and telemetry, `--fs-ui` (14px)
-  controls plus monospace code and diff, `--fs-body` (16px) primary reading content,
-  `--fs-title` (18px) headings, `--fs-display` (22px) the one masthead title and the big
-  phase numeral. This first step is a value-preserving rename: meta/ui/body take over the
-  three old tokens at their old sizes (the reading column unifies onto `--fs-body`, and
-  monospace code/diff sits one notch below its sans equivalent, code at ui not body),
-  while title and display are introduced as defined-but-unwired tokens for the later
-  heading and masthead work that adopts them. The 12px floor still holds and is still
-  enforced by the existing
-  `src/ui/styles.test.ts` font-size guard; a second test in the same file now pins the
-  scale to exactly these five tokens at exactly these px values and fails if the retired
-  names (`--fs-prose` / `--fs-label`) reappear or if `--fs-body` is redefined off 16px.
-  (Note: `--fs-body` is reused for a NEW value, 16 instead of 14, so the rename is done
-  in the order body→ui, prose→body, label→meta to avoid a name collision.)
+  12) are replaced by a fully wired 5-role semantic scale, assigned by READING ROLE
+  rather than by mono/sans visual treatment: `--fs-meta` (12px) labels and telemetry,
+  `--fs-ui` (14px) controls plus monospace code and diff, `--fs-body` (16px) primary
+  reading content, `--fs-title` (18px) headings, `--fs-display` (22px) the one masthead
+  title and the big phase numeral. Size follows reading role, so the same content reads at
+  the same size whether it is set in sans or mono. All five roles are now in use:
+  - Headings take title: card titles, phase names, grill questions, and markdown h1/h2
+    (h3/h4 stay body), each keeping its own weight and tracking.
+  - The masthead session title takes display and is the one element that compacts,
+    shrinking display→title on scroll and on the phone, never below a heading size; the
+    big phase numeral takes display and does not compact.
+  - Icon-only glyph BUTTONS that need presence take title (the section ⋯ menu, the gear,
+    the ☰ hamburger, the sidebar « collapse and » expand handles); small inline status
+    glyphs take meta (the tally mark, the grill star); text controls take ui (the
+    dropdown menu item, the phone-bar tally button, the drawer whole-word toggle).
+  - Reading content that historically wore the mono telemetry treatment is promoted into
+    the body tier and switched to the sans face where it is prose: the anchored comment
+    quotes (composer/pending/thread) and the empty-rail copy now read as body-16 sans,
+    while their accompanying slugs/ids/timestamps stay meta-12 mono. Genuine
+    labels/ids/timestamps/chips/badges/eyebrows are NOT promoted.
+  The 12px floor still holds, and the scale is now the single source of truth for size:
+  outside the `:root` token block(s), NO `font`/`font-size` declaration carries a px size
+  literal: every size is a `var(--fs-*)` token or an intentional `max(12px, …)` inline
+  clamp. `src/ui/styles.test.ts` carries four guards: the 12px floor, the exact-five-token
+  scale (retired names `--fs-prose`/`--fs-label` must never reappear and `--fs-body` must
+  stay 16), the em-relative `max(12px, …)` clamp on sub-1em sizes, and a final guard that
+  the font SIZE position outside `:root` is always a token or a `max(12px, …)` (a px in a
+  `font:` shorthand's `/<line-height>` slot is out of scope; only the size must be
+  tokenised).
 - **Why:** From a grill (q1-q4). The old three-token scale keyed size off visual
   treatment, which dumped real reading content (mono field values, callout bodies, table
-  cells) into the 12px telemetry tier simply because it was set in mono, so genuine
-  content read as hairline labels. Keying size off reading role instead lets the same
-  content sit at body size whether it is sans or mono, while labels stay at meta and the
-  one masthead earns a display tier. Splitting headings (title) and the masthead/numeral
-  (display) out of the old prose tier gives hierarchy the prior scale could not express.
-  Pinning the scale in a guard keeps a future edit from re-fragmenting it or quietly
-  reintroducing a retired token name.
-- **Revisit when:** A new surface needs a sixth role (e.g. a distinct caption or a
-  larger hero), at which point a token is added and the scale-pinning guard's expected
-  set is updated in the same commit; or the code-one-notch-down convention stops reading
-  well at some density, at which point code rejoins body.
+  cells, anchored quotes) into the 12px telemetry tier simply because it was set in mono,
+  so genuine content read as hairline labels. Keying size off reading role instead lets
+  the same content sit at body size whether it is sans or mono, while labels stay at meta
+  and the one masthead earns a display tier. Splitting headings (title) and the
+  masthead/numeral (display) out of the old prose tier gives hierarchy the prior scale
+  could not express. Normalizing icon glyphs by role (presence buttons at title, status
+  glyphs at meta, text controls at ui) stops a per-glyph px from drifting and keeps the
+  controls visually coherent. Promoting the telemetry-styled quotes and empty copy into
+  the sans body face matches their reading role to their rendered size and face (they are
+  sentences the user reads, not identifiers). The final no-px-outside-`:root` guard makes
+  the five roles the literal single source of truth: a stray `font-size: 17px;` can no
+  longer silently fork the scale.
+- **Revisit when:** A new surface needs a sixth role (e.g. a distinct caption or a larger
+  hero), at which point a token is added and the scale-pinning guard's expected set is
+  updated in the same commit; or the code-one-notch-down convention stops reading well at
+  some density, at which point code rejoins body; or `--fs-body` is ever lowered below
+  16px. Because the mobile anti-zoom override now rides `var(--fs-body)` (see "Preserve
+  pinch-zoom; kill only the iOS input auto-zoom"), dropping it under 16 would reinstate
+  the iOS Safari focus-zoom, so the two must move together.
 
 ### Sub-note: unifying the dossier reading column on body, and a real em floor (2026-06-25)
 

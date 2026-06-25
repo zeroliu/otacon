@@ -1020,22 +1020,34 @@ small to large: `--fs-meta` (12px) for labels and telemetry (eyebrows, chip and 
 text, ids, repo·branch, timestamps, fence headers, field labels), `--fs-ui` (14px) for
 controls (buttons, inputs, tabs, menu items) and for monospace code and diff,
 `--fs-body` (16px) for primary reading content (prose, field values, callout bodies,
-table cells, quotes), `--fs-title` (18px) reserved for headings (card titles, phase
-names, grill questions, markdown h1/h2, icon-glyph buttons), and `--fs-display` (22px)
-reserved for the one masthead session title and the big phase numeral. The meta, ui, and
-body roles carry the rendered sizes; title and display are defined and wait on the
-heading and masthead work that adopts them. Every substantive piece of dossier reading
-content renders at body (16): prose, field values, callout bodies, the Files list, table
-cells (both `td` and the mono-uppercase `th` header cells, which keep their weight and
-tracking but share the body size), and Given/When/Then clause text. Monospace code and
-diff sit one notch below their sans equivalent (code at ui 14, not body), so a dense
-block reads as operational without crowding the reading column. Nothing renders below
-12px, text or glyph: that floor holds, and the 12px `--fs-meta` token is the smallest in
-the scale. Inline sizes that scale with their context (inline code, inline scope pills,
-and the inline citation chip, each set as a sub-1em multiplier) are clamped with
-`max(12px, …)` so they can never fall under the floor when nested in a smaller context. The telemetry character comes from
-mono plus uppercase plus tracking plus color, not from sub-12px size; icon-only controls
-keep an adequate hit box.
+table cells, quotes), `--fs-title` (18px) for headings (card titles, phase names, grill
+questions, markdown h1/h2, and the icon-glyph buttons that need presence), and
+`--fs-display` (22px) for the one masthead session title and the big phase numeral. All
+five roles carry rendered sizes: the scale is fully wired, no token waits on adoption.
+Every substantive piece of dossier reading content renders at body (16): prose, field
+values, callout bodies, the Files list, table cells (both `td` and the mono-uppercase
+`th` header cells, which keep their weight and tracking but share the body size), and
+Given/When/Then clause text. Reading content that once wore the mono telemetry treatment
+is promoted into the body tier in the sans face: the anchored comment quotes
+(composer, pending, and thread quotes) and the empty-rail copy now read as body-16 sans
+prose, while their accompanying slugs, ids, and timestamps stay meta-12 mono. Headings
+step the dossier prose, markdown h1/h2 at title (18) over h3/h4 at body (16). Monospace
+code and diff sit one notch below their sans equivalent (code at ui 14, not body), so a
+dense block reads as operational without crowding the reading column. Icon-only glyph
+buttons that carry presence (the section ⋯ menu, the gear, the ☰ hamburger, the sidebar
+collapse and expand handles) take title (18); small inline status glyphs (the tally
+mark, the grill star) stay meta (12); text controls hold ui (14). The masthead session
+title is the one display element that compacts: it shrinks from display (22) to title
+(18) on scroll and on the phone, never below a heading size. Nothing renders below 12px,
+text or glyph: that floor holds, and the 12px `--fs-meta` token is the smallest in the
+scale. Inline sizes that scale with their context (inline code, inline scope pills, and
+the inline citation chip, each set as a sub-1em multiplier) are clamped with
+`max(12px, …)` so they can never fall under the floor when nested in a smaller context.
+Outside the `:root` token block no `font`/`font-size` declaration carries a px size
+literal; every size is a `var(--fs-*)` token or one of those `max(12px, …)` clamps, so
+the five roles stay the single source of truth. The telemetry character comes from mono
+plus uppercase plus tracking plus color, not from sub-12px size; icon-only controls keep
+an adequate hit box.
 
 **Callouts** apply this vocabulary to plan prose: a `> [!risk]` blockquote becomes a
 flat panel with a 2px top rule and a glyph+label inked in the type's hue — risk amber,
@@ -1288,9 +1300,11 @@ returns to the index.
   breakpoint — approve and the question tally fold into it and leave the header strip,
   never shown twice.
 - Agent question cards answerable with chips — designed for grilling on the move.
-- Touch inputs (composer, drawer edit, grill answer) are sized ≥16px so iOS never
-  auto-zooms the page when a field is focused; the viewport meta stays permissive,
-  so pinch-zoom stays available for accessibility.
+- Touch inputs (composer, drawer edit, grill answer) are sized at `var(--fs-body)`
+  (16px) so iOS never auto-zooms the page when a field is focused; the size rides the
+  body token rather than a hardcoded 16px, so the anti-zoom floor and the reading size
+  stay coupled. The viewport meta stays permissive, so pinch-zoom stays available for
+  accessibility.
 - Bottom sheets are keyboard-aware: every sheet (composer, the section ⋯ menu,
   the approve confirm) rides above the on-screen keyboard — tracked live via the
   VisualViewport API — so its actions never hide under the fold, and the plan
