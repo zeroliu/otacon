@@ -8,6 +8,7 @@ import type { RegistrySession } from "../../shared/types.js";
 import { planPath } from "../../shared/paths.js";
 import { api, baseUrl, ensureDaemon } from "../client.js";
 import { fail, notice, printJson, usageError } from "../output.js";
+import { refreshInstalledWrappers } from "../install/wrapper.js";
 import { currentBranch, findRepoRoot, realpathOr } from "../session.js";
 import { maybeAutoUpdate } from "../update.js";
 
@@ -18,6 +19,16 @@ export async function startCommand(argv: string[]): Promise<number> {
   // proceed on the installed version. Must run before ensureDaemon so the
   // re-exec's version handshake restarts the stale daemon.
   await maybeAutoUpdate(argv);
+
+  // Fallback/migration: re-assert already-installed managed wrappers to their
+  // desired state (promote a copy to a symlink, repair a drifted project copy).
+  // Inert for a correct symlink, skipped on source runs, notices go to stderr,
+  // so the single-JSON-line stdout contract below is untouched.
+  try {
+    refreshInstalledWrappers();
+  } catch {
+    /* fail-open: never block start on a wrapper refresh */
+  }
 
   const { values } = parseArgs({
     args: argv,

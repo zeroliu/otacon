@@ -2502,6 +2502,56 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** Another consumer needs the version in a form a flat constant can't
   provide.
 
+## Ship `skillMd()` as a packaged file via build-time codegen
+
+- **Decision:** The `build` chain runs `scripts/gen-skill-asset.ts` after `tsc` to
+  write `skillMd()` into `dist/skills/otacon/SKILL.md`, shipped via `files: ["dist"]`.
+  `packagedSkillPath()` (`src/cli/install/wrapper.ts`) resolves that file's absolute
+  path from the installed package, or `undefined` when no stable copy exists (running
+  from source, or an `_npx` ephemeral cache). A test asserts the shipped file equals
+  `skillMd()`.
+- **Why:** `otacon install` copies the wrapper text today, so it goes stale when the
+  binary auto-updates. The fix is to SYMLINK the installed wrapper to a real in-package
+  file, so a binary upgrade refreshes the skill for free. A symlink needs a stable
+  on-disk target, but `skillMd()` is a function, not a file, so the build emits its
+  output once. Source/npx paths are unstable (the source asset never exists; an npx
+  cache may be pruned), so `packagedSkillPath()` returns `undefined` there and callers
+  copy instead. Mirrors the gen-version pattern, with the same equality test as a
+  backstop against the generator drifting from `skillMd()`.
+- **Revisit when:** The symlink install path lands (later phases consume
+  `packagedSkillPath()`), or a consumer needs the asset in a form the flat file can't
+  provide.
+
+## Self-heal installed wrappers on start (fallback + migration path)
+
+- **Decision:** `otacon start` calls `refreshInstalledWrappers()`
+  (`src/cli/install/wrapper.ts`) right after the auto-update gate: for every wrapper
+  that is ALREADY installed at a managed location, it re-asserts the desired state via
+  `ensureWrapper`: promoting a user-scope copy (or repairing a dangling/wrong-target
+  symlink) to a symlink to the packaged file, and rewriting a drifted project-scope
+  copy to the current `skillMd()`. It never creates a wrapper that does not already
+  exist, never touches a foreign (unmarked) file, skips entirely on a source run, and
+  is best-effort and fail-open (a refresh never blocks `start`); notices go to stderr.
+- **Why:** Once the install path symlinks user-scope wrappers, a fresh `otacon install`
+  is already correct, so the only installs that go stale on a binary upgrade are the
+  ones that could not symlink in the first place: copy-fallback installs
+  (Windows/npx), committed project copies, and legacy pre-symlink installs from before
+  this landed. A reinstall would fix them, but users do not reinstall; piggybacking a
+  re-assertion on `start` (which they run constantly) migrates those installs with zero
+  user action, while staying a true no-op for the common correct symlink. It is skipped
+  on a source run because this checkout's committed `otacon-dev` dogfood wrapper is
+  generated and test-guarded, so a source-mode `start` must never rewrite it. It fires
+  only on real drift (each wrapper is converged idempotently), and it heals only what
+  it owns (the managed marker, or a symlink at our own location) so a hand-written
+  SKILL.md is left alone. A project-scope rewrite **mutates the working tree** of the
+  repo the agent is in (accepted by design): a committed project wrapper that drifted
+  from the current protocol is stale and should be refreshed, and the change is an
+  ordinary tracked diff the user can see and commit or discard.
+- **Revisit when:** A project rewrite surprising a user (an unexpected working-tree
+  change) becomes a real complaint (then: gate project-scope heals behind a flag or a
+  prompt), or the fallback set shrinks to nothing because every install platform
+  symlinks reliably (then this pass can become install-only).
+
 ## npm trusted publishing (OIDC), no stored token; provenance + SHA-pinned actions
 
 - **Decision:** The release workflow publishes with `npm publish --access public` and
@@ -3710,6 +3760,35 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** A non-version input begins to drive the channel (the seam should then
   carry that instead), or the release stops stamping `version.ts` before the gates run (the
   coupling would no longer exist).
+
+## Symlink user-scope wrappers to the packaged file; project-scope copies (2026-06-25)
+
+- **Decision:** `otacon install` SYMLINKS a user-scope wrapper to the packaged
+  `SKILL.md` shipped in the npm package (`dist/skills/otacon/SKILL.md`, materialized
+  from `skillMd()` at build time by `scripts/gen-skill-asset.ts`). It falls back to
+  COPYING the current text in two cases: the symlink call throws (filesystem/privilege
+  unsupported, e.g. Windows or a cross-device link), or there is no stable packaged file
+  to point at (`packagedSkillPath()` is `undefined`: a source run, or an ephemeral npx
+  cache it already rejected). A project-scope wrapper (`otacon install --project`) ALWAYS
+  copies. `ensureWrapper(path, scope, pkgPath?, symlink?)` owns the decision, converges
+  idempotently (a correct symlink or a matching copy is a no-op; a scope/availability
+  change self-heals by removing what is in the way first), and returns the resulting
+  `mode` for the install JSON. The injected `symlink` argument is a test seam to force the
+  copy fallback without a real unsupported filesystem.
+- **Why:** Copy-only wrappers go stale silently when the binary auto-updates: the
+  installed text keeps teaching an old protocol until the user happens to reinstall.
+  Pointing the wrapper at a real file the new build overwrites refreshes every user-scope
+  skill for free on upgrade (the gstack-style "install a pointer, not a snapshot"
+  rationale). But that only works when the target is a stable, machine-local path, which
+  rules out two surfaces: a committed/shared `--project` wrapper must be machine
+  INDEPENDENT, so it cannot symlink to a global path a teammate or CI lacks; and there is
+  nothing durable to link to from source or a transient npx cache. In all three the copy
+  is the correct artifact, and a later install self-heals it back to a symlink once a
+  stable package path exists, so the wrapper still ends up fresh.
+- **Revisit when:** A packaged-asset hash or version stamp lets us detect a stale COPY and
+  rewrite it on the next command (closing the gap that copy-mode users do not auto-refresh
+  on upgrade), or the package ships the wrapper at a path stable enough that even
+  project/npx installs could safely link to it.
 
 ## Side-nav status indicators are lucide-react icons (2026-06-25)
 
