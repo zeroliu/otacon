@@ -1024,10 +1024,16 @@ table cells, quotes), `--fs-title` (18px) reserved for headings (card titles, ph
 names, grill questions, markdown h1/h2, icon-glyph buttons), and `--fs-display` (22px)
 reserved for the one masthead session title and the big phase numeral. The meta, ui, and
 body roles carry the rendered sizes; title and display are defined and wait on the
-heading and masthead work that adopts them. Monospace code and diff sit one notch below
-their sans equivalent (code at ui, not body), so a dense block reads as operational
-without crowding. Nothing renders below 12px, text or glyph: that floor holds, and the
-12px `--fs-meta` token is the smallest in the scale. The telemetry character comes from
+heading and masthead work that adopts them. Every substantive piece of dossier reading
+content renders at body (16): prose, field values, callout bodies, the Files list, table
+cells (both `td` and the mono-uppercase `th` header cells, which keep their weight and
+tracking but share the body size), and Given/When/Then clause text. Monospace code and
+diff sit one notch below their sans equivalent (code at ui 14, not body), so a dense
+block reads as operational without crowding the reading column. Nothing renders below
+12px, text or glyph: that floor holds, and the 12px `--fs-meta` token is the smallest in
+the scale. Inline sizes that scale with their context (inline code, inline scope pills,
+and the inline citation chip, each set as a sub-1em multiplier) are clamped with
+`max(12px, …)` so they can never fall under the floor when nested in a smaller context. The telemetry character comes from
 mono plus uppercase plus tracking plus color, not from sub-12px size; icon-only controls
 keep an adequate hit box.
 

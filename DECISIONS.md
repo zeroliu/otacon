@@ -3666,6 +3666,35 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   set is updated in the same commit; or the code-one-notch-down convention stops reading
   well at some density, at which point code rejoins body.
 
+### Sub-note: unifying the dossier reading column on body, and a real em floor (2026-06-25)
+
+- **Decision:** The Phase 1 rename was value-preserving, which left `--fs-ui` (14)
+  doing double duty: genuine controls AND in-dossier reading text that historically
+  rendered at 14. This phase splits them. Every substantive reading element in the plan
+  dossier moves up to `--fs-body` (16): the Given/When/Then clause text (`.gwt-step`),
+  the markdown table cells (`.md table`'s `font-size`, which the `td` cells inherit, plus
+  the mono-uppercase header cells `.md th`, which keep their weight/tracking but share the
+  body size), and the mono Files list
+  (`.field-files .field-value .md`). Prose, field values, and callout bodies already
+  flowed through `.md` (body 16) and so needed no change. Monospace code and diff stay
+  one notch below at `--fs-ui` (14): `.fence pre`/`.fence code` (code blocks) and
+  `.dline` (diff lines), the documented code-one-notch-down convention. The two inline
+  sub-1em sizes (inline `code` at 0.92em, scope `.pill` at 0.8em) plus the inline
+  citation chip (`.q-cite` at 0.94em) are now clamped with `max(12px, …)`, and a third
+  guard in `src/ui/styles.test.ts` fails on any unclamped sub-1em-multiplier or
+  sub-100%-percentage `font`/`font-size`.
+- **Why:** Pill at 0.8em rendered ~11px in body context, below the 12px floor, and the
+  other inline em sizes could drop below it when nested in a smaller context; absolute-px
+  and var() floors were already guarded, but em/percent multipliers were not. Clamping
+  with `max(12px, …)` keeps the inline-relative scaling while pinning the floor, and
+  guarding it keeps a future edit from reintroducing a sub-floor multiplier. Unifying the
+  reading column on body completes the role-not-treatment intent: mono file paths and
+  table cells are content, so they read at content size, while code/diff stay one notch
+  down to read as operational.
+- **Revisit when:** A mono reading element needs to read as operational rather than
+  content (then it joins code at ui), or the `max(12px, …)` clamp pattern needs a
+  different floor (then the guard's `12px` literal moves with it).
+
 ## Reuse an existing open tab: daemon-wide live-tab heartbeat + TTL (2026-06-24)
 
 - **Decision:** The daemon tracks its live browser tabs with an explicit SPA heartbeat

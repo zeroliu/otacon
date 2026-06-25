@@ -102,6 +102,53 @@ test("the :root type scale is exactly the five semantic role tokens", () => {
   }
 });
 
+test("every sub-1em / sub-100% font size is clamped with max(12px, …)", () => {
+  // The em-relative floor (DECISIONS.md "5-role semantic type scale"): inline
+  // sizes that scale below their context (a sub-1.0 `em` multiplier or a
+  // sub-100% percentage, e.g. inline code at 0.92em, scope pills at 0.8em)
+  // can drop below the 12px legibility floor when their inherited size is small.
+  // Each MUST be wrapped in a max(12px, …) clamp so the rendered size never
+  // falls under the floor. A bare `font-size: 0.8em;` fails here; the clamped
+  // `font-size: max(12px, 0.8em);` passes. Absolute px/var() sizes carry no
+  // sub-1 multiplier and so are not matched.
+  //
+  // A sub-1.0 em is `[0].\d+ em` (e.g. 0.8em, .8em). A sub-100% is a 1-2 digit
+  // integer or fractional percent (e.g. 90%, 7.5%). The `(?<![\d.])` lookbehind
+  // pins the start of the number so we do NOT misread the `.5em` inside a
+  // legitimate `1.5em`, or the `50%` inside `150%`, as a sub-floor size.
+  const SUB_ONE = /(?<![\d.])0?\.\d+em|(?<![\d.])\d{1,2}(?:\.\d+)?%/;
+  const offenders: string[] = [];
+
+  let lineNo = 1;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  FONT_DECL.lastIndex = 0;
+  while ((match = FONT_DECL.exec(css)) !== null) {
+    lineNo += countNewlines(css.slice(lastIndex, match.index));
+    lastIndex = match.index;
+
+    const prop = match[1] ?? "font";
+    const value = (match[2] ?? "").trim();
+
+    // Look for a sub-1.0 em multiplier or a sub-100% percentage anywhere in the
+    // declaration. A two-digit-or-less integer percent (or a fractional one) is
+    // always below 100%; a leading-zero/bare decimal em (0.x em) is below 1.0.
+    const subOne = SUB_ONE.test(value);
+    if (!subOne) continue;
+
+    // Clamped if the offending size sits inside a max(12px, …) expression.
+    const clamped = /max\(\s*12px\s*,/.test(value);
+    if (!clamped) {
+      offenders.push(`line ${lineNo}: ${prop}: ${value}; → sub-1em/sub-100% size not clamped with max(12px, …)`);
+    }
+  }
+
+  expect(
+    offenders,
+    `un-clamped sub-1em/sub-100% font sizes found:\n${offenders.join("\n")}`,
+  ).toEqual([]);
+});
+
 function countNewlines(s: string): number {
   let n = 0;
   for (let i = 0; i < s.length; i++) {

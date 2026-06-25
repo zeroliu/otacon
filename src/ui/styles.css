@@ -578,7 +578,7 @@ body::before {
 }
 
 code {
-  font: 0.92em var(--mono);
+  font: max(12px, 0.92em) var(--mono);
   background: color-mix(in srgb, var(--ink) 7%, transparent);
   border-radius: 4px;
   padding: 1.5px 5px;
@@ -940,7 +940,7 @@ code {
 .pill {
   padding: 1px 6px;
   border-radius: 4px;
-  font: 600 0.8em var(--mono);
+  font: 600 max(12px, 0.8em) var(--mono);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   white-space: nowrap;
@@ -994,7 +994,7 @@ code {
 
 .gwt-step {
   margin: 0 0 0.25em;
-  font-size: var(--fs-ui);
+  font-size: var(--fs-body);
   line-height: 1.5;
 }
 
@@ -1041,7 +1041,7 @@ code {
 .md table {
   border-collapse: collapse;
   margin: 0 0 0.85em;
-  font-size: var(--fs-ui);
+  font-size: var(--fs-body);
   display: block;
   overflow-x: auto;
 }
@@ -1054,7 +1054,7 @@ code {
 }
 
 .md th {
-  font: 600 var(--fs-meta)/1.4 var(--mono);
+  font: 600 var(--fs-body)/1.4 var(--mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--ink-soft);
@@ -1143,7 +1143,7 @@ code {
 }
 
 .field-files .field-value .md {
-  font: var(--fs-ui)/1.75 var(--mono);
+  font: var(--fs-body)/1.75 var(--mono);
 }
 
 .field-files .field-value .md ul {
@@ -3409,7 +3409,7 @@ code {
 /* ── decision traceability chrome in the dossier (plan structure, lint, and anchoring, interview questions) ── */
 
 .q-cite {
-  font: 600 0.94em var(--mono);
+  font: 600 max(12px, 0.94em) var(--mono);
   color: var(--accent);
   text-decoration: underline dotted;
   text-decoration-color: color-mix(in srgb, var(--accent) 55%, transparent);
