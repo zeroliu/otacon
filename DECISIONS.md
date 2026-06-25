@@ -3965,3 +3965,24 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   rule order, so the lift never fights the "you are here" anchor.
 - **Revisit when:** A third state proves it also needs to pull the eye (re-weigh which
   states are "act now"), or the neutral tint reads muddy against a future surface palette.
+
+## Socratic mode plumbs end-to-end like `quick` before any enforcement (2026-06-26)
+
+- **Decision:** A session can be born "socratic": a `socratic` boolean rides the registry
+  session, the `CreateSessionInput`, the `POST /api/sessions` body, and the printed `start`
+  JSON — mirroring the existing `quick` flag at every layer. A `socratic.default` config
+  field (default false) lets a repo opt every new session in. `otacon start --socratic`
+  declares the flag with no CLI default, so an omitted flag sends nothing and the daemon
+  resolves the effective value from `socratic.default`; an explicit `--socratic` wins. The
+  first phase is pure plumbing: the flag carries no behavior yet (the free-text grill and
+  linter enforcement it gates land later). The UI surfaces it as a quiet badge (review
+  header) and an "S" marker (session list).
+- **Why:** Landing the mode as a typed, tested boolean that flows through every seam first
+  keeps the later enforcement phase small and reviewable — the wiring is already proven
+  green before any behavior hangs off it. Modeling it on `quick` (an existing mode flag
+  with the same shape) means the two modes share one mental model and one set of integration
+  points, so neither can drift. Omitting the CLI flag rather than sending `false` is what
+  lets `socratic.default` apply server-side, exactly as a config default should.
+- **Revisit when:** The enforcement phase needs the flag to carry more than a boolean (e.g.
+  a grill intensity), or `quick` and `socratic` turn out to be mutually exclusive and want a
+  single `mode` enum instead of two independent booleans.

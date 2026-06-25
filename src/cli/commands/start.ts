@@ -1,4 +1,4 @@
-// otacon start --title <t> [--quick] — mint and register a session:
+// otacon start --title <t> [--quick] [--socratic] — mint and register a session:
 // POST /api/sessions, print the session id, review URL, and the plan draft path
 // (~/.otacon/sessions/<id>/plan.md, where the agent writes the plan). No local
 // session pointer — the daemon registry is the single source of truth.
@@ -32,7 +32,14 @@ export async function startCommand(argv: string[]): Promise<number> {
 
   const { values } = parseArgs({
     args: argv,
-    options: { title: { type: "string" }, quick: { type: "boolean", default: false } },
+    options: {
+      title: { type: "string" },
+      quick: { type: "boolean", default: false },
+      // No default: `values.socratic` is `true` only when `--socratic` is passed,
+      // `undefined` otherwise — letting the daemon apply the `socratic.default`
+      // config when the flag is omitted.
+      socratic: { type: "boolean" },
+    },
   });
   if (values.title === undefined || values.title.trim() === "") {
     usageError("otacon start requires --title <t>");
@@ -52,6 +59,9 @@ export async function startCommand(argv: string[]): Promise<number> {
     repo,
     branch: gitRoot === undefined ? "" : currentBranch(cwd),
     quick: values.quick === true,
+    // Send `socratic: true` only when the flag was passed; omitting it lets the
+    // daemon apply the `socratic.default` config.
+    ...(values.socratic === true ? { socratic: true } : {}),
   });
   if (created.status !== 201) {
     fail("E_INTERNAL", `session create failed: ${JSON.stringify(created.body)}`, undefined, 2);
@@ -65,6 +75,7 @@ export async function startCommand(argv: string[]): Promise<number> {
     repo,
     branch: session.branch,
     quick: session.quick,
+    socratic: session.socratic,
     url: `${baseUrl()}/s/${session.id}`,
     plan: planPath(session.id),
   });

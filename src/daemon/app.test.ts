@@ -202,6 +202,48 @@ describe("session CRUD", () => {
     expect(body.error.code).toBe("E_BAD_REQUEST");
   });
 
+  test("POST /api/sessions persists an explicit socratic:true", async () => {
+    const res = await postJson("/api/sessions", { title: "grill", repo, socratic: true });
+    expect(res.status).toBe(201);
+    const session = (await res.json()) as RegistrySession;
+    expect(session.socratic).toBe(true);
+    expect(store.getSession(session.id)?.socratic).toBe(true);
+  });
+
+  test("POST /api/sessions defaults socratic to false when omitted (no config)", async () => {
+    const res = await postJson("/api/sessions", { title: "plain", repo });
+    expect(res.status).toBe(201);
+    const session = (await res.json()) as RegistrySession;
+    expect(session.socratic).toBe(false);
+  });
+
+  test("an omitted socratic falls back to the repo's socratic.default config", async () => {
+    mkdirSync(join(repo, ".otacon"), { recursive: true });
+    writeFileSync(repoConfigPath(repo), JSON.stringify({ socratic: { default: true } }));
+    const res = await postJson("/api/sessions", { title: "config-default", repo });
+    expect(res.status).toBe(201);
+    const session = (await res.json()) as RegistrySession;
+    // The config default applies because the request omitted socratic.
+    expect(session.socratic).toBe(true);
+    expect(store.getSession(session.id)?.socratic).toBe(true);
+  });
+
+  test("an explicit socratic:false overrides a socratic.default:true config", async () => {
+    mkdirSync(join(repo, ".otacon"), { recursive: true });
+    writeFileSync(repoConfigPath(repo), JSON.stringify({ socratic: { default: true } }));
+    const res = await postJson("/api/sessions", { title: "override", repo, socratic: false });
+    expect(res.status).toBe(201);
+    const session = (await res.json()) as RegistrySession;
+    expect(session.socratic).toBe(false);
+  });
+
+  test("POST /api/sessions rejects a non-boolean socratic", async () => {
+    const res = await postJson("/api/sessions", { title: "bad", repo, socratic: "yes" });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("E_BAD_REQUEST");
+  });
+
   test("GET /api/sessions lists registered sessions", async () => {
     const a = mintSession();
     const b = mintSession();

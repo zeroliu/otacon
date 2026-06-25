@@ -21,6 +21,7 @@ import type { ConfigField, OtaconConfig, ScopeValues } from "../shared/config.js
 const SECTION_GROUPS: ReadonlyArray<{ title: string; sections: ReadonlyArray<keyof OtaconConfig> }> = [
   { title: "worktree", sections: ["worktree", "plans"] },
   { title: "update", sections: ["update"] },
+  { title: "socratic", sections: ["socratic"] },
   { title: "notifications", sections: ["notifications"] },
   { title: "budgets", sections: ["budgets"] },
   { title: "activity", sections: ["activity", "stream"] },

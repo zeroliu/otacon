@@ -179,6 +179,16 @@ function SessionRow({
             {session.branch !== "" && <span className="sl-branch"> · {session.branch}</span>}
           </span>
         </span>
+        {session.socratic && (
+          <span
+            className="session-badge sl-socratic"
+            data-mode="socratic"
+            aria-label="socratic mode"
+            title="Socratic mode"
+          >
+            S
+          </span>
+        )}
         {unread > 0 && (
           <span className="sl-unread" aria-label={`${unread} unread`}>
             ●{unread}

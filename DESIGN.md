@@ -358,7 +358,7 @@ the model is suspended — no inference, no token spend.
 
 | Command                                                                     | Effect                                                                        |
 | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `otacon start --title <t> [--quick]`                                        | Mint session, register it, print review URL                                   |
+| `otacon start --title <t> [--quick] [--socratic]`                           | Mint session, register it, print review URL (`--socratic` overrides the `socratic.default` config) |
 | `otacon submit [plan.md] [--resolutions res.json]`                          | Lint → reject with errors, or store revision N, notify UI                     |
 | `otacon wait [--timeout 540] [--session <id>]`                              | Long-poll this session's queue; print next event as JSON                      |
 | `otacon ask --question "…" [--options "A\|B\|C"] [--recommend A] [--multi]` | Post agent question card to UI (or a batch of independent questions via `--batch <file\|->`); answer arrives via `wait` |
@@ -1793,8 +1793,9 @@ live-activity stream (`stream.cap`, `stream.detailMaxChars`, `stream.labelMaxCha
 `notifications.desktop`, `worktree.dir` (base dir for Implement build worktrees, default
 `~/.otacon/worktrees`, outside the repo), `plans.dir` (where **Save** writes the
 project copy of the approved plan, default `.otacon/plans`; set it to `docs/plans` to
-group it with other tracked plans), and `update.auto` (auto-update at `otacon start`,
-default true; see Updating below). The home session store location is fixed
+group it with other tracked plans), `update.auto` (auto-update at `otacon start`,
+default true; see Updating below), and `socratic.default` (mint new sessions in
+Socratic mode unless `otacon start --socratic` overrides it, default false). The home session store location is fixed
 (`~/.otacon/sessions/`), not configurable.
 
 Config is editable two ways over those override files: by hand, or through

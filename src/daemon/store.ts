@@ -183,6 +183,7 @@ export interface CreateSessionInput {
   repo: string;
   branch?: string;
   quick?: boolean;
+  socratic?: boolean;
 }
 
 /**
@@ -232,6 +233,7 @@ export class Store {
       repo: input.repo,
       branch: input.branch ?? "",
       quick: input.quick ?? false,
+      socratic: input.socratic ?? false,
       status: "draft",
       createdAt: now,
       updatedAt: now,

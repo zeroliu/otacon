@@ -326,6 +326,34 @@ body::before {
   white-space: nowrap;
 }
 
+/* The session-mode badge (review header + sidebar marker): a quiet accent-tinted
+ * pill in the same telemetry language as .badge, lower-cased and lightly spaced
+ * so it reads as a mode tag rather than a count. */
+.session-badge {
+  flex: none;
+  font: 600 var(--fs-meta)/1 var(--mono);
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--accent) 85%, var(--ink-soft));
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: 999px;
+  padding: 3px 8px;
+  text-transform: lowercase;
+  white-space: nowrap;
+}
+
+/* Compact sidebar variant: a single "S" disc sitting in the row's right-edge
+ * chrome, small enough not to crowd the unread badge and agent dot. */
+.sl-socratic {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  letter-spacing: 0;
+}
+
 .card-where {
   margin: 5px 0 12px;
   font: var(--fs-meta)/1.4 var(--mono);

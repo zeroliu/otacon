@@ -605,7 +605,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
 
   app.post("/api/sessions", async (c) => {
     const body = (await readJsonBody(c)) ?? {};
-    const { title, repo, branch, quick } = body;
+    const { title, repo, branch, quick, socratic } = body;
     if (typeof title !== "string" || title.trim() === "") {
       return badRequest(c, "title must be a non-empty string");
     }
@@ -618,7 +618,15 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     if (quick !== undefined && typeof quick !== "boolean") {
       return badRequest(c, "quick must be a boolean");
     }
-    const session = store.createSession({ title, repo, branch, quick });
+    if (socratic !== undefined && typeof socratic !== "boolean") {
+      return badRequest(c, "socratic must be a boolean");
+    }
+    // An omitted `socratic` falls back to the repo's merged `socratic.default`
+    // config (otacon start omits the flag precisely so this default applies);
+    // an explicit boolean always wins.
+    const socraticEffective =
+      typeof socratic === "boolean" ? socratic : loadConfig(repo).socratic.default;
+    const session = store.createSession({ title, repo, branch, quick, socratic: socraticEffective });
     // Attach the transcript tailer now: the agent is already working in `repo`,
     // so its live transcript may already exist (and if not, the tailer re-locates
     // until it appears). A repo whose agent has no adapter attaches nothing.

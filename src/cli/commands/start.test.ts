@@ -20,6 +20,9 @@ let server: Server | undefined;
 let savedPort: string | undefined;
 let savedCwd: string;
 let cwd: string;
+// The last parsed POST /api/sessions body, so a test can assert the exact wire
+// shape the CLI sent (e.g. that `socratic` is omitted unless `--socratic`).
+let lastBody: Record<string, unknown> = {};
 
 async function listen(): Promise<void> {
   const handler = (req: IncomingMessage, res: ServerResponse): void => {
@@ -32,6 +35,7 @@ async function listen(): Promise<void> {
       req.on("data", (chunk) => (raw += chunk));
       req.on("end", () => {
         const input = JSON.parse(raw || "{}") as Record<string, unknown>;
+        lastBody = input;
         const now = "2026-06-24T00:00:00.000Z";
         res.statusCode = 201;
         res.end(
@@ -41,6 +45,9 @@ async function listen(): Promise<void> {
             repo: input.repo,
             branch: input.branch ?? "",
             quick: input.quick ?? false,
+            // The real daemon resolves an omitted socratic from config; the fake
+            // mirrors the explicit-wins half so we can assert the CLI's wire shape.
+            socratic: input.socratic ?? false,
             status: "draft",
             createdAt: now,
             updatedAt: now,
@@ -74,6 +81,7 @@ async function run(argv: string[]): Promise<{ code: number; printed: Record<stri
 }
 
 beforeEach(() => {
+  lastBody = {};
   savedPort = process.env.OTACON_PORT;
   savedCwd = process.cwd();
   // A non-git tmp dir so findRepoRoot falls back to cwd (no git calls).
@@ -105,4 +113,26 @@ test("start prints the home plan draft path", async () => {
   expect(printed.plan).toBe(planPath("otc_start1"));
   expect(String(printed.plan)).toContain("/sessions/otc_start1/plan.md");
   expect(String(printed.plan)).not.toContain("/.otacon/otc_start1/");
+});
+
+test("--socratic sends socratic:true and echoes it in the printed JSON", async () => {
+  await listen();
+
+  const { code, printed } = await run(["--title", "grill-me", "--socratic"]);
+
+  expect(code).toBe(0);
+  expect(lastBody.socratic).toBe(true);
+  expect(printed.socratic).toBe(true);
+});
+
+test("a plain start omits socratic from the wire body (config default applies)", async () => {
+  await listen();
+
+  const { code, printed } = await run(["--title", "plain"]);
+
+  expect(code).toBe(0);
+  // Omitted on the wire — the daemon applies socratic.default, not a forced false.
+  expect("socratic" in lastBody).toBe(false);
+  // The fake daemon defaults to false, which the CLI echoes back verbatim.
+  expect(printed.socratic).toBe(false);
 });

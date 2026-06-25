@@ -83,6 +83,16 @@ export interface UpdateConfig {
   auto: boolean;
 }
 
+/**
+ * Default mode for new sessions. When `default` is true, `otacon start` mints
+ * sessions in Socratic mode unless `--socratic` says otherwise. Phase 1 is pure
+ * plumbing: the flag flows end-to-end like `quick`; the grill/linter
+ * enforcement it gates is a later phase.
+ */
+export interface SocraticConfig {
+  default: boolean;
+}
+
 export interface OtaconConfig {
   budgets: Budgets;
   activity: ActivityConfig;
@@ -91,6 +101,7 @@ export interface OtaconConfig {
   worktree: WorktreeConfig;
   plans: PlansConfig;
   update: UpdateConfig;
+  socratic: SocraticConfig;
 }
 
 export const DEFAULT_CONFIG: OtaconConfig = {
@@ -121,6 +132,7 @@ export const DEFAULT_CONFIG: OtaconConfig = {
   worktree: { dir: "~/.otacon/worktrees" },
   plans: { dir: ".otacon/plans" },
   update: { auto: true },
+  socratic: { default: false },
 };
 
 export type ConfigFieldType = "int" | "bool" | "path";
@@ -337,6 +349,15 @@ export const CONFIG_SCHEMA: ConfigField[] = [
     type: "bool",
     default: DEFAULT_CONFIG.update.auto,
   },
+  // socratic — default mode for new sessions
+  {
+    section: "socratic",
+    key: "default",
+    label: "Socratic mode by default",
+    description: "Mint new sessions in Socratic mode unless otacon start --socratic overrides it.",
+    type: "bool",
+    default: DEFAULT_CONFIG.socratic.default,
+  },
 ];
 
 type CoerceResult = { ok: true; value: number | boolean | string } | { ok: false };
@@ -424,6 +445,7 @@ function overlayConfig(base: OtaconConfig, raw: unknown, source: string): Otacon
     worktree: { ...base.worktree },
     plans: { ...base.plans },
     update: { ...base.update },
+    socratic: { ...base.socratic },
   };
   const mergedSections = merged as unknown as Record<string, Record<string, unknown>>;
   walkProvidedFields(raw, (section, field, result) => {
@@ -446,7 +468,7 @@ function overlayConfig(base: OtaconConfig, raw: unknown, source: string): Otacon
  * (`<repo>/.otacon/config.local.json`, personal). Closest wins. Loaded fresh
  * on every use so tuning takes effect immediately. Each file is overlaid field
  * by field against CONFIG_SCHEMA (budgets, activity, stream, notifications,
- * worktree, plans, update).
+ * worktree, plans, update, socratic).
  */
 export function loadConfig(repoRoot?: string): OtaconConfig {
   const overlay = (source: string, into: OtaconConfig): OtaconConfig =>
