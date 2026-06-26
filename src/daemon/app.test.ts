@@ -202,6 +202,60 @@ describe("session CRUD", () => {
     expect(body.error.code).toBe("E_BAD_REQUEST");
   });
 
+  test("POST /api/sessions persists an explicit socratic:true", async () => {
+    const res = await postJson("/api/sessions", { title: "grill", repo, socratic: true });
+    expect(res.status).toBe(201);
+    const session = (await res.json()) as RegistrySession;
+    expect(session.socratic).toBe(true);
+    expect(store.getSession(session.id)?.socratic).toBe(true);
+  });
+
+  test("POST /api/sessions defaults socratic to false when omitted (no config)", async () => {
+    const res = await postJson("/api/sessions", { title: "plain", repo });
+    expect(res.status).toBe(201);
+    const session = (await res.json()) as RegistrySession;
+    expect(session.socratic).toBe(false);
+  });
+
+  test("an omitted socratic falls back to the repo's socratic.default config", async () => {
+    mkdirSync(join(repo, ".otacon"), { recursive: true });
+    writeFileSync(repoConfigPath(repo), JSON.stringify({ socratic: { default: true } }));
+    const res = await postJson("/api/sessions", { title: "config-default", repo });
+    expect(res.status).toBe(201);
+    const session = (await res.json()) as RegistrySession;
+    // The config default applies because the request omitted socratic.
+    expect(session.socratic).toBe(true);
+    expect(store.getSession(session.id)?.socratic).toBe(true);
+  });
+
+  test("an explicit socratic:false overrides a socratic.default:true config", async () => {
+    mkdirSync(join(repo, ".otacon"), { recursive: true });
+    writeFileSync(repoConfigPath(repo), JSON.stringify({ socratic: { default: true } }));
+    const res = await postJson("/api/sessions", { title: "override", repo, socratic: false });
+    expect(res.status).toBe(201);
+    const session = (await res.json()) as RegistrySession;
+    expect(session.socratic).toBe(false);
+  });
+
+  test("POST /api/sessions rejects a non-boolean socratic", async () => {
+    const res = await postJson("/api/sessions", { title: "bad", repo, socratic: "yes" });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("E_BAD_REQUEST");
+  });
+
+  test("POST /api/sessions rejects socratic + quick (mutually exclusive)", async () => {
+    const res = await postJson("/api/sessions", {
+      title: "contradiction",
+      repo,
+      quick: true,
+      socratic: true,
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { message: string } };
+    expect(body.error.message).toContain("mutually exclusive");
+  });
+
   test("GET /api/sessions lists registered sessions", async () => {
     const a = mintSession();
     const b = mintSession();
@@ -1495,6 +1549,55 @@ describe("the grill loop: ask, answers, transcript, L3 (M4)", () => {
     expect(((await (await ask(session.id, { question: "ok now" })).json()) as { id: string }).id).toBe(
       "q1",
     );
+  });
+
+  test("socratic mode refuses chips (options/recommend) but accepts free text", async () => {
+    const session = store.createSession({ title: "grill", repo, socratic: true });
+    const withOptions = await ask(session.id, { question: "x", options: ["A", "B"] });
+    expect(withOptions.status).toBe(400);
+    expect(((await withOptions.json()) as { error: { code: string } }).error.code).toBe(
+      "E_SOCRATIC_FREE_TEXT_ONLY",
+    );
+    const withRecommend = await ask(session.id, {
+      question: "x",
+      options: ["A", "B"],
+      recommend: "A",
+    });
+    expect(withRecommend.status).toBe(400);
+    expect(((await withRecommend.json()) as { error: { code: string } }).error.code).toBe(
+      "E_SOCRATIC_FREE_TEXT_ONLY",
+    );
+    // A pure free-text question is the only allowed shape and mints q1.
+    const freeText = await ask(session.id, { question: "why this approach?" });
+    expect(freeText.status).toBe(201);
+    expect(((await freeText.json()) as { id: string }).id).toBe("q1");
+    // The two rejected asks burned no counter.
+    const listed = (await (await app.request(`/api/sessions/${session.id}/transcript`)).json()) as {
+      transcript: { id: string }[];
+    };
+    expect(listed.transcript.map((e) => e.id)).toEqual(["q1"]);
+  });
+
+  test("socratic mode: one chip member fails the whole batch with the coded 400", async () => {
+    const session = store.createSession({ title: "grill", repo, socratic: true });
+    const res = await ask(session.id, {
+      questions: [{ question: "free?" }, { question: "pick?", options: ["A", "B"] }],
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("E_SOCRATIC_FREE_TEXT_ONLY");
+    expect(body.error.message).toContain("questions[1]");
+    // Nothing minted — the whole batch was refused.
+    const listed = (await (await app.request(`/api/sessions/${session.id}/transcript`)).json()) as {
+      transcript: unknown[];
+    };
+    expect(listed.transcript).toEqual([]);
+  });
+
+  test("non-socratic sessions still accept chips (regression guard)", async () => {
+    const session = mintSession(); // socratic: false
+    const res = await ask(session.id, { question: "x", options: ["A", "B"], recommend: "A" });
+    expect(res.status).toBe(201);
   });
 
   test("an answer lands on the transcript and wakes the agent with an answer event", async () => {

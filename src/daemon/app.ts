@@ -113,6 +113,11 @@ const MAX_WAIT_SECONDS = 600;
 
 const badRequest = (c: AppContext, message: string) =>
   c.json({ error: { code: "E_BAD_REQUEST", message } }, 400);
+// A 400 that carries a specific machine code rather than the generic
+// E_BAD_REQUEST — mirrors the coded 409s (E_NO_REVISION, E_UNRESOLVED_THREADS)
+// so a caller can branch on the code, not parse the message.
+const codedBadRequest = (c: AppContext, code: string, message: string) =>
+  c.json({ error: { code, message } }, 400);
 const notFound = (c: AppContext, message: string) =>
   c.json({ error: { code: "E_NOT_FOUND", message } }, 404);
 const timeoutEvent = (c: AppContext) => c.json({ event: "timeout" });
@@ -605,7 +610,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
 
   app.post("/api/sessions", async (c) => {
     const body = (await readJsonBody(c)) ?? {};
-    const { title, repo, branch, quick } = body;
+    const { title, repo, branch, quick, socratic } = body;
     if (typeof title !== "string" || title.trim() === "") {
       return badRequest(c, "title must be a non-empty string");
     }
@@ -618,7 +623,20 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     if (quick !== undefined && typeof quick !== "boolean") {
       return badRequest(c, "quick must be a boolean");
     }
-    const session = store.createSession({ title, repo, branch, quick });
+    if (socratic !== undefined && typeof socratic !== "boolean") {
+      return badRequest(c, "socratic must be a boolean");
+    }
+    // An omitted `socratic` falls back to the repo's merged `socratic.default`
+    // config (otacon start omits the flag precisely so this default applies);
+    // an explicit boolean always wins.
+    const socraticEffective =
+      typeof socratic === "boolean" ? socratic : loadConfig(repo).socratic.default;
+    // --quick skips the grill; socratic mode requires it. The two are
+    // contradictory, so refuse rather than silently picking a winner.
+    if (quick === true && socraticEffective) {
+      return badRequest(c, "socratic and quick are mutually exclusive");
+    }
+    const session = store.createSession({ title, repo, branch, quick, socratic: socraticEffective });
     // Attach the transcript tailer now: the agent is already working in `repo`,
     // so its live transcript may already exist (and if not, the tailer re-locates
     // until it appears). A repo whose agent has no adapter attaches nothing.
@@ -774,6 +792,10 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
 
     const state = store.readState(session.id);
     const replies = resolutions.threads ?? {};
+    // Read the transcript once and derive both sets L3 needs: the known q ids and
+    // the "reasoned" subset — q ids whose answer carries non-empty free text (the
+    // user reasoned it in their own words, not just picked a chip).
+    const transcript = readTranscript(store.transcriptPath(session.id));
     const result = lint(content, loadConfig(session.repo), {
       session: session.id,
       expectedRevision: state.revision + 1,
@@ -781,7 +803,11 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       // L3/L5 context is composed here: rules stay pure, the daemon does the I/O.
       grill: {
         quick: session.quick,
-        knownQuestions: readTranscript(store.transcriptPath(session.id)).map((e) => e.id),
+        socratic: session.socratic,
+        knownQuestions: transcript.map((e) => e.id),
+        reasonedQuestions: transcript
+          .filter((e) => typeof e.answer?.text === "string" && e.answer.text.trim().length > 0)
+          .map((e) => e.id),
       },
       resolutions: {
         revision: state.revision + 1,
@@ -1323,6 +1349,16 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       for (let i = 0; i < raw.length; i++) {
         const spec = parseQuestionSpec(raw[i]);
         if (typeof spec === "string") return badRequest(c, `questions[${i}] ${spec}`);
+        // Socratic mode bans answer-revealing chips: a bad member fails the whole
+        // batch (mirrors the malformed-member rule above), so the queue never
+        // holds a partial set.
+        if (session.socratic && (spec.options !== undefined || spec.recommend !== undefined)) {
+          return codedBadRequest(
+            c,
+            "E_SOCRATIC_FREE_TEXT_ONLY",
+            `questions[${i}] socratic mode requires free-text questions only (no options/recommend)`,
+          );
+        }
         specs.push(spec);
       }
       const counters = store.bumpCounters(session.id, { question: specs.length });
@@ -1344,6 +1380,15 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
 
     const spec = parseQuestionSpec(body);
     if (typeof spec === "string") return badRequest(c, spec);
+    // Socratic mode forbids answer-revealing chips so the agent can't hand the
+    // user the answer — free-text questions only.
+    if (session.socratic && (spec.options !== undefined || spec.recommend !== undefined)) {
+      return codedBadRequest(
+        c,
+        "E_SOCRATIC_FREE_TEXT_ONLY",
+        "socratic mode requires free-text questions only (no options/recommend)",
+      );
+    }
     const counters = store.bumpCounters(session.id, { question: 1 });
     const entry = entryFromSpec(`q${counters.question}`, spec, new Date().toISOString());
     appendEntry(store.transcriptPath(session.id), entry);

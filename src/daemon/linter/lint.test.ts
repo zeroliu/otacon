@@ -648,7 +648,13 @@ describe("L3 decision traceability", () => {
   ): LintResult =>
     run(doc({ decisions }), {
       session: SESSION,
-      grill: { quick: false, knownQuestions: ["q1", "q2"], ...ctx },
+      grill: {
+        quick: false,
+        socratic: false,
+        knownQuestions: ["q1", "q2"],
+        reasonedQuestions: [],
+        ...ctx,
+      },
     });
 
   test("L3 never runs without a daemon-composed context", () => {
@@ -704,5 +710,57 @@ describe("L3 decision traceability", () => {
 
   test("non-D list items in Decisions are not L3's business", () => {
     expect(l3("## Decisions\n\n- a plain note without a D label\n").ok).toBeTrue();
+  });
+
+  describe("socratic mode bans chip-only reasoning", () => {
+    test("socratic bans [assumed] with an always-error E_ASSUMED_NOT_ALLOWED", () => {
+      const result = l3("## Decisions\n\n- D1: guessed [assumed]\n", { socratic: true });
+      expect(result.errors.map((e) => e.code)).toEqual(["E_ASSUMED_NOT_ALLOWED"]);
+      expect(result.errors[0]).toMatchObject({ rule: "L3", section: "decisions", line: 20 });
+    });
+
+    test("socratic: even --quick keeps the [assumed] ban an error, not a warning", () => {
+      const result = l3("## Decisions\n\n- D1: guessed [assumed]\n", {
+        socratic: true,
+        quick: true,
+      });
+      expect(result.ok).toBeFalse();
+      expect(result.errors.map((e) => e.code)).toEqual(["E_ASSUMED_NOT_ALLOWED"]);
+    });
+
+    test("socratic: a citation to a known-but-not-reasoned q is E_DECISION_NOT_REASONED", () => {
+      const result = l3("## Decisions\n\n- D1: choice ← q1\n", {
+        socratic: true,
+        reasonedQuestions: [],
+      });
+      expect(result.errors.map((e) => e.code)).toEqual(["E_DECISION_NOT_REASONED"]);
+      expect(result.errors[0]?.message).toContain("q1");
+    });
+
+    test("socratic: a citation to a reasoned (free-text) q passes", () => {
+      const result = l3("## Decisions\n\n- D1: choice ← q1\n- D2: other ← q1, q2\n", {
+        socratic: true,
+        reasonedQuestions: ["q1", "q2"],
+      });
+      expect(result.ok).toBeTrue();
+      expect(result.warnings).toEqual([]);
+    });
+
+    test("socratic: an unknown citation reports only E_UNKNOWN_QUESTION_CITED (one verdict per qid)", () => {
+      const result = l3("## Decisions\n\n- D1: ghost ← q9\n", {
+        socratic: true,
+        reasonedQuestions: [],
+      });
+      expect(result.errors.map((e) => e.code)).toEqual(["E_UNKNOWN_QUESTION_CITED"]);
+    });
+
+    test("NON-socratic: the same [assumed]/chip-cited plan still passes (the new rules are socratic-only)", () => {
+      const result = l3(
+        "## Decisions\n\n- D1: choice ← q1\n- D2: guessed [assumed]\n",
+        { socratic: false, reasonedQuestions: [] },
+      );
+      expect(result.ok).toBeTrue();
+      expect(result.warnings).toEqual([]);
+    });
   });
 });

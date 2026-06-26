@@ -472,8 +472,19 @@ export function checkL7(plan: ParsedPlan): LintIssue[] {
 export interface GrillContext {
   /** Session started --quick: the grill was skipped, L3 downgrades to warnings. */
   quick: boolean;
+  /**
+   * Session is in socratic mode: L3 bans `[assumed]` decisions and forces every
+   * cited q to carry a free-text answer (two extra always-error checks below).
+   */
+  socratic: boolean;
   /** q ids present in the session's grill transcript. */
   knownQuestions: string[];
+  /**
+   * Subset of `knownQuestions` whose answer carries non-empty user free text —
+   * the user reasoned it in their own words, not just picked a chip. Only L3's
+   * socratic branch reads it; non-socratic callers may omit it.
+   */
+  reasonedQuestions?: string[];
 }
 
 const DECISION_RE = /^[-*+]\s+(D\d+):/;
@@ -488,26 +499,47 @@ const DECISION_RE = /^[-*+]\s+(D\d+):/;
  * grill question(s) that produced it (`← q7`) or wear `[assumed]`, and every
  * cited q id must exist in the transcript. Errors normally; warnings in
  * --quick sessions (codes stay stable — severity is the contextual dimension).
+ *
+ * Socratic mode tightens this with two always-error checks (no chip may stand
+ * in for the user's reasoning): `[assumed]` is banned outright, and a cited q
+ * that exists but carries no free-text answer (a bare chip pick) is rejected.
+ * Non-socratic behavior is unchanged — `[assumed]` stays a valid escape there.
  */
 export function checkL3(plan: ParsedPlan, ctx: GrillContext): LintIssue[] {
   const severity: LintSeverity = ctx.quick ? "warning" : "error";
   const known = new Set(ctx.knownQuestions);
+  const reasoned = new Set(ctx.reasonedQuestions ?? []);
   const issues: LintIssue[] = [];
   const decisions = plan.sections.find((s) => s.id === "decisions");
   for (const item of decisions?.listItems ?? []) {
     const label = DECISION_RE.exec(item.text)?.[1];
     if (label === undefined) continue; // non-D entries are not L3's business
+    const at = { line: item.startLine, section: "decisions" };
     const cited = [...item.text.matchAll(CITATION_RE)].flatMap((m) =>
       (m[1] as string).split(",").map((q) => q.trim()),
     );
-    if (cited.length === 0 && !item.text.includes("[assumed]")) {
+    const assumed = item.text.includes("[assumed]");
+    // Socratic only: `[assumed]` is no escape — every decision must trace to the
+    // user's own reasoning (severity "error" regardless of --quick).
+    if (ctx.socratic && assumed) {
+      issues.push(
+        issue(
+          "L3",
+          "E_ASSUMED_NOT_ALLOWED",
+          "error",
+          `Decision ${label} uses [assumed] — socratic mode requires every decision to trace to your own reasoning (cite a free-text grill answer)`,
+          at,
+        ),
+      );
+    }
+    if (cited.length === 0 && !assumed) {
       issues.push(
         issue(
           "L3",
           "E_DECISION_UNTRACED",
           severity,
           `Decision ${label} cites no grill question — add "← q<n>" or tag it [assumed]`,
-          { line: item.startLine, section: "decisions" },
+          at,
         ),
       );
       continue;
@@ -520,7 +552,21 @@ export function checkL3(plan: ParsedPlan, ctx: GrillContext): LintIssue[] {
             "E_UNKNOWN_QUESTION_CITED",
             severity,
             `Decision ${label} cites ${qid}, which is not in this session's grill transcript`,
-            { line: item.startLine, section: "decisions" },
+            at,
+          ),
+        );
+        continue; // an unknown id can't also be "not reasoned" — one verdict per qid
+      }
+      // Socratic only: a known-but-unreasoned citation is a bare chip pick — the
+      // user must reason it in their own words (severity "error" regardless of --quick).
+      if (ctx.socratic && !reasoned.has(qid)) {
+        issues.push(
+          issue(
+            "L3",
+            "E_DECISION_NOT_REASONED",
+            "error",
+            `Decision ${label} cites ${qid}, which has no free-text answer — socratic mode requires you to reason it in your own words, not pick a chip`,
+            at,
           ),
         );
       }

@@ -59,6 +59,7 @@ describe("Store session CRUD", () => {
     expect(session.status).toBe("draft");
     expect(session.branch).toBe("");
     expect(session.quick).toBe(false);
+    expect(session.socratic).toBe(false);
     expect(session.createdAt).toBe(session.updatedAt);
 
     const registry = JSON.parse(readFileSync(registryPath(), "utf8"));
@@ -68,7 +69,13 @@ describe("Store session CRUD", () => {
 
   test("createSession seeds session.json and events.json under the home store", () => {
     const store = new Store();
-    const { id } = store.createSession({ title: "t", repo, branch: "main", quick: true });
+    const { id } = store.createSession({
+      title: "t",
+      repo,
+      branch: "main",
+      quick: true,
+      socratic: true,
+    });
     const dir = sessionDir(id);
     // Working state lives in the home store (~/.otacon/sessions/<id>/), keyed by
     // id, not in the repo (confine-otacon-dir-to-config-and-plans).
@@ -84,6 +91,7 @@ describe("Store session CRUD", () => {
     expect(events).toEqual({ version: 1, events: [] });
     expect(store.getSession(id)?.branch).toBe("main");
     expect(store.getSession(id)?.quick).toBe(true);
+    expect(store.getSession(id)?.socratic).toBe(true);
     // Nothing was created under <repo>/.otacon/ (it holds config + plans only).
     expect(existsSync(join(repo, ".otacon"))).toBe(false);
   });

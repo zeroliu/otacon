@@ -56,6 +56,12 @@ export interface RegistrySession {
   /** Git branch at start time; "" when none. */
   branch: string;
   quick: boolean;
+  /**
+   * Born in Socratic mode: a later phase enforces a free-text grill and
+   * reviewer-reasoned decisions. Phase 1 is pure plumbing — this flag flows
+   * end-to-end like `quick` with no behavior change yet.
+   */
+  socratic: boolean;
   status: SessionStatus;
   createdAt: string;
   updatedAt: string;

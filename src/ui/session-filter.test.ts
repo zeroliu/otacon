@@ -15,6 +15,7 @@ function session(id: string, status: SessionStatus): SessionSummary {
     repo: "/repo",
     branch: "",
     quick: false,
+    socratic: false,
     status,
     createdAt: "2026-06-14T00:00:00.000Z",
     updatedAt: "2026-06-14T00:00:00.000Z",

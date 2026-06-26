@@ -34,6 +34,7 @@ function session(
     repo,
     branch: "",
     quick: false,
+    socratic: false,
     status,
     createdAt: now,
     updatedAt: now,

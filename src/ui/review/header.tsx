@@ -113,6 +113,15 @@ export function ReviewHeader({
             openQuestions={session.openQuestions}
             latestActivity={session.latestActivity}
           />
+          {session.socratic && (
+            <span
+              className="session-badge"
+              data-mode="socratic"
+              title="Socratic mode: free-text grill, decisions you reason yourself"
+            >
+              socratic
+            </span>
+          )}
           <AgentDot
             status={session.status}
             parked={session.parked}
