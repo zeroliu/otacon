@@ -827,8 +827,11 @@ HTTP requests, no contention.
 
 **UI switching.** The **app shell sidebar** is the persistent session list (§10): one
 condensed row per active session — accent, title, repo/branch, status icon, agent dot,
-unread badge — with approved (and implemented / implement_failed) sessions folded into a
-collapsed `approved (n)` disclosure below, the same split the old index read. On desktop
+unread badge, with terminal sessions split below into two collapsible groups: a **PR
+review** group (terminal sessions whose latest PR is still open, expanded by default and
+carrying a count, so work waiting on review stays visible) and a **Done** group (finished
+work: Save-only approvals, merged or closed PRs, failed builds, collapsed by default and
+uncounted), the same split every session surface reads. On desktop
 (≥960px) it's a drag-resizable, collapsible column (240px by default) wrapping every
 route, so switching is one click from anywhere; `/` itself is a welcome pane, not the
 index. Below 960px the sidebar is hidden: the home route renders the list inline (the
@@ -1139,13 +1142,17 @@ browser↔daemon link dot, which now lives in the review header's bar (labelled
 `agent` vs `link`); the status chip stays the primary "your turn" signal. The dot is live while the agent is parked in
 `otacon wait` or its last contact is recent, and is hidden on approved sessions.
 
-**Approved sessions group separately.** The main list holds only active sessions
-(drafting / in review / revising / **implementing** — a live build is active work, so
-it stays in the list, not grouped away); approved (and implemented / implement_failed)
-ones fold into a collapsed `approved (n)` disclosure below it, one click to expand (the
-same disclosure idiom as the activity panel). Approved plans stay readable: opening an
-approved row shows its read-only plan — the disclosure is the only entry point now the
-list no longer keeps them in the active set.
+**Terminal sessions group separately.** The main list holds only active sessions
+(drafting / in review / revising / finalizing / **implementing**; a live build is active
+work, so it stays in the list, not grouped away, and a reopened amendment that carries a
+PR URL but is still non-terminal also stays here). Terminal sessions fall into two
+collapsible groups below the list, keyed off the PR rather than the status alone: a **PR
+review** group (terminal sessions whose latest PR is still open, or not yet probed,
+expanded by default and counted) and a **Done** group (the rest of the terminal set:
+Save-only approvals with no PR, merged or closed PRs, and failed builds, collapsed by
+default and uncounted). Both use the same disclosure idiom as the activity panel.
+Finished plans stay readable: opening a row shows its read-only plan, and the disclosure
+is the only entry point now the list no longer keeps them in the active set.
 
 **Welcome pane.** With no session open, `/` depends on width. At ≥960px it shows a short
 welcome in the content track: when the registry is empty, the empty-state copy (run

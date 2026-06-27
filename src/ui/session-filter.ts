@@ -1,10 +1,18 @@
-// The shared "session is over" split (session registry and switcher, review UI, approval and archive lifecycle): one React-free
-// source of truth for active-vs-over, so the switcher (which hides over
-// sessions) and the home list (which parks them in a collapsed section) can
-// never disagree about what is hidden. Mirrors the single-source rule the
-// status surfaces already follow (questionsPending in chip.tsx) — derive once,
-// render on every face. Typed on `{ status }` alone (not LiveSession) so it
-// stays out of the DOM-bound api.ts module and the root typecheck program
+// The shared session split (session registry and switcher, review UI, approval and archive lifecycle): one React-free
+// source of truth, so the switcher (which hides over sessions) and the sidebar
+// (which parks them in collapsed groups) can never disagree about what is hidden.
+// Mirrors the single-source rule the status surfaces already follow
+// (questionsPending in chip.tsx): derive once, render on every face.
+//
+// `isOver` is the binary active-vs-terminal divider every surface still reads.
+// `partitionSessions` layers a THREE-way split on top (active, PR review, done)
+// that keys off the PR, not the status alone: a terminal session whose latest PR
+// is still open lands in PR review, while a NON-terminal session that carries a
+// prUrl (a reopened amendment) stays active, not in PR review. See
+// `partitionSessions`/`prInReview` for the exact rule.
+//
+// Typed on a small structural shape (status + prUrl + prState), not LiveSession,
+// so it stays out of the DOM-bound api.ts module and the root typecheck program
 // never pulls that in.
 
 import { TERMINAL_STATUSES, type SessionStatus } from "../shared/types.js";
@@ -24,25 +32,70 @@ export function isOver(status: SessionStatus): boolean {
   return TERMINAL.has(status);
 }
 
-export interface ApprovalSplit<T> {
-  /** Still in play (draft / in_review / revising / implementing): switcher + home main list. */
+/**
+ * A terminal session whose latest PR is still in play: it has a PR URL and that
+ * PR is open (or not yet probed: an absent prState on a PR-bearing session
+ * counts as still open, per types.ts). Keyed off the PR, NOT the status, so the
+ * sidebar can park "waiting on review" PRs separately from finished work.
+ *
+ * Note the `isOver` gate: a NON-terminal session that carries a prUrl (e.g. a
+ * reopened amendment still `revising`/`implementing` over an earlier PR) is NOT
+ * in PR review. It stays in the active list. Only terminal sessions can reach
+ * PR review or done.
+ */
+export function prInReview<
+  T extends { status: SessionStatus; prUrl?: string; prState?: "open" | "merged" | "closed" },
+>(s: T): boolean {
+  return (
+    isOver(s.status) &&
+    typeof s.prUrl === "string" &&
+    s.prState !== "merged" &&
+    s.prState !== "closed"
+  );
+}
+
+export interface SessionGroups<T> {
+  /**
+   * Still in play: NOT terminal (draft / in_review / revising / finalizing /
+   * implementing), regardless of any prUrl. The switcher + home main list. A
+   * reopened amendment that carries a prUrl but is non-terminal stays here, not
+   * in PR review.
+   */
   active: T[];
-  /** Over sessions (the terminal set), kept reachable in home's collapsed section. */
-  over: T[];
+  /**
+   * Terminal sessions whose latest PR is open or not yet probed (see
+   * `prInReview`): "waiting on review", kept in their own expanded, counted
+   * group so they stay visible.
+   */
+  prReview: T[];
+  /**
+   * Terminal sessions that are NOT in PR review: approved Save-only plans with no
+   * PR, merged or closed PRs, and the rare failed build. Finished work, parked in
+   * a collapsed, uncounted group.
+   */
+  done: T[];
 }
 
 /**
- * Partition sessions into active vs over, preserving the caller's order in
- * both lists (the index and switcher already sort by activity) and never
- * dropping or duplicating a session.
+ * Partition sessions into three groups (active, PR review, done), keying off
+ * the PR rather than the status alone. Every session lands in exactly one group,
+ * the caller's incoming order is preserved within each group (the index and
+ * switcher already sort by activity), and no session is dropped or duplicated.
+ *
+ * The split: a non-terminal session is always `active` (even with a prUrl, the
+ * reopened-amendment case); a terminal session is `prReview` when `prInReview`
+ * holds, otherwise `done`.
  */
-export function partitionByApproval<T extends { status: SessionStatus }>(
-  sessions: T[],
-): ApprovalSplit<T> {
+export function partitionSessions<
+  T extends { status: SessionStatus; prUrl?: string; prState?: "open" | "merged" | "closed" },
+>(sessions: T[]): SessionGroups<T> {
   const active: T[] = [];
-  const over: T[] = [];
+  const prReview: T[] = [];
+  const done: T[] = [];
   for (const session of sessions) {
-    (isOver(session.status) ? over : active).push(session);
+    if (!isOver(session.status)) active.push(session);
+    else if (prInReview(session)) prReview.push(session);
+    else done.push(session);
   }
-  return { active, over };
+  return { active, prReview, done };
 }

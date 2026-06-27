@@ -4840,14 +4840,15 @@ code {
   outline-offset: 1px;
 }
 
-/* The collapsed approved disclosure, parallel to home's .approved-group but
- * sized for the sidebar: the same button + count + caret idiom, holding the
- * condensed over rows. */
-.sl-approved {
+/* A collapsible sidebar group of terminal sessions (PR review + Done), parallel
+ * to home's .approved-group but sized for the sidebar: the same button + caret
+ * idiom holding the condensed rows. PR review shows the count chip; Done omits
+ * it (the .sl-group-count span simply isn't rendered there). */
+.sl-group {
   border-top: 1px solid var(--line);
 }
 
-.sl-approved-toggle {
+.sl-group-toggle {
   display: flex;
   align-items: center;
   gap: 9px;
@@ -4864,26 +4865,26 @@ code {
   text-align: left;
 }
 
-.sl-approved-toggle:hover {
+.sl-group-toggle:hover {
   color: var(--ink);
 }
 
-.sl-approved-toggle:focus-visible {
+.sl-group-toggle:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
 
-.sl-approved-word {
+.sl-group-word {
   flex: none;
   color: var(--ink);
 }
 
-.sl-approved-count {
+.sl-group-count {
   flex: none;
   color: var(--accent);
 }
 
-.sl-approved-caret {
+.sl-group-caret {
   margin-left: auto;
   flex: none;
   color: var(--accent);
@@ -4891,7 +4892,7 @@ code {
 
 /* Drop the first row's top rule — the toggle already rules the section off, so
  * a doubled hairline would read as a gap. */
-.sl-approved-rows .sl-row:first-child {
+.sl-group-rows .sl-row:first-child {
   border-top: none;
 }
 
