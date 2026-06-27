@@ -3027,6 +3027,89 @@ code {
   animation: details-in 0.2s ease-out both;
 }
 
+/* ──────────────────── the Prompt card (review UI) ────────────────────
+ * The reviewer's own request, echoed at the top of the column. It is the
+ * inverse of the transmission cards (the grill card, the revision banner):
+ * those signal "incoming from the agent" with an accent-tinted fill and a 2px
+ * accent TOP border; this is the reviewer's words going the other way, so it
+ * stays quiet — a plain surface fill with a left accent rule (a margin-quote
+ * motif), muted ink on the collapsed preview, and the same eyebrow label
+ * treatment the Interview toggle wears.
+ */
+.prompt-card {
+  margin-bottom: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent);
+  animation: card-in 0.35s cubic-bezier(0.22, 0.7, 0.3, 1) both;
+}
+
+.prompt-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  width: 100%;
+  min-height: 44px;
+  padding: 12px 14px;
+  border: none;
+  background: none;
+  color: var(--ink-soft);
+  font: 600 var(--fs-meta)/1 var(--mono);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  cursor: pointer;
+  text-align: left;
+}
+
+.prompt-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.prompt-toggle:hover {
+  color: var(--ink);
+}
+
+.prompt-glyph {
+  color: var(--accent);
+}
+
+.prompt-word {
+  color: var(--ink);
+}
+
+/* The collapsed one-liner: the request clipped to a single muted line, in the
+ * reading sans (not mono) since it is the user's prose, not telemetry. */
+.prompt-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font: var(--fs-meta)/1.3 var(--sans);
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ink-soft);
+}
+
+.prompt-caret {
+  margin-left: auto;
+  color: var(--accent);
+}
+
+/* Expanded: the full request verbatim, plain text with line breaks preserved
+ * (it is echoed, not parsed as markdown). */
+.prompt-body {
+  margin: 0;
+  padding: 2px 15px 14px;
+  border-top: 1px dashed var(--line-strong);
+  font-size: var(--fs-body);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  animation: details-in 0.2s ease-out both;
+}
+
 /* ──────────────────── now-playing bar + live console ────────────────────
  * The always-on "what is the agent doing right now?" status bar (the
  * live-activity stream §10a, review UI), pinned directly under the sticky

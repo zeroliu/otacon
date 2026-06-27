@@ -880,6 +880,16 @@ Structural integration:
 
 - **Traceability** (§4, lint L3): plan decisions cite the grill Q&A that produced them
   (`D3 ← q7`) or wear `[assumed]`. No plan reaches review with silently-made decisions.
+- **The request is echoed at the top**: a **"Prompt" card** is the first child of the
+  review column, present from session start (it does not wait on a plan). It shows the
+  reviewer's verbatim request captured via `--prompt` as plain text with line breaks
+  preserved (not parsed as markdown — it is the user's own words handed back). It is
+  **collapsed by default** to a one-line preview behind the "Prompt" label, expanding on
+  click to the full text and collapsing again on a second click. Unlike the agent's
+  transmission cards (the grill card, the revision banner) it carries the reviewer's
+  words the other direction, so it wears a quiet surface fill with a left accent rule
+  rather than the accent-tinted top-border treatment. When no prompt was captured the
+  card renders nothing — no empty shell, no label.
 - **The transcript is part of the review UI**: a collapsible **"Interview" panel is the
   single grill surface** (no separate pinned queue above the plan). It has two labeled
   zones, each newest-first: an **"open"** group on top where unanswered questions are
