@@ -126,6 +126,20 @@ describe("single-source wrappers (D7)", () => {
     expect(dogfoodSkillMd()).toContain("./bin/otacon start --title <t> --socratic");
   });
 
+  test("every wrapper tells the agent to pass the user's verbatim request via --prompt", () => {
+    for (const text of [skillMd(), dogfoodSkillMd()]) {
+      // Step 1 instructs the agent to capture the original ask verbatim, stripping
+      // only the /otacon slash-command boilerplate, so the reviewer's Prompt card
+      // is populated at session start.
+      expect(text).toContain('Pass the user\'s ORIGINAL request verbatim as `--prompt "<their words>"`');
+      expect(text).toContain("strip ONLY");
+      expect(text).toContain("skill-invocation boilerplate");
+      expect(text).toContain('populates a "Prompt" card');
+      // The quick reference advertises the optional flag.
+      expect(text).toContain('start --title <t> [--prompt "<request>"] [--quick]');
+    }
+  });
+
   test("every wrapper teaches the comment & approve fold-in batch (final:true)", () => {
     for (const text of [skillMd(), dogfoodSkillMd()]) {
       // A `final:true` comments batch ends the review: the next clean submit

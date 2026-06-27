@@ -66,6 +66,10 @@ spawning a second worktree.
    the session and prints the review URL plus the \`plan\` draft path (under
    \`~/.otacon/sessions/<id>/\`). Tell the user to open the URL (\`${cmd} open\`
    launches it in their browser) so they can watch the whole thing from the first second.
+   Pass the user's ORIGINAL request verbatim as \`--prompt "<their words>"\`: strip ONLY
+   the \`/otacon\` skill-invocation boilerplate (the slash-command wrapper), never the
+   actual ask. It populates a "Prompt" card at the top of the reviewer's screen so they
+   never lose track of what they asked for.
    \`--quick\` skips the interview — only when the user explicitly asks.
 2. **Research the codebase.** On supported agents the daemon now auto-streams your
    tool calls, text, and thinking to the reviewer's now-playing console, so it
@@ -158,7 +162,7 @@ machine. Invert your usual posture:
 
 ## CLI quick reference
 
-- \`${cmd} start --title <t> [--quick]\` · \`${cmd} resume [--session <id>]\` ·
+- \`${cmd} start --title <t> [--prompt "<request>"] [--quick]\` · \`${cmd} resume [--session <id>]\` ·
   \`${cmd} progress "<note>"\` (occasional highlights / chapter markers; the activity
   floor on agents without auto-capture) ·
   \`${cmd} ask ...\` · \`${cmd} wait --timeout 540\` · \`${cmd} submit [--resolutions f]\` ·

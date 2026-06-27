@@ -889,7 +889,10 @@ Structural integration:
   transmission cards (the grill card, the revision banner) it carries the reviewer's
   words the other direction, so it wears a quiet surface fill with a left accent rule
   rather than the accent-tinted top-border treatment. When no prompt was captured the
-  card renders nothing — no empty shell, no label.
+  card renders nothing — no empty shell, no label. The wrapper protocol card teaches the
+  agent to pass this request at session start (the original ask verbatim via `--prompt`,
+  with only the `/otacon` skill-invocation boilerplate stripped), so the card populates
+  on its own; the daemon never synthesizes it.
 - **The transcript is part of the review UI**: a collapsible **"Interview" panel is the
   single grill surface** (no separate pinned queue above the plan). It has two labeled
   zones, each newest-first: an **"open"** group on top where unanswered questions are
