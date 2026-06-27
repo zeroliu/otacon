@@ -74,6 +74,12 @@ export interface Section {
   visualCount: number;
   /** Mermaid fences in the section read path — the lead-diagram check (L7). */
   diagramCount: number;
+  /**
+   * GFM (decision-matrix) tables in the section read path. Tracked apart from
+   * visualCount (which also counts callouts) because L7 accepts a lead matrix as
+   * a satisfying lead visual, but a callout alone never satisfies the nudge.
+   */
+  matrixCount: number;
   /** A `<!-- no-lead-diagram -->` escape-hatch marker was seen in this section. */
   leadDiagramOptOut: boolean;
   /**
@@ -338,6 +344,7 @@ export function parsePlan(content: string): ParsedPlan {
           fenceCount: 0,
           visualCount: 0,
           diagramCount: 0,
+          matrixCount: 0,
           leadDiagramOptOut: false,
           gwtBlocks: [],
           listItems: [],
@@ -420,7 +427,12 @@ export function parsePlan(content: string): ParsedPlan {
       inTable = true;
       closeItem();
       if (phase) phase.visualCount++;
-      else if (section) section.visualCount++;
+      else if (section) {
+        section.visualCount++;
+        // A matrix also bumps matrixCount so L7 can treat a lead table as a
+        // satisfying lead visual without crediting callouts (visualCount counts both).
+        section.matrixCount++;
+      }
       continue;
     }
 

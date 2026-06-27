@@ -486,4 +486,19 @@ describe("table (decision matrix) detection", () => {
     );
     expect(plan.sections[0]!.visualCount).toBe(2);
   });
+
+  test("a table bumps matrixCount; a callout-only Summary leaves it 0", () => {
+    const withMatrix = parsePlan(
+      planWith("## Summary\n\nShip it.\n\n| Pick | Option |\n| --- | --- |\n| ✓ | A |\n| | B |\n"),
+    ).sections[0]!;
+    expect(withMatrix.matrixCount).toBe(1);
+
+    // A callout still counts as a visual, but it is not a matrix, so L7 must keep
+    // nudging a Summary whose only visual is a callout (it doesn't show shape).
+    const calloutOnly = parsePlan(
+      planWith("## Summary\n\nShip it.\n\n> [!risk]\n> rolling the key drops live sessions\n"),
+    ).sections[0]!;
+    expect(calloutOnly.visualCount).toBe(1);
+    expect(calloutOnly.matrixCount).toBe(0);
+  });
 });
