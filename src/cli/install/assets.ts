@@ -231,10 +231,38 @@ max one per read-path section; the markdown-native review visuals below share a
 separate per-section cap. Details may elaborate on the read path, never
 introduce new scope.
 
-**Lead with a diagram.** Put a \`\`\`mermaid state / sequence / flow diagram right
-under the \`## Summary\` headline — strongly recommended on ~90% of plans, so the
-reviewer grasps the change's shape before reading prose. Keep the headline as the ≤5-line
-Summary.
+**Lead with a visual, but the right one.** Open the \`## Summary\` with a visual so the
+reviewer sees the change's shape before the prose. This stays the strong default (about
+90% of plans want one). But a visual only helps when its shape matches the content. The
+test: a diagram earns its place only when it reveals structure (a branch, a cycle,
+fan-in/fan-out, parallelism, or a true hierarchy) that prose or a table can't show at a
+glance. If the content redraws losslessly as a 2-column table or one sentence, lead with
+that instead (a decision-matrix table counts as a visual): a forced diagram is worse than
+none. Keep the headline as the ≤5-line Summary.
+
+**Match the representation to the content's shape. \`graph TD\` is one option, not the
+default; reach for it only for a genuine branching flow or a true hierarchy:**
+
+| When the content is… | Lead with | Not |
+| --- | --- | --- |
+| things resting in conditions; edges are *events* (a lifecycle) | \`stateDiagram-v2\` | a flowchart of "steps" |
+| an ordered exchange between 2+ actors or systems over time | \`sequenceDiagram\` | a flowchart |
+| ONE process with a real decision point and/or a feedback loop | \`flowchart\` (LR/TD) | (fine as is) |
+| a dependency or blast-radius graph (every edge means "depends on") | \`flowchart\`, one arrow-meaning, every edge labeled | mixed-meaning arrows |
+| a classification, key→value map, or option comparison | a **decision-matrix table** | a decision-diamond fan-out |
+| a problem→fix or symptom→cause mapping | a **table** | a graph of disconnected pairs |
+| a straight A→B→C→D with no branch | **one sentence** or a numbered list | a flowchart |
+
+**Diagram anti-patterns. Each one shipped in a real plan; do not repeat them:**
+- A decision diamond fanning to N leaves where nothing nests further. That is a lookup table, not a decision. Use a table.
+- A linear call or import chain (\`A→B→C→D\`). It just restates code reading order. Keep only the structural fact (a shared dependency, a fan-in), else use prose.
+- Two unrelated concerns in one chart joined by a shared "hinge" node. Split them; lead with the one that is the actual change.
+- One arrow glyph meaning three things (calls, then, depends-on) in the same diagram. Pick ONE meaning per diagram and label every edge.
+- A flowchart whose every arrow just means "and then." That is a sentence.
+
+When you deliberately lead with a table or prose because the content has no diagrammable
+shape, add a \`<!-- no-lead-diagram: <why> -->\` marker in Summary so the L7 nudge stays
+quiet. "No diagram" is then a deliberate, visible choice, not an oversight.
 
 ## Visuals — prefer them over prose where they carry the information
 
@@ -267,15 +295,13 @@ or callout.
   \`\`\`
   Capped at 6 scenarios per block; must sit under \`Verification\`.
 
-When plan content is shaped as a hierarchy or tree (a taxonomy, a doc or file
-structure, a nested option space, a state hierarchy, a decision tree), draw it as a
-\`\`\`mermaid diagram, not as a monospace nested outline in a \`\`\`text fence: an outline
-forces the reviewer to reconstruct the shape line by line, while a diagram shows it at a
-glance. \`graph TD\` (a top-down flowchart) is the natural default; pick whatever shape
-reads best (a mindmap, a state diagram, etc. when they fit). Put the tree diagram in the
+When plan content is itself a hierarchy or tree (a taxonomy, a doc or file structure, a
+nested option space, a state hierarchy), draw it as a \`\`\`mermaid diagram, never as a
+monospace nested outline in a \`\`\`text fence (an outline forces the reviewer to
+reconstruct the shape line by line). Pick the shape from the table above. Put it in the
 section that owns that structure (Contract, Impact, or a phase's Details); \`mermaid\`
-diagrams no longer count toward the per-section fence cap, so a lead diagram and a
-structural one can coexist.
+diagrams don't count toward the per-section fence cap, so a lead diagram and a structural
+one can coexist.
 
 Callouts and matrices are budget-exempt but capped (default 2 per read-path
 section); pills are free. Reach for a visual when it carries the point better
