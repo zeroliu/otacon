@@ -4035,3 +4035,16 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   changes. It also matches `quick`, which is likewise fixed at mint.
 - **Revisit when:** A real workflow needs to start loose and tighten partway (or vice
   versa) often enough that a guarded, audit-logged mode switch beats starting over.
+
+## Grill questions render at body (16px), not the title heading tier (2026-06-27)
+
+- **Decision:** The open grill question renders at `--fs-body` (16px), not the `--fs-title`
+  (18px) heading tier; the answered/"settled" state stays at `--fs-ui` (14px).
+- **Why:** A grill question is reading content the user reads and answers, not a heading; at
+  title (18px) it out-shouted its own option chips, answer field (both `--fs-ui` 14px), and
+  answered state. Body-16 sits it in the reading tier and makes the open→settled step a
+  deliberate 16→14 de-emphasis carried by size, weight, and ink-soft color. (Originally
+  requested as "14px"; on review the body-16 reading tier was chosen over the ui-14 input
+  tier.)
+- **Revisit when:** The type scale gains a tier between body and title, or grill questions
+  need to visually outrank surrounding dossier prose again.

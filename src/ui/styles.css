@@ -29,8 +29,8 @@
    * the dark-mode :root. Ordered small -> large. */
   --fs-meta: 12px;   /* labels & telemetry: eyebrows, chip/badge text, ids, repo·branch, timestamps, fence headers, field labels; + mono control labels (buttons, tabs, toggles, menu items, delete/approve actions) */
   --fs-ui: 14px;     /* sans text inputs + monospace code & diff (one notch below body); mono control labels drop to meta */
-  --fs-body: 16px;   /* primary reading content: prose, field values, callout bodies, table cells, quotes */
-  --fs-title: 18px;  /* headings: card titles, phase names, grill questions, md h1/h2, icon-glyph buttons */
+  --fs-body: 16px;   /* primary reading content: prose, field values, callout bodies, table cells, quotes, grill questions */
+  --fs-title: 18px;  /* headings: card titles, phase names, md h1/h2, icon-glyph buttons */
   --fs-display: 22px; /* the one masthead session title (compact 18) + the big phase numeral */
 
   --bg: #f2f1ec;
@@ -2732,7 +2732,7 @@ code {
 
 .grill-question {
   margin: 11px 0 0;
-  font-size: var(--fs-title);
+  font-size: var(--fs-body);
   font-weight: 550;
   line-height: 1.5;
   letter-spacing: -0.005em;

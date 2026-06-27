@@ -1051,8 +1051,8 @@ text, ids, repo·branch, timestamps, fence headers, field labels) and for mono c
 labels (buttons, tabs, toggles, menu and delete/approve actions), `--fs-ui` (14px) for
 sans text inputs and for monospace code and diff,
 `--fs-body` (16px) for primary reading content (prose, field values, callout bodies,
-table cells, quotes), `--fs-title` (18px) for headings (card titles, phase names, grill
-questions, markdown h1/h2, and the icon-glyph buttons that need presence), and
+table cells, quotes, grill questions), `--fs-title` (18px) for headings (card titles,
+phase names, markdown h1/h2, and the icon-glyph buttons that need presence), and
 `--fs-display` (22px) for the one masthead session title and the big phase numeral. All
 five roles carry rendered sizes: the scale is fully wired, no token waits on adoption.
 Every substantive piece of dossier reading content renders at body (16): prose, field
