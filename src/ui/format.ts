@@ -18,3 +18,12 @@ export function repoName(repoPath: string): string {
   const parts = repoPath.split("/").filter(Boolean);
   return parts[parts.length - 1] ?? repoPath;
 }
+
+/**
+ * The "#N" label for a GitHub PR URL (`.../pull/40` → "#40"), or undefined when
+ * the URL carries no `/pull/<digits>` segment. Powers the header's PR badge.
+ */
+export function prNumber(url: string): string | undefined {
+  const match = /\/pull\/(\d+)/.exec(url);
+  return match ? `#${match[1]}` : undefined;
+}
