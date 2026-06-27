@@ -91,11 +91,16 @@ describe("parsePlan on the valid fixture", () => {
       startLine: 32,
       budgetedLineCount: 1,
       listItemCount: 0,
+      contentLines: [], // the goal text rides the label line, which is not captured
     });
     expect(phase.fields.files).toEqual({
       startLine: 33,
       budgetedLineCount: 3,
       listItemCount: 2,
+      contentLines: [
+        { text: "- src/auth/issuer.ts", line: 34 },
+        { text: "- src/auth/keys.ts", line: 35 },
+      ],
     });
     expect(phase.fields.verification?.budgetedLineCount).toBe(1);
     expect(phase.fields.outOfScope).toBeUndefined();
@@ -211,6 +216,33 @@ describe("parsePlan structure handling", () => {
     );
     const details = plan.sections[0]!.phases![0]!.details!;
     expect(details.lineCount).toBe(6);
+  });
+});
+
+describe("phase field content-line capture", () => {
+  test("a Files list captures each bullet line (label line excluded)", () => {
+    const plan = parsePlan(
+      planWith("## Phases\n\n### Phase 1 — x\n\nGoal: g\nFiles:\n- a.ts\n- b.ts\nVerification: t\n"),
+    );
+    const files = plan.sections[0]!.phases![0]!.fields.files!;
+    expect(files.contentLines).toEqual([
+      { text: "- a.ts", line: 15 },
+      { text: "- b.ts", line: 16 },
+    ]);
+  });
+
+  test("a Files table captures the header, delimiter, and body rows", () => {
+    const plan = parsePlan(
+      planWith(
+        "## Phases\n\n### Phase 1 — x\n\nGoal: g\nFiles:\n| File | What changed |\n| - | - |\n| `a.ts` | adds X |\nVerification: t\n",
+      ),
+    );
+    const files = plan.sections[0]!.phases![0]!.fields.files!;
+    expect(files.contentLines).toEqual([
+      { text: "| File | What changed |", line: 15 },
+      { text: "| - | - |", line: 16 },
+      { text: "| `a.ts` | adds X |", line: 17 },
+    ]);
   });
 });
 
