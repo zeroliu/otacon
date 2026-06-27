@@ -4048,3 +4048,19 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   tier.)
 - **Revisit when:** The type scale gains a tier between body and title, or grill questions
   need to visually outrank surrounding dossier prose again.
+
+## Grill questions: format long ones, guide rather than lint (2026-06-27)
+
+- **Decision:** The skill wrapper now tells the agent to ask one focused, short question
+  per card and, when a question must run long, to format it into short paragraphs authored
+  in a `$TMPDIR` temp file and passed via `--question "$(cat …)"` (then removed). This is
+  guidance only; the daemon does not lint or reject unbroken questions.
+- **Why:** Long unbroken grill questions are agent-authored, not a render bug. The daemon
+  stores the question verbatim and the UI renders `white-space: pre-wrap`, so newlines
+  already display (sessions that contain `\n\n` render fine). No formatting guidance existed,
+  so the cheapest correct move is to add it, with a wall-versus-formatted anti-example,
+  before reaching for enforcement. A "long + zero newlines" lint was considered and deferred:
+  guidance was never tried, and a hard reject mid-grill adds a failure mode plus a threshold
+  to tune.
+- **Revisit when:** Walls keep appearing despite the guidance; then add the deferred
+  "long + unbroken" lint next to `E_SOCRATIC_FREE_TEXT_ONLY` as the backstop.
