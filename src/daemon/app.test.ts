@@ -256,6 +256,35 @@ describe("session CRUD", () => {
     expect(body.error.message).toContain("mutually exclusive");
   });
 
+  test("POST /api/sessions persists a trimmed prompt and surfaces it on GET", async () => {
+    const res = await postJson("/api/sessions", {
+      title: "with prompt",
+      repo,
+      prompt: "  do the thing  ",
+    });
+    expect(res.status).toBe(201);
+    const session = (await res.json()) as RegistrySession;
+    expect(session.prompt).toBe("do the thing");
+    expect(store.getSession(session.id)?.prompt).toBe("do the thing");
+    const got = await app.request(`/api/sessions/${session.id}`);
+    expect(((await got.json()) as RegistrySession).prompt).toBe("do the thing");
+  });
+
+  test("POST /api/sessions stores no prompt for a whitespace-only value", async () => {
+    const res = await postJson("/api/sessions", { title: "blank prompt", repo, prompt: "   " });
+    expect(res.status).toBe(201);
+    const session = (await res.json()) as RegistrySession;
+    expect("prompt" in session).toBe(false);
+    expect("prompt" in (store.getSession(session.id) as RegistrySession)).toBe(false);
+  });
+
+  test("POST /api/sessions rejects a non-string prompt", async () => {
+    const res = await postJson("/api/sessions", { title: "bad prompt", repo, prompt: 42 });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("E_BAD_REQUEST");
+  });
+
   test("GET /api/sessions lists registered sessions", async () => {
     const a = mintSession();
     const b = mintSession();
