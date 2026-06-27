@@ -171,21 +171,25 @@ over 80 lines).
 
 ### Lead diagram (first screen)
 
-A **lead diagram** — a ` ```mermaid ` state / sequence / flow chart placed directly
-under the `## Summary` headline — is **strongly recommended, not required** (~90% of
-plans, q6): the reviewer should grasp the change's shape before reading any prose. It is
-exempt from both the line budget and the per-section fence cap; a `mermaid` diagram is
-not counted by the fence cap, so it never spends Summary's one-fence allowance and the
-≤5-line headline is unaffected, and the review screen pins the Summary and its lead
-diagram as the first screen (§10). The headline stays the existing ≤5-line Summary. There
-is no forced one-line TL;DR, and phases stay expanded.
+A **lead visual** placed directly under the `## Summary` headline is **strongly
+recommended, not required** (~90% of plans, q6): the reviewer should grasp the change's
+shape before reading any prose. The agent matches the visual to the content's shape
+instead of defaulting to a flowchart: a ` ```mermaid ` state, sequence, or flow chart for
+a lifecycle or branching flow, a **decision-matrix table** for a classification or option
+comparison, or plain prose (with an opt-out marker) when the content is a linear chain
+with no shape worth drawing. A `mermaid` lead is exempt from both the line budget and the
+per-section fence cap, so it never spends Summary's one-fence allowance and the ≤5-line
+headline is unaffected; the review screen pins the Summary and its lead visual as the
+first screen (§10). There is no forced one-line TL;DR, and phases stay expanded.
 
-The linter checks **presence, never usefulness** (a diagram that merely restates the
-summary adds reading load): a Summary with no diagram earns a non-blocking nudge (lint
-L7, §5), never an error. When a chart genuinely wouldn't help — a pure docs or config
-change — an explicit `<!-- no-lead-diagram: <why> -->` marker in Summary suppresses the
-nudge (the marker is chrome, exempt from the line budget). The escape hatch is explicit
-so "no diagram" is always a deliberate choice, never an oversight.
+The linter checks **presence, never usefulness** (a visual that merely restates the
+summary adds reading load): a Summary with no lead visual (neither a ` ```mermaid `
+diagram nor a decision-matrix table) earns a non-blocking nudge (lint L7, §5), never an
+error. When a visual genuinely wouldn't help (a pure docs or config change, or a linear
+chain that reads better as a sentence), an explicit `<!-- no-lead-diagram: <why> -->`
+marker in Summary suppresses the nudge (the marker is chrome, exempt from the line
+budget). The escape hatch is explicit so "no lead visual" is always a deliberate choice,
+never an oversight.
 
 ### The normative / informative contract
 
@@ -226,12 +230,14 @@ them side-by-side on desktop, stacked on phones; an unpaired tag renders as an
 ordinary fence. The plan stays plain renderable markdown everywhere else.
 
 Tree- or hierarchy-shaped content (a taxonomy, a doc or file structure, a nested
-option space, a state hierarchy, a decision tree) is expressed as a ` ```mermaid `
-diagram (the agent picks the shape, `graph TD` by default), not a monospace nested
-outline in a ` ```text ` fence: a diagram shows the shape at a glance where an outline
-forces the reviewer to reconstruct it line by line. This is part of the visuals
-vocabulary the wrapper teaches; the renderer already validates such diagrams (L8) and
-exempts them from the fence cap, so a structural tree can sit alongside the lead diagram.
+option space, a state hierarchy) is expressed as a ` ```mermaid ` diagram (the agent
+picks the shape that matches the structure, not `graph TD` by reflex), not a monospace
+nested outline in a ` ```text ` fence: a diagram shows the shape at a glance where an
+outline forces the reviewer to reconstruct it line by line. This is part of the visuals
+vocabulary the wrapper teaches, which now includes a content-shape-to-diagram-type rubric
+and a set of named diagram anti-patterns; the renderer already validates such diagrams
+(L8) and exempts them from the fence cap, so a structural tree can sit alongside the lead
+visual.
 
 **Review visuals (markdown-native).** Beyond fences, a set of primitives the renderer
 styles from plain markdown — so each stays comment-anchorable, diff-able, and degrades
@@ -304,7 +310,7 @@ errors on stdout; the agent fixes and resubmits. Invalid revisions never reach t
 | L4   | Detail containment heuristics: file paths in Details must appear in that phase's Files; new dependency names in Details must appear in Decisions | warning                                |
 | L5   | Revision accompaniment: a submit must include a reply for every open comment thread that has none — a comment the reviewer has **resolved** (the close/withdraw verb) is skipped, never blocking the submit — and every revision ≥ 2 must carry a changelog | error                                  |
 | L6   | Detail soft caps (>80 lines/section)                                                                                                             | warning, surfaced as a badge in the UI |
-| L7   | First-screen recommendation: a lead diagram (`mermaid`) near the top is strongly recommended (~90% of plans); a `<!-- no-lead-diagram -->` marker in Summary opts out | warning (nudge, never blocks) |
+| L7   | First-screen recommendation: a lead visual near the top is strongly recommended (~90% of plans), satisfied by a `mermaid` diagram or a decision-matrix table; a `<!-- no-lead-diagram -->` marker in Summary opts out | warning (nudge, never blocks) |
 | L8   | Diagram renderability: every `mermaid` fence parses headlessly (mermaid in a happy-dom DOM); a fence mermaid cannot parse is `E_DIAGRAM_UNRENDERABLE`, so an unrenderable diagram never reaches the reviewer | error (fails open: no headless setup → no check) |
 
 Budget numbers are config, expected to be tuned during the first week of real use.
