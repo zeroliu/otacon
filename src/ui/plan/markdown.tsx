@@ -5,9 +5,10 @@
 
 import DOMPurify from "dompurify";
 import { memo, useMemo } from "react";
-// marked, configured with the plan's markdown-native visuals (callouts,
-// decision matrices). The whole transform pipeline lives in marked-setup so it
-// stays DOM-free and testable; here we only parse + sanitize.
+// marked, configured with the plan's markdown-native visuals (decision
+// matrices) and inline tokens (callout badges, scope pills). The whole
+// transform pipeline lives in marked-setup so it stays DOM-free and testable;
+// here we only parse + sanitize.
 import { marked } from "./marked-setup";
 
 // The {__html} wrapper identity is what matters here: react-dom re-assigns

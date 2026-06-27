@@ -341,12 +341,15 @@ describe("L2 budgets", () => {
     expect(run(doc({ summary }), { session: SESSION }, config).ok).toBeTrue();
   });
 
-  test("visual cap: two callouts pass, a third fails", () => {
-    const callout = (type: string, body: string) => `> [!${type}]\n> ${body}\n`;
-    const atCap = `## Summary\n\nShip it.\n\n${callout("risk", "a")}\n${callout("note", "b")}`;
+  // Decision matrices are the one capped read-path visual (callouts are inline
+  // badges now, free like pills). A matrix is a `✓`-led GFM table.
+  const matrix = (pick: string) => `| Pick | Option |\n| - | - |\n| ✓ | ${pick} |\n`;
+
+  test("visual cap: two matrices pass, a third fails", () => {
+    const atCap = `## Summary\n\nShip it.\n\n${matrix("a")}\n${matrix("b")}`;
     expect(run(doc({ summary: atCap })).ok).toBeTrue();
 
-    const overCap = `${atCap}\n${callout("decision", "c")}`;
+    const overCap = `${atCap}\n${matrix("c")}`;
     const result = run(doc({ summary: overCap }));
     expect(result.errors.find((e) => e.code === "E_VISUAL_CAP")).toMatchObject({
       section: "summary",
@@ -356,19 +359,22 @@ describe("L2 budgets", () => {
   });
 
   test("visual cap applies to a phase's read path but not Details", () => {
-    const overCap =
-      "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n- a.ts\nVerification: t\n\n> [!risk]\n> a\n\n> [!note]\n> b\n\n> [!decision]\n> c\n";
+    const overCap = `## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n- a.ts\nVerification: t\n\n${matrix("a")}\n${matrix("b")}\n${matrix("c")}`;
     expect(run(doc({ phases: overCap })).errors.find((e) => e.code === "E_VISUAL_CAP")).toMatchObject({
       section: "phase-1",
     });
 
-    const inDetails =
-      "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n- a.ts\nVerification: t\n\n#### Details\n\n> [!risk]\n> a\n\n> [!note]\n> b\n\n> [!decision]\n> c\n";
+    const inDetails = `## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n- a.ts\nVerification: t\n\n#### Details\n\n${matrix("a")}\n${matrix("b")}\n${matrix("c")}`;
     expect(run(doc({ phases: inDetails })).ok).toBeTrue();
   });
 
+  test("callout badges never trip the visual cap (free, like pills)", () => {
+    const summary = `## Summary\n\n> [!risk]\n> a\n\n> [!note]\n> b\n\n> [!decision]\n> c\n\n> [!assumption]\n> d\n`;
+    expect(run(doc({ summary })).errors.find((e) => e.code === "E_VISUAL_CAP")).toBeUndefined();
+  });
+
   test("visual cap is config-driven", () => {
-    const summary = `## Summary\n\nShip it.\n\n> [!risk]\n> a\n\n> [!note]\n> b\n\n> [!decision]\n> c\n`;
+    const summary = `## Summary\n\nShip it.\n\n${matrix("a")}\n${matrix("b")}\n${matrix("c")}`;
     const config: OtaconConfig = {
       ...DEFAULT_CONFIG,
       budgets: { ...DEFAULT_CONFIG.budgets, maxVisualsPerReadSection: 3 },

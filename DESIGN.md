@@ -237,9 +237,10 @@ exempts them from the fence cap, so a structural tree can sit alongside the lead
 styles from plain markdown — so each stays comment-anchorable, diff-able, and degrades
 to readable text if rendering ever fails:
 
-- **Callouts** — a blockquote whose first line is `[!risk]`, `[!note]`, `[!decision]`,
-  or `[!assumption]` renders as a flat semantic-ink panel (§10). Unknown types stay
-  ordinary blockquotes.
+- **Callouts** — an inline marker `[!risk]`, `[!note]`, `[!decision]`, or
+  `[!assumption]` (anywhere in prose, case-insensitive) renders as a small badge in
+  the type's hue (§10); the rest of the line stays normal prose. Unknown types stay
+  literal.
 - **Decision matrix** — a GFM table whose chosen row leads with a `✓` first cell; the
   renderer accent-inks that row so the winner reads at a glance (§10). Any table with no
   `✓` row degrades to a plain table.
@@ -256,11 +257,12 @@ to readable text if rendering ever fails:
   fence), capped instead at a scenario count (default 6), and must sit under
   Verification; a malformed or misplaced block fails the lint.
 
-The two block visuals are exempt from line budgets but counted against a
+The decision matrix is exempt from line budgets but counted against a
 per-read-path-section **visual cap** (default 2, tunable — the same shape as the
-one-fence rule, and uncapped inside Details), so a 2-line risk can _be_ a callout without
-a section becoming a wall of widgets. **Inline pills are always free** (never counted).
-The `gwt` block is exempt from the fence cap and tracked by its own scenario budget.
+one-fence rule, and uncapped inside Details), so a section can't fill with tables.
+**Callout badges and inline pills are always free** (inline tokens, never counted
+toward the budget or the visual cap). The `gwt` block is exempt from the fence cap
+and tracked by its own scenario budget.
 `mermaid` diagrams are likewise exempt from the per-section fence cap (counted only
 toward the L7 lead-diagram check), so the fence cap now governs only code and
 before/after fences.
@@ -1050,13 +1052,13 @@ small to large: `--fs-meta` (12px) for labels and telemetry (eyebrows, chip and 
 text, ids, repo·branch, timestamps, fence headers, field labels) and for mono control
 labels (buttons, tabs, toggles, menu and delete/approve actions), `--fs-ui` (14px) for
 sans text inputs and for monospace code and diff,
-`--fs-body` (16px) for primary reading content (prose, field values, callout bodies,
+`--fs-body` (16px) for primary reading content (prose, field values,
 table cells, quotes, grill questions), `--fs-title` (18px) for headings (card titles,
 phase names, markdown h1/h2, and the icon-glyph buttons that need presence), and
 `--fs-display` (22px) for the one masthead session title and the big phase numeral. All
 five roles carry rendered sizes: the scale is fully wired, no token waits on adoption.
 Every substantive piece of dossier reading content renders at body (16): prose, field
-values, callout bodies, the Files list, table cells (both `td` and the mono-uppercase
+values, the Files list, table cells (both `td` and the mono-uppercase
 `th` header cells, which keep their weight and tracking but share the body size), and
 Given/When/Then clause text. Reading content that once wore the mono telemetry treatment
 is promoted into the body tier in the sans face: the anchored comment quotes
@@ -1084,12 +1086,13 @@ the five roles stay the single source of truth. The telemetry character comes fr
 plus uppercase plus tracking plus color, not from sub-12px size; icon-only controls keep
 an adequate hit box.
 
-**Callouts** apply this vocabulary to plan prose: a `> [!risk]` blockquote becomes a
-flat panel with a 2px top rule and a glyph+label inked in the type's hue — risk amber,
-note blue, decision accent, assumption muted — no fill, no radius, drawn only from the
-tested chip/accent palette so the codec discipline and light/dark contrast both hold.
-The marker line is chrome (unselectable, never anchored); the body stays anchorable
-markdown so a comment pins to one specific callout. A **decision matrix** is a plain
+**Callouts** apply this vocabulary to plan prose: an inline `[!risk]` marker becomes a
+small mono uppercase badge inked in the type's hue — risk amber, note blue, decision
+accent, assumption muted — a faint hue-tinted fill, drawn only from the tested
+chip/accent palette so the codec discipline and light/dark contrast both hold. The
+badge is chrome (`user-select: none`, never anchored); the prose on the rest of the
+line stays anchorable markdown, so a comment pins to the line's text. A **decision
+matrix** is a plain
 GFM table; the chosen row (first cell `✓`) gets a 2px accent rule on the marker cell
 and a faint accent wash — the winner inked, the alternatives left as ordinary rows.
 **Inline pills** are small mono tags hued by scope (new green, breaking/deletes red,

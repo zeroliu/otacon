@@ -57,7 +57,7 @@ export interface Phase {
   strayH4s: number[];
   /** Fences outside Details — the phase's read path. */
   fenceCount: number;
-  /** Markdown-native visuals (callouts, matrices) outside Details — capped. */
+  /** Markdown-native visuals (decision matrices) outside Details — capped. */
   visualCount: number;
   /** Behavioral-assertion blocks in the read path; budget-exempt, validated separately. */
   gwtBlocks: GwtBlock[];
@@ -70,7 +70,7 @@ export interface Section {
   endLine: number;
   budgetedLineCount: number;
   fenceCount: number;
-  /** Markdown-native visuals (callouts, matrices) in the section read path. */
+  /** Markdown-native visuals (decision matrices) in the section read path. */
   visualCount: number;
   /** Mermaid fences in the section read path — the lead-diagram check (L7). */
   diagramCount: number;
@@ -123,12 +123,10 @@ const HEADING_RE = /^(#{2,4})\s+(.+?)\s*$/;
 // not a budgeted/visual fence (plan structure, lint, and anchoring). Group 1 stays the delimiter.
 const FENCE_RE = /^\s*(`{3,}|~{3,})\s*(.*)$/;
 const LIST_ITEM_RE = /^[-*+]\s+/;
-// A blockquote line, and the callout marker that must be its first line — the
-// same closed type set the renderer styles (src/ui/plan/callout.tsx). A known
-// callout's lines are budget-exempt and count as one visual; a plain
-// blockquote (or an unknown `[!type]`) stays ordinary budgeted prose.
+// A blockquote line. Callouts are now inline badges (src/ui/plan/callout.ts),
+// matched mid-prose like a scope pill, so a blockquote is always ordinary
+// budgeted prose — the parser no longer special-cases `[!type]` markers.
 const QUOTE_RE = /^\s*>/;
-const CALLOUT_RE = /^\s*>\s*\[!(?:risk|note|decision|assumption)\]\s*$/i;
 // The lead-diagram escape hatch (plan structure, lint, and anchoring): an HTML-comment directive that
 // suppresses the L7 nudge when a chart isn't meaningful. Like a callout marker
 // it is chrome, not prose, so a section's read path exempts it from the budget.
@@ -137,7 +135,7 @@ const LEAD_OPT_OUT_RE = /^\s*<!--\s*no-lead-diagram\b.*?-->\s*$/i;
 // A GFM table: a header row (has a pipe) immediately followed by a delimiter
 // row (pipes plus only `-:` and spaces, with at least one `-`). The renderer
 // styles such tables as decision matrices; the parser exempts their lines from
-// the line budget and counts the table as one visual, like a callout.
+// the line budget and counts the table as one visual — the only capped visual.
 const TABLE_ROW_RE = /\|/;
 function isTableDelimiter(line: string): boolean {
   const trimmed = line.trim();
@@ -208,11 +206,12 @@ export function parsePlan(content: string): ParsedPlan {
   let mermaidBody: string[] | null = null;
   let mermaidStartLine = 0;
   let mermaidSection = "";
-  // Open blockquote run: a callout (budget-exempt, counts as one visual) or a
-  // plain quote (ordinary budgeted prose). Reset by any structural boundary.
-  let quote: { callout: boolean } | null = null;
-  // Open GFM table run (a decision matrix): budget-exempt, counts as one
-  // visual. Reset by any structural boundary.
+  // Whether we are inside an open blockquote run (ordinary budgeted prose;
+  // callouts are inline badges now, so a quote never counts as a visual). Reset
+  // by any structural boundary.
+  let quote = false;
+  // Open GFM table run (a decision matrix): the one capped read-path visual —
+  // budget-exempt, counts as one visual. Reset by any structural boundary.
   let inTable = false;
   let inDetails = false;
   let openDetails: DetailsBlock | null = null;
@@ -284,7 +283,7 @@ export function parsePlan(content: string): ParsedPlan {
       const lang = (fenceMatch[2] ?? "").trim().toLowerCase().split(/\s+/)[0];
       const isGwt = lang === "gwt";
       const isMermaid = lang === "mermaid";
-      quote = null;
+      quote = false;
       inTable = false;
       closeItem();
       if (inDetails) detailsLastContent = lineNo;
@@ -323,7 +322,7 @@ export function parsePlan(content: string): ParsedPlan {
 
     const heading = HEADING_RE.exec(line);
     if (heading) {
-      quote = null; // a heading ends any open blockquote run
+      quote = false; // a heading ends any open blockquote run
       inTable = false;
       const level = heading[1]!.length;
       const title = heading[2]!;
@@ -387,26 +386,20 @@ export function parsePlan(content: string): ParsedPlan {
       continue;
     }
 
-    // Blockquote runs (outside Details). A known callout is exempt from the
-    // line budget and counts as one visual; a plain blockquote stays budgeted
-    // prose, exactly as before this primitive existed.
+    // Blockquote runs (outside Details). Always ordinary budgeted prose —
+    // callouts are inline badges (free, like pills), so a quote never counts as
+    // a visual.
     if (quote) {
       if (QUOTE_RE.test(line)) {
-        if (!quote.callout && !phase && section) section.budgetedLineCount++;
+        if (!phase && section) section.budgetedLineCount++;
         continue;
       }
-      quote = null; // a non-quote line ends the run; fall through to handle it
+      quote = false; // a non-quote line ends the run; fall through to handle it
     }
     if (QUOTE_RE.test(line)) {
-      const callout = CALLOUT_RE.test(line);
-      quote = { callout };
+      quote = true;
       closeItem();
-      if (callout) {
-        if (phase) phase.visualCount++;
-        else if (section) section.visualCount++;
-      } else if (!phase && section) {
-        section.budgetedLineCount++;
-      }
+      if (!phase && section) section.budgetedLineCount++;
       continue;
     }
 

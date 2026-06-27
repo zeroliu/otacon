@@ -263,54 +263,43 @@ describe("gwt block capture", () => {
   });
 });
 
-describe("callout detection", () => {
-  test("a known callout is budget-exempt and counts as one visual", () => {
+describe("callouts are inline badges, not blockquote visuals", () => {
+  test("a callout blockquote is ordinary budgeted prose, no visual", () => {
     const plan = parsePlan(
       planWith("## Summary\n\nShip it.\n\n> [!risk]\n> Rolling the key drops live sessions.\n"),
     );
     const summary = plan.sections[0]!;
-    expect(summary.budgetedLineCount).toBe(1); // only "Ship it." counts
-    expect(summary.visualCount).toBe(1);
+    // "Ship it." plus both quote lines all count as prose; nothing is exempt.
+    expect(summary.budgetedLineCount).toBe(3);
+    expect(summary.visualCount).toBe(0);
   });
 
-  test("plain blockquotes and unknown markers stay budgeted prose", () => {
+  test("a bare `[!risk]` line (no blockquote) is ordinary budgeted prose", () => {
+    const plan = parsePlan(planWith("## Summary\n\n[!risk] rolling the key drops sessions\n"));
+    expect(plan.sections[0]!.budgetedLineCount).toBe(1);
+    expect(plan.sections[0]!.visualCount).toBe(0);
+  });
+
+  test("plain blockquotes and `[!type]` markers alike stay budgeted prose", () => {
     const plain = parsePlan(planWith("## Summary\n\n> a plain quote\n> second line\n"));
     expect(plain.sections[0]!.budgetedLineCount).toBe(2);
     expect(plain.sections[0]!.visualCount).toBe(0);
 
-    const unknown = parsePlan(planWith("## Summary\n\n> [!warning]\n> not in the set\n"));
-    expect(unknown.sections[0]!.budgetedLineCount).toBe(2);
-    expect(unknown.sections[0]!.visualCount).toBe(0);
+    const marker = parsePlan(planWith("## Summary\n\n> [!note]\n> in a quote\n"));
+    expect(marker.sections[0]!.budgetedLineCount).toBe(2);
+    expect(marker.sections[0]!.visualCount).toBe(0);
   });
 
-  test("only a marker on the blockquote's first line opens a callout", () => {
-    const plan = parsePlan(planWith("## Summary\n\n> lead line\n> [!risk]\n> trailing\n"));
-    // The marker is a continuation line, so this is one plain (budgeted) quote.
-    expect(plan.sections[0]!.budgetedLineCount).toBe(3);
-    expect(plan.sections[0]!.visualCount).toBe(0);
-  });
-
-  test("callouts count per-section and per-phase, separately from fences", () => {
+  test("callout markers never bump a phase's visual count or its field budget", () => {
     const plan = parsePlan(
       planWith(
         "## Summary\n\n> [!note]\n> one\n\n> [!risk]\n> two\n\n## Phases\n\n### Phase 1 — x\n\nGoal: g\nFiles:\n- a.ts\nVerification: t\n\n> [!decision]\n> chose A\n",
       ),
     );
-    expect(plan.sections[0]!.visualCount).toBe(2);
+    expect(plan.sections[0]!.visualCount).toBe(0);
     const phase = plan.sections[1]!.phases![0]!;
-    expect(phase.visualCount).toBe(1);
-    expect(phase.fields.verification!.budgetedLineCount).toBe(1); // callout didn't touch it
-  });
-
-  test("callouts inside Details do not count toward the phase visual cap", () => {
-    const plan = parsePlan(
-      planWith(
-        "## Phases\n\n### Phase 1 — x\n\nGoal: g\n\n#### Details\n\n> [!risk]\n> detail-level\n",
-      ),
-    );
-    const phase = plan.sections[0]!.phases![0]!;
     expect(phase.visualCount).toBe(0);
-    expect(phase.details!.lineCount).toBeGreaterThan(0);
+    expect(phase.fields.verification!.budgetedLineCount).toBe(1); // callout didn't touch it
   });
 });
 
@@ -478,12 +467,13 @@ describe("table (decision matrix) detection", () => {
     expect(inDetails.sections[0]!.phases![0]!.visualCount).toBe(0);
   });
 
-  test("callouts and tables share the per-section visual count", () => {
+  test("a callout blockquote does not share the visual count — only tables count", () => {
     const plan = parsePlan(
       planWith(
         "## Summary\n\n> [!note]\n> n\n\n| a | b |\n| - | - |\n| 1 | 2 |\n",
       ),
     );
-    expect(plan.sections[0]!.visualCount).toBe(2);
+    // The table is the only visual; the `[!note]` quote is budgeted prose.
+    expect(plan.sections[0]!.visualCount).toBe(1);
   });
 });
