@@ -14,6 +14,7 @@
 // "closed".
 
 import { execFile } from "node:child_process";
+import type { RegistrySession } from "../shared/types.js";
 
 export type PrState = "open" | "merged" | "closed";
 
@@ -66,4 +67,86 @@ export async function fetchPrState(
     // JSON: all degrade to "couldn't determine".
     return undefined;
   }
+}
+
+/**
+ * The PR poller refreshes only UN-SETTLED PRs (`open` or not-yet-known) so the
+ * home UI can re-section an implemented plan the moment its PR merges or closes.
+ * A settled PR ("merged"/"closed") is GitHub-terminal, so it is never re-queried.
+ * Refresh happens on a timer (every few minutes) AND on demand via `pollNow`
+ * (the index UI kicks one each time it connects), and any state CHANGE publishes
+ * the session so subscribers re-summarize live. Like `fetchPrState`, a poll
+ * never throws: an indeterminate probe leaves the session untouched.
+ */
+
+/** How often the timer refreshes un-settled PRs. A few minutes: PR fates change on human, not machine, time. */
+const POLL_INTERVAL_MS = 3 * 60_000;
+
+/** Everything the poller needs from the daemon, injectable for tests. */
+export interface PrPollingDeps {
+  /** All registry sessions (the poller filters to PR-bearing, un-settled ones). */
+  listSessions: () => RegistrySession[];
+  /** Persist a refreshed state (store.updateSession). */
+  updateSession: (id: string, patch: { prState: PrState }) => void;
+  /** Re-summarize + SSE a session by id (publishSession-by-id) so the UI re-sections. */
+  publish: (id: string) => void;
+  /** Test seam: defaults to the module's `fetchPrState`. */
+  fetchPrState?: (url: string) => Promise<PrState | undefined>;
+  /** Test seam: timer cadence in ms (default a few minutes). */
+  intervalMs?: number;
+  /** Test seam: the timer factory (defaults to setInterval/clearInterval). */
+  setInterval?: (cb: () => void, ms: number) => ReturnType<typeof setInterval>;
+  clearInterval?: (h: ReturnType<typeof setInterval>) => void;
+}
+
+/**
+ * Start the timer that periodically refreshes un-settled PRs. Returns `pollNow`
+ * (an on-demand sweep, awaitable) and `stop` (clears the timer). The timer is
+ * armed here but does NOT fire on start (the caller decides when to kick the
+ * first poll). Like the tailer, the handle is `unref`'d so it never holds the
+ * process open.
+ */
+export function startPrPolling(
+  deps: PrPollingDeps,
+): { pollNow: () => Promise<void>; stop: () => void } {
+  const probe = deps.fetchPrState ?? fetchPrState;
+  const intervalMs = deps.intervalMs ?? POLL_INTERVAL_MS;
+  const setIntervalFn = deps.setInterval ?? ((cb, ms) => setInterval(cb, ms));
+  const clearIntervalFn = deps.clearInterval ?? ((h) => clearInterval(h));
+
+  const pollNow = async (): Promise<void> => {
+    // Skip settled PRs (merged/closed are GitHub-terminal) and session-without-PR
+    // rows entirely: only `open`/`undefined` are worth a probe.
+    const eligible = deps
+      .listSessions()
+      .filter((s) => typeof s.prUrl === "string" && s.prState !== "merged" && s.prState !== "closed");
+    await Promise.all(
+      eligible.map(async (session) => {
+        // `probe` is total, but stay defensive: one bad probe must not sink the sweep.
+        let next: PrState | undefined;
+        try {
+          next = await probe(session.prUrl as string);
+        } catch {
+          return; // couldn't determine, leave the session unchanged
+        }
+        // An absent prState already reads as "open" (see RegistrySession), so a
+        // probe of "open" against undefined is NOT a change worth republishing.
+        const current = session.prState ?? "open";
+        if (next === undefined || next === current) return; // no change to publish
+        deps.updateSession(session.id, { prState: next });
+        deps.publish(session.id);
+      }),
+    );
+  };
+
+  const timer = setIntervalFn(() => {
+    void pollNow();
+  }, intervalMs);
+  (timer as { unref?: () => void }).unref?.(); // never holds the daemon open on its own
+
+  const stop = (): void => {
+    clearIntervalFn(timer);
+  };
+
+  return { pollNow, stop };
 }
