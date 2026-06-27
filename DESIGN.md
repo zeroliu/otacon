@@ -1501,7 +1501,7 @@ Operational requirement: the Mac stays awake while a plan is in review
 | `~/.otacon/sessions/<id>/`                        | Per-session working state, keyed by session id: `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), threads (`threads.json`: comment + question threads with answers, agent replies, reviewer-resolve closes, and anchor states inline), the grill transcript (`transcript.json`), the capped live-activity feed (`activity.json`: the newest ~N `otacon progress` notes), the live-activity stream (`stream.jsonl`: the normalized, capped, append-only event stream, §10a), queues, AND the canonical approved plan `YYYY-MM-DD-<slug>.md`. Removed outright when the session is deleted | n/a (global)                              |
 | `~/.otacon/worktrees/<slug>/`                     | Implement build's git worktree on branch `otacon/impl-<slug>` (base dir is `worktree.dir`, default `~/.otacon/worktrees` — outside the repo)                    | n/a (global, outside the repo)             |
 | `<repo>/<plans.dir>/YYYY-MM-DD-<slug>.md`         | Save-time project copy (default `.otacon/plans`; set `plans.dir=docs/plans` to group with tracked plans)       | yours to commit (or not)                   |
-| `~/.otacon/registry.json`                         | Session registry: ID → repo, branch, title, status, `prUrl`, and `impl` (the build's worktree + branch, recorded at Implement-approve; see below)                                                             | n/a (global)                               |
+| `~/.otacon/registry.json`                         | Session registry: ID → repo, branch, title, status, `prUrl`, `prState` (the latest PR's GitHub state, refreshed by a `gh` poller; see below), and `impl` (the build's worktree + branch, recorded at Implement-approve; see below)                                                             | n/a (global)                               |
 
 Every session's working state (and its approved plan) lives in the home store keyed
 by its session id (`~/.otacon/sessions/<id>/`), repo-independent. On **Save** it
@@ -1632,6 +1632,17 @@ on the summary (surfaced as the home card's PR link, §10). `otacon clean` shoul
 finished or aborted build's impl worktree and branch alongside archiving its session
 state. The whole build runs in native in-session subagents (subscription-covered, §13);
 the daemon never spawns a model.
+
+Once a session carries a `prUrl`, the daemon tracks that PR's fate with `prState`
+(open / merged / closed). It is the session's LATEST PR state only (no history),
+paired with `prUrl`: a re-opened session that cuts a fresh PR overwrites both via
+implement-done. The state is refreshed by polling GitHub through the `gh` CLI
+(`gh pr view <url> --json state`), reusing the user's existing `gh auth` (no token
+for otacon to store), and a local OS call, never a model API (§13). It is best-effort:
+when `gh` is unavailable, unauthenticated, or the probe otherwise fails, `prState`
+stays absent, and a PR-bearing session with an absent `prState` is treated as still
+open (the home UI degrades to a plain link). otacon tracks only open/merged/closed,
+not CI or review status.
 
 ---
 

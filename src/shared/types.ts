@@ -72,6 +72,14 @@ export interface RegistrySession {
    */
   prUrl?: string;
   /**
+   * The latest PR's GitHub state, refreshed by the daemon's `gh` poller
+   * (daemon/pr-status.ts). Absent until first polled; sectioning treats an
+   * absent prState on a PR-bearing session as still open. Paired with `prUrl`:
+   * the two model the session's LATEST PR only (no history). A re-opened session
+   * that cuts a fresh PR after its first merged has implement-done overwrite both.
+   */
+  prState?: "open" | "merged" | "closed";
+  /**
    * The Implement build's worktree + branch, recorded when the session flips to
    * `implementing` (deterministic from slug + worktree.dir). Lets a later
    * `/otacon` run from inside that worktree reopen this same session to amend it
