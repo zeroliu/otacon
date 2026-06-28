@@ -242,7 +242,9 @@ outputs, types, errors; one signature fence is fine under the 1-fence rule) ·
 that produced it, or `[assumed]`) · *(optional)* `## Impact` (≤10 lines — blast
 radius: the upstream modules this plan leans on and the downstream modules it can
 break; a dependency mermaid is fine under the 1-fence rule) · `## Phases`
-(`### Phase <n> — <name>`, each with `Goal:` ≤3 lines, `Files:` list,
+(`### Phase <n> — <name>`, each with `Goal:` ≤3 lines, `Files:` as a
+`| File | What changed |` table (fill every row's 'What changed' cell) or a
+plain list (the review shows Verification above Files, so Files reads last),
 `Verification:` ≤3 lines plus an optional ```gwt scenario block — see below,
 optional collapsible `#### Details` block) ·
 `## Risks` (≤5 items, ≤2 lines each) ·

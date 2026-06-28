@@ -11,7 +11,7 @@ import type { LintIssue } from "../../shared/types";
 import { CITATION_RE } from "../../shared/types";
 import { CodeFence, MermaidFigure, PairFences } from "./code";
 import { Markdown } from "./markdown";
-import type { Block, PlanDetails, PlanPhase, PlanSection } from "./parse";
+import type { Block, PlanDetails, PlanField, PlanPhase, PlanSection } from "./parse";
 import { parsePlan } from "./parse";
 import { ScenarioCards } from "./scenario-card";
 
@@ -76,6 +76,26 @@ function DetailsBlock({ details, l6 }: { details: PlanDetails; l6?: LintIssue })
   );
 }
 
+// Canonical field order, independent of source order: Goal reads first, then
+// Verification, Out of scope, and Files always last (Files is the labelless,
+// full-width change manifest — it closes the card). A stable sort by rank, so
+// any unknown key (shouldn't happen — parse.ts only emits the four) sinks last
+// without reshuffling its peers.
+const FIELD_RANK: Record<PlanField["key"], number> = {
+  goal: 0,
+  verification: 1,
+  "out-of-scope": 2,
+  files: 3,
+};
+
+export function orderedFields(fields: PlanField[]): PlanField[] {
+  const rank = (f: PlanField): number => FIELD_RANK[f.key] ?? Number.MAX_SAFE_INTEGER;
+  return fields
+    .map((field, index) => ({ field, index }))
+    .sort((a, b) => rank(a.field) - rank(b.field) || a.index - b.index)
+    .map((entry) => entry.field);
+}
+
 function PhaseCard({
   phase,
   warnings,
@@ -99,9 +119,12 @@ function PhaseCard({
       {phase.body.length > 0 && <Blocks blocks={phase.body} />}
       {phase.fields.length > 0 && (
         <dl className="fields">
-          {phase.fields.map((field) => (
+          {orderedFields(phase.fields).map((field) => (
             <div key={field.key} className={`field field-${field.key}`}>
-              <dt className="field-label">{field.label}</dt>
+              {/* Files is the labelless, full-width change manifest — render just
+               *  its value (table or legacy list) so it reads as the card's
+               *  closing block. Every other field keeps its eyebrow <dt>. */}
+              {field.key !== "files" && <dt className="field-label">{field.label}</dt>}
               <dd className="field-value">
                 <Blocks blocks={field.blocks} />
               </dd>

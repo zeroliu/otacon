@@ -168,6 +168,87 @@ describe("L1 schema completeness", () => {
     expect(codes(run(doc({ phases })))).toContain("E_FILES_EMPTY");
   });
 
+  describe("Files-as-table requires a non-empty What changed cell", () => {
+    test("a table with every What changed cell filled lints clean", () => {
+      const phases =
+        "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n| File | What changed |\n| - | - |\n| `a.ts` | adds the X endpoint |\n| `b.ts` | wires the route |\nVerification: t\n";
+      const result = run(doc({ phases }));
+      expect(codes(result)).toEqual([]);
+      expect(result.ok).toBeTrue();
+    });
+
+    test("a body row with an empty What changed cell is E_FILES_NO_SUMMARY anchored to that row", () => {
+      const phases =
+        "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n| File | What changed |\n| - | - |\n| `a.ts` | adds the X endpoint |\n| `b.ts` | |\nVerification: t\n";
+      const result = run(doc({ phases }));
+      const noSummary = result.errors.filter((e) => e.code === "E_FILES_NO_SUMMARY");
+      expect(noSummary).toHaveLength(1);
+      // The empty-cell row is the 4th line of the phases body; phases is the 4th
+      // doc part, so the row sits well below the phase heading — anchor to it, not
+      // the field. (Computed below by locating the offending line.)
+      const lines = doc({ phases }).split("\n");
+      const offending = lines.findIndex((l) => l === "| `b.ts` | |") + 1;
+      expect(noSummary[0]).toMatchObject({ rule: "L1", section: "phase-1", line: offending });
+      expect(noSummary[0]?.message).toContain("empty");
+    });
+
+    test("a single-column table is E_FILES_NO_SUMMARY (needs a What changed column)", () => {
+      const phases =
+        "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n| File |\n| - |\n| `a.ts` |\nVerification: t\n";
+      const result = run(doc({ phases }));
+      const noSummary = result.errors.filter((e) => e.code === "E_FILES_NO_SUMMARY");
+      expect(noSummary).toHaveLength(1);
+      expect(noSummary[0]?.message).toContain("column");
+    });
+
+    test("a second column not titled What changed is E_FILES_NO_SUMMARY", () => {
+      const phases =
+        "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n| File | Notes |\n| - | - |\n| `a.ts` | adds X |\nVerification: t\n";
+      const result = run(doc({ phases }));
+      const noSummary = result.errors.filter((e) => e.code === "E_FILES_NO_SUMMARY");
+      expect(noSummary).toHaveLength(1);
+      expect(noSummary[0]?.message).toContain('titled "What changed"');
+    });
+
+    test('a "What Changed" header passes regardless of case/spacing', () => {
+      const phases =
+        "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n|  File  |  What   Changed  |\n| - | - |\n| `a.ts` | adds X |\nVerification: t\n";
+      expect(codes(run(doc({ phases })))).toEqual([]);
+    });
+
+    test("a table fires no E_FILES_EMPTY even though it has no list items", () => {
+      const phases =
+        "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n| File | What changed |\n| - | - |\n| `a.ts` | adds X |\nVerification: t\n";
+      expect(codes(run(doc({ phases })))).not.toContain("E_FILES_EMPTY");
+    });
+
+    test("a legacy Files list still lints clean — no E_FILES_NO_SUMMARY, no E_FILES_EMPTY", () => {
+      const phases =
+        "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n- `a.ts` (adds X)\n- `b.ts`\nVerification: t\n";
+      const result = run(doc({ phases }));
+      expect(codes(result)).not.toContain("E_FILES_NO_SUMMARY");
+      expect(codes(result)).not.toContain("E_FILES_EMPTY");
+      expect(result.ok).toBeTrue();
+    });
+
+    test("an empty Files field (neither list nor table) is still E_FILES_EMPTY", () => {
+      const phases =
+        "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles: none listed\nVerification: t\n";
+      const result = run(doc({ phases }));
+      expect(codes(result)).toContain("E_FILES_EMPTY");
+      expect(codes(result)).not.toContain("E_FILES_NO_SUMMARY");
+    });
+
+    test("the Files table is exempt from the phase visual cap — table + 2 callouts still lints clean", () => {
+      // The cap is maxVisualsPerReadSection (2). A Files table is required
+      // structure, not decoration: it must not consume a decorative-visual slot,
+      // so a phase with a Files table AND the full 2 callouts must stay clean.
+      const phases =
+        "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n| File | What changed |\n| - | - |\n| `a.ts` | adds X |\n\n> [!note]\n> n\n\n> [!risk]\n> r\n\nVerification: t\n";
+      expect(codes(run(doc({ phases })))).not.toContain("E_VISUAL_CAP");
+    });
+  });
+
   test("more than one Details block", () => {
     const phases =
       "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n- a.ts\nVerification: t\n\n#### Details\n\na\n\n#### Details\n\nb\n";

@@ -163,11 +163,21 @@ like any diagram, exempt from the fence cap). The order check tolerates absent o
 the sections found against the canonical order filtered to those present), so
 omitting one never trips the ordering rule.
 
-Each `### Phase <n> — <name>` requires: **Goal** (≤3 lines), **Files** (list),
-**Verification** (≤3 lines), optional **Out of scope**. The Verification field
+Each `### Phase <n> — <name>` requires: **Goal** (≤3 lines), **Files**,
+**Verification** (≤3 lines), optional **Out of scope**. **Files** is authored as a
+`| File | What changed |` table (preferred; every row's "What changed" cell filled)
+or, for legacy plans, a plain list. The Verification field
 may also carry a ` ```gwt ` **behavioral-assertion block** (below). Each phase may
 have one `#### Details` block — collapsible in the UI, unbudgeted (soft cap: warn
 over 80 lines).
+
+The review renders the phase fields in a fixed reading order regardless of source
+order: **Goal**, then **Verification**, then **Out of scope**, then **Files** last
+(the file list is the least-read subsection, so verification is promoted above it).
+Files renders
+**labelless** (the "Files" heading is dropped) and **full-width**, whether it is a
+table or a list. The renderer does no list↔table conversion: it renders whatever
+markdown the author wrote.
 
 ### Lead diagram (first screen)
 
@@ -260,7 +270,10 @@ The two block visuals are exempt from line budgets but counted against a
 per-read-path-section **visual cap** (default 2, tunable — the same shape as the
 one-fence rule, and uncapped inside Details), so a 2-line risk can _be_ a callout without
 a section becoming a wall of widgets. **Inline pills are always free** (never counted).
-The `gwt` block is exempt from the fence cap and tracked by its own scenario budget.
+A phase's **Files table** is also exempt from the visual cap: it is required structure,
+not a decorative visual, so counting it would silently halve a phase's callout/matrix
+budget. The `gwt` block is exempt from the fence
+cap and tracked by its own scenario budget.
 `mermaid` diagrams are likewise exempt from the per-section fence cap (counted only
 toward the L7 lead-diagram check), so the fence cap now governs only code and
 before/after fences.
@@ -298,7 +311,7 @@ errors on stdout; the agent fixes and resubmits. Invalid revisions never reach t
 
 | Rule | Check                                                                                                                                            | Severity                               |
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
-| L1   | Schema completeness: required sections present, in canonical order (absent optionals tolerated); phases have Goal/Files/Verification; `gwt` blocks well-formed and under Verification | error                                  |
+| L1   | Schema completeness: required sections present, in canonical order (absent optionals tolerated); phases have Goal/Files/Verification; a Files **table** needs a second column titled "What changed" (≥2 columns, header matched case-insensitively) with every body row's cell filled (`E_FILES_NO_SUMMARY`), while a Files **list** is accepted as-is and `E_FILES_EMPTY` fires only when Files has neither a table nor a list; `gwt` blocks well-formed and under Verification | error                                  |
 | L2   | Read-path budgets (Summary ≤5 lines, Goal ≤3, etc.)                                                                                              | error                                  |
 | L3   | Decision traceability: every `D<n>` cites a `q<n>` (`← q7` or `← q7, q9`; `<-` accepted) or `[assumed]`; cited ids must exist in the grill transcript. In a **socratic** session (§8) `[assumed]` is banned (`E_ASSUMED_NOT_ALLOWED`) and every citation must point at a free-text answer, not a chip (`E_DECISION_NOT_REASONED`) | error (warning in `--quick` sessions; the two socratic codes are always errors) |
 | L4   | Detail containment heuristics: file paths in Details must appear in that phase's Files; new dependency names in Details must appear in Decisions | warning                                |
@@ -1056,9 +1069,13 @@ phase names, markdown h1/h2, and the icon-glyph buttons that need presence), and
 `--fs-display` (22px) for the one masthead session title and the big phase numeral. All
 five roles carry rendered sizes: the scale is fully wired, no token waits on adoption.
 Every substantive piece of dossier reading content renders at body (16): prose, field
-values, callout bodies, the Files list, table cells (both `td` and the mono-uppercase
+values, callout bodies, table cells (both `td` and the mono-uppercase
 `th` header cells, which keep their weight and tracking but share the body size), and
-Given/When/Then clause text. Reading content that once wore the mono telemetry treatment
+Given/When/Then clause text. The **Files table** (the per-phase file-change table) is the
+one explicit exception to the body-16 table-cell rule: it reads at `--fs-ui` (14px),
+because file paths are operational, mono content, not primary reading prose, the same
+reasoning that sits code and diff at ui 14. A legacy **Files list** is not a table at all;
+it keeps its own mono 16px treatment. Reading content that once wore the mono telemetry treatment
 is promoted into the body tier in the sans face: the anchored comment quotes
 (composer, pending, and thread quotes) and the empty-rail copy now read as body-16 sans
 prose, while their accompanying slugs, ids, and timestamps stay meta-12 mono. Headings
