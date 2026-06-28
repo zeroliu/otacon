@@ -8,7 +8,7 @@
 // force Save writes the .otacon/plans/ project copy (plus the home copy) and
 // locks the session.
 
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
@@ -329,27 +329,42 @@ test("approve warns on unresolved threads, forces on confirm, locks the session,
   await expect(sheet).toContainText("1 unresolved thread");
   await sheet.locator(".btn-force").click();
 
-  // Approved: the quiet notice names the saved project copy; the chip flips
-  // over SSE.
-  const note = page.locator(".approved-note");
-  await expect(note).toBeVisible();
-  await expect(page.locator(".chip")).toHaveText("approved");
-  const noted = await note.locator(".approved-path").textContent();
-  const relPath = /\.otacon\/plans\/\S+\.md/.exec(noted ?? "")?.[0];
-  expect(relPath).toBeTruthy();
+  // A Save-approve of the viewed session redirects it home on the live approved
+  // crossing (DECISIONS "Approving the viewed session redirects home"): the
+  // screen leaves /s/:id for the index.
+  await expect(page).toHaveURL(/\/$/);
 
-  // The project copy is on disk in the session's repo: daemon-rewritten
-  // frontmatter plus the appended interview.
-  const artifact = readFileSync(join(session.repo, relPath!), "utf8");
+  // The project copy is on disk in the session's repo (otacon never commits it):
+  // daemon-rewritten frontmatter plus the appended interview.
+  const plansDir = join(session.repo, ".otacon", "plans");
+  let planFiles: string[] = [];
+  await expect
+    .poll(() => {
+      planFiles = existsSync(plansDir)
+        ? readdirSync(plansDir).filter((f) => f.endsWith(".md"))
+        : [];
+      return planFiles.length;
+    })
+    .toBeGreaterThan(0);
+  const artifact = readFileSync(join(plansDir, planFiles[0]!), "utf8");
   expect(artifact).toContain("status: approved");
   expect(artifact).toContain("## Interview");
   expect(artifact).toContain(`### ${qid}`);
   expect(artifact).toContain("Ship behind a flag?");
 
-  // Read-only: every mutation surface is gone…
+  // The daemon refuses mutations outright: the session is over.
+  const refused = await request.post(`/api/sessions/${session.id}/comments`, {
+    data: { items: [{ anchor: null, body: "too late" }] },
+  });
+  expect(refused.status()).toBe(409);
+
+  // Re-open the now-approved session (already over → no redirect): it renders
+  // read-only behind the approved notice, with every mutation surface gone.
+  await page.goto(`/s/${session.id}`);
+  await expect(page.locator(".approved-note")).toBeVisible();
+  await expect(page.locator(".chip")).toHaveText("approved");
   await expect(page.locator(".ctrl-approve")).toHaveCount(0);
-  // The Interview panel's answer affordances are gone too: no inline undo on the
-  // answered card (it opens to the static echo only).
+  // The Interview panel opens to the static echo only — no inline undo.
   await page.locator(".interview-toggle").click();
   await expect(page.locator(".grill-undo")).toHaveCount(0);
   await expect(page.locator(`.grill-settled[data-iv="${qid}"] .settled-choice`)).toHaveText("yes");
@@ -358,37 +373,41 @@ test("approve warns on unresolved threads, forces on confirm, locks the session,
   await expect(page.locator(".sel-bar")).toHaveCount(0);
   await page.keyboard.press("c");
   await expect(page.locator(".composer")).toHaveCount(0);
-  // …and the daemon refuses mutations outright: the session is over.
-  const refused = await request.post(`/api/sessions/${session.id}/comments`, {
-    data: { items: [{ anchor: null, body: "too late" }] },
-  });
-  expect(refused.status()).toBe(409);
 });
 
-test("index chips: questions pending lights live on an open question, approved settles the card", async ({
+test("index glyphs: answer-needed lights live on an open question, approved settles the row", async ({
   page,
   request,
 }) => {
   const session = await createSession(request, uniqueTitle("chip-light"));
   await page.goto("/");
-  const card = page.locator(".card", { hasText: session.title });
-  await expect(card.locator(".chip")).toHaveText("agent working");
+  // The index is the sidebar; status rides the row's glyph (aria-label). A fresh
+  // draft with no agent on the line yet reads stalled.
+  const row = page.locator(".session-list > .sl-row", { hasText: session.title });
+  await expect(row.locator(".sl-glyph")).toHaveAttribute("aria-label", "stalled");
   await plantMarker(page);
 
   // An open agent question outranks the stored status (derived, review UI)…
   const qid = await ask(request, session.id, { question: "One thing to verify?" });
-  await expect(card.locator(".chip")).toHaveText("questions pending");
-  // …and answering hands the turn back.
+  await expect(row.locator(".sl-glyph")).toHaveAttribute("aria-label", "answer needed");
+  // …and answering hands the turn back (no longer answer-needed).
   await answer(request, session.id, { question: qid, text: "the staging deploy" });
-  await expect(card.locator(".chip")).toHaveText("agent working");
+  await expect(row.locator(".sl-glyph")).not.toHaveAttribute("aria-label", "answer needed");
 
   await submitFixturePlan(request, session.id, "valid-plan.md");
-  await expect(card.locator(".chip")).toHaveText("awaiting your review");
+  await expect(row.locator(".sl-glyph")).toHaveAttribute("aria-label", "review needed");
   const approved = await request.post(`/api/sessions/${session.id}/approve`, {
     data: { force: true },
   });
   expect(approved.ok()).toBeTruthy();
-  await expect(card.locator(".chip")).toHaveText("approved");
+  // Approved (over) sessions leave the active list for the collapsed disclosure.
+  await expect(
+    page.locator(".session-list > .sl-row", { hasText: session.title }),
+  ).toHaveCount(0);
+  await page.locator(".sl-approved-toggle").click();
+  await expect(
+    page.locator(".sl-approved-rows .sl-row", { hasText: session.title }).locator(".sl-glyph"),
+  ).toHaveAttribute("aria-label", "approved");
   expect(await readMarker(page)).toBe(true); // every flip rode SSE
 });
 
@@ -406,9 +425,9 @@ test("375px: cards are one-thumb — ≥44px targets, no horizontal scroll, appr
   });
   await submitFixturePlan(request, session.id, "valid-plan.md");
   await page.goto(`/s/${session.id}`);
-  // A submitted plan moves past draft, so the panel starts collapsed; open it to
-  // reach the open question card (the single grill surface).
-  await page.locator(".interview-toggle").click();
+  // The unanswered question force-opens the Interview panel on load (even past
+  // the draft grill phase — useInterviewOpen), so the open card is already
+  // reachable; no toggle click (which would collapse it again).
   await expect(page.locator(".iv-zone-open .grill-card")).toBeVisible();
 
   // Every chip and the send button meet the 44px thumb target (interview questions); rounded

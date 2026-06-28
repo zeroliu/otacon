@@ -2,9 +2,10 @@
 // real built CLI. Section ⋯ menus mint section-only anchors ({section}, no
 // exact quote) that round-trip to a parked `otacon wait`; the sticky bar is
 // the whole one-thumb control surface (❓ queue jump, drawer + send all,
-// approve); the header switcher scrolls as chips and navigates; `otacon
-// clean` removes a session live everywhere. Desktop keeps its header strip —
-// the phone controls never show there.
+// approve); the ☰ button opens the mobile session sheet (the app-shell list
+// below 960px) that navigates and badges unread; `otacon clean` removes a
+// session live everywhere. Desktop keeps its header strip + the persistent
+// sidebar — the phone controls never show there.
 
 import type { APIRequestContext, Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
@@ -88,8 +89,9 @@ test("375px: ⋯ menu → section comment → sticky-bar send all delivers a sec
   await expect(thread.locator(".thread-where")).toHaveText("#phase-1");
   await expect(thread.locator(".thread-quote")).toHaveCount(0);
 
-  // Jumping from the thread still washes the section (anchor sans quote).
-  await thread.click();
+  // Jumping from the thread still washes the section (anchor sans quote). The
+  // jump lives on the meta row (no quote here), not the card body.
+  await thread.locator(".thread-meta").click();
   await expect(page.locator("#phase-1.anchor-hit")).toHaveCount(1);
 });
 
@@ -163,7 +165,7 @@ test("375px: approve from the sticky bar walks the confirm sheet and ends the se
   request,
 }) => {
   await page.setViewportSize(PHONE);
-  await openReview(page, request, "bar-approve");
+  const session = await openReview(page, request, "bar-approve");
 
   const approve = page.locator(".bar-approve");
   await expect(approve).toBeVisible();
@@ -174,66 +176,57 @@ test("375px: approve from the sticky bar walks the confirm sheet and ends the se
   const sheetBox = await page.locator(".approve-sheet").boundingBox();
   expect(sheetBox).not.toBeNull();
   expect(sheetBox!.y + sheetBox!.height).toBeGreaterThan(PHONE.height * 0.8); // thumb range
+  // No open threads, so Save Plan finalizes straight away (no warn). A Save-approve
+  // redirects the viewed session home (DECISIONS "Approving the viewed session
+  // redirects home").
   await page.locator(".btn-approve", { hasText: "Save Plan" }).click();
+  await expect(page).toHaveURL(/\/$/);
 
-  // The session frame flips the screen read-only: note up, controls gone.
+  // Re-open it (already over → no redirect): read-only, with the phone control
+  // surface (sticky bar approve, section ⋯) gone.
+  await page.goto(`/s/${session.id}`);
   await expect(page.locator(".approved-note")).toBeVisible();
   await expect(page.locator(".chip")).toHaveText("approved");
   await expect(page.locator(".drawer")).toHaveCount(0);
+  await expect(page.locator(".bar-approve")).toHaveCount(0);
   await expect(page.locator(".sec-menu").first()).toBeHidden(); // no anchors to mint
 });
 
-test("375px: switcher chips scroll horizontally, navigate, and badge unread", async ({
+test("375px: the ☰ session sheet lists sessions, navigates, and badges unread", async ({
   page,
   request,
 }) => {
   await page.setViewportSize(PHONE);
-  const a = await createSession(request, uniqueTitle("switch-a chip overflow"));
-  const b = await createSession(request, uniqueTitle("switch-b chip overflow"));
-  const c = await createSession(request, uniqueTitle("switch-c chip overflow"));
+  const a = await createSession(request, uniqueTitle("switch-a"));
+  const b = await createSession(request, uniqueTitle("switch-b"));
+  const c = await createSession(request, uniqueTitle("switch-c"));
   await submitFixturePlan(request, a.id, "valid-plan.md");
   await submitFixturePlan(request, b.id, "valid-plan.md");
 
   await page.goto(`/s/${a.id}`);
   await expect(page.locator("#summary .md")).toBeVisible();
 
-  const chips = page.locator(".switch-chips");
-  const chipFor = (s: Session) => chips.locator(".switch-chip", { hasText: s.title.slice(0, 16) });
-  await expect(chipFor(a)).toBeVisible();
-  await expect(chipFor(a)).toHaveAttribute("aria-current", "page");
-  // The current chip leads the strip; the desktop dropdown stays hidden.
-  await expect(chips.locator(".switch-chip").first()).toHaveAttribute("aria-current", "page");
-  await expect(page.locator(".switch-select")).toBeHidden();
+  // Below 960px the sidebar is hidden; the ☰ button opens the session sheet.
+  const sheet = page.locator(".ss-sheet");
+  const rowFor = (s: Session) => sheet.locator(".sl-row", { hasText: s.title });
+  await page.locator(".rh-menu").click();
+  await expect(sheet).toBeVisible();
+  // The open session is marked current in the list.
+  await expect(rowFor(a)).toHaveAttribute("aria-current", "page");
+  // b has an unseen r1 on this device: its row wears ●1; c (r0) wears none.
+  await expect(rowFor(b).locator(".sl-unread")).toHaveText("●1");
+  await expect(rowFor(c).locator(".sl-unread")).toHaveCount(0);
 
-  // Three+ sessions overflow 375px: the strip scrolls, the page does not.
-  const metrics = (await page.evaluate(
-    `(() => {
-      const el = document.querySelector(".switch-chips");
-      return { scroll: el.scrollWidth, client: el.clientWidth };
-    })()`,
-  )) as { scroll: number; client: number };
-  expect(metrics.scroll).toBeGreaterThan(metrics.client);
-  expect((await page.evaluate("document.documentElement.scrollWidth")) as number).toBeLessThanOrEqual(
-    PHONE.width,
-  );
-
-  // b has an unseen r1 on this device: its chip wears ●1; c (r0) wears none.
-  await expect(chipFor(b).locator(".switch-unread")).toHaveText("●1");
-  await expect(chipFor(c).locator(".switch-unread")).toHaveCount(0);
-
-  // Tapping b switches screens in place and clears its badge (now reading it).
-  await chipFor(b).scrollIntoViewIfNeeded();
-  await chipFor(b).click();
+  // Tapping b switches screens in place (and closes the sheet) and clears unread.
+  await rowFor(b).click();
   await expect(page).toHaveURL(`/s/${b.id}`);
   await expect(page.locator(".session-title")).toHaveText(b.title);
-  await expect(chipFor(b)).toHaveAttribute("aria-current", "page");
-  await expect(chipFor(b).locator(".switch-unread")).toHaveCount(0);
 
-  // Back on a, b stays cleared: seen is per-device state, not chip position.
-  await chipFor(a).scrollIntoViewIfNeeded();
-  await chipFor(a).click();
-  await expect(page).toHaveURL(`/s/${a.id}`);
-  await expect(chipFor(b).locator(".switch-unread")).toHaveCount(0);
+  // Re-open the sheet: b is now current and its badge cleared (reading it).
+  await page.locator(".rh-menu").click();
+  await expect(sheet).toBeVisible();
+  await expect(rowFor(b)).toHaveAttribute("aria-current", "page");
+  await expect(rowFor(b).locator(".sl-unread")).toHaveCount(0);
 });
 
 test("clean (real CLI): the session vanishes live from index and switcher; its open screen shows the cleaned state", async ({
@@ -252,14 +245,26 @@ test("clean (real CLI): the session vanishes live from index and switcher; its o
   const onDoomed = await ctx.newPage();
   await onDoomed.goto(`/s/${doomed.id}`);
   await expect(onDoomed.locator(".approved-note")).toBeVisible();
+
+  // The index is the inline session list on phone; the approved doomed sits in
+  // the collapsed `approved` disclosure — expand it to reveal the row. Scope to
+  // `.app-content`: the (hidden) sidebar list is still in the DOM below 960px, so
+  // an unscoped `.sl-*` selector would match both lists.
   const onIndex = await ctx.newPage();
   await onIndex.goto("/");
-  const card = onIndex.locator(".card", { hasText: doomed.title });
-  await expect(card).toBeVisible();
+  const indexList = onIndex.locator(".app-content");
+  await indexList.locator(".sl-approved-toggle").click();
+  const indexRow = indexList.locator(".sl-approved-rows .sl-row", { hasText: doomed.title });
+  await expect(indexRow).toBeVisible();
+
+  // The keeper's nav is the ☰ session sheet; the doomed row lives in its approved
+  // disclosure too.
   const onKeeper = await ctx.newPage();
   await onKeeper.goto(`/s/${keeper.id}`);
-  const doomedChip = onKeeper.locator(".switch-chip", { hasText: doomed.title.slice(0, 16) });
-  await expect(doomedChip).toBeVisible();
+  await onKeeper.locator(".rh-menu").click();
+  await onKeeper.locator(".ss-sheet .sl-approved-toggle").click();
+  const sheetRow = onKeeper.locator(".ss-sheet .sl-approved-rows .sl-row", { hasText: doomed.title });
+  await expect(sheetRow).toBeVisible();
   await Promise.all([plantMarker(onDoomed), plantMarker(onIndex), plantMarker(onKeeper)]);
 
   // The REAL CLI cleans from the session's repo: daemon DELETE + archive move.
@@ -269,10 +274,10 @@ test("clean (real CLI): the session vanishes live from index and switcher; its o
   expect(out.cleaned.map((entry) => entry.session)).toEqual([doomed.id]);
 
   // All three screens react live to the `removed` frame — no navigation.
-  await expect(card).toHaveCount(0);
-  await expect(doomedChip).toHaveCount(0);
-  await expect(onDoomed.locator(".empty-title")).toHaveText("session cleaned");
-  await expect(onDoomed.locator(".empty-body")).toContainText("otacon clean");
+  await expect(indexRow).toHaveCount(0);
+  await expect(sheetRow).toHaveCount(0);
+  await expect(onDoomed.locator(".empty-title")).toHaveText("session closed");
+  await expect(onDoomed.locator(".empty-body")).toContainText("left the codec");
   expect(await readMarker(onDoomed)).toBe(true);
   expect(await readMarker(onIndex)).toBe(true);
   expect(await readMarker(onKeeper)).toBe(true);
@@ -289,15 +294,15 @@ test("desktop regression: header strip intact, phone bar controls absent, ⋯ op
   const session = await openReview(page, request, "desktop-strip");
   await ask(request, session.id, "Desktop still routes questions to the queue?");
 
-  // The header instrument strip holds approve; the switcher is a dropdown.
+  // The header instrument strip holds approve; the desktop nav is the persistent
+  // sidebar (the mobile ☰ menu is hidden ≥960px).
   await expect(page.locator(".review-header .ctrl-approve")).toBeVisible();
-  await expect(page.locator(".switch-select select")).toBeVisible();
-  await expect(page.locator(".switch-chips")).toBeHidden();
+  await expect(page.locator(".app-sidebar")).toBeVisible();
+  await expect(page.locator(".rh-menu")).toBeHidden();
 
   // The phone-only bar instruments stay dormant even with a question open. The
-  // plan is past draft, so the Interview panel starts collapsed; open it to reach
-  // the open question card (the single grill surface).
-  await page.locator(".interview-toggle").click();
+  // pending question force-opens the Interview panel on load, so the open card is
+  // already reachable (no toggle, which would collapse it again).
   await expect(page.locator(".iv-zone-open .grill-card")).toBeVisible();
   await expect(page.locator(".bar-quest")).toBeHidden();
   await expect(page.locator(".bar-approve")).toBeHidden();
@@ -309,9 +314,9 @@ test("desktop regression: header strip intact, phone bar controls absent, ⋯ op
   await page.keyboard.press("Escape");
   await expect(page.locator(".sec-pop")).toHaveCount(0);
 
-  // The dropdown navigates like the chips do.
+  // The sidebar navigates between sessions.
   const other = await createSession(request, uniqueTitle("desktop-hop"));
-  await page.locator(".switch-select select").selectOption(other.id);
+  await page.locator(".app-sidebar .sl-row", { hasText: other.title }).click();
   await expect(page).toHaveURL(`/s/${other.id}`);
   await expect(page.locator(".session-title")).toHaveText(other.title);
 });
@@ -327,9 +332,9 @@ test("tablet band (600px): the phone face and the menu sheet flip together, not 
   await page.setViewportSize({ width: 600, height: 800 });
   await openReview(page, request, "tablet-band");
 
-  // The phone face is on: chips, not the dropdown.
-  await expect(page.locator(".switch-chips")).toBeVisible();
-  await expect(page.locator(".switch-select select")).toBeHidden();
+  // The phone face is on: the sidebar is hidden (the ☰ session sheet is the nav).
+  await expect(page.locator(".app-sidebar")).toBeHidden();
+  await expect(page.locator(".rh-menu")).toBeVisible();
 
   // So the ⋯ menu docks as the thumb-range sheet, never a desktop popover.
   await page.locator("#decisions .sec-menu").click();
@@ -337,7 +342,7 @@ test("tablet band (600px): the phone face and the menu sheet flip together, not 
   await expect(page.locator(".sec-pop")).toHaveCount(0);
 });
 
-test("375px dark: menu sheet, sticky bar, and switcher chips render on the dark scheme", async ({
+test("375px dark: menu sheet, sticky bar, and session menu render on the dark scheme", async ({
   page,
   request,
 }) => {
@@ -348,7 +353,7 @@ test("375px dark: menu sheet, sticky bar, and switcher chips render on the dark 
 
   await expect(page.locator(".bar-quest .bar-count")).toHaveText("1");
   await expect(page.locator(".bar-approve")).toBeVisible();
-  await expect(page.locator(".switch-chips .switch-chip").first()).toBeVisible();
+  await expect(page.locator(".rh-menu")).toBeVisible();
 
   await page.locator("#summary .sec-menu").click();
   await expect(page.locator(".sec-sheet")).toBeVisible();

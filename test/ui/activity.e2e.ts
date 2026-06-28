@@ -29,9 +29,10 @@ test("a progress note drives the draft chip, the now-playing bar + console, and 
   // The activity-driven draft chip reads the latest note (review UI, D3),
   // not a fixed "agent drafting".
   await expect(page.locator(".review-header .chip")).toHaveText("reading the auth module");
-  // The always-on now-playing bar shows the latest event's label; in `draft`
-  // the console auto-expands and the progress note renders as a highlight row.
+  // The always-on now-playing bar shows the latest event's label. The console
+  // starts collapsed and never auto-expands now, so open it to see the highlight.
   await expect(page.locator(".now-playing .np-label")).toContainText("reading the auth module");
+  await page.locator(".now-playing").click();
   await expect(page.locator(".live-console .lc-highlight-body")).toContainText(
     "reading the auth module",
   );
@@ -60,19 +61,25 @@ test("a progress note posted while watching appears live (SSE), no reload", asyn
   await postProgress(request, session.id, "drafting the plan");
   await expect(page.locator(".review-header .chip")).toHaveText("drafting the plan");
   await expect(page.locator(".now-playing .np-label")).toContainText("drafting the plan");
+  // The console is collapsed by default; open it to see the highlight row.
+  await page.locator(".now-playing").click();
   await expect(page.locator(".live-console .lc-highlight-body")).toContainText(
     "drafting the plan",
   );
   expect(await readMarker(page)).toBe(true); // SSE updated the screen, no navigation
 });
 
-test("the index card shows the latest note and a live agent dot", async ({ page, request }) => {
+test("the index sidebar row shows a live agent dot after a progress note", async ({
+  page,
+  request,
+}) => {
   const session = await createSession(request, uniqueTitle("activity-card"));
   await postProgress(request, session.id, "exploring the daemon");
   await page.goto("/");
-  const card = page.locator(".card", { hasText: session.title });
-  await expect(card.locator(".chip")).toHaveText("exploring the daemon");
-  await expect(card.locator(".agent-dot")).toHaveClass(/is-live/);
+  // The sidebar row carries no note text (that rides the session header's chip),
+  // but the progress note bumped last-contact, so the row's agent dot reads live.
+  const row = page.locator(".sl-row", { hasText: session.title });
+  await expect(row.locator(".agent-dot")).toHaveClass(/is-live/);
 });
 
 test("the console keeps multiple notes as distinct highlights; the chip shows the newest", async ({
@@ -85,7 +92,9 @@ test("the console keeps multiple notes as distinct highlights; the chip shows th
   await page.goto(`/s/${session.id}`);
 
   // Each progress note is its own chapter divider (highlights never collapse),
-  // so two notes render two highlight rows; the draft chip rides the newest.
+  // so two notes render two highlight rows once the (collapsed) console is opened;
+  // the draft chip rides the newest.
+  await page.locator(".now-playing").click();
   await expect(page.locator(".live-console .lc-highlight")).toHaveCount(2);
   await expect(page.locator(".review-header .chip")).toHaveText("second note");
 });

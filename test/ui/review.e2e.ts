@@ -115,16 +115,19 @@ test("a new revision lands live over SSE, without a reload", async ({ page, requ
   const session = await createSession(request, uniqueTitle("liverev"));
   await submitRichPlan(request, session.id);
   await page.goto(`/s/${session.id}`);
-  // The fresh new-revision banner carries the landed revision (the r0 header
-  // pill is gone): r1 received on first load, then r2 when the revision lands.
-  await expect(page.locator(".rev-fresh .rev-label")).toHaveText("r1 received");
+  // r1 is a first review, not a re-review: no new-revision banner yet — it
+  // renders only from r2 (DECISIONS "Re-review chrome ... banner from r2").
+  // The plan body itself renders on first load.
   await expect(page.locator("#summary .md")).toContainText("Replace session-cookie auth");
+  await expect(page.locator(".rev-fresh")).toHaveCount(0);
   await plantMarker(page);
 
   await submitRichPlan(request, session.id, 2, (plan) =>
     plan.replace("Replace session-cookie auth", "Revised again: replace session-cookie auth"),
   );
 
+  // r2 lands live over the session SSE stream: the fresh banner raises with the
+  // landed revision and the plan body updates, both without a reload.
   await expect(page.locator(".rev-fresh .rev-label")).toHaveText("r2 received");
   await expect(page.locator("#summary .md")).toContainText("Revised again");
   expect(await readMarker(page)).toBe(true); // no navigation happened

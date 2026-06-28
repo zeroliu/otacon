@@ -650,6 +650,23 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** the suites need shared fixtures, or bun can run Playwright specs
   natively.
 
+## UI e2e caps workers at 2 with 2 retries: one daemon, not a worker fleet
+
+- **Decision:** `playwright.config.ts` pins `workers: 2` and `retries: 2` (keeping
+  `fullyParallel`). The whole suite shares ONE `node dist/daemon/main.js`; each
+  worker holds SSE streams and spawns real `otacon wait` long-polls, so high
+  concurrency saturates that single process and its keep-alive connections reset
+  mid-flight (`ECONNRESET` on the API client). The reset count scales with workers
+  (≈1 → 8 → 24 at 2 → 4 → 9); two workers keeps it rare and the retry budget
+  absorbs the residual, so the run is deterministically green.
+- **Why:** The contention is a test-harness artifact, not a daemon bug — production
+  otacond serves one human plus their agent, never a fleet of concurrent clients, so
+  raising the server's keep-alive to chase e2e throughput would change product code
+  for a test-only reason. Capping the harness is the scoped fix; retries cover the
+  inherently timing-dependent reuse race a worker cap alone can't fully eliminate.
+- **Revisit when:** the suite is sharded across daemons (a port/home per worker), or
+  the daemon gains real multi-client load worth hardening keep-alive for.
+
 ## M1 scope: CLI surface is `start`/`submit`/`wait`/`status` only
 
 - **Decision:** M1 ships sessions, registry, submit + linter (L1/L2/L6), event queues,

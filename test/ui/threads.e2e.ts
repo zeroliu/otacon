@@ -77,8 +77,9 @@ test("comment flow: selection → bar → drawer → Send all wakes a parked CLI
   await expect(thread.locator(".thread-quote")).toContainText("short-lived JWTs");
   await expect(thread.locator(".thread-where")).toHaveText("#summary");
 
-  // Clicking the anchored thread jumps to and washes the anchored section.
-  await thread.click();
+  // Clicking the thread's quote jumps to and washes the anchored section (the
+  // jump lives on the meta row + quote, not the card body which holds the reply box).
+  await thread.locator(".thread-quote").click();
   await expect(page.locator("#summary.anchor-hit")).toHaveCount(1);
 });
 
