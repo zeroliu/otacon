@@ -21,9 +21,11 @@ const LABEL: Record<CalloutType, string> = {
 };
 
 // The inline marker: `[!type]` for the closed set, anchored at the start of the
-// inline src the tokenizer is handed (the `start` hook positions it). Case-
-// insensitive because models emit `[!NOTE]` and `[!note]` interchangeably.
-export const BADGE_RE = /^\[!(risk|note|decision|assumption)\]/i;
+// inline src the tokenizer is handed (the `start` hook positions it). The
+// alternation is built from CALLOUT_TYPES so parsing and labels stay one source
+// of truth. Case-insensitive because models emit `[!NOTE]` and `[!note]`
+// interchangeably.
+export const BADGE_RE = new RegExp(`^\\[!(${CALLOUT_TYPES.join("|")})\\]`, "i");
 
 /** Render a known callout type as its inline badge span. */
 export function badgeHtml(kind: CalloutType): string {
