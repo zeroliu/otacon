@@ -5,7 +5,7 @@
 // imports the configured `marked` from here, then parses + sanitizes.
 
 import { marked } from "marked";
-import { calloutHtml } from "./callout.js";
+import { BADGE_RE, badgeHtml, type CalloutType } from "./callout.js";
 
 // A decision-matrix row is "chosen" when its first body cell is the ✓ marker.
 // We test the already-rendered cells — header cells render as `<th>`, so the
@@ -28,15 +28,6 @@ const PILL_RE = /^\[(new|breaking|risky|deletes)\](?![([])/;
 marked.use({
   gfm: true,
   renderer: {
-    // A typed blockquote (`> [!risk]`) becomes a semantic-ink callout; every
-    // other blockquote falls through to marked's default. The markup carries a
-    // stable `class` and no inline styles, so it survives DOMPurify; rendering
-    // the default ourselves keeps the fallback explicit and version-proof.
-    blockquote(token) {
-      return (
-        calloutHtml(token.text) ?? `<blockquote>\n${this.parser.parse(token.tokens)}</blockquote>\n`
-      );
-    },
     tablerow({ text }) {
       const chosen = CHOSEN_CELL_RE.test(text);
       return `<tr${chosen ? ' class="chosen"' : ""}>\n${text}</tr>\n`;
@@ -57,6 +48,26 @@ marked.use({
       },
       renderer(token) {
         return `<span class="pill pill-${token.kind}">${token.kind}</span>`;
+      },
+    },
+    {
+      // Inline callout badges: `[!risk]` and the rest of the closed set, matched
+      // anywhere in prose like a pill (BADGE_RE in callout.ts). The `!` keeps it
+      // from colliding with pills or plain brackets, so order with `pill` doesn't
+      // matter: `[!risk]` only ever matches here, `[new]` only the pill.
+      name: "badge",
+      level: "inline",
+      start(src) {
+        const index = src.indexOf("[!");
+        return index === -1 ? undefined : index;
+      },
+      tokenizer(src) {
+        const match = BADGE_RE.exec(src);
+        if (!match) return undefined;
+        return { type: "badge", raw: match[0], kind: match[1]!.toLowerCase() as CalloutType };
+      },
+      renderer(token) {
+        return badgeHtml(token.kind);
       },
     },
   ],

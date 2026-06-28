@@ -21,17 +21,28 @@ describe("decision matrix rendering", () => {
   });
 });
 
-describe("callout rendering through the configured marked", () => {
-  test("a typed blockquote becomes a callout panel", () => {
-    const html = render("> [!risk]\n> Migrating locks out old sessions.\n");
-    expect(html).toContain('<div class="callout callout-risk">');
-    expect(html).toContain("Migrating locks out old sessions.");
+describe("callout badge rendering through the configured marked", () => {
+  test("a bare `[!risk]` marker becomes an inline badge, body stays prose", () => {
+    const html = render("[!risk] body");
+    expect(html).toContain('<span class="callout-badge callout-badge-risk">Risk</span>');
+    expect(html).toContain("body");
   });
 
-  test("a plain blockquote falls back to a blockquote", () => {
+  test("the marker is case-insensitive", () => {
+    const html = render("[!ASSUMPTION] x");
+    expect(html).toContain('<span class="callout-badge callout-badge-assumption">Assumption</span>');
+  });
+
+  test("an unknown type stays literal text, no badge", () => {
+    const html = render("[!warning] x");
+    expect(html).toContain("[!warning]");
+    expect(html).not.toContain("callout-badge");
+  });
+
+  test("a plain blockquote still renders a blockquote", () => {
     const html = render("> just a quote\n");
     expect(html).toContain("<blockquote>");
-    expect(html).not.toContain("callout");
+    expect(html).not.toContain("callout-badge");
   });
 });
 

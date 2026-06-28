@@ -286,14 +286,14 @@ marker. The marker makes a no-visual lead a deliberate, visible choice, not an o
 ## Visuals — prefer them over prose where they carry the information
 
 Four markdown-native primitives the review UI styles. They degrade to readable
-markdown if rendering fails, and a comment can anchor to one specific risk, row,
-or callout.
+markdown if rendering fails, and a comment can anchor to one specific risk or
+row.
 
-- **Callouts** — a blockquote whose first line is a type marker
-  (\`[!risk]\`, \`[!note]\`, \`[!decision]\`, \`[!assumption]\`). Risks and
-  assumptions SHOULD be callouts, not bullets buried in prose:
-  > [!risk]
-  > The JWT cutover locks out sessions issued before it.
+- **Callouts** — an inline type marker (\`[!risk]\`, \`[!note]\`, \`[!decision]\`,
+  \`[!assumption]\`) anywhere in prose renders as a small inline badge; the rest
+  of the line stays normal prose. Risks and assumptions SHOULD lead with a
+  callout marker, not be bullets buried in prose:
+  [!risk] The JWT cutover locks out sessions issued before it.
 - **Decision matrix** — a GFM table comparing options, the chosen row led by a
   \`✓\`. A Decisions section weighing 2+ options SHOULD use a matrix:
   | Pick | Option | Tradeoff                        |
@@ -322,9 +322,9 @@ section that owns that structure (Contract, Impact, or a phase's Details); \`mer
 diagrams don't count toward the per-section fence cap, so a lead diagram and a structural
 one can coexist.
 
-Callouts and matrices are budget-exempt but capped (default 2 per read-path
-section); pills are free. Reach for a visual when it carries the point better
-than a sentence — never as decoration.
+A decision matrix is budget-exempt but capped (default 2 per read-path
+section); callout badges and pills are inline and free. Reach for a visual when
+it carries the point better than a sentence — never as decoration.
 
 ## Rules
 

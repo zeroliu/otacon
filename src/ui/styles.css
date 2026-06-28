@@ -29,7 +29,7 @@
    * the dark-mode :root. Ordered small -> large. */
   --fs-meta: 12px;   /* labels & telemetry: eyebrows, chip/badge text, ids, repo·branch, timestamps, fence headers, field labels; + mono control labels (buttons, tabs, toggles, menu items, delete/approve actions) */
   --fs-ui: 14px;     /* sans text inputs + monospace code & diff (one notch below body); mono control labels drop to meta */
-  --fs-body: 16px;   /* primary reading content: prose, field values, callout bodies, table cells, quotes, grill questions */
+  --fs-body: 16px;   /* primary reading content: prose, field values, table cells, quotes, grill questions */
   --fs-title: 18px;  /* headings: card titles, phase names, md h1/h2, icon-glyph buttons */
   --fs-display: 22px; /* the one masthead session title (compact 18) + the big phase numeral */
 
@@ -919,51 +919,40 @@ code {
   color: var(--ink-soft);
 }
 
-/* ── callouts: semantic ink (plan structure, lint, and anchoring visuals, review UI) ──
- * A typed blockquote (`> [!risk]`) renders flat: a 2px top rule and a
- * glyph+label inked in the type's hue, no fill and no radius. Hues are drawn
- * only from the tested chip/accent palette, so contrast holds in light + dark
- * and only `decision` leans on the per-session accent (by design). */
-.callout {
+/* ── callouts: inline badges (plan structure, lint, and anchoring visuals, review UI) ──
+ * A typed marker (`[!risk]`) renders as a small mono uppercase pill inked in
+ * the type's hue (label only, no glyph). Chrome: `user-select: none` so the
+ * badge never lands inside a comment anchor — the prose after it carries the
+ * anchor. Hues are drawn only from the tested chip/accent palette, so contrast
+ * holds in light + dark and only `decision` leans on the per-session accent. */
+.callout-badge {
   --callout-ink: var(--ink-soft);
-  margin: 0 0 0.85em;
-  padding: 9px 0 1px;
-  border-top: 2px solid var(--callout-ink);
+  margin-inline-end: 0.4em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font: 600 max(12px, 0.8em) var(--mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  user-select: none;
+  color: var(--callout-ink);
+  background: color-mix(in srgb, var(--callout-ink) 12%, transparent);
 }
 
-.callout-risk {
+.callout-badge-risk {
   --callout-ink: var(--chip-await-ink);
 }
 
-.callout-note {
+.callout-badge-note {
   --callout-ink: var(--chip-revise-ink);
 }
 
-.callout-decision {
+.callout-badge-decision {
   --callout-ink: var(--accent);
 }
 
-.callout-assumption {
+.callout-badge-assumption {
   --callout-ink: var(--ink-soft);
-}
-
-/* Chrome: the marker line. Unselectable so it never lands inside a comment
- * anchor (the body text below carries the anchor instead). */
-.callout-label {
-  margin: 0 0 0.4em;
-  font: 600 var(--fs-meta)/1.2 var(--mono);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--callout-ink);
-  user-select: none;
-}
-
-.callout-body > :first-child {
-  margin-top: 0;
-}
-
-.callout-body > :last-child {
-  margin-bottom: 0;
 }
 
 /* ── inline scope pills (plan structure, lint, and anchoring) ──

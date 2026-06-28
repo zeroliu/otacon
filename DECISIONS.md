@@ -55,6 +55,8 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** A visual genuinely needs structure plain markdown can't express (the
   blast-radius file tree was cut from v1 for exactly this reason), or the cap default of
   2 proves wrong in real use.
+- _(Superseded for callouts by "Callouts are inline badges, matched like scope pills"
+  (2026-06-27); matrices and pills unchanged.)_
 
 ## Mermaid diagrams are exempt from the per-section fence cap
 
@@ -4049,6 +4051,27 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** The type scale gains a tier between body and title, or grill questions
   need to visually outrank surrounding dossier prose again.
 
+## Callouts are inline badges, matched like scope pills (2026-06-27)
+
+- **Decision:** A callout marker — `[!risk]`, `[!note]`, `[!decision]`, `[!assumption]` —
+  is detected as a marked inline token (like the scope pills), matched anywhere in prose
+  (case-insensitive, the `!` keeps false matches near-zero), and rendered as a small mono
+  uppercase badge in the type's hue (label only, `user-select: none`). The old
+  blockquote-panel rendering path is dropped, and so is the linter's callout
+  visual/budget exemption: a callout line is now ordinary budgeted prose and the badge is
+  free (never counted toward the line budget or the per-section visual cap). All four
+  types are uniform badges. Supersedes the callout portion of "Plan visuals:
+  markdown-native, semantic-ink, budget-capped"; the decision matrix stays the one capped
+  read-path visual, and scope pills are unchanged.
+- **Why:** A bare `[!assumption] body` line (marker inline with text, no `>`) rendered as
+  literal text under the old whole-first-line panel rule — a real bug. Matching the
+  marker inline like a pill fixes that and unifies the two "small inline tag" primitives,
+  and the user disliked the flat panel visual. Inline-and-free is the correct budget
+  posture once the marker is mid-prose: the line is prose either way, so exempting it (or
+  capping it as a "visual") was double-counting that confused the budget.
+- **Revisit when:** A callout needs more than one line of dedicated, set-apart treatment
+  again (a return of the panel), or mid-prose `[!type]` false matches show up in practice.
+
 ## Original prompt: captured once at start, stored on the session record, uncapped (2026-06-27)
 
 - **Decision:** The user's verbatim request is captured once at `otacon start` via a
@@ -4186,10 +4209,10 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 ## A Files table is exempt from the per-phase visual cap (2026-06-28)
 
 - **Decision:** A phase's Files table does not count against the per-read-path-section
-  visual cap (default 2) that governs callouts and decision matrices.
+  visual cap (default 2) that governs decision matrices.
 - **Why:** The Files table is required structure, present in every phase, not a decorative
   visual the author chose to add. Counting it would silently consume one of the two
-  visual slots in every phase, halving the callout/matrix budget for content that is
+  visual slots in every phase, halving the matrix budget for content that is
   genuinely optional, which is the opposite of what the cap exists to ration.
 - **Revisit when:** The visual-cap model changes (e.g. required structural elements get a
   separate budget, or the cap is replaced by a different "no wall of widgets" mechanism).
