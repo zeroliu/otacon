@@ -179,6 +179,8 @@ const BASE36 = "0123456789abcdefghijklmnopqrstuvwxyz";
 
 export interface CreateSessionInput {
   title: string;
+  /** The user's verbatim request, trimmed; absent/empty stores no prompt field. */
+  prompt?: string;
   /** Absolute repo root (DECISIONS.md "`.otacon/` lives at the git repo root"). */
   repo: string;
   branch?: string;
@@ -238,6 +240,11 @@ export class Store {
       createdAt: now,
       updatedAt: now,
     };
+    // Only write the prompt field when one was captured: a whitespace-only or
+    // absent request leaves the field off entirely, like other optionals.
+    if (typeof input.prompt === "string" && input.prompt.trim() !== "") {
+      session.prompt = input.prompt.trim();
+    }
     // State files first, registry entry last: the registry is the commit point.
     // A crash in between leaves an orphan ~/.otacon/sessions/<id>/ dir
     // (harmless), never a registered session whose state files are missing

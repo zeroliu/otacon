@@ -51,6 +51,8 @@ export const TERMINAL_STATUSES: readonly SessionStatus[] = [
 export interface RegistrySession {
   id: string;
   title: string;
+  /** The user's verbatim request that triggered this session; absent when not captured. */
+  prompt?: string;
   /** Absolute repo root at start time. */
   repo: string;
   /** Git branch at start time; "" when none. */

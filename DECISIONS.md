@@ -4072,6 +4072,23 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** A callout needs more than one line of dedicated, set-apart treatment
   again (a return of the panel), or mid-prose `[!type]` false matches show up in practice.
 
+## Original prompt: captured once at start, stored on the session record, uncapped (2026-06-27)
+
+- **Decision:** The user's verbatim request is captured once at `otacon start` via a
+  `--prompt` flag, threaded through `POST /api/sessions`, and persisted (trimmed only,
+  no length cap) on the registry session record rather than in a dedicated per-session
+  file. A whitespace-only or absent prompt stores no field. It rides the existing
+  `...session` spread into `SessionSummary`, so the UI surfaces it for free.
+- **Why:** Real requests are short, so the cost of carrying the text in the global
+  registry (a whole-file rewrite per mutation) is negligible, and a record field is far
+  simpler than minting and reading a side file. Capturing at `start` means the agent
+  records the request once, at the one moment it has the verbatim text, instead of
+  re-deriving it later. Trimming-only keeps the stored text faithful; a cap would risk
+  silently truncating the very intent the reviewer needs.
+- **Revisit when:** Prompts routinely get large enough that the per-mutation registry
+  rewrite is a real cost: then add a length cap or move the prompt to a per-session
+  file read on demand.
+
 ## Diagram guidance: match the visual to the content's shape, not graph-TD-by-default (2026-06-27)
 
 - **Decision:** The wrapper's diagram guidance no longer tells the agent to "lead with a

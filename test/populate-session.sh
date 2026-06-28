@@ -75,7 +75,11 @@ echo "# starting session ($FLAVOR) in $REPO"
 # (~/.otacon/sessions/<id>/plan.md, isolated per worktree). The daemon reads the
 # draft from THERE, not from this scratch repo's .otacon/ — so derive SDIR from
 # it and write every plan there.
-START="$("$OTACON" start --title "demo: $FLAVOR" 2>/dev/null)"
+# The demo session carries a verbatim --prompt so the review's "Prompt" card has
+# real content: a multi-paragraph ask that exercises the collapsed one-line
+# preview AND the expand-to-full-text behavior (newlines preserved on expand).
+PROMPT=$'When reviewing a plan I keep forgetting what I originally asked the agent for.\n\nAdd a "Prompt" card at the top of the review that shows my original request verbatim. Keep it collapsed by default so it does not take over the screen, but let me click to expand and read the whole thing.'
+START="$("$OTACON" start --title "demo: $FLAVOR" --prompt "$PROMPT" 2>/dev/null)"
 SID="$(printf '%s' "$START" | jf .session)"
 [[ "$SID" == otc_* ]] || { echo "error: start did not return a session id" >&2; exit 1; }
 SDIR="$(dirname "$(printf '%s' "$START" | jf .plan)")"
@@ -217,7 +221,7 @@ fi
 # what the UI does after its unresolved-thread warning; this is a plain Save, so
 # the project copy lands in the scratch repo's .otacon/plans/ (untracked, otacon
 # never commits it) and a canonical copy in the home archive (~/.otacon/sessions/).
-APPROVED_START="$("$OTACON" start --title "demo: $FLAVOR (approved)" 2>/dev/null)"
+APPROVED_START="$("$OTACON" start --title "demo: $FLAVOR (approved)" --prompt "Make approved plans easy to find: hide them from the active switcher and group them under a collapsed section on the home screen." 2>/dev/null)"
 APPROVED_SID="$(printf '%s' "$APPROVED_START" | jf .session)"
 if [[ "$APPROVED_SID" == otc_* ]]; then
   APPROVED_SDIR="$(dirname "$(printf '%s' "$APPROVED_START" | jf .plan)")"
