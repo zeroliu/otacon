@@ -201,6 +201,21 @@ describe("L1 schema completeness", () => {
       expect(noSummary[0]?.message).toContain("column");
     });
 
+    test("a second column not titled What changed is E_FILES_NO_SUMMARY", () => {
+      const phases =
+        "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n| File | Notes |\n| - | - |\n| `a.ts` | adds X |\nVerification: t\n";
+      const result = run(doc({ phases }));
+      const noSummary = result.errors.filter((e) => e.code === "E_FILES_NO_SUMMARY");
+      expect(noSummary).toHaveLength(1);
+      expect(noSummary[0]?.message).toContain('titled "What changed"');
+    });
+
+    test('a "What Changed" header passes regardless of case/spacing', () => {
+      const phases =
+        "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n|  File  |  What   Changed  |\n| - | - |\n| `a.ts` | adds X |\nVerification: t\n";
+      expect(codes(run(doc({ phases })))).toEqual([]);
+    });
+
     test("a table fires no E_FILES_EMPTY even though it has no list items", () => {
       const phases =
         "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n| File | What changed |\n| - | - |\n| `a.ts` | adds X |\nVerification: t\n";

@@ -277,15 +277,28 @@ export function checkL1(plan: ParsedPlan, session?: string): LintIssue[] {
         const table = findFilesTable(files.contentLines);
         if (table) {
           // A Files table must carry a "What changed" column: ≥2 columns overall,
+          // the 2nd column titled "What changed" (the documented protocol header),
           // and every body row's 2nd cell non-empty. A list is exempt — only a
           // table makes the per-row summary a structural promise to keep.
-          if (splitCells(table.header.text).length < 2) {
+          const headerCells = splitCells(table.header.text);
+          const secondHeader = (headerCells[1] ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+          if (headerCells.length < 2) {
             issues.push(
               issue(
                 "L1",
                 "E_FILES_NO_SUMMARY",
                 "error",
                 `Phase ${phase.n} "Files" table needs a "What changed" column`,
+                { line: table.header.line, section: phaseSlug(phase) },
+              ),
+            );
+          } else if (secondHeader !== "what changed") {
+            issues.push(
+              issue(
+                "L1",
+                "E_FILES_NO_SUMMARY",
+                "error",
+                `Phase ${phase.n} "Files" table's second column must be titled "What changed"`,
                 { line: table.header.line, section: phaseSlug(phase) },
               ),
             );
