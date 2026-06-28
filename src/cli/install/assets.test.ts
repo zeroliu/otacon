@@ -109,6 +109,11 @@ describe("single-source wrappers (D7)", () => {
       expect(text).toContain("Match the representation to the content's shape");
       expect(text).toContain("Diagram anti-patterns");
       expect(text).toContain("decision-matrix table");
+      // Deprecated guidance must not slip back into either wrapper: the old
+      // "lead with a diagram" mandate, or the stale fence rule that capped
+      // mermaid at one per read-path section (mermaid is exempt from the cap).
+      expect(text.toLowerCase()).not.toContain("lead with a diagram");
+      expect(text).not.toContain("max one per read-path section");
     }
   });
 

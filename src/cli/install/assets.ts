@@ -214,22 +214,24 @@ until \`implement-done\`.
 Frontmatter (\`title\`, \`session\`, \`revision\`, \`status\`, \`created\`), then these
 H2 sections in order — the five required ones plus optional review-altitude
 sections slotted in place (include them when the change warrants; skip them on
-trivial plans): \`## Summary\` (≤5 lines, lead with a diagram — see below) ·
+trivial plans): \`## Summary\` (≤5 lines, lead with a visual — see below) ·
 *(optional)* \`## Contract\` (≤12 lines —
 the interface surface the reviewer signs off instead of reading code: inputs,
 outputs, types, errors; one signature fence is fine under the 1-fence rule) ·
 \`## Decisions\` (entries ≤3 lines, \`- D<n>: ... ← q<n>\` citing the grill answer
 that produced it, or \`[assumed]\`) · *(optional)* \`## Impact\` (≤10 lines — blast
 radius: the upstream modules this plan leans on and the downstream modules it can
-break; a dependency mermaid is fine under the 1-fence rule) · \`## Phases\`
+break; a dependency mermaid is fine, and is exempt from the fence cap) · \`## Phases\`
 (\`### Phase <n> — <name>\`, each with \`Goal:\` ≤3 lines, \`Files:\` list,
 \`Verification:\` ≤3 lines plus an optional \`\`\`gwt scenario block — see below,
 optional collapsible \`#### Details\` block) ·
 \`## Risks\` (≤5 items, ≤2 lines each) ·
-\`## Open Questions\`. Mermaid / code / \`before\`+\`after\` fences are budget-exempt,
-max one per read-path section; the markdown-native review visuals below share a
-separate per-section cap. Details may elaborate on the read path, never
-introduce new scope.
+\`## Open Questions\`. Fenced blocks are line-budget-exempt; code and
+\`before\`+\`after\` fences are capped at one per read-path section, but \`mermaid\`
+diagrams are exempt from that cap (they count only toward the lead-visual check),
+so a lead diagram and a structural diagram can coexist in one section. The
+markdown-native review visuals below share a separate per-section cap. Details may
+elaborate on the read path, never introduce new scope.
 
 **Lead with a visual, but the right one.** Open the \`## Summary\` with a visual so the
 reviewer sees the change's shape before the prose. This stays the strong default (about
@@ -260,9 +262,10 @@ default; reach for it only for a genuine branching flow or a true hierarchy:**
 - One arrow glyph meaning three things (calls, then, depends-on) in the same diagram. Pick ONE meaning per diagram and label every edge.
 - A flowchart whose every arrow just means "and then." That is a sentence.
 
-When you deliberately lead with a table or prose because the content has no diagrammable
-shape, add a \`<!-- no-lead-diagram: <why> -->\` marker in Summary so the L7 nudge stays
-quiet. "No diagram" is then a deliberate, visible choice, not an oversight.
+When the content has no shape worth drawing and you lead with plain prose (no diagram and
+no table), add a \`<!-- no-lead-diagram: <why> -->\` marker in Summary so the L7 nudge stays
+quiet. A lead decision-matrix table already satisfies L7, so a table-lead never needs the
+marker. The marker makes a no-visual lead a deliberate, visible choice, not an oversight.
 
 ## Visuals — prefer them over prose where they carry the information
 
