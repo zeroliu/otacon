@@ -107,11 +107,28 @@ describe("parsePlan on the valid fixture", () => {
     expect(phase.details).toEqual({ startLine: 38, lineCount: 6 });
   });
 
-  test("phase 2: bold labels, hyphen dash, out of scope", () => {
+  test("phase 2: bold labels, hyphen dash, Files table, out of scope", () => {
     const phase = plan.sections[2]!.phases![1]!;
     expect(phase).toMatchObject({ n: 2, name: "Middleware verification", headingValid: true });
     expect(phase.fields.goal?.budgetedLineCount).toBe(1);
-    expect(phase.fields.files).toMatchObject({ budgetedLineCount: 2, listItemCount: 1 });
+    // Files authored as a GFM table: no list items, budget-exempt, captured as
+    // content lines so rules.ts can require a filled "What changed" cell.
+    expect(phase.fields.files).toMatchObject({
+      startLine: 49,
+      budgetedLineCount: 1,
+      listItemCount: 0,
+      contentLines: [
+        { text: "| File | What changed |", line: 51 },
+        { text: "| ---- | ------------ |", line: 52 },
+        {
+          text: "| `src/middleware/jwt.ts` | verify the JWT and reject expired or bad-signature requests |",
+          line: 53,
+        },
+        { text: "| `src/middleware/index.ts` | wire the verifier into the middleware chain |", line: 54 },
+      ],
+    });
+    // A Files table is exempt from the per-phase visual cap (required structure).
+    expect(phase.visualCount).toBe(0);
     expect(phase.fields.verification?.budgetedLineCount).toBe(1);
     expect(phase.fields.outOfScope?.budgetedLineCount).toBe(1);
     expect(phase.details).toBeUndefined();

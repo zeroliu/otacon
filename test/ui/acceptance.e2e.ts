@@ -114,7 +114,8 @@ test("UI acceptance: the whole agent/reviewer loop renders and round-trips in th
   // Schema-aware structure, not markdown soup.
   await expect(page.locator("#summary .section-title")).toHaveText("Summary");
   await expect(page.locator("#phase-1 .phase-name")).toHaveText("Token issuance");
-  await expect(page.locator("#phase-1 .field-label")).toHaveText(["Goal", "Files", "Verification"]);
+  // Files renders last and labelless, so only Goal + Verification carry a label.
+  await expect(page.locator("#phase-1 .field-label")).toHaveText(["Goal", "Verification"]);
   // The citation deep-links into the Interview panel; [assumed] wears the veto tag.
   await expect(page.locator(`#decisions a.q-cite[data-q="${qid}"]`)).toHaveText(qid);
   await expect(page.locator("#decisions .assumed-tag")).toHaveCount(1);
