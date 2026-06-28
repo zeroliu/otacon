@@ -3,9 +3,10 @@
 // through the UI, r2 resubmitted with resolutions + changelog, and the
 // re-review layer asserted live over SSE: the changelog banner, dismiss
 // moving the daemon's last-reviewed baseline, gutter markers, the [clean|diff]
-// toggle with its baseline picker, j/k jumps, the resolved thread's reply,
-// and a thread orphaned by r4 landing in the tray. Dark + 375px smokes ride
-// the HTTP fixtures for speed; the loop itself is CLI-driven end to end.
+// toggle with its baseline picker, j/k jumps, the agent's reply landing inline
+// on the open thread, and a thread whose quote r4 deletes detaching inline &
+// muted (no orphan tray). Dark + 375px smokes ride the HTTP fixtures for speed;
+// the loop itself is CLI-driven end to end.
 
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -104,13 +105,13 @@ test("the revision loop: banner, dismiss, diff + j/k, resolution, orphan tray", 
   await expect(page.locator(".unit-changed")).toHaveCount(1);
   await expect(page.locator("#summary.unit-changed")).toHaveCount(1);
 
-  // The resolved thread collapses to its ✓ line; expanding shows the reply.
-  const resolved = page.locator(".thread-resolved");
-  await expect(resolved).toHaveCount(1);
-  await expect(resolved.locator(".resolved-rev")).toHaveText("r2");
-  await expect(resolved.locator(".thread-answer-body")).not.toBeVisible();
-  await resolved.locator(".resolved-summary").click();
-  await expect(resolved.locator(".thread-answer-body")).toHaveText(
+  // The agent's reply lands inline on the still-open comment card (a reply is a
+  // response, not a close — the reviewer resolves separately; DECISIONS).
+  const thread = page.locator(".thread-comment");
+  await expect(thread).toHaveCount(1);
+  await expect(page.locator(".thread-resolved")).toHaveCount(0);
+  await expect(thread.locator(".thread-answer-label")).toContainText("r2");
+  await expect(thread.locator(".thread-answer-body")).toHaveText(
     "Added the rationale — verifiers hold only the public key.",
   );
 
@@ -165,22 +166,18 @@ test("the revision loop: banner, dismiss, diff + j/k, resolution, orphan tray", 
   await page.keyboard.press("k");
   await expect(page.locator("#summary.anchor-hit")).toHaveCount(1);
 
-  // r4 deletes the quoted decision text: the thread orphans into the tray,
-  // live over the SSE thread frame — never silently dropped (plan structure, lint, and anchoring).
+  // r4 deletes the quoted decision text: the thread detaches and renders inline
+  // & muted — never silently dropped, and never in a tray (DECISIONS "no UI
+  // tray, inline & muted") — live over the SSE thread frame.
   plan = plan.replace("- D1: RS256 over HS256 [assumed]\n", "");
   await cliSubmit(session, dir, plan, { changelog: "Dropped the RS256 decision line." });
-  const tray = page.locator(".orphan-toggle");
-  await expect(tray).toBeVisible();
-  await expect(tray.locator(".orphan-count")).toHaveText("1");
-  await expect(page.locator(".thread-resolved")).toHaveCount(0); // moved out of the rail list
-  await tray.click();
-  const orphan = page.locator(".orphan");
-  await expect(orphan).toHaveCount(1);
-  await expect(orphan.locator(".thread-quote")).toContainText("RS256 over HS256");
-  await expect(orphan.locator(".orphan-where")).toHaveText("#decisions");
-  await orphan.click(); // the full original anchor text + the old resolution
-  await expect(orphan).toHaveClass(/orphan-open/);
-  await expect(orphan.locator(".thread-answer-body")).toContainText(
+  await expect(page.locator(".rev-banner .rev-label")).toHaveText("r4 received");
+  const detached = page.locator(".thread-comment");
+  await expect(detached.locator(".thread-quote-muted")).toContainText("RS256 over HS256");
+  await expect(detached.locator(".thread-quote-detached")).toBeVisible();
+  await expect(page.locator(".rail")).not.toContainText("orphan");
+  // Its earlier agent reply stays shown inline on the now-detached card.
+  await expect(detached.locator(".thread-answer-body")).toContainText(
     "verifiers hold only the public key",
   );
 });
@@ -259,8 +256,10 @@ test("375px: banner, markers, diff, and the orphan tray hold the column", async 
 
   await expect(page.locator(".rev-banner")).toBeVisible();
   await expect(page.locator("#risks.unit-changed")).toHaveCount(1);
-  await page.locator(".orphan-toggle").click();
-  await expect(page.locator(".orphan")).toHaveCount(1);
+  // The thread whose quote r2 deleted renders inline & muted (no orphan tray).
+  await expect(page.locator(".thread-comment .thread-quote-muted")).toContainText(
+    "Key rotation downtime",
+  );
   expect((await page.evaluate("document.documentElement.scrollWidth")) as number).toBeLessThanOrEqual(
     375,
   );

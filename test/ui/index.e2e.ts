@@ -18,6 +18,14 @@ async function postComment(request: APIRequestContext, id: string): Promise<void
   expect(res.status()).toBe(202);
 }
 
+// A progress note bumps the session's last-contact, so a working session reads
+// its working word ("drafting"/"revising") in the sidebar glyph rather than the
+// offline "stalled" — the agent is on the line.
+async function postProgress(request: APIRequestContext, id: string, note: string): Promise<void> {
+  const res = await request.post(`/api/sessions/${id}/progress`, { data: { note } });
+  expect(res.status()).toBe(200);
+}
+
 /** Mirrors src/ui/accent.ts — the test locks the algorithm in place. */
 function expectedHue(sessionId: string): number {
   let hash = 0x811c9dc5;
@@ -28,23 +36,30 @@ function expectedHue(sessionId: string): number {
   return hash % 360;
 }
 
-const cardFor = (page: Page, session: Session) =>
-  page.locator(".card", { hasText: session.title });
+// The index is the app-shell sidebar now: one `.sl-row` per session, status
+// conveyed by the `.sl-glyph` (aria-label = the status word), not a `.card`/`.chip`.
+const rowFor = (page: Page, session: Session) =>
+  page.locator(".sl-row", { hasText: session.title });
+const glyphFor = (page: Page, session: Session) => rowFor(page, session).locator(".sl-glyph");
 
-test("index renders session cards with the correct status chips", async ({ page, request }) => {
+test("the index sidebar renders rows with the correct status glyphs", async ({ page, request }) => {
+  // The working sessions get a live agent (a progress note bumps last-contact),
+  // so their glyph reads the working word rather than the offline "stalled".
   const drafting = await createSession(request, uniqueTitle("drafting"));
+  await postProgress(request, drafting.id, "reading the auth module");
   const awaiting = await createSession(request, uniqueTitle("awaiting"));
   await submitPlan(request, awaiting.id);
   const revising = await createSession(request, uniqueTitle("revising"));
   await submitPlan(request, revising.id);
   await postComment(request, revising.id);
+  await postProgress(request, revising.id, "folding in the comment");
 
   await page.goto("/");
-  await expect(cardFor(page, drafting).locator(".chip")).toHaveText("agent working");
-  await expect(cardFor(page, awaiting).locator(".chip")).toHaveText("awaiting your review");
-  await expect(cardFor(page, revising).locator(".chip")).toHaveText("agent revising");
-  // repo + branch metadata renders on the card
-  await expect(cardFor(page, drafting).locator(".card-where")).toContainText("zero/prototype");
+  await expect(glyphFor(page, drafting)).toHaveAttribute("aria-label", "drafting");
+  await expect(glyphFor(page, awaiting)).toHaveAttribute("aria-label", "review needed");
+  await expect(glyphFor(page, revising)).toHaveAttribute("aria-label", "revising");
+  // repo + branch metadata renders on the row
+  await expect(rowFor(page, drafting).locator(".sl-where")).toContainText("zero/prototype");
 });
 
 test("a session created via the API appears live, without a reload (SSE)", async ({
@@ -52,27 +67,28 @@ test("a session created via the API appears live, without a reload (SSE)", async
   request,
 }) => {
   await page.goto("/");
-  await expect(page.locator(".masthead")).toBeVisible();
+  await expect(page.locator(".app-sidebar")).toBeVisible();
   await plantMarker(page);
 
   const fresh = await createSession(request, uniqueTitle("fresh"));
-  await expect(cardFor(page, fresh)).toBeVisible();
+  await expect(rowFor(page, fresh)).toBeVisible();
   expect(await readMarker(page)).toBe(true); // no navigation happened
 });
 
-test("a status change flips the chip live and raises the unread badge", async ({
+test("a status change flips the glyph live and raises the unread badge", async ({
   page,
   request,
 }) => {
   const session = await createSession(request, uniqueTitle("flip"));
   await page.goto("/");
-  const card = cardFor(page, session);
-  await expect(card.locator(".chip")).toHaveText("agent working");
+  const row = rowFor(page, session);
+  // Fresh draft, no agent on the line yet → the offline "stalled" glyph.
+  await expect(row.locator(".sl-glyph")).toHaveAttribute("aria-label", "stalled");
   await plantMarker(page);
 
   await submitPlan(request, session.id);
-  await expect(card.locator(".chip")).toHaveText("awaiting your review");
-  await expect(card.locator(".badge")).toHaveText("r1 unread");
+  await expect(row.locator(".sl-glyph")).toHaveAttribute("aria-label", "review needed");
+  await expect(row.locator(".sl-unread")).toHaveText("●1");
   expect(await readMarker(page)).toBe(true);
 });
 
@@ -122,11 +138,11 @@ test("light and dark color schemes both render the index", async ({ page, reques
 
   await page.emulateMedia({ colorScheme: "dark" });
   await page.goto("/");
-  await expect(cardFor(page, session)).toBeVisible();
+  await expect(rowFor(page, session)).toBeVisible();
   const dark = await backgroundLuminance(page);
 
   await page.emulateMedia({ colorScheme: "light" });
-  await expect(cardFor(page, session)).toBeVisible();
+  await expect(rowFor(page, session)).toBeVisible();
   const light = await backgroundLuminance(page);
 
   expect(dark).toBeLessThan(64);

@@ -130,11 +130,13 @@ test("a project · local override wins over the committed project value", async 
   await expect(page.getByLabel("Summary lines")).toHaveValue("9");
 });
 
-test("sections lead with worktree, then notifications", async ({ page }) => {
+test("sections lead with worktree, notifications among them", async ({ page }) => {
   await page.goto("/settings");
   const titles = page.locator(".settings-section-title");
+  // The two storage-location knobs (worktree dir + plans dir) lead the form.
   await expect(titles.first()).toHaveText("worktree");
-  await expect(titles.nth(1)).toHaveText("notifications");
+  // notifications stays one of the sections (now after update + socratic).
+  await expect(titles.filter({ hasText: "notifications" })).toHaveCount(1);
 });
 
 test("worktree section carries both the worktree dir and the plans dir", async ({ page }) => {
@@ -159,8 +161,11 @@ test("a text field auto-saves on blur (no Save button)", async ({ page, request 
   await page.goto(`/settings?repo=${encodeURIComponent(session.repo)}`);
   await page.getByRole("tab", { name: "project", exact: true }).click();
 
-  // Editing IS the commit, with no Save button to click (or forget).
-  await expect(page.getByRole("button", { name: "save" })).toHaveCount(0);
+  // Editing IS the commit, with no Save button to click (or forget). Scope to the
+  // settings pane (.page): the sidebar's per-row "delete session …" buttons can
+  // carry a session title containing "save" (e.g. "auto-save"), which a global
+  // button-name match would otherwise pick up.
+  await expect(page.locator(".page").getByRole("button", { name: "save" })).toHaveCount(0);
 
   const input = page.getByLabel("Summary lines");
   await input.fill("5");

@@ -1,0 +1,86 @@
+name: E2E
+
+# Runs the Playwright UI e2e suite (`bun run e2e:ui`) on every PR and on every
+# merge to main. The suite drives the REAL built daemon, so it can't be a bun
+# unit test — and until now it had no automated gate, which is how it silently
+# rotted across several UI refactors (see DECISIONS.md "UI e2e caps workers…").
+#
+# On a POST-MERGE failure (a regression landed on main), the `autofix` job hands
+# the failure to Claude Code, which reproduces it, fixes the right side (app or
+# stale test), and opens a PR. On a PR, the red check is the gate — you fix it on
+# the branch, so the bot does not open a PR there.
+#
+# Requirements (one-time): the `ANTHROPIC_API_KEY` repo secret, and
+# Settings → Actions → General → "Allow GitHub Actions to create and approve
+# pull requests" (so the autofix job can open the PR).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded PR runs; let every merge to main run to completion.
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Install Playwright browser
+        run: bunx playwright install --with-deps chromium
+      - name: Run UI e2e suite
+        run: bun run e2e:ui
+      - name: Upload Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # Post-merge self-heal. Runs only when the suite fails on a push to main; it
+  # sets up bun + the Playwright browser too, so Claude can actually re-run
+  # `bun run e2e:ui` to reproduce and verify its fix before opening the PR.
+  autofix:
+    needs: [e2e]
+    if: ${{ failure() && github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Install Playwright browser
+        run: bunx playwright install --with-deps chromium
+      - name: Fix the failing e2e suite and open a PR
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: "--max-turns 30"
+          prompt: |
+            The Playwright UI e2e suite (`bun run e2e:ui`) is failing on `main` after a merge.
+            Investigate, fix it, and open a pull request with the fix.
+
+            - Reproduce with `bun run e2e:ui` — it builds, boots the real daemon on a throwaway
+              OTACON_HOME, and runs `test/ui/*.e2e.ts`.
+            - For each failure, decide whether the bug is in the app/daemon (`src/`) or a stale
+              expectation in `test/ui/*.e2e.ts`, and fix the correct side. Read DESIGN.md and
+              DECISIONS.md before changing any product behavior — the suite drives the real
+              built daemon, and DESIGN.md is the source of truth for intended behavior.
+            - Re-run `bun run e2e:ui` until the whole suite is green, and keep `bun test` and
+              `bun run typecheck` passing too.
+            - Open a PR whose description states the root cause and the fix.
