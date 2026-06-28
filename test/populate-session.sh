@@ -15,6 +15,9 @@
 # flavor (default: full):
 #   full     r1 + grill Q&A + comment threads + r2 → a diff, a resolved+anchored
 #            thread, and an orphaned thread. The all-purpose realistic surface.
+#            Also mints two terminal sessions: an approved one (Save-only, lands
+#            in "Done") and an implemented one with an open PR (lands in "PR
+#            review", shows the impl header line).
 #   visuals  r1 is a plan built from callouts + a decision matrix + inline pills +
 #            a Given/When/Then scenario card block, with a comment anchored INTO a
 #            callout. For expressive-plan-visuals.
@@ -217,6 +220,27 @@ if [[ "$APPROVED_SID" == otc_* ]]; then
   curl -s -X POST "$BASE/api/sessions/$APPROVED_SID/approve" \
     -H 'content-type: application/json' -d '{"force":true}' >/dev/null
   echo "# second session $APPROVED_SID approved: hidden from the switcher, grouped on home"
+fi
+
+# ---- a third, IMPLEMENTED session (open PR) ---------------------------------
+# So the new "PR review" home group and the impl-detail header line are demoable.
+# The approve here passes implement:true, which the daemon treats like the UI's
+# "approve and implement": it flips the session to `implementing` and records
+# impl: {worktree, branch} (deterministic from the title slug). Then implement-done
+# flips it to `implemented`, stores the prUrl, and stamps prState:"open". The PR url
+# is an intentional demo placeholder (the gh poller cannot resolve it), so prState
+# stays "open" and the session stays in "PR review" deterministically.
+IMPL_START="$("$OTACON" start --title "demo: $FLAVOR (implemented)" 2>/dev/null)"
+IMPL_SID="$(printf '%s' "$IMPL_START" | jf .session)"
+if [[ "$IMPL_SID" == otc_* ]]; then
+  IMPL_SDIR="$(dirname "$(printf '%s' "$IMPL_START" | jf .plan)")"
+  mkdir -p "$IMPL_SDIR"
+  sed "s/otc_test01/$IMPL_SID/" "$FIXTURES/valid-plan.md" > "$IMPL_SDIR/plan.md"
+  "$OTACON" submit --session "$IMPL_SID" >/dev/null
+  curl -s -X POST "$BASE/api/sessions/$IMPL_SID/approve" \
+    -H 'content-type: application/json' -d '{"force":true,"implement":true}' >/dev/null
+  "$OTACON" implement-done --session "$IMPL_SID" --pr "https://github.com/otacon/demo/pull/7" >/dev/null
+  echo "# third session $IMPL_SID implemented: lands in 'PR review', shows the impl header line"
 fi
 
 echo
