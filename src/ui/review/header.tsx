@@ -171,6 +171,7 @@ export function ReviewHeader({
               href={session.prUrl}
               target="_blank"
               rel="noreferrer"
+              aria-label={`pull request ${prNumber(session.prUrl) ?? ""} (${session.prState ?? "open"})`}
               title={`pull request ${prNumber(session.prUrl) ?? ""} (${session.prState ?? "open"})`}
             >
               {prNumber(session.prUrl) ?? "PR"}

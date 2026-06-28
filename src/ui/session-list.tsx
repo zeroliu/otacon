@@ -79,6 +79,7 @@ export function SessionList({
       ))}
       {prReview.length > 0 && (
         <SessionGroup
+          key="pr-review"
           label="PR review"
           sessions={prReview}
           defaultOpen={true}
@@ -90,6 +91,7 @@ export function SessionList({
       )}
       {done.length > 0 && (
         <SessionGroup
+          key="done"
           label="Done"
           sessions={done}
           defaultOpen={false}
