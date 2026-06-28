@@ -150,7 +150,7 @@ Verification: A ✓ row highlights the winner; links and \`[assumed]\` stay unto
 
 ## Risks
 
-[!risk] Budget exemption could smuggle in prose — the per-section count cap is the guard.
+[!risk] A budget-exempt decision matrix could smuggle in prose — the per-section visual cap is the guard.
 
 ## Open Questions
 
