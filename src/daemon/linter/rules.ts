@@ -55,6 +55,53 @@ function phaseSlug(phase: Phase): string {
 }
 
 /**
+ * A GFM table delimiter row: ignoring spaces, only `|`, `:`, `-`, with at least
+ * one `-` and at least one column segment (an `isTableDelimiter` sibling in
+ * parse.ts gates the parser's table primitive; this one gates the Files-table
+ * verdict). Detection is deliberately ≥1 column, not ≥2: a single-column table
+ * is still a table — it just earns the "needs a What changed column" verdict, so
+ * we must recognize it rather than treat it as not-a-table.
+ */
+function isDelimiterRow(text: string): boolean {
+  const compact = text.replace(/\s/g, "");
+  if (!compact.includes("-")) return false;
+  if (!/^[|:-]+$/.test(compact)) return false;
+  return splitCells(text).length >= 1;
+}
+
+/**
+ * Split a GFM table row into trimmed cells. Splits on `|` that is NOT escaped
+ * (`\|`, a literal pipe inside a cell), then drops the empty leading/trailing
+ * cells the row's outer pipes produce. The remaining count is the column count.
+ */
+function splitCells(text: string): string[] {
+  const cells = text
+    .split(/(?<!\\)\|/)
+    .map((c) => c.trim());
+  while (cells.length > 0 && cells[0] === "") cells.shift();
+  while (cells.length > 0 && cells[cells.length - 1] === "") cells.pop();
+  return cells;
+}
+
+/**
+ * Locate a GFM table in a Files field's captured content lines: a delimiter row
+ * whose immediately-preceding content line is the header. Returns the header,
+ * delimiter, and body rows (everything after the delimiter), or null if the
+ * field is authored as a list (or anything that isn't a table). Structural data
+ * only — the verdict (≥2 columns, non-empty "What changed") lives in the caller.
+ */
+function findFilesTable(
+  contentLines: { text: string; line: number }[],
+): { header: { text: string; line: number }; body: { text: string; line: number }[] } | null {
+  for (let i = 1; i < contentLines.length; i++) {
+    if (isDelimiterRow(contentLines[i]!.text)) {
+      return { header: contentLines[i - 1]!, body: contentLines.slice(i + 1) };
+    }
+  }
+  return null;
+}
+
+/**
  * The shape verdicts shared by every gwt block, wherever it sits: empty (no
  * scenario) and malformed (a scenario that doesn't read Given… When… Then…).
  * `where` prefixes the message ("Phase 2", "Section ## Summary"); `slug` anchors
@@ -225,13 +272,61 @@ export function checkL1(plan: ParsedPlan, session?: string): LintIssue[] {
           );
         }
       }
-      if (phase.fields.files && phase.fields.files.listItemCount === 0) {
-        issues.push(
-          issue("L1", "E_FILES_EMPTY", "error", `Phase ${phase.n} "Files" has no list items`, {
-            line: phase.fields.files.startLine,
-            section: phaseSlug(phase),
-          }),
-        );
+      if (phase.fields.files) {
+        const files = phase.fields.files;
+        const table = findFilesTable(files.contentLines);
+        if (table) {
+          // A Files table must carry a "What changed" column: ≥2 columns overall,
+          // the 2nd column titled "What changed" (the documented protocol header),
+          // and every body row's 2nd cell non-empty. A list is exempt — only a
+          // table makes the per-row summary a structural promise to keep.
+          const headerCells = splitCells(table.header.text);
+          const secondHeader = (headerCells[1] ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+          if (headerCells.length < 2) {
+            issues.push(
+              issue(
+                "L1",
+                "E_FILES_NO_SUMMARY",
+                "error",
+                `Phase ${phase.n} "Files" table needs a "What changed" column`,
+                { line: table.header.line, section: phaseSlug(phase) },
+              ),
+            );
+          } else if (secondHeader !== "what changed") {
+            issues.push(
+              issue(
+                "L1",
+                "E_FILES_NO_SUMMARY",
+                "error",
+                `Phase ${phase.n} "Files" table's second column must be titled "What changed"`,
+                { line: table.header.line, section: phaseSlug(phase) },
+              ),
+            );
+          } else {
+            for (const row of table.body) {
+              const cells = splitCells(row.text);
+              if ((cells[1] ?? "") === "") {
+                issues.push(
+                  issue(
+                    "L1",
+                    "E_FILES_NO_SUMMARY",
+                    "error",
+                    `Phase ${phase.n} "Files" row has an empty "What changed" cell`,
+                    { line: row.line, section: phaseSlug(phase) },
+                  ),
+                );
+              }
+            }
+          }
+        } else if (files.listItemCount === 0) {
+          // No table and no list item — the field is genuinely empty.
+          issues.push(
+            issue("L1", "E_FILES_EMPTY", "error", `Phase ${phase.n} "Files" has no list items`, {
+              line: files.startLine,
+              section: phaseSlug(phase),
+            }),
+          );
+        }
       }
       if (phase.detailsCount > 1) {
         issues.push(
@@ -443,23 +538,32 @@ export function checkL6(plan: ParsedPlan, budgets: Budgets): LintIssue[] {
 }
 
 /**
- * L7: a lead diagram near the top is *strongly
+ * L7: a lead visual near the top is *strongly
  * recommended, not required* — ~90% of plans — so the reviewer sees the
- * change's shape before its prose. A Summary with no ` ```mermaid ` diagram and
- * no `<!-- no-lead-diagram -->` escape-hatch marker earns one **warning**, never
- * an error: the linter checks presence, never usefulness (a diagram that merely
- * restates the summary would add reading load), so it must not block a submit.
- * A missing Summary is L1's business, not L7's — no double-report.
+ * change's shape before its prose. A ` ```mermaid ` diagram satisfies it, and so
+ * does a lead decision-matrix table (the right shape for a classification). A
+ * Summary with neither, and no `<!-- no-lead-diagram -->` escape-hatch marker,
+ * earns one **warning**, never an error: the linter checks presence, never
+ * usefulness (a visual that merely restates the summary would add reading load),
+ * so it must not block a submit. A callout alone does not satisfy L7 (it doesn't
+ * show the change's shape), so this keys off matrixCount, not visualCount. A
+ * missing Summary is L1's business, not L7's (no double-report).
  */
 export function checkL7(plan: ParsedPlan): LintIssue[] {
   const summary = plan.sections.find((s) => s.id === "summary");
-  if (!summary || summary.diagramCount > 0 || summary.leadDiagramOptOut) return [];
+  if (
+    !summary ||
+    summary.diagramCount > 0 ||
+    summary.matrixCount > 0 ||
+    summary.leadDiagramOptOut
+  )
+    return [];
   return [
     issue(
       "L7",
       "W_LEAD_DIAGRAM_MISSING",
       "warning",
-      "Summary has no lead diagram — a state/sequence/flow ```mermaid block up top is strongly recommended (≈90% of plans). Add one, or mark `<!-- no-lead-diagram: <why> -->` in Summary if a chart wouldn't help.",
+      "Summary has no lead visual: a diagram (a state/sequence/flow ```mermaid block), or a decision-matrix table for a classification, up top is strongly recommended (≈90% of plans). Add one, or mark `<!-- no-lead-diagram: <why> -->` in Summary if a visual wouldn't help.",
       { line: summary.startLine, section: "summary" },
     ),
   ];
