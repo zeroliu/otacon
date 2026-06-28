@@ -4193,3 +4193,42 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   genuinely optional, which is the opposite of what the cap exists to ration.
 - **Revisit when:** The visual-cap model changes (e.g. required structural elements get a
   separate budget, or the cap is replaced by a different "no wall of widgets" mechanism).
+
+## Keep the implement dot live by watching the worktree, not subagent transcripts (2026-06-28)
+
+- **Decision:** While a session is `implementing`, the daemon polls its own
+  `impl.worktree` for the newest file mtime (excluding `node_modules`/`.git`) and refreshes
+  `lastContactAt` on any increase, rather than following the subagent's transcript or
+  relying on a per-agent hook. The watch feeds the *same* `lastContactAt` the CLI verbs,
+  `wait` park, and the transcript tailer already drive — no new summary field, no UI work.
+- **Why:** The parent orchestrator goes silent for minutes during a `Task` subagent run,
+  so the transcript tailer alone lets the dot flip offline mid-build even though the build
+  is editing files the whole time. The worktree is **unique per session**, so its mtime is a
+  direct activity signal that needs no attribution. Following the child's transcript instead
+  would be heuristic and racy: the child transcript carries no back-link to its parent
+  session (verified), so matching it would lean on prompt/timing guesses across concurrent
+  sessions. A hook heartbeat would be direct but is Claude-only and adds install/settings
+  surface that drifts on every agent upgrade. An open-tool-call timeout would lean on a
+  guessed cap. The worktree watch is hook-free, agent-agnostic, attribution-free, and has no
+  timeout — liveness simply decays once writes stop, which is the intended behavior (a
+  read-only subagent over five minutes *should* read as stalled, not be faked live).
+- **Revisit when:** A build legitimately works for over five minutes without touching its
+  worktree (pure analysis/read phases) often enough to annoy, or worktrees stop being
+  one-session-each, at which point a richer signal (or attribution) may be warranted.
+
+## The worktree watch primes on its first reading and polls on a 30s constant (2026-06-28)
+
+- **Decision:** The watch establishes a baseline from its first observed mtime **without**
+  bumping liveness, then bumps only when a later poll sees a strictly greater mtime. It polls
+  on a 30s module constant (`DEFAULT_WORKTREE_POLL_MS`), not a config key.
+- **Why:** The worktree is freshly written at implement-start and already populated after a
+  daemon restart, so treating its first reading as new activity would falsely revive a dead
+  session for the full liveness window after a restart — the same restart-stays-offline
+  property the tailer's catch-up guard protects. The cadence only has to stay **under** the
+  5-min liveness window: a single worktree write inside that window keeps the dot live, so a
+  coarse poll suffices and cuts the recursive-scan cost (a tighter poll would scan far more
+  often for no liveness benefit). Leaving it a constant rather than a config key keeps the
+  configuration surface minimal; nothing about the value is per-repo.
+- **Revisit when:** The liveness window changes (the cadence must stay safely under it), the
+  scan cost becomes material on large worktrees (then an exclude list or cadence may want
+  tuning), or a real need to tune cadence/ignore-list per repo appears.

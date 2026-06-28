@@ -53,6 +53,8 @@ import { normalize } from "./capture/normalize.js";
 import { appendStreamEvents, readStream, StreamSeq } from "./capture/stream-store.js";
 import type { TailerDeps } from "./capture/tailer.js";
 import { Tailer } from "./capture/tailer.js";
+import type { WorktreeWatchDeps } from "./capture/worktree-watch.js";
+import { WorktreeWatch } from "./capture/worktree-watch.js";
 import { composeArtifact, localDate, pickHomePath, pickProjectRelPath } from "./approve.js";
 import type { DesktopNotifier } from "./desktop-notify.js";
 import { createDesktopNotifier } from "./desktop-notify.js";
@@ -104,6 +106,12 @@ export interface AppOptions {
    * suite never depends on real `~/.claude` contents or a live fs poll.
    */
   makeTailer?: (deps: TailerDeps) => { start(): void; stop(): void };
+  /**
+   * Test override: the per-session worktree liveness watch factory (default: the
+   * real `WorktreeWatch`, polling the implement worktree's newest mtime). A test
+   * can return a stub so the suite never depends on a live fs poll.
+   */
+  makeWorktreeWatch?: (deps: WorktreeWatchDeps) => { start(): void; stop(): void };
 }
 
 type AppContext = Context<{ Bindings: NodeBindings }>;
@@ -360,11 +368,46 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     tailer.stop();
     tailers.delete(id);
   };
+
+  // Per-session worktree liveness watches: while a session is `implementing`,
+  // its watch polls the implement worktree's newest mtime and refreshes liveness
+  // on any increase — keeping the agent-live dot lit through multi-minute
+  // subagent runs where the parent emits nothing. onActivity calls
+  // refreshLiveness (NOT a bare bumpContact): a `stream` frame never carries
+  // lastContactAt to the browser, only a `session` frame moves the dot. Watches
+  // are injectable via options.makeWorktreeWatch so a test can drive `tick()`.
+  const worktreeWatches = new Map<string, { start(): void; stop(): void }>();
+  const makeWorktreeWatch =
+    options.makeWorktreeWatch ?? ((deps: WorktreeWatchDeps) => new WorktreeWatch(deps));
+  const startWorktreeWatch = (session: RegistrySession): void => {
+    if (worktreeWatches.has(session.id)) return; // idempotent — already watching
+    if (session.status !== "implementing") return; // only the build phase writes the worktree
+    const worktree = session.impl?.worktree;
+    if (!worktree) return; // no worktree recorded — nothing to watch
+    const watch = makeWorktreeWatch({
+      dir: worktree,
+      onActivity: () => refreshLiveness(session.id),
+    });
+    worktreeWatches.set(session.id, watch);
+    watch.start();
+  };
+  const stopWorktreeWatch = (id: string): void => {
+    const watch = worktreeWatches.get(id);
+    if (watch === undefined) return;
+    watch.stop();
+    worktreeWatches.delete(id);
+  };
+
   // Re-attach tailers to sessions that were already active when the daemon
   // started (a restart mid-build): the registry survives the restart, so the
   // live transcript is still being written. New sessions wire their tailer at
-  // creation; terminal ones are skipped by startTailer's guard.
-  for (const session of store.listSessions()) startTailer(session);
+  // creation; terminal ones are skipped by startTailer's guard. The worktree
+  // watch re-attaches the same way — its guard filters to implementing-with-
+  // worktree, so calling it unconditionally in the loop is safe.
+  for (const session of store.listSessions()) {
+    startTailer(session);
+    startWorktreeWatch(session);
+  }
 
   // Desktop attention banners (review loop and daemon API). Presence tracks which sessions
   // have a *visible* review open; the notify sink fires the native macOS banner
@@ -505,8 +548,11 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     });
     // Save (approved) is terminal — the agent stops, so tear the tailer down.
     // Implement keeps the session live (`implementing`), so the tailer keeps
-    // streaming the build's activity until implement-done flips it terminal.
-    if (!opts.implement) stopTailer(session.id);
+    // streaming the build's activity until implement-done flips it terminal —
+    // and we start the worktree watch so the dot stays lit through the silent
+    // subagent runs that the transcript tailer can't see.
+    if (opts.implement) startWorktreeWatch(updated);
+    else stopTailer(session.id);
     // Disarm after the flip: a crash between them leaves a stale flag on an
     // already-terminal/building session (harmless — no further submit finalizes),
     // never a finalizing session that lost its flag (which would re-open review).
@@ -690,6 +736,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     const queue = queueFor(session.id);
     const pendingEvents = queue.size;
     stopTailer(session.id); // the session is going away — stop watching its transcript
+    stopWorktreeWatch(session.id); // …and stop watching its worktree
     if (TERMINAL_STATUSES.includes(session.status)) {
       // Deregister first — it can throw (registry flush), and an early queue
       // eviction would orphan in-flight ack tracking for a session that is in
@@ -1787,6 +1834,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       ...(typeof pr === "string" ? { prUrl: pr } : {}),
     });
     stopTailer(session.id); // build is over (both outcomes terminal): stop tailing
+    stopWorktreeWatch(session.id); // …and stop watching the worktree
     publishSession(updated); // the chip flips + the PR link appears live
     return c.json({ ok: true, session: updated, status, prUrl: updated.prUrl });
   });

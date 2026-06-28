@@ -2113,6 +2113,102 @@ describe("transcript tailer lifecycle (live-progress-activity-redesign)", () => 
   });
 });
 
+describe("worktree liveness watch lifecycle (keep-agent-live-during-implementation)", () => {
+  // A stub watch factory records start/stop and captures the deps, so the test
+  // observes the lifecycle wiring + the onActivity refresh without a real fs poll.
+  type WatchStub = {
+    start(): void;
+    stop(): void;
+    started: number;
+    stopped: number;
+    dir: string;
+    onActivity: () => void;
+  };
+  function watchedApp() {
+    const stubs: WatchStub[] = [];
+    const watched = createApp({
+      store,
+      uiDir,
+      presence,
+      notify: () => {},
+      makeWorktreeWatch: (deps) => {
+        const stub: WatchStub = {
+          started: 0,
+          stopped: 0,
+          dir: deps.dir,
+          onActivity: deps.onActivity,
+          start() {
+            this.started += 1;
+          },
+          stop() {
+            this.stopped += 1;
+          },
+        };
+        stubs.push(stub);
+        return stub;
+      },
+    });
+    return { watched, stubs };
+  }
+  const post = (a: Hono<{ Bindings: NodeBindings }>, path: string, body: unknown = {}) =>
+    a.request(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+  test("approve {implement:true} starts a worktree watch wired so onActivity publishes a fresh lastContactAt", async () => {
+    const { watched, stubs } = watchedApp();
+    const { id } = (await (await post(watched, "/api/sessions", { title: "t", repo })).json()) as { id: string };
+    await watched.request(`/api/sessions/${id}/submit`, { method: "POST", body: validPlanFor(id) });
+    await post(watched, `/api/sessions/${id}/approve`, { implement: true });
+
+    // Exactly one watch, started, pointed at the recorded implement worktree.
+    expect(stubs).toHaveLength(1);
+    expect(stubs[0]?.started).toBe(1);
+    expect(stubs[0]?.stopped).toBe(0);
+    expect(stubs[0]?.dir).toBe(store.getSession(id)?.impl?.worktree);
+
+    // Open the index SSE stream AFTER the implementing flip so the next live
+    // frame is the one onActivity triggers: only a `session` frame carries
+    // lastContactAt, so the dot moves only when onActivity → refreshLiveness
+    // publishes one (a `stream` frame would never move the dot).
+    const reader = sseReader(await watched.request("/api/stream"));
+    expect((await reader.next()).event).toBe("snapshot");
+
+    stubs[0]?.onActivity();
+    const refreshed = await reader.next();
+    expect(refreshed.event).toBe("session");
+    const summary = (refreshed.data as { session: { id: string; lastContactAt?: number } }).session;
+    expect(summary.id).toBe(id);
+    expect(typeof summary.lastContactAt).toBe("number");
+    await reader.cancel();
+  });
+
+  test("Save (approve without implement) starts NO worktree watch", async () => {
+    const { watched, stubs } = watchedApp();
+    const { id } = (await (await post(watched, "/api/sessions", { title: "t", repo })).json()) as { id: string };
+    await watched.request(`/api/sessions/${id}/submit`, { method: "POST", body: validPlanFor(id) });
+    await post(watched, `/api/sessions/${id}/approve`, {});
+    expect(stubs).toHaveLength(0); // approved is terminal — no build, no worktree watch
+  });
+
+  test("implement-done stops the worktree watch", async () => {
+    const { watched, stubs } = watchedApp();
+    const { id } = (await (await post(watched, "/api/sessions", { title: "t", repo })).json()) as { id: string };
+    await watched.request(`/api/sessions/${id}/submit`, { method: "POST", body: validPlanFor(id) });
+    await post(watched, `/api/sessions/${id}/approve`, { implement: true });
+    expect(stubs[0]?.stopped).toBe(0); // still building → still watching
+    await post(watched, `/api/sessions/${id}/implement-done`, { pr: "https://example.com/pr/1" });
+    expect(stubs[0]?.stopped).toBe(1); // build over → watch torn down
+  });
+
+  test("deleting an implementing session stops the worktree watch", async () => {
+    const { watched, stubs } = watchedApp();
+    const { id } = (await (await post(watched, "/api/sessions", { title: "t", repo })).json()) as { id: string };
+    await watched.request(`/api/sessions/${id}/submit`, { method: "POST", body: validPlanFor(id) });
+    await post(watched, `/api/sessions/${id}/approve`, { implement: true });
+    await watched.request(`/api/sessions/${id}`, { method: "DELETE" });
+    expect(stubs[0]?.stopped).toBe(1);
+  });
+});
+
 describe("approve and the status machine (M4)", () => {
   const submitValid = async (id: string) => {
     const res = await app.request(`/api/sessions/${id}/submit`, {
