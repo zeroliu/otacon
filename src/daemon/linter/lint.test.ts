@@ -537,16 +537,30 @@ describe("L6 details soft cap", () => {
 describe("lead diagram nudge (L7)", () => {
   const noDiagram = "## Summary\n\nShip it.\n";
   const withDiagram = "## Summary\n\nShip it.\n\n```mermaid\nflowchart LR\n  a --> b\n```\n";
+  const withMatrix =
+    "## Summary\n\nShip it.\n\n| Pick | Option |\n| --- | --- |\n| ✓ | A |\n| | B |\n";
+  const calloutOnly = "## Summary\n\nShip it.\n\n> [!risk]\n> rolling the key drops live sessions\n";
   const optedOut = "## Summary\n\nShip it.\n\n<!-- no-lead-diagram: pure docs change -->\n";
 
   test("a Summary with a lead diagram is clean", () => {
     expect(codes(run(doc({ summary: withDiagram })))).toEqual([]);
   });
 
+  test("a Summary that leads with a decision-matrix table needs no marker (no nudge)", () => {
+    expect(codes(run(doc({ summary: withMatrix })))).toEqual([]);
+  });
+
   test("no diagram nudges — a warning, never a blocking error", () => {
     const result = run(doc({ summary: noDiagram }));
     expect(result.ok).toBeTrue();
     expect(result.errors).toEqual([]);
+    const nudge = result.warnings.find((w) => w.code === "W_LEAD_DIAGRAM_MISSING");
+    expect(nudge).toMatchObject({ rule: "L7", severity: "warning", section: "summary" });
+  });
+
+  test("a callout-only Summary still nudges (a callout doesn't show the change's shape)", () => {
+    const result = run(doc({ summary: calloutOnly }));
+    expect(result.ok).toBeTrue();
     const nudge = result.warnings.find((w) => w.code === "W_LEAD_DIAGRAM_MISSING");
     expect(nudge).toMatchObject({ rule: "L7", severity: "warning", section: "summary" });
   });

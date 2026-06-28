@@ -538,23 +538,32 @@ export function checkL6(plan: ParsedPlan, budgets: Budgets): LintIssue[] {
 }
 
 /**
- * L7: a lead diagram near the top is *strongly
+ * L7: a lead visual near the top is *strongly
  * recommended, not required* — ~90% of plans — so the reviewer sees the
- * change's shape before its prose. A Summary with no ` ```mermaid ` diagram and
- * no `<!-- no-lead-diagram -->` escape-hatch marker earns one **warning**, never
- * an error: the linter checks presence, never usefulness (a diagram that merely
- * restates the summary would add reading load), so it must not block a submit.
- * A missing Summary is L1's business, not L7's — no double-report.
+ * change's shape before its prose. A ` ```mermaid ` diagram satisfies it, and so
+ * does a lead decision-matrix table (the right shape for a classification). A
+ * Summary with neither, and no `<!-- no-lead-diagram -->` escape-hatch marker,
+ * earns one **warning**, never an error: the linter checks presence, never
+ * usefulness (a visual that merely restates the summary would add reading load),
+ * so it must not block a submit. A callout alone does not satisfy L7 (it doesn't
+ * show the change's shape), so this keys off matrixCount, not visualCount. A
+ * missing Summary is L1's business, not L7's (no double-report).
  */
 export function checkL7(plan: ParsedPlan): LintIssue[] {
   const summary = plan.sections.find((s) => s.id === "summary");
-  if (!summary || summary.diagramCount > 0 || summary.leadDiagramOptOut) return [];
+  if (
+    !summary ||
+    summary.diagramCount > 0 ||
+    summary.matrixCount > 0 ||
+    summary.leadDiagramOptOut
+  )
+    return [];
   return [
     issue(
       "L7",
       "W_LEAD_DIAGRAM_MISSING",
       "warning",
-      "Summary has no lead diagram — a state/sequence/flow ```mermaid block up top is strongly recommended (≈90% of plans). Add one, or mark `<!-- no-lead-diagram: <why> -->` in Summary if a chart wouldn't help.",
+      "Summary has no lead visual: a diagram (a state/sequence/flow ```mermaid block), or a decision-matrix table for a classification, up top is strongly recommended (≈90% of plans). Add one, or mark `<!-- no-lead-diagram: <why> -->` in Summary if a visual wouldn't help.",
       { line: summary.startLine, section: "summary" },
     ),
   ];
