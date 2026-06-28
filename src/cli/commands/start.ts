@@ -1,4 +1,4 @@
-// otacon start --title <t> [--quick] [--socratic] — mint and register a session:
+// otacon start --title <t> [--prompt <t>] [--quick] [--socratic] — mint and register a session:
 // POST /api/sessions, print the session id, review URL, and the plan draft path
 // (~/.otacon/sessions/<id>/plan.md, where the agent writes the plan). No local
 // session pointer — the daemon registry is the single source of truth.
@@ -34,6 +34,7 @@ export async function startCommand(argv: string[]): Promise<number> {
     args: argv,
     options: {
       title: { type: "string" },
+      prompt: { type: "string" },
       quick: { type: "boolean", default: false },
       // No default: `values.socratic` is `true` only when `--socratic` is passed,
       // `undefined` otherwise — letting the daemon apply the `socratic.default`
@@ -59,6 +60,11 @@ export async function startCommand(argv: string[]): Promise<number> {
     repo,
     branch: gitRoot === undefined ? "" : currentBranch(cwd),
     quick: values.quick === true,
+    // Forward the verbatim request only when it carries content after trimming;
+    // a whitespace-only/absent prompt leaves the field off the wire.
+    ...(typeof values.prompt === "string" && values.prompt.trim() !== ""
+      ? { prompt: values.prompt.trim() }
+      : {}),
     // Send `socratic: true` only when the flag was passed; omitting it lets the
     // daemon apply the `socratic.default` config.
     ...(values.socratic === true ? { socratic: true } : {}),

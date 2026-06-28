@@ -377,7 +377,7 @@ the model is suspended — no inference, no token spend.
 
 | Command                                                                     | Effect                                                                        |
 | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `otacon start --title <t> [--quick] [--socratic]`                           | Mint session, register it, print review URL (`--socratic` overrides the `socratic.default` config) |
+| `otacon start --title <t> [--prompt <t>] [--quick] [--socratic]`            | Mint session, register it, print review URL (`--socratic` overrides the `socratic.default` config; `--prompt` records the user's verbatim request, trimmed and uncapped, on the session record) |
 | `otacon submit [plan.md] [--resolutions res.json]`                          | Lint → reject with errors, or store revision N, notify UI                     |
 | `otacon wait [--timeout 540] [--session <id>]`                              | Long-poll this session's queue; print next event as JSON                      |
 | `otacon ask --question "…" [--options "A\|B\|C"] [--recommend A] [--multi]` | Post agent question card to UI (or a batch of independent questions via `--batch <file\|->`); answer arrives via `wait` |
@@ -826,7 +826,10 @@ Multiple concurrent planning sessions (different repos, worktrees, or features) 
 one daemon.
 
 **Identity & routing.** `otacon start` mints a session ID and registers it in
-`~/.otacon/registry.json` (ID → repo path, branch, title, status). The registry is
+`~/.otacon/registry.json` (ID → repo path, branch, title, status, and the optional
+`prompt`, the user's verbatim request captured via `--prompt`, trimmed and stored
+uncapped, absent when not supplied). The registry record flows verbatim into the
+`SessionSummary`, so the UI surfaces the prompt for free. The registry is
 the single source of truth — there is no local session pointer:
 
 - Commands default to the repo's single active session: the CLI reads the registry
@@ -896,6 +899,19 @@ Structural integration:
 
 - **Traceability** (§4, lint L3): plan decisions cite the grill Q&A that produced them
   (`D3 ← q7`) or wear `[assumed]`. No plan reaches review with silently-made decisions.
+- **The request is echoed at the top**: a **"Prompt" card** is the first child of the
+  review column, present from session start (it does not wait on a plan). It shows the
+  reviewer's verbatim request captured via `--prompt` as plain text with line breaks
+  preserved (not parsed as markdown — it is the user's own words handed back). It is
+  **collapsed by default** to a one-line preview behind the "Prompt" label, expanding on
+  click to the full text and collapsing again on a second click. Unlike the agent's
+  transmission cards (the grill card, the revision banner) it carries the reviewer's
+  words the other direction, so it wears a quiet surface fill with a left accent rule
+  rather than the accent-tinted top-border treatment. When no prompt was captured the
+  card renders nothing — no empty shell, no label. The wrapper protocol card teaches the
+  agent to pass this request at session start (the original ask verbatim via `--prompt`,
+  with only the `/otacon` skill-invocation boilerplate stripped), so the card populates
+  on its own; the daemon never synthesizes it.
 - **The transcript is part of the review UI**: a collapsible **"Interview" panel is the
   single grill surface** (no separate pinned queue above the plan). It has two labeled
   zones, each newest-first: an **"open"** group on top where unanswered questions are
@@ -1524,7 +1540,7 @@ Operational requirement: the Mac stays awake while a plan is in review
 | `~/.otacon/sessions/<id>/`                        | Per-session working state, keyed by session id: `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), threads (`threads.json`: comment + question threads with answers, agent replies, reviewer-resolve closes, and anchor states inline), the grill transcript (`transcript.json`), the capped live-activity feed (`activity.json`: the newest ~N `otacon progress` notes), the live-activity stream (`stream.jsonl`: the normalized, capped, append-only event stream, §10a), queues, AND the canonical approved plan `YYYY-MM-DD-<slug>.md`. Removed outright when the session is deleted | n/a (global)                              |
 | `~/.otacon/worktrees/<slug>/`                     | Implement build's git worktree on branch `otacon/impl-<slug>` (base dir is `worktree.dir`, default `~/.otacon/worktrees` — outside the repo)                    | n/a (global, outside the repo)             |
 | `<repo>/<plans.dir>/YYYY-MM-DD-<slug>.md`         | Save-time project copy (default `.otacon/plans`; set `plans.dir=docs/plans` to group with tracked plans)       | yours to commit (or not)                   |
-| `~/.otacon/registry.json`                         | Session registry: ID → repo, branch, title, status, `prUrl`, and `impl` (the build's worktree + branch, recorded at Implement-approve; see below)                                                             | n/a (global)                               |
+| `~/.otacon/registry.json`                         | Session registry: ID → repo, branch, title, status, the optional `prompt` (the user's verbatim request from `--prompt`, trimmed and uncapped), `prUrl`, and `impl` (the build's worktree + branch, recorded at Implement-approve; see below)                                                             | n/a (global)                               |
 
 Every session's working state (and its approved plan) lives in the home store keyed
 by its session id (`~/.otacon/sessions/<id>/`), repo-independent. On **Save** it

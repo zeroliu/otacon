@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registryPath, sessionDir } from "../shared/paths.js";
+import type { RegistrySession } from "../shared/types.js";
 import { SessionQueue } from "./queue.js";
 import { quarantineCorruptFile, Store, writeFileAtomic } from "./store.js";
 
@@ -65,6 +66,18 @@ describe("Store session CRUD", () => {
     const registry = JSON.parse(readFileSync(registryPath(), "utf8"));
     expect(registry.version).toBe(1);
     expect(registry.sessions[session.id].title).toBe("auth refactor");
+  });
+
+  test("createSession stores a trimmed prompt only when non-empty", () => {
+    const store = new Store();
+    const withPrompt = store.createSession({ title: "t", repo, prompt: "  ship it  " });
+    expect(withPrompt.prompt).toBe("ship it");
+    expect(store.getSession(withPrompt.id)?.prompt).toBe("ship it");
+
+    // A whitespace-only request leaves the field off entirely, like other optionals.
+    const blank = store.createSession({ title: "t", repo, prompt: "   " });
+    expect("prompt" in blank).toBe(false);
+    expect("prompt" in (store.getSession(blank.id) as RegistrySession)).toBe(false);
   });
 
   test("createSession seeds session.json and events.json under the home store", () => {
