@@ -55,6 +55,53 @@ function phaseSlug(phase: Phase): string {
 }
 
 /**
+ * A GFM table delimiter row: ignoring spaces, only `|`, `:`, `-`, with at least
+ * one `-` and at least one column segment (an `isTableDelimiter` sibling in
+ * parse.ts gates the parser's table primitive; this one gates the Files-table
+ * verdict). Detection is deliberately ≥1 column, not ≥2: a single-column table
+ * is still a table — it just earns the "needs a What changed column" verdict, so
+ * we must recognize it rather than treat it as not-a-table.
+ */
+function isDelimiterRow(text: string): boolean {
+  const compact = text.replace(/\s/g, "");
+  if (!compact.includes("-")) return false;
+  if (!/^[|:-]+$/.test(compact)) return false;
+  return splitCells(text).length >= 1;
+}
+
+/**
+ * Split a GFM table row into trimmed cells. Splits on `|` that is NOT escaped
+ * (`\|`, a literal pipe inside a cell), then drops the empty leading/trailing
+ * cells the row's outer pipes produce. The remaining count is the column count.
+ */
+function splitCells(text: string): string[] {
+  const cells = text
+    .split(/(?<!\\)\|/)
+    .map((c) => c.trim());
+  while (cells.length > 0 && cells[0] === "") cells.shift();
+  while (cells.length > 0 && cells[cells.length - 1] === "") cells.pop();
+  return cells;
+}
+
+/**
+ * Locate a GFM table in a Files field's captured content lines: a delimiter row
+ * whose immediately-preceding content line is the header. Returns the header,
+ * delimiter, and body rows (everything after the delimiter), or null if the
+ * field is authored as a list (or anything that isn't a table). Structural data
+ * only — the verdict (≥2 columns, non-empty "What changed") lives in the caller.
+ */
+function findFilesTable(
+  contentLines: { text: string; line: number }[],
+): { header: { text: string; line: number }; body: { text: string; line: number }[] } | null {
+  for (let i = 1; i < contentLines.length; i++) {
+    if (isDelimiterRow(contentLines[i]!.text)) {
+      return { header: contentLines[i - 1]!, body: contentLines.slice(i + 1) };
+    }
+  }
+  return null;
+}
+
+/**
  * The shape verdicts shared by every gwt block, wherever it sits: empty (no
  * scenario) and malformed (a scenario that doesn't read Given… When… Then…).
  * `where` prefixes the message ("Phase 2", "Section ## Summary"); `slug` anchors
@@ -225,13 +272,61 @@ export function checkL1(plan: ParsedPlan, session?: string): LintIssue[] {
           );
         }
       }
-      if (phase.fields.files && phase.fields.files.listItemCount === 0) {
-        issues.push(
-          issue("L1", "E_FILES_EMPTY", "error", `Phase ${phase.n} "Files" has no list items`, {
-            line: phase.fields.files.startLine,
-            section: phaseSlug(phase),
-          }),
-        );
+      if (phase.fields.files) {
+        const files = phase.fields.files;
+        const table = findFilesTable(files.contentLines);
+        if (table) {
+          // A Files table must carry a "What changed" column: ≥2 columns overall,
+          // the 2nd column titled "What changed" (the documented protocol header),
+          // and every body row's 2nd cell non-empty. A list is exempt — only a
+          // table makes the per-row summary a structural promise to keep.
+          const headerCells = splitCells(table.header.text);
+          const secondHeader = (headerCells[1] ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+          if (headerCells.length < 2) {
+            issues.push(
+              issue(
+                "L1",
+                "E_FILES_NO_SUMMARY",
+                "error",
+                `Phase ${phase.n} "Files" table needs a "What changed" column`,
+                { line: table.header.line, section: phaseSlug(phase) },
+              ),
+            );
+          } else if (secondHeader !== "what changed") {
+            issues.push(
+              issue(
+                "L1",
+                "E_FILES_NO_SUMMARY",
+                "error",
+                `Phase ${phase.n} "Files" table's second column must be titled "What changed"`,
+                { line: table.header.line, section: phaseSlug(phase) },
+              ),
+            );
+          } else {
+            for (const row of table.body) {
+              const cells = splitCells(row.text);
+              if ((cells[1] ?? "") === "") {
+                issues.push(
+                  issue(
+                    "L1",
+                    "E_FILES_NO_SUMMARY",
+                    "error",
+                    `Phase ${phase.n} "Files" row has an empty "What changed" cell`,
+                    { line: row.line, section: phaseSlug(phase) },
+                  ),
+                );
+              }
+            }
+          }
+        } else if (files.listItemCount === 0) {
+          // No table and no list item — the field is genuinely empty.
+          issues.push(
+            issue("L1", "E_FILES_EMPTY", "error", `Phase ${phase.n} "Files" has no list items`, {
+              line: files.startLine,
+              section: phaseSlug(phase),
+            }),
+          );
+        }
       }
       if (phase.detailsCount > 1) {
         issues.push(

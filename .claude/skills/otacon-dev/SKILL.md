@@ -96,6 +96,16 @@ spawning a second worktree.
      with your recommended answer. `--multi` for multi-select; omit `--options`
      for free text. The user can always answer with free-form custom text instead
      of (or alongside) the chips, so frame options as a starting point, not a cage.
+   - **One question, well-shaped.** Ask one decision per card and keep it short by
+     default. When a question genuinely needs length (the user asked for that depth, or
+     in socratic mode you are feeding context like a professor), break it into short
+     paragraphs with blank lines between them; never post one unbroken wall. Newlines
+     render fine (the card preserves them); the only friction is shell-quoting a
+     multi-line flag, so author the long question in a temp file under `$TMPDIR` and
+     pass it in, then delete it:
+     `./bin/otacon ask --question "$(cat "$TMPDIR/otacon-q.txt")"` then `rm` the temp file.
+     Wall (avoid): "...five modes: (1)... (2)... my one-line test:... does it match?..."
+     Formatted (do): the same content, one short paragraph per idea, blank lines between.
    - Independent questions whose answers don't shape each other? Post them in one
      call: `./bin/otacon ask --batch questions.json` (or `--batch -` for stdin) — a JSON
      array of the same specs (`{question, options?, recommend?, multi?}`). They land
@@ -154,7 +164,7 @@ machine. Invert your usual posture:
   answers in their own words.
 - **Feed context like a professor.** When the user is missing a fact, teach it (cite
   the code, state the constraint), then ask the question that lets them draw the
-  conclusion themselves. Still never ask what the code can answer for you.
+  conclusion themselves. Still never ask what the code can answer for you. Format that context into short paragraphs, never one wall (see the question-shape rule above).
 - **Do not always agree.** Challenge weak, shallow, or hand-wavy answers. Probe with a
   follow-up question (it carries `replyTo`): surface the case their answer breaks on
   and make them defend or revise it. Push until the reasoning is sound, not just until
@@ -232,7 +242,9 @@ outputs, types, errors; one signature fence is fine under the 1-fence rule) ·
 that produced it, or `[assumed]`) · *(optional)* `## Impact` (≤10 lines — blast
 radius: the upstream modules this plan leans on and the downstream modules it can
 break; a dependency mermaid is fine, and is exempt from the fence cap) · `## Phases`
-(`### Phase <n> — <name>`, each with `Goal:` ≤3 lines, `Files:` list,
+(`### Phase <n> — <name>`, each with `Goal:` ≤3 lines, `Files:` as a
+`| File | What changed |` table (fill every row's 'What changed' cell) or a
+plain list (the review shows Verification above Files, so Files reads last),
 `Verification:` ≤3 lines plus an optional ```gwt scenario block — see below,
 optional collapsible `#### Details` block) ·
 `## Risks` (≤5 items, ≤2 lines each) ·

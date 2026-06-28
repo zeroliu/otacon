@@ -4096,3 +4096,83 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   it does not show the change's shape.
 - **Revisit when:** Another lead visual (a paired before/after, an image) should also
   satisfy L7, or a thin table passing the nudge proves to be a problem in practice.
+
+## Grill questions: format long ones, guide rather than lint (2026-06-27)
+
+- **Decision:** The skill wrapper now tells the agent to ask one focused, short question
+  per card and, when a question must run long, to format it into short paragraphs authored
+  in a `$TMPDIR` temp file and passed via `--question "$(cat …)"` (then removed). This is
+  guidance only; the daemon does not lint or reject unbroken questions.
+- **Why:** Long unbroken grill questions are agent-authored, not a render bug. The daemon
+  stores the question verbatim and the UI renders `white-space: pre-wrap`, so newlines
+  already display (sessions that contain `\n\n` render fine). No formatting guidance existed,
+  so the cheapest correct move is to add it, with a wall-versus-formatted anti-example,
+  before reaching for enforcement. A "long + zero newlines" lint was considered and deferred:
+  guidance was never tried, and a hard reject mid-grill adds a failure mode plus a threshold
+  to tune.
+- **Revisit when:** Walls keep appearing despite the guidance; then add the deferred
+  "long + unbroken" lint next to `E_SOCRATIC_FREE_TEXT_ONLY` as the backstop.
+
+## Files field is authored as a GFM table and rendered as-is (2026-06-28)
+
+- **Decision:** A phase's **Files** field is authored directly as a
+  `| File | What changed |` GFM table, and the review renderer renders whatever markdown
+  the author wrote. There is no render-time list→table conversion; a legacy plain list is
+  still accepted and rendered unchanged.
+- **Why:** A reviewer rejected render-time parsing of a list into a table as fragile (the
+  renderer would have to guess structure from free text and could silently mangle it).
+  Authoring the table in markdown keeps markdown the single source of truth, makes the
+  per-file "what changed" an explicit part of what the author wrote (so a comment can
+  anchor to one row), and lets every old plan render exactly as before with no migration.
+- **Revisit when:** A structured, non-markdown Files format is ever needed (e.g. a machine
+  consumer that wants typed file metadata rather than rendered prose).
+
+## The Files label is dropped and Files renders last (2026-06-28)
+
+- **Decision:** The review always removes the "Files" label and renders the field
+  full-width, and the phase fields read in a fixed order with **Files last**: Goal,
+  Verification, Out of scope, then Files, regardless of source order (source order
+  previously put Files second).
+- **Why:** The file list is the least-read subsection of a phase; a reviewer reads the
+  goal and the verification far more often than the touched-files inventory. Demoting Files
+  to last and dropping its label puts verification first on the reading path and lets the
+  full-width file table breathe without a redundant heading.
+- **Revisit when:** File lists become a primary read path again (e.g. review starts keying
+  off touched files), making a label and an earlier slot worth the reading cost.
+
+## Files table renders at ui-14, not body-16 (2026-06-28)
+
+- **Decision:** The per-phase **Files table** renders at `--fs-ui` (14px), an explicit
+  exception to the body-16 rule that governs other review table cells. A legacy Files
+  **list** keeps its own mono 16px treatment.
+- **Why:** File paths are operational, mono content, not primary reading prose; this is the
+  same reasoning that already sits code and diff at ui 14 rather than body 16. Setting the file
+  table at the reading-prose size would over-weight an inventory the reviewer scans, not
+  reads.
+- **Revisit when:** The type scale is restructured (e.g. a dedicated operational/data tier
+  is added), changing where operational content belongs.
+
+## Lint requires a filled "What changed" cell in a Files table, but stays permissive on list-vs-table (2026-06-28)
+
+- **Decision:** When **Files** is a table, L1 requires ≥2 columns and a non-empty 2nd
+  ("What changed") cell on every body row (`E_FILES_NO_SUMMARY`). A list is accepted
+  as-is; `E_FILES_EMPTY` fires only when Files has neither a table nor a list. The linter
+  does not force a list to become a table.
+- **Why:** The agent must always state what changed per file, which a table with a filled
+  summary column guarantees and a bare path list does not. But forcing every legacy
+  list-style plan to migrate to a table on its next resubmit would be a gratuitous churn
+  cost on plans that predate the table format, so list-vs-table stays the author's choice
+  while the per-file summary is mandatory only where the table structure promises it.
+- **Revisit when:** Lists are fully deprecated (every plan is expected to use the table),
+  at which point the list path can be removed and the summary required universally.
+
+## A Files table is exempt from the per-phase visual cap (2026-06-28)
+
+- **Decision:** A phase's Files table does not count against the per-read-path-section
+  visual cap (default 2) that governs callouts and decision matrices.
+- **Why:** The Files table is required structure, present in every phase, not a decorative
+  visual the author chose to add. Counting it would silently consume one of the two
+  visual slots in every phase, halving the callout/matrix budget for content that is
+  genuinely optional, which is the opposite of what the cap exists to ration.
+- **Revisit when:** The visual-cap model changes (e.g. required structural elements get a
+  separate budget, or the cap is replaced by a different "no wall of widgets" mechanism).

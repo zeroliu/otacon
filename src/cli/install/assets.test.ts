@@ -137,6 +137,19 @@ describe("single-source wrappers (D7)", () => {
     expect(dogfoodSkillMd()).toContain("./bin/otacon start --title <t> --socratic");
   });
 
+  test("every wrapper teaches focused, formatted questions (no walls)", () => {
+    for (const text of [skillMd(), dogfoodSkillMd()]) {
+      // Ask one decision per card, short by default.
+      expect(text).toContain("One question, well-shaped.");
+      // Long questions go through a temp file passed via --question "$(cat ...)".
+      expect(text).toContain('ask --question "$(cat');
+      // The wall-versus-formatted anti-example is present.
+      expect(text).toContain("Wall (avoid):");
+      // Socratic context-feeding points back at the question-shape rule.
+      expect(text).toContain("never one wall");
+    }
+  });
+
   test("every wrapper teaches the comment & approve fold-in batch (final:true)", () => {
     for (const text of [skillMd(), dogfoodSkillMd()]) {
       // A `final:true` comments batch ends the review: the next clean submit
