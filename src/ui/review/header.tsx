@@ -157,6 +157,7 @@ export function ReviewHeader({
           sessions (no impl) gain zero clutter. */}
       {session.impl && !compact && (
         <div className="rh-impl">
+          <span className="rh-impl-label">Implementation</span>
           <span className="rh-impl-branch" title={session.impl.branch}>
             {session.impl.branch}
           </span>

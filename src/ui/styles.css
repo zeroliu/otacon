@@ -765,6 +765,16 @@ code {
   display: none;
 }
 
+/* The "Implementation" eyebrow: an uppercase field label leading the line so the
+ * branch / worktree / PR values that follow are self-explanatory, not bare. Same
+ * eyebrow voice (tracked, uppercase, soft ink) used elsewhere; not interactive. */
+.rh-impl-label {
+  flex: none;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
 .rh-impl-branch {
   flex: none;
   white-space: nowrap;
