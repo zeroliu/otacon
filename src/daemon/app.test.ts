@@ -2058,6 +2058,45 @@ describe("transcript tailer lifecycle (live-progress-activity-redesign)", () => 
     expect(stubs[0]?.stopped).toBe(1);
   });
 
+  test("startTailer wires a markActive that bumps lastContactAt AND publishes a session frame (keep-agent-live-during-implementation)", async () => {
+    // Capture the deps handed to the tailer so we can invoke its markActive and
+    // observe the liveness refresh — without a real fs poll.
+    let captured: { markActive?: () => void } | undefined;
+    const wired = createApp({
+      store,
+      uiDir,
+      presence,
+      notify: () => {},
+      makeTailer: (deps) => {
+        captured = deps;
+        return { start() {}, stop() {} };
+      },
+    });
+    // Open the index SSE stream so we can see the browser-facing frames: a
+    // `stream` frame carries no lastContactAt, so the dot only moves when a
+    // `session` frame is published — exactly what markActive must trigger.
+    const reader = sseReader(await wired.request("/api/stream"));
+    expect((await reader.next()).event).toBe("snapshot");
+
+    const { id } = (await (await post(wired, "/api/sessions", { title: "t", repo })).json()) as { id: string };
+    // Creation publishes a session frame; a fresh session has no contact yet.
+    const created = await reader.next();
+    expect(created.event).toBe("session");
+    expect((created.data as { session: { lastContactAt?: number } }).session.lastContactAt).toBeUndefined();
+
+    // Captured transcript activity refreshes liveness: it must publish a session
+    // frame carrying a defined lastContactAt, or the browser's AgentDot never sees it.
+    expect(typeof captured?.markActive).toBe("function");
+    captured?.markActive?.();
+    const refreshed = await reader.next();
+    expect(refreshed.event).toBe("session");
+    const summary = (refreshed.data as { session: { id: string; lastContactAt?: number } }).session;
+    expect(summary.id).toBe(id);
+    expect(typeof summary.lastContactAt).toBe("number");
+
+    await reader.cancel();
+  });
+
   test("FLOOR: with no adapter, no tailer activity occurs yet progress still streams", async () => {
     // The default app (no makeTailer override) uses the real Tailer; the temp
     // repo has no ~/.claude transcript, so findAdapter returns null and the
@@ -2071,6 +2110,102 @@ describe("transcript tailer lifecycle (live-progress-activity-redesign)", () => 
     const stream = (snapshot.data as { stream: { kind: string; label: string }[] }).stream;
     expect(stream.some((e) => e.kind === "highlight" && e.label === "floor still flows")).toBe(true);
     await reader.cancel();
+  });
+});
+
+describe("worktree liveness watch lifecycle (keep-agent-live-during-implementation)", () => {
+  // A stub watch factory records start/stop and captures the deps, so the test
+  // observes the lifecycle wiring + the onActivity refresh without a real fs poll.
+  type WatchStub = {
+    start(): void;
+    stop(): void;
+    started: number;
+    stopped: number;
+    dir: string;
+    onActivity: () => void;
+  };
+  function watchedApp() {
+    const stubs: WatchStub[] = [];
+    const watched = createApp({
+      store,
+      uiDir,
+      presence,
+      notify: () => {},
+      makeWorktreeWatch: (deps) => {
+        const stub: WatchStub = {
+          started: 0,
+          stopped: 0,
+          dir: deps.dir,
+          onActivity: deps.onActivity,
+          start() {
+            this.started += 1;
+          },
+          stop() {
+            this.stopped += 1;
+          },
+        };
+        stubs.push(stub);
+        return stub;
+      },
+    });
+    return { watched, stubs };
+  }
+  const post = (a: Hono<{ Bindings: NodeBindings }>, path: string, body: unknown = {}) =>
+    a.request(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+  test("approve {implement:true} starts a worktree watch wired so onActivity publishes a fresh lastContactAt", async () => {
+    const { watched, stubs } = watchedApp();
+    const { id } = (await (await post(watched, "/api/sessions", { title: "t", repo })).json()) as { id: string };
+    await watched.request(`/api/sessions/${id}/submit`, { method: "POST", body: validPlanFor(id) });
+    await post(watched, `/api/sessions/${id}/approve`, { implement: true });
+
+    // Exactly one watch, started, pointed at the recorded implement worktree.
+    expect(stubs).toHaveLength(1);
+    expect(stubs[0]?.started).toBe(1);
+    expect(stubs[0]?.stopped).toBe(0);
+    expect(stubs[0]?.dir).toBe(store.getSession(id)?.impl?.worktree);
+
+    // Open the index SSE stream AFTER the implementing flip so the next live
+    // frame is the one onActivity triggers: only a `session` frame carries
+    // lastContactAt, so the dot moves only when onActivity → refreshLiveness
+    // publishes one (a `stream` frame would never move the dot).
+    const reader = sseReader(await watched.request("/api/stream"));
+    expect((await reader.next()).event).toBe("snapshot");
+
+    stubs[0]?.onActivity();
+    const refreshed = await reader.next();
+    expect(refreshed.event).toBe("session");
+    const summary = (refreshed.data as { session: { id: string; lastContactAt?: number } }).session;
+    expect(summary.id).toBe(id);
+    expect(typeof summary.lastContactAt).toBe("number");
+    await reader.cancel();
+  });
+
+  test("Save (approve without implement) starts NO worktree watch", async () => {
+    const { watched, stubs } = watchedApp();
+    const { id } = (await (await post(watched, "/api/sessions", { title: "t", repo })).json()) as { id: string };
+    await watched.request(`/api/sessions/${id}/submit`, { method: "POST", body: validPlanFor(id) });
+    await post(watched, `/api/sessions/${id}/approve`, {});
+    expect(stubs).toHaveLength(0); // approved is terminal — no build, no worktree watch
+  });
+
+  test("implement-done stops the worktree watch", async () => {
+    const { watched, stubs } = watchedApp();
+    const { id } = (await (await post(watched, "/api/sessions", { title: "t", repo })).json()) as { id: string };
+    await watched.request(`/api/sessions/${id}/submit`, { method: "POST", body: validPlanFor(id) });
+    await post(watched, `/api/sessions/${id}/approve`, { implement: true });
+    expect(stubs[0]?.stopped).toBe(0); // still building → still watching
+    await post(watched, `/api/sessions/${id}/implement-done`, { pr: "https://example.com/pr/1" });
+    expect(stubs[0]?.stopped).toBe(1); // build over → watch torn down
+  });
+
+  test("deleting an implementing session stops the worktree watch", async () => {
+    const { watched, stubs } = watchedApp();
+    const { id } = (await (await post(watched, "/api/sessions", { title: "t", repo })).json()) as { id: string };
+    await watched.request(`/api/sessions/${id}/submit`, { method: "POST", body: validPlanFor(id) });
+    await post(watched, `/api/sessions/${id}/approve`, { implement: true });
+    await watched.request(`/api/sessions/${id}`, { method: "DELETE" });
+    expect(stubs[0]?.stopped).toBe(1);
   });
 });
 

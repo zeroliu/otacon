@@ -41,6 +41,8 @@ export interface TailerDeps {
   publish: (events: StreamEvent[]) => void;
   /** The session's stream config (caps) for `normalize`. */
   config: () => StreamConfig;
+  /** Bump session liveness when genuinely new activity is ingested; skipped on the first catch-up batch. */
+  markActive?: () => void;
   /** Test seam: defaults to the real registry lookup. */
   findAdapter?: (repoRoot: string) => { adapter: TranscriptAdapter; handle: TranscriptHandle } | null;
   /** Test seam: poll interval in ms. */
@@ -57,6 +59,7 @@ export interface TailerDeps {
 export class Tailer {
   private readonly deps: Required<Pick<TailerDeps, "repoRoot" | "nextSeq" | "append" | "publish" | "config">> &
     Pick<TailerDeps, never>;
+  private readonly markActiveFn?: () => void;
   private readonly findAdapter: (repoRoot: string) => { adapter: TranscriptAdapter; handle: TranscriptHandle } | null;
   private readonly pollMs: number;
   private readonly setIntervalFn: (cb: () => void, ms: number) => ReturnType<typeof setInterval>;
@@ -67,9 +70,15 @@ export class Tailer {
   private handle: TranscriptHandle | undefined;
   private cursor: Cursor = { ...INITIAL_CURSOR };
   private running = false;
+  // The first non-empty batch is the catch-up replay of existing transcript
+  // lines; we prime on it WITHOUT bumping liveness, so a daemon restart stays
+  // offline until genuinely new activity arrives. markActive fires only from the
+  // second non-empty batch onward.
+  private primed = false;
 
   constructor(deps: TailerDeps) {
     this.deps = deps;
+    this.markActiveFn = deps.markActive;
     this.findAdapter = deps.findAdapter ?? defaultFindAdapter;
     this.pollMs = deps.pollMs ?? DEFAULT_POLL_MS;
     this.setIntervalFn = deps.setInterval ?? ((cb, ms) => setInterval(cb, ms));
@@ -117,6 +126,10 @@ export class Tailer {
       const normalized = raw.map((e) => normalize(e, cfg, this.deps.nextSeq(), at));
       this.deps.append(normalized);
       this.deps.publish(normalized);
+      // Genuinely new activity bumps liveness — but the first non-empty batch is
+      // the catch-up replay, so prime on it and only bump from the next one on.
+      if (this.primed) this.markActiveFn?.();
+      else this.primed = true;
     } catch {
       // A parse/store/publish hiccup on one tick must not kill the loop — the
       // session falls back to the floor for this tick and we retry next time.

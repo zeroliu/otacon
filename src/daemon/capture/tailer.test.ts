@@ -168,3 +168,61 @@ describe("Tailer is fail-soft", () => {
     expect(true).toBe(true);
   });
 });
+
+describe("Tailer markActive (keep-agent-live-during-implementation)", () => {
+  /** Build a tailer wired with a markActive spy and a real-adapter temp file. */
+  function activeHarness() {
+    let seq = 0;
+    let active = 0;
+    const handle: TranscriptHandle = { agent: "claude", path };
+    const tailer = new Tailer({
+      repoRoot: "/repo",
+      nextSeq: () => ++seq,
+      append: () => {},
+      publish: () => {},
+      config,
+      markActive: () => {
+        active += 1;
+      },
+      findAdapter: () => ({ adapter: claudeAdapter, handle }),
+      setInterval: () => 0 as unknown as ReturnType<typeof setInterval>,
+      clearInterval: () => {},
+    });
+    return { tailer, calls: () => active };
+  }
+
+  test("the first (catch-up) non-empty batch does NOT call markActive", () => {
+    writeFileSync(path, lineFor("replayed line"));
+    const { tailer, calls } = activeHarness();
+    tailer.start();
+    tailer.tick(); // catch-up replay → prime only, no bump
+    expect(calls()).toBe(0);
+    tailer.stop();
+  });
+
+  test("a primed tailer bumps markActive when the next tick ingests a new line", () => {
+    writeFileSync(path, lineFor("replayed line"));
+    const { tailer, calls } = activeHarness();
+    tailer.start();
+    tailer.tick(); // catch-up → primed, no bump
+    expect(calls()).toBe(0);
+    appendFileSync(path, lineFor("genuinely new"));
+    tailer.tick(); // real new activity → bump
+    expect(calls()).toBe(1);
+    tailer.stop();
+  });
+
+  test("an empty-batch tick never calls markActive and never primes", () => {
+    writeFileSync(path, ""); // nothing to parse
+    const { tailer, calls } = activeHarness();
+    tailer.start();
+    tailer.tick(); // empty → no prime, no bump
+    tailer.tick(); // still empty
+    expect(calls()).toBe(0);
+    // The first NON-empty batch is still treated as catch-up (primes, no bump).
+    writeFileSync(path, lineFor("first real line"));
+    tailer.tick();
+    expect(calls()).toBe(0);
+    tailer.stop();
+  });
+});

@@ -703,12 +703,21 @@ transcript entries still awaiting the user's answer, from which the index's
 publishes a fresh `session` frame so that count is always live. They also carry
 `latestActivity` (the newest progress note, driving the draft chip), plus the
 agent-presence pair `parked` (a live `otacon wait` long-poll exists) and
-`lastContactAt` (epoch-ms of the agent's last contact — any mutating verb or each
-`wait` park bumps it). Presence is in-memory and ephemeral: the daemon keeps no
-timer, the UI derives live/offline from `parked || recency`, and a daemon restart
-reads offline until the next contact (correct). A `wait` park publishes a `session`
-frame so the refreshed `lastContactAt` and `parked` reach the dot within one park
-slice.
+`lastContactAt` (epoch-ms of the agent's last contact). The UI derives liveness as
+`parked OR (now − lastContactAt < 5 min)`, and four signals refresh
+`lastContactAt`: any mutating CLI verb, each `wait` park, captured transcript
+activity (the tailer's newly-ingested events, below), and worktree file changes
+while the session is `implementing` (the worktree liveness watch, below). The last
+two keep the dot lit through the parent orchestrator's silent stretches — a
+multi-minute subagent run that writes nothing to the parent transcript — without
+hooks, agent cooperation, or a timeout cap; liveness decays naturally once real
+activity stops. Presence is in-memory and ephemeral: the daemon keeps no timer, the
+UI derives live/offline from `parked || recency`, and a daemon restart reads offline
+until the next genuinely-new contact (correct — the catch-up replay of an existing
+transcript does not count). A `wait` park, and any of the other three signals,
+publishes a `session` frame so the refreshed `lastContactAt` and `parked` reach the
+dot within one park slice (a `stream` frame never carries `lastContactAt`, so only a
+`session` frame moves the dot).
 State-changing `/api` requests carrying
 a foreign `Origin` header are refused 403: the loopback bind alone does not stop a
 malicious webpage from firing `fetch()` at 127.0.0.1, and only browsers send `Origin`.
@@ -1467,7 +1476,31 @@ tailer so the build's activity keeps streaming. The tailer polls the transcript 
 short interval (a plain poll loop, chosen over `fs.watch` for cross-platform
 reliability), so a burst of writes between two polls naturally coalesces into one append
 and one `stream` frame. It re-locates while no transcript is found yet — a session can be
-created a beat before the agent's transcript file appears.
+created a beat before the agent's transcript file appears. Genuinely-new ingested
+activity also refreshes liveness (above): the tailer skips this only on its first
+(catch-up) batch, so a daemon restart stays offline until real new activity arrives
+rather than falsely reviving a dead session from its replayed transcript.
+
+**Worktree liveness watch (while `implementing`).** A captured transcript goes silent
+during a subagent run: the parent orchestrator delegates to a `Task` child and emits
+nothing for minutes, even though the build is editing, building, and testing the whole
+time. So while a session is `implementing` the daemon also runs a per-session *worktree
+watch* that polls `impl.worktree` for the newest file mtime (excluding `node_modules`
+and `.git`) and refreshes liveness on any increase — a direct signal of real work that
+needs no attribution (the worktree is unique per session), no hooks, and no agent
+cooperation. It mirrors the tailer's posture: a plain poll loop (not `fs.watch`), an
+`unref`'d timer, fail-soft (any fs error contributes nothing and never throws), and
+idempotent start/stop. It primes on its first observed mtime *without* bumping (the
+worktree is freshly written at implement-start, and already populated on a restart, so
+that first reading is a baseline, not new activity) and tolerates the worktree not
+existing yet (the dir may appear a beat after the watch starts). It is bound to the
+build lifecycle: it starts at the implementing flip (and re-attaches for every still-
+`implementing` session after a daemon restart) and stops on implement-done or delete.
+The poll cadence is a 30s constant — it only has to stay under the 5-min liveness
+window, since a single worktree write inside that window keeps the dot live, so a coarse
+poll suffices and cuts scan cost. A subagent that only *reads* or thinks for over five
+minutes with zero worktree writes still ages out to "stalled" — intended, since liveness
+tracks real activity rather than faking it.
 
 **Adapter authoring contract.** Each coding agent is supported by a small
 `TranscriptAdapter` (one per agent); the daemon holds an ordered registry of them.
