@@ -18,9 +18,9 @@
 #            Also mints two terminal sessions: an approved one (Save-only, lands
 #            in "Done") and an implemented one with an open PR (lands in "PR
 #            review", shows the impl header line).
-#   visuals  r1 is a plan built from callouts + a decision matrix + inline pills +
-#            a Given/When/Then scenario card block, with a comment anchored INTO a
-#            callout. For expressive-plan-visuals.
+#   visuals  r1 is a plan built from inline callout badges + a decision matrix +
+#            inline pills + a Given/When/Then scenario card block, with a comment
+#            anchored INTO a callout badge line. For expressive-plan-visuals.
 #   notify   full base, then an interactive loop: fire a grill question / a new
 #            revision on demand so you can test focus/blur banner suppression.
 #   activity full base, then streams `otacon progress` notes live so you can watch
@@ -40,6 +40,16 @@ FLAVOR="${1:-full}"
 [ -x "./bin/otacon" ] || { echo "error: no ./bin/otacon here — run from a checkout root" >&2; exit 1; }
 OTACON="$(pwd)/bin/otacon"
 FIXTURES="$(pwd)/test/fixtures"
+
+# Lead the realistic plan's Risks bullets with [!risk] badges so the populated
+# session exercises the inline callout-badge primitive. Rewrites only the
+# per-session copy — test/fixtures/valid-plan.md stays pristine for the unit and
+# e2e suites that anchor to its exact text.
+enrich_risk_badges() {
+  sed -e 's|^- Key rotation downtime|[!risk] Key rotation downtime|' \
+      -e 's|^- Clock skew between|[!risk] Clock skew between|' \
+      "$1" > "$1.badge" && mv "$1.badge" "$1"
+}
 
 # Read one field off a JSON object on stdin (the repo's jq-free idiom).
 jf() { node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8"))'"$1"; }
@@ -68,7 +78,11 @@ echo "# starting session ($FLAVOR) in $REPO"
 # (~/.otacon/sessions/<id>/plan.md, isolated per worktree). The daemon reads the
 # draft from THERE, not from this scratch repo's .otacon/ — so derive SDIR from
 # it and write every plan there.
-START="$("$OTACON" start --title "demo: $FLAVOR" 2>/dev/null)"
+# The demo session carries a verbatim --prompt so the review's "Prompt" card has
+# real content: a multi-paragraph ask that exercises the collapsed one-line
+# preview AND the expand-to-full-text behavior (newlines preserved on expand).
+PROMPT=$'When reviewing a plan I keep forgetting what I originally asked the agent for.\n\nAdd a "Prompt" card at the top of the review that shows my original request verbatim. Keep it collapsed by default so it does not take over the screen, but let me click to expand and read the whole thing.'
+START="$("$OTACON" start --title "demo: $FLAVOR" --prompt "$PROMPT" 2>/dev/null)"
 SID="$(printf '%s' "$START" | jf .session)"
 [[ "$SID" == otc_* ]] || { echo "error: start did not return a session id" >&2; exit 1; }
 SDIR="$(dirname "$(printf '%s' "$START" | jf .plan)")"
@@ -78,10 +92,10 @@ mkdir -p "$SDIR"
 # ---- r1 ---------------------------------------------------------------------
 if [ "$FLAVOR" = visuals ]; then
   # Built inline so it is self-contained and exercises every render primitive:
-  # semantic callouts, a decision matrix, inline pills, and a Given/When/Then
-  # scenario-card block under a phase's Verification. At most one budget-exempt
-  # visual (callout/matrix) per section keeps it under any reasonable per-section
-  # visual cap; inline pills are always free, and a ```gwt block is fence- and
+  # inline callout badges (all four hues), a decision matrix, inline pills, and a
+  # Given/When/Then scenario-card block under a phase's Verification. The decision
+  # matrix is the one budget-exempt capped visual per section; callout badges and
+  # inline pills are inline and always free, and a ```gwt block is fence- and
   # visual-exempt (validated separately by the linter, plan structure, lint, and anchoring).
   cat > "$SDIR/plan.md" <<EOF
 ---
@@ -96,11 +110,10 @@ created: 2026-06-13
 
 ## Summary
 
-Demonstrates the three render primitives so each can be reviewed: semantic
-callouts, a decision matrix, and inline scope pills.
+Demonstrates the render primitives so each can be reviewed: inline callout
+badges, a decision matrix, and inline scope pills.
 
-> [!decision]
-> Ship callouts, matrix, and pills together rather than one at a time.
+[!decision] Ship callouts, matrix, and pills together rather than one at a time.
 
 ## Decisions
 
@@ -113,10 +126,12 @@ callouts, a decision matrix, and inline scope pills.
 
 ### Phase 1 — Callouts [new]
 
-Goal: Render \`> [!risk|note|decision|assumption]\` blockquotes as semantic-ink panels.
+Goal: Render \`[!risk]\` \`[!note]\` \`[!decision]\` \`[!assumption]\` markers as inline badges.
 Files:
-- src/ui/plan/callout.tsx
+- src/ui/plan/callout.ts
 Verification: A 4-type sample renders; an over-cap section fails lint.
+
+[!risk] A selection spanning a pill token may break comment anchoring — verify it.
 
 \`\`\`gwt
 Given a phase whose Verification holds a gwt fence
@@ -129,9 +144,6 @@ When the daemon lints the submit
 Then it reports E_GWT_MALFORMED and blocks the revision
 \`\`\`
 
-> [!risk]
-> A selection spanning a pill token may break comment anchoring — verify it.
-
 ### Phase 2 — Matrix and pills [breaking]
 
 Goal: Style tables as decision matrices and inline \`[new] [risky] [deletes]\` tokens as pills.
@@ -139,21 +151,23 @@ Files:
 - src/ui/plan/markdown.tsx
 Verification: A ✓ row highlights the winner; links and \`[assumed]\` stay untouched.
 
-> [!assumption]
-> The callout/pill classes survive DOMPurify sanitization.
+[!assumption] The callout and pill classes survive DOMPurify sanitization.
+
+[!note] All four badge hues read clearly in light and dark.
 
 ## Risks
 
-> [!risk]
-> Budget exemption could smuggle in prose — the per-section count cap is the guard.
+[!risk] A budget-exempt decision matrix could smuggle in prose — the per-section visual cap is the guard.
 
 ## Open Questions
 
 - Confirm the callout vocabulary and the pill keyword set.
 EOF
 else
-  # The committed known-good fixture (passes the linter as-is).
+  # The committed known-good fixture (passes the linter as-is), with its Risks
+  # bullets promoted to [!risk] badges so the realistic surface shows them too.
   sed "s/otc_test01/$SID/" "$FIXTURES/valid-plan.md" > "$SDIR/plan.md"
+  enrich_risk_badges "$SDIR/plan.md"
 fi
 
 # ---- grill (ask before drafting, mirroring the real loop) -------------------
@@ -210,12 +224,13 @@ fi
 # what the UI does after its unresolved-thread warning; this is a plain Save, so
 # the project copy lands in the scratch repo's .otacon/plans/ (untracked, otacon
 # never commits it) and a canonical copy in the home archive (~/.otacon/sessions/).
-APPROVED_START="$("$OTACON" start --title "demo: $FLAVOR (approved)" 2>/dev/null)"
+APPROVED_START="$("$OTACON" start --title "demo: $FLAVOR (approved)" --prompt "Make approved plans easy to find: hide them from the active switcher and group them under a collapsed section on the home screen." 2>/dev/null)"
 APPROVED_SID="$(printf '%s' "$APPROVED_START" | jf .session)"
 if [[ "$APPROVED_SID" == otc_* ]]; then
   APPROVED_SDIR="$(dirname "$(printf '%s' "$APPROVED_START" | jf .plan)")"
   mkdir -p "$APPROVED_SDIR"
   sed "s/otc_test01/$APPROVED_SID/" "$FIXTURES/valid-plan.md" > "$APPROVED_SDIR/plan.md"
+  enrich_risk_badges "$APPROVED_SDIR/plan.md"
   "$OTACON" submit --session "$APPROVED_SID" >/dev/null
   curl -s -X POST "$BASE/api/sessions/$APPROVED_SID/approve" \
     -H 'content-type: application/json' -d '{"force":true}' >/dev/null

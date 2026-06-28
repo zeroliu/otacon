@@ -57,7 +57,7 @@ Every decision below was resolved deliberately; rationale follows in the relevan
 | 13  | Storage           | Per-session working state (and the approved plan) in the home store `~/.otacon/sessions/<id>/`, keyed by session id; deleting a session removes that folder outright. `<repo>/.otacon/` holds ONLY project config (`config.json`/`config.local.json`) and, on Save, the project copy under `plans.dir`                                  |
 | 14  | LLM cost          | Zero API spend invariant: daemon/CLI/UI never call a model; all intelligence runs in the user's interactive subscription-backed session. No Agent SDK anywhere                    |
 | 15  | Multi-session     | One daemon, many concurrent sessions; per-session event queues; UI session list (resizable/collapsible sidebar ≥960px; inline home list + ☰ overflow sheet below)                 |
-| 16  | Grilling          | grill-me discipline is a mandatory protocol phase before drafting; decisions must trace to grill answers (linted)                                                                 |
+| 16  | Grilling          | grill-me discipline is a mandatory protocol phase before drafting; decisions must trace to grill answers (linted); questions are asked focused and short, long ones formatted into paragraphs (guidance, not linted)                                                                 |
 | 17  | Name              | CLI `otacon`, daemon `otacond`. Future implementer: `snake` (suggestion, not locked)                                                                                              |
 | 18  | Storage format    | Plain JSON files, written atomically; SQLite rejected (native dep, opaque state)                                                                                                  |
 | 19  | Dev tooling       | bun for dev (installs + `bun test`); shipped artifact builds with `tsc` and runs on plain Node                                                                                    |
@@ -163,29 +163,43 @@ like any diagram, exempt from the fence cap). The order check tolerates absent o
 the sections found against the canonical order filtered to those present), so
 omitting one never trips the ordering rule.
 
-Each `### Phase <n> — <name>` requires: **Goal** (≤3 lines), **Files** (list),
-**Verification** (≤3 lines), optional **Out of scope**. The Verification field
+Each `### Phase <n> — <name>` requires: **Goal** (≤3 lines), **Files**,
+**Verification** (≤3 lines), optional **Out of scope**. **Files** is authored as a
+`| File | What changed |` table (preferred; every row's "What changed" cell filled)
+or, for legacy plans, a plain list. The Verification field
 may also carry a ` ```gwt ` **behavioral-assertion block** (below). Each phase may
 have one `#### Details` block — collapsible in the UI, unbudgeted (soft cap: warn
 over 80 lines).
 
+The review renders the phase fields in a fixed reading order regardless of source
+order: **Goal**, then **Verification**, then **Out of scope**, then **Files** last
+(the file list is the least-read subsection, so verification is promoted above it).
+Files renders
+**labelless** (the "Files" heading is dropped) and **full-width**, whether it is a
+table or a list. The renderer does no list↔table conversion: it renders whatever
+markdown the author wrote.
+
 ### Lead diagram (first screen)
 
-A **lead diagram** — a ` ```mermaid ` state / sequence / flow chart placed directly
-under the `## Summary` headline — is **strongly recommended, not required** (~90% of
-plans, q6): the reviewer should grasp the change's shape before reading any prose. It is
-exempt from both the line budget and the per-section fence cap; a `mermaid` diagram is
-not counted by the fence cap, so it never spends Summary's one-fence allowance and the
-≤5-line headline is unaffected, and the review screen pins the Summary and its lead
-diagram as the first screen (§10). The headline stays the existing ≤5-line Summary. There
-is no forced one-line TL;DR, and phases stay expanded.
+A **lead visual** placed directly under the `## Summary` headline is **strongly
+recommended, not required** (~90% of plans, q6): the reviewer should grasp the change's
+shape before reading any prose. The agent matches the visual to the content's shape
+instead of defaulting to a flowchart: a ` ```mermaid ` state, sequence, or flow chart for
+a lifecycle or branching flow, a **decision-matrix table** for a classification or option
+comparison, or plain prose (with an opt-out marker) when the content is a linear chain
+with no shape worth drawing. A `mermaid` lead is exempt from both the line budget and the
+per-section fence cap, so it never spends Summary's one-fence allowance and the ≤5-line
+headline is unaffected; the review screen pins the Summary and its lead visual as the
+first screen (§10). There is no forced one-line TL;DR, and phases stay expanded.
 
-The linter checks **presence, never usefulness** (a diagram that merely restates the
-summary adds reading load): a Summary with no diagram earns a non-blocking nudge (lint
-L7, §5), never an error. When a chart genuinely wouldn't help — a pure docs or config
-change — an explicit `<!-- no-lead-diagram: <why> -->` marker in Summary suppresses the
-nudge (the marker is chrome, exempt from the line budget). The escape hatch is explicit
-so "no diagram" is always a deliberate choice, never an oversight.
+The linter checks **presence, never usefulness** (a visual that merely restates the
+summary adds reading load): a Summary with no lead visual (neither a ` ```mermaid `
+diagram nor a decision-matrix table) earns a non-blocking nudge (lint L7, §5), never an
+error. When a visual genuinely wouldn't help (a pure docs or config change, or a linear
+chain that reads better as a sentence), an explicit `<!-- no-lead-diagram: <why> -->`
+marker in Summary suppresses the nudge (the marker is chrome, exempt from the line
+budget). The escape hatch is explicit so "no lead visual" is always a deliberate choice,
+never an oversight.
 
 ### The normative / informative contract
 
@@ -226,20 +240,23 @@ them side-by-side on desktop, stacked on phones; an unpaired tag renders as an
 ordinary fence. The plan stays plain renderable markdown everywhere else.
 
 Tree- or hierarchy-shaped content (a taxonomy, a doc or file structure, a nested
-option space, a state hierarchy, a decision tree) is expressed as a ` ```mermaid `
-diagram (the agent picks the shape, `graph TD` by default), not a monospace nested
-outline in a ` ```text ` fence: a diagram shows the shape at a glance where an outline
-forces the reviewer to reconstruct it line by line. This is part of the visuals
-vocabulary the wrapper teaches; the renderer already validates such diagrams (L8) and
-exempts them from the fence cap, so a structural tree can sit alongside the lead diagram.
+option space, a state hierarchy) is expressed as a ` ```mermaid ` diagram (the agent
+picks the shape that matches the structure, not `graph TD` by reflex), not a monospace
+nested outline in a ` ```text ` fence: a diagram shows the shape at a glance where an
+outline forces the reviewer to reconstruct it line by line. This is part of the visuals
+vocabulary the wrapper teaches, which now includes a content-shape-to-diagram-type rubric
+and a set of named diagram anti-patterns; the renderer already validates such diagrams
+(L8) and exempts them from the fence cap, so a structural tree can sit alongside the lead
+visual.
 
 **Review visuals (markdown-native).** Beyond fences, a set of primitives the renderer
 styles from plain markdown — so each stays comment-anchorable, diff-able, and degrades
 to readable text if rendering ever fails:
 
-- **Callouts** — a blockquote whose first line is `[!risk]`, `[!note]`, `[!decision]`,
-  or `[!assumption]` renders as a flat semantic-ink panel (§10). Unknown types stay
-  ordinary blockquotes.
+- **Callouts** — an inline marker `[!risk]`, `[!note]`, `[!decision]`, or
+  `[!assumption]` (anywhere in prose, case-insensitive) renders as a small badge in
+  the type's hue (§10); the rest of the line stays normal prose. Unknown types stay
+  literal.
 - **Decision matrix** — a GFM table whose chosen row leads with a `✓` first cell; the
   renderer accent-inks that row so the winner reads at a glance (§10). Any table with no
   `✓` row degrades to a plain table.
@@ -256,11 +273,14 @@ to readable text if rendering ever fails:
   fence), capped instead at a scenario count (default 6), and must sit under
   Verification; a malformed or misplaced block fails the lint.
 
-The two block visuals are exempt from line budgets but counted against a
+The decision matrix is exempt from line budgets but counted against a
 per-read-path-section **visual cap** (default 2, tunable — the same shape as the
-one-fence rule, and uncapped inside Details), so a 2-line risk can _be_ a callout without
-a section becoming a wall of widgets. **Inline pills are always free** (never counted).
-The `gwt` block is exempt from the fence cap and tracked by its own scenario budget.
+one-fence rule, and uncapped inside Details), so a section can't fill with tables.
+**Callout badges and inline pills are always free** (inline tokens, never counted
+toward the budget or the visual cap). A phase's **Files table** is also exempt from
+the visual cap: it is required structure, not a decorative visual, so counting it
+would silently halve a phase's matrix budget. The `gwt` block is exempt from the
+fence cap and tracked by its own scenario budget.
 `mermaid` diagrams are likewise exempt from the per-section fence cap (counted only
 toward the L7 lead-diagram check), so the fence cap now governs only code and
 before/after fences.
@@ -298,13 +318,13 @@ errors on stdout; the agent fixes and resubmits. Invalid revisions never reach t
 
 | Rule | Check                                                                                                                                            | Severity                               |
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
-| L1   | Schema completeness: required sections present, in canonical order (absent optionals tolerated); phases have Goal/Files/Verification; `gwt` blocks well-formed and under Verification | error                                  |
+| L1   | Schema completeness: required sections present, in canonical order (absent optionals tolerated); phases have Goal/Files/Verification; a Files **table** needs a second column titled "What changed" (≥2 columns, header matched case-insensitively) with every body row's cell filled (`E_FILES_NO_SUMMARY`), while a Files **list** is accepted as-is and `E_FILES_EMPTY` fires only when Files has neither a table nor a list; `gwt` blocks well-formed and under Verification | error                                  |
 | L2   | Read-path budgets (Summary ≤5 lines, Goal ≤3, etc.)                                                                                              | error                                  |
 | L3   | Decision traceability: every `D<n>` cites a `q<n>` (`← q7` or `← q7, q9`; `<-` accepted) or `[assumed]`; cited ids must exist in the grill transcript. In a **socratic** session (§8) `[assumed]` is banned (`E_ASSUMED_NOT_ALLOWED`) and every citation must point at a free-text answer, not a chip (`E_DECISION_NOT_REASONED`) | error (warning in `--quick` sessions; the two socratic codes are always errors) |
 | L4   | Detail containment heuristics: file paths in Details must appear in that phase's Files; new dependency names in Details must appear in Decisions | warning                                |
 | L5   | Revision accompaniment: a submit must include a reply for every open comment thread that has none — a comment the reviewer has **resolved** (the close/withdraw verb) is skipped, never blocking the submit — and every revision ≥ 2 must carry a changelog | error                                  |
 | L6   | Detail soft caps (>80 lines/section)                                                                                                             | warning, surfaced as a badge in the UI |
-| L7   | First-screen recommendation: a lead diagram (`mermaid`) near the top is strongly recommended (~90% of plans); a `<!-- no-lead-diagram -->` marker in Summary opts out | warning (nudge, never blocks) |
+| L7   | First-screen recommendation: a lead visual near the top is strongly recommended (~90% of plans), satisfied by a `mermaid` diagram or a decision-matrix table; a `<!-- no-lead-diagram -->` marker in Summary opts out | warning (nudge, never blocks) |
 | L8   | Diagram renderability: every `mermaid` fence parses headlessly (mermaid in a happy-dom DOM); a fence mermaid cannot parse is `E_DIAGRAM_UNRENDERABLE`, so an unrenderable diagram never reaches the reviewer | error (fails open: no headless setup → no check) |
 
 Budget numbers are config, expected to be tuned during the first week of real use.
@@ -358,7 +378,7 @@ the model is suspended — no inference, no token spend.
 
 | Command                                                                     | Effect                                                                        |
 | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `otacon start --title <t> [--quick] [--socratic]`                           | Mint session, register it, print review URL (`--socratic` overrides the `socratic.default` config) |
+| `otacon start --title <t> [--prompt <t>] [--quick] [--socratic]`            | Mint session, register it, print review URL (`--socratic` overrides the `socratic.default` config; `--prompt` records the user's verbatim request, trimmed and uncapped, on the session record) |
 | `otacon submit [plan.md] [--resolutions res.json]`                          | Lint → reject with errors, or store revision N, notify UI                     |
 | `otacon wait [--timeout 540] [--session <id>]`                              | Long-poll this session's queue; print next event as JSON                      |
 | `otacon ask --question "…" [--options "A\|B\|C"] [--recommend A] [--multi]` | Post agent question card to UI (or a batch of independent questions via `--batch <file\|->`); answer arrives via `wait` |
@@ -807,7 +827,10 @@ Multiple concurrent planning sessions (different repos, worktrees, or features) 
 one daemon.
 
 **Identity & routing.** `otacon start` mints a session ID and registers it in
-`~/.otacon/registry.json` (ID → repo path, branch, title, status). The registry is
+`~/.otacon/registry.json` (ID → repo path, branch, title, status, and the optional
+`prompt`, the user's verbatim request captured via `--prompt`, trimmed and stored
+uncapped, absent when not supplied). The registry record flows verbatim into the
+`SessionSummary`, so the UI surfaces the prompt for free. The registry is
 the single source of truth — there is no local session pointer:
 
 - Commands default to the repo's single active session: the CLI reads the registry
@@ -880,6 +903,19 @@ Structural integration:
 
 - **Traceability** (§4, lint L3): plan decisions cite the grill Q&A that produced them
   (`D3 ← q7`) or wear `[assumed]`. No plan reaches review with silently-made decisions.
+- **The request is echoed at the top**: a **"Prompt" card** is the first child of the
+  review column, present from session start (it does not wait on a plan). It shows the
+  reviewer's verbatim request captured via `--prompt` as plain text with line breaks
+  preserved (not parsed as markdown — it is the user's own words handed back). It is
+  **collapsed by default** to a one-line preview behind the "Prompt" label, expanding on
+  click to the full text and collapsing again on a second click. Unlike the agent's
+  transmission cards (the grill card, the revision banner) it carries the reviewer's
+  words the other direction, so it wears a quiet surface fill with a left accent rule
+  rather than the accent-tinted top-border treatment. When no prompt was captured the
+  card renders nothing — no empty shell, no label. The wrapper protocol card teaches the
+  agent to pass this request at session start (the original ask verbatim via `--prompt`,
+  with only the `/otacon` skill-invocation boilerplate stripped), so the card populates
+  on its own; the daemon never synthesizes it.
 - **The transcript is part of the review UI**: a collapsible **"Interview" panel is the
   single grill surface** (no separate pinned queue above the plan). It has two labeled
   zones, each newest-first: an **"open"** group on top where unanswered questions are
@@ -1053,15 +1089,19 @@ small to large: `--fs-meta` (12px) for labels and telemetry (eyebrows, chip and 
 text, ids, repo·branch, timestamps, fence headers, field labels) and for mono control
 labels (buttons, tabs, toggles, menu and delete/approve actions), `--fs-ui` (14px) for
 sans text inputs and for monospace code and diff,
-`--fs-body` (16px) for primary reading content (prose, field values, callout bodies,
+`--fs-body` (16px) for primary reading content (prose, field values,
 table cells, quotes, grill questions), `--fs-title` (18px) for headings (card titles,
 phase names, markdown h1/h2, and the icon-glyph buttons that need presence), and
 `--fs-display` (22px) for the one masthead session title and the big phase numeral. All
 five roles carry rendered sizes: the scale is fully wired, no token waits on adoption.
 Every substantive piece of dossier reading content renders at body (16): prose, field
-values, callout bodies, the Files list, table cells (both `td` and the mono-uppercase
+values, table cells (both `td` and the mono-uppercase
 `th` header cells, which keep their weight and tracking but share the body size), and
-Given/When/Then clause text. Reading content that once wore the mono telemetry treatment
+Given/When/Then clause text. The **Files table** (the per-phase file-change table) is the
+one explicit exception to the body-16 table-cell rule: it reads at `--fs-ui` (14px),
+because file paths are operational, mono content, not primary reading prose, the same
+reasoning that sits code and diff at ui 14. A legacy **Files list** is not a table at all;
+it keeps its own mono 16px treatment. Reading content that once wore the mono telemetry treatment
 is promoted into the body tier in the sans face: the anchored comment quotes
 (composer, pending, and thread quotes) and the empty-rail copy now read as body-16 sans
 prose, while their accompanying slugs, ids, and timestamps stay meta-12 mono. Headings
@@ -1087,12 +1127,13 @@ the five roles stay the single source of truth. The telemetry character comes fr
 plus uppercase plus tracking plus color, not from sub-12px size; icon-only controls keep
 an adequate hit box.
 
-**Callouts** apply this vocabulary to plan prose: a `> [!risk]` blockquote becomes a
-flat panel with a 2px top rule and a glyph+label inked in the type's hue — risk amber,
-note blue, decision accent, assumption muted — no fill, no radius, drawn only from the
-tested chip/accent palette so the codec discipline and light/dark contrast both hold.
-The marker line is chrome (unselectable, never anchored); the body stays anchorable
-markdown so a comment pins to one specific callout. A **decision matrix** is a plain
+**Callouts** apply this vocabulary to plan prose: an inline `[!risk]` marker becomes a
+small mono uppercase badge inked in the type's hue — risk amber, note blue, decision
+accent, assumption muted — a faint hue-tinted fill, drawn only from the tested
+chip/accent palette so the codec discipline and light/dark contrast both hold. The
+badge is chrome (`user-select: none`, never anchored); the prose on the rest of the
+line stays anchorable markdown, so a comment pins to the line's text. A **decision
+matrix** is a plain
 GFM table; the chosen row (first cell `✓`) gets a 2px accent rule on the marker cell
 and a faint accent wash — the winner inked, the alternatives left as ordinary rows.
 **Inline pills** are small mono tags hued by scope (new green, breaking/deletes red,
@@ -1508,7 +1549,7 @@ Operational requirement: the Mac stays awake while a plan is in review
 | `~/.otacon/sessions/<id>/`                        | Per-session working state, keyed by session id: `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), threads (`threads.json`: comment + question threads with answers, agent replies, reviewer-resolve closes, and anchor states inline), the grill transcript (`transcript.json`), the capped live-activity feed (`activity.json`: the newest ~N `otacon progress` notes), the live-activity stream (`stream.jsonl`: the normalized, capped, append-only event stream, §10a), queues, AND the canonical approved plan `YYYY-MM-DD-<slug>.md`. Removed outright when the session is deleted | n/a (global)                              |
 | `~/.otacon/worktrees/<slug>/`                     | Implement build's git worktree on branch `otacon/impl-<slug>` (base dir is `worktree.dir`, default `~/.otacon/worktrees` — outside the repo)                    | n/a (global, outside the repo)             |
 | `<repo>/<plans.dir>/YYYY-MM-DD-<slug>.md`         | Save-time project copy (default `.otacon/plans`; set `plans.dir=docs/plans` to group with tracked plans)       | yours to commit (or not)                   |
-| `~/.otacon/registry.json`                         | Session registry: ID → repo, branch, title, status, `prUrl`, `prState` (the latest PR's GitHub state, refreshed by a `gh` poller; see below), and `impl` (the build's worktree + branch, recorded at Implement-approve; see below)                                                             | n/a (global)                               |
+| `~/.otacon/registry.json`                         | Session registry: ID → repo, branch, title, status, the optional `prompt` (the user's verbatim request from `--prompt`, trimmed and uncapped), `prUrl`, `prState` (the latest PR's GitHub state, refreshed by a `gh` poller; see below), and `impl` (the build's worktree + branch, recorded at Implement-approve; see below)                                                             | n/a (global)                               |
 
 Every session's working state (and its approved plan) lives in the home store keyed
 by its session id (`~/.otacon/sessions/<id>/`), repo-independent. On **Save** it

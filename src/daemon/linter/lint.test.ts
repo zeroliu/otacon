@@ -168,6 +168,87 @@ describe("L1 schema completeness", () => {
     expect(codes(run(doc({ phases })))).toContain("E_FILES_EMPTY");
   });
 
+  describe("Files-as-table requires a non-empty What changed cell", () => {
+    test("a table with every What changed cell filled lints clean", () => {
+      const phases =
+        "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n| File | What changed |\n| - | - |\n| `a.ts` | adds the X endpoint |\n| `b.ts` | wires the route |\nVerification: t\n";
+      const result = run(doc({ phases }));
+      expect(codes(result)).toEqual([]);
+      expect(result.ok).toBeTrue();
+    });
+
+    test("a body row with an empty What changed cell is E_FILES_NO_SUMMARY anchored to that row", () => {
+      const phases =
+        "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n| File | What changed |\n| - | - |\n| `a.ts` | adds the X endpoint |\n| `b.ts` | |\nVerification: t\n";
+      const result = run(doc({ phases }));
+      const noSummary = result.errors.filter((e) => e.code === "E_FILES_NO_SUMMARY");
+      expect(noSummary).toHaveLength(1);
+      // The empty-cell row is the 4th line of the phases body; phases is the 4th
+      // doc part, so the row sits well below the phase heading — anchor to it, not
+      // the field. (Computed below by locating the offending line.)
+      const lines = doc({ phases }).split("\n");
+      const offending = lines.findIndex((l) => l === "| `b.ts` | |") + 1;
+      expect(noSummary[0]).toMatchObject({ rule: "L1", section: "phase-1", line: offending });
+      expect(noSummary[0]?.message).toContain("empty");
+    });
+
+    test("a single-column table is E_FILES_NO_SUMMARY (needs a What changed column)", () => {
+      const phases =
+        "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n| File |\n| - |\n| `a.ts` |\nVerification: t\n";
+      const result = run(doc({ phases }));
+      const noSummary = result.errors.filter((e) => e.code === "E_FILES_NO_SUMMARY");
+      expect(noSummary).toHaveLength(1);
+      expect(noSummary[0]?.message).toContain("column");
+    });
+
+    test("a second column not titled What changed is E_FILES_NO_SUMMARY", () => {
+      const phases =
+        "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n| File | Notes |\n| - | - |\n| `a.ts` | adds X |\nVerification: t\n";
+      const result = run(doc({ phases }));
+      const noSummary = result.errors.filter((e) => e.code === "E_FILES_NO_SUMMARY");
+      expect(noSummary).toHaveLength(1);
+      expect(noSummary[0]?.message).toContain('titled "What changed"');
+    });
+
+    test('a "What Changed" header passes regardless of case/spacing', () => {
+      const phases =
+        "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n|  File  |  What   Changed  |\n| - | - |\n| `a.ts` | adds X |\nVerification: t\n";
+      expect(codes(run(doc({ phases })))).toEqual([]);
+    });
+
+    test("a table fires no E_FILES_EMPTY even though it has no list items", () => {
+      const phases =
+        "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n| File | What changed |\n| - | - |\n| `a.ts` | adds X |\nVerification: t\n";
+      expect(codes(run(doc({ phases })))).not.toContain("E_FILES_EMPTY");
+    });
+
+    test("a legacy Files list still lints clean — no E_FILES_NO_SUMMARY, no E_FILES_EMPTY", () => {
+      const phases =
+        "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n- `a.ts` (adds X)\n- `b.ts`\nVerification: t\n";
+      const result = run(doc({ phases }));
+      expect(codes(result)).not.toContain("E_FILES_NO_SUMMARY");
+      expect(codes(result)).not.toContain("E_FILES_EMPTY");
+      expect(result.ok).toBeTrue();
+    });
+
+    test("an empty Files field (neither list nor table) is still E_FILES_EMPTY", () => {
+      const phases =
+        "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles: none listed\nVerification: t\n";
+      const result = run(doc({ phases }));
+      expect(codes(result)).toContain("E_FILES_EMPTY");
+      expect(codes(result)).not.toContain("E_FILES_NO_SUMMARY");
+    });
+
+    test("the Files table is exempt from the phase visual cap — table + 2 callouts still lints clean", () => {
+      // The cap is maxVisualsPerReadSection (2). A Files table is required
+      // structure, not decoration: it must not consume a decorative-visual slot,
+      // so a phase with a Files table AND the full 2 callouts must stay clean.
+      const phases =
+        "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n| File | What changed |\n| - | - |\n| `a.ts` | adds X |\n\n> [!note]\n> n\n\n> [!risk]\n> r\n\nVerification: t\n";
+      expect(codes(run(doc({ phases })))).not.toContain("E_VISUAL_CAP");
+    });
+  });
+
   test("more than one Details block", () => {
     const phases =
       "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n- a.ts\nVerification: t\n\n#### Details\n\na\n\n#### Details\n\nb\n";
@@ -341,12 +422,15 @@ describe("L2 budgets", () => {
     expect(run(doc({ summary }), { session: SESSION }, config).ok).toBeTrue();
   });
 
-  test("visual cap: two callouts pass, a third fails", () => {
-    const callout = (type: string, body: string) => `> [!${type}]\n> ${body}\n`;
-    const atCap = `## Summary\n\nShip it.\n\n${callout("risk", "a")}\n${callout("note", "b")}`;
+  // Decision matrices are the one capped read-path visual (callouts are inline
+  // badges now, free like pills). A matrix is a `✓`-led GFM table.
+  const matrix = (pick: string) => `| Pick | Option |\n| - | - |\n| ✓ | ${pick} |\n`;
+
+  test("visual cap: two matrices pass, a third fails", () => {
+    const atCap = `## Summary\n\nShip it.\n\n${matrix("a")}\n${matrix("b")}`;
     expect(run(doc({ summary: atCap })).ok).toBeTrue();
 
-    const overCap = `${atCap}\n${callout("decision", "c")}`;
+    const overCap = `${atCap}\n${matrix("c")}`;
     const result = run(doc({ summary: overCap }));
     expect(result.errors.find((e) => e.code === "E_VISUAL_CAP")).toMatchObject({
       section: "summary",
@@ -356,19 +440,22 @@ describe("L2 budgets", () => {
   });
 
   test("visual cap applies to a phase's read path but not Details", () => {
-    const overCap =
-      "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n- a.ts\nVerification: t\n\n> [!risk]\n> a\n\n> [!note]\n> b\n\n> [!decision]\n> c\n";
+    const overCap = `## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n- a.ts\nVerification: t\n\n${matrix("a")}\n${matrix("b")}\n${matrix("c")}`;
     expect(run(doc({ phases: overCap })).errors.find((e) => e.code === "E_VISUAL_CAP")).toMatchObject({
       section: "phase-1",
     });
 
-    const inDetails =
-      "## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n- a.ts\nVerification: t\n\n#### Details\n\n> [!risk]\n> a\n\n> [!note]\n> b\n\n> [!decision]\n> c\n";
+    const inDetails = `## Phases\n\n### Phase 1 — Build\n\nGoal: g\nFiles:\n- a.ts\nVerification: t\n\n#### Details\n\n${matrix("a")}\n${matrix("b")}\n${matrix("c")}`;
     expect(run(doc({ phases: inDetails })).ok).toBeTrue();
   });
 
+  test("callout badges never trip the visual cap (free, like pills)", () => {
+    const summary = `## Summary\n\n> [!risk]\n> a\n\n> [!note]\n> b\n\n> [!decision]\n> c\n\n> [!assumption]\n> d\n`;
+    expect(run(doc({ summary })).errors.find((e) => e.code === "E_VISUAL_CAP")).toBeUndefined();
+  });
+
   test("visual cap is config-driven", () => {
-    const summary = `## Summary\n\nShip it.\n\n> [!risk]\n> a\n\n> [!note]\n> b\n\n> [!decision]\n> c\n`;
+    const summary = `## Summary\n\nShip it.\n\n${matrix("a")}\n${matrix("b")}\n${matrix("c")}`;
     const config: OtaconConfig = {
       ...DEFAULT_CONFIG,
       budgets: { ...DEFAULT_CONFIG.budgets, maxVisualsPerReadSection: 3 },
@@ -456,16 +543,30 @@ describe("L6 details soft cap", () => {
 describe("lead diagram nudge (L7)", () => {
   const noDiagram = "## Summary\n\nShip it.\n";
   const withDiagram = "## Summary\n\nShip it.\n\n```mermaid\nflowchart LR\n  a --> b\n```\n";
+  const withMatrix =
+    "## Summary\n\nShip it.\n\n| Pick | Option |\n| --- | --- |\n| ✓ | A |\n| | B |\n";
+  const calloutOnly = "## Summary\n\nShip it.\n\n> [!risk]\n> rolling the key drops live sessions\n";
   const optedOut = "## Summary\n\nShip it.\n\n<!-- no-lead-diagram: pure docs change -->\n";
 
   test("a Summary with a lead diagram is clean", () => {
     expect(codes(run(doc({ summary: withDiagram })))).toEqual([]);
   });
 
+  test("a Summary that leads with a decision-matrix table needs no marker (no nudge)", () => {
+    expect(codes(run(doc({ summary: withMatrix })))).toEqual([]);
+  });
+
   test("no diagram nudges — a warning, never a blocking error", () => {
     const result = run(doc({ summary: noDiagram }));
     expect(result.ok).toBeTrue();
     expect(result.errors).toEqual([]);
+    const nudge = result.warnings.find((w) => w.code === "W_LEAD_DIAGRAM_MISSING");
+    expect(nudge).toMatchObject({ rule: "L7", severity: "warning", section: "summary" });
+  });
+
+  test("a callout-only Summary still nudges (a callout doesn't show the change's shape)", () => {
+    const result = run(doc({ summary: calloutOnly }));
+    expect(result.ok).toBeTrue();
     const nudge = result.warnings.find((w) => w.code === "W_LEAD_DIAGRAM_MISSING");
     expect(nudge).toMatchObject({ rule: "L7", severity: "warning", section: "summary" });
   });

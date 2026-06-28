@@ -91,22 +91,44 @@ describe("parsePlan on the valid fixture", () => {
       startLine: 32,
       budgetedLineCount: 1,
       listItemCount: 0,
+      contentLines: [], // the goal text rides the label line, which is not captured
     });
     expect(phase.fields.files).toEqual({
       startLine: 33,
       budgetedLineCount: 3,
       listItemCount: 2,
+      contentLines: [
+        { text: "- src/auth/issuer.ts", line: 34 },
+        { text: "- src/auth/keys.ts", line: 35 },
+      ],
     });
     expect(phase.fields.verification?.budgetedLineCount).toBe(1);
     expect(phase.fields.outOfScope).toBeUndefined();
     expect(phase.details).toEqual({ startLine: 38, lineCount: 6 });
   });
 
-  test("phase 2: bold labels, hyphen dash, out of scope", () => {
+  test("phase 2: bold labels, hyphen dash, Files table, out of scope", () => {
     const phase = plan.sections[2]!.phases![1]!;
     expect(phase).toMatchObject({ n: 2, name: "Middleware verification", headingValid: true });
     expect(phase.fields.goal?.budgetedLineCount).toBe(1);
-    expect(phase.fields.files).toMatchObject({ budgetedLineCount: 2, listItemCount: 1 });
+    // Files authored as a GFM table: no list items, budget-exempt, captured as
+    // content lines so rules.ts can require a filled "What changed" cell.
+    expect(phase.fields.files).toMatchObject({
+      startLine: 49,
+      budgetedLineCount: 1,
+      listItemCount: 0,
+      contentLines: [
+        { text: "| File | What changed |", line: 51 },
+        { text: "| ---- | ------------ |", line: 52 },
+        {
+          text: "| `src/middleware/jwt.ts` | verify the JWT and reject expired or bad-signature requests |",
+          line: 53,
+        },
+        { text: "| `src/middleware/index.ts` | wire the verifier into the middleware chain |", line: 54 },
+      ],
+    });
+    // A Files table is exempt from the per-phase visual cap (required structure).
+    expect(phase.visualCount).toBe(0);
     expect(phase.fields.verification?.budgetedLineCount).toBe(1);
     expect(phase.fields.outOfScope?.budgetedLineCount).toBe(1);
     expect(phase.details).toBeUndefined();
@@ -214,6 +236,33 @@ describe("parsePlan structure handling", () => {
   });
 });
 
+describe("phase field content-line capture", () => {
+  test("a Files list captures each bullet line (label line excluded)", () => {
+    const plan = parsePlan(
+      planWith("## Phases\n\n### Phase 1 — x\n\nGoal: g\nFiles:\n- a.ts\n- b.ts\nVerification: t\n"),
+    );
+    const files = plan.sections[0]!.phases![0]!.fields.files!;
+    expect(files.contentLines).toEqual([
+      { text: "- a.ts", line: 15 },
+      { text: "- b.ts", line: 16 },
+    ]);
+  });
+
+  test("a Files table captures the header, delimiter, and body rows", () => {
+    const plan = parsePlan(
+      planWith(
+        "## Phases\n\n### Phase 1 — x\n\nGoal: g\nFiles:\n| File | What changed |\n| - | - |\n| `a.ts` | adds X |\nVerification: t\n",
+      ),
+    );
+    const files = plan.sections[0]!.phases![0]!.fields.files!;
+    expect(files.contentLines).toEqual([
+      { text: "| File | What changed |", line: 15 },
+      { text: "| - | - |", line: 16 },
+      { text: "| `a.ts` | adds X |", line: 17 },
+    ]);
+  });
+});
+
 describe("gwt block capture", () => {
   test("a gwt fence under Verification is captured, budget-exempt", () => {
     const plan = parsePlan(
@@ -263,54 +312,43 @@ describe("gwt block capture", () => {
   });
 });
 
-describe("callout detection", () => {
-  test("a known callout is budget-exempt and counts as one visual", () => {
+describe("callouts are inline badges, not blockquote visuals", () => {
+  test("a callout blockquote is ordinary budgeted prose, no visual", () => {
     const plan = parsePlan(
       planWith("## Summary\n\nShip it.\n\n> [!risk]\n> Rolling the key drops live sessions.\n"),
     );
     const summary = plan.sections[0]!;
-    expect(summary.budgetedLineCount).toBe(1); // only "Ship it." counts
-    expect(summary.visualCount).toBe(1);
+    // "Ship it." plus both quote lines all count as prose; nothing is exempt.
+    expect(summary.budgetedLineCount).toBe(3);
+    expect(summary.visualCount).toBe(0);
   });
 
-  test("plain blockquotes and unknown markers stay budgeted prose", () => {
+  test("a bare `[!risk]` line (no blockquote) is ordinary budgeted prose", () => {
+    const plan = parsePlan(planWith("## Summary\n\n[!risk] rolling the key drops sessions\n"));
+    expect(plan.sections[0]!.budgetedLineCount).toBe(1);
+    expect(plan.sections[0]!.visualCount).toBe(0);
+  });
+
+  test("plain blockquotes and `[!type]` markers alike stay budgeted prose", () => {
     const plain = parsePlan(planWith("## Summary\n\n> a plain quote\n> second line\n"));
     expect(plain.sections[0]!.budgetedLineCount).toBe(2);
     expect(plain.sections[0]!.visualCount).toBe(0);
 
-    const unknown = parsePlan(planWith("## Summary\n\n> [!warning]\n> not in the set\n"));
-    expect(unknown.sections[0]!.budgetedLineCount).toBe(2);
-    expect(unknown.sections[0]!.visualCount).toBe(0);
+    const marker = parsePlan(planWith("## Summary\n\n> [!note]\n> in a quote\n"));
+    expect(marker.sections[0]!.budgetedLineCount).toBe(2);
+    expect(marker.sections[0]!.visualCount).toBe(0);
   });
 
-  test("only a marker on the blockquote's first line opens a callout", () => {
-    const plan = parsePlan(planWith("## Summary\n\n> lead line\n> [!risk]\n> trailing\n"));
-    // The marker is a continuation line, so this is one plain (budgeted) quote.
-    expect(plan.sections[0]!.budgetedLineCount).toBe(3);
-    expect(plan.sections[0]!.visualCount).toBe(0);
-  });
-
-  test("callouts count per-section and per-phase, separately from fences", () => {
+  test("callout markers never bump a phase's visual count or its field budget", () => {
     const plan = parsePlan(
       planWith(
         "## Summary\n\n> [!note]\n> one\n\n> [!risk]\n> two\n\n## Phases\n\n### Phase 1 — x\n\nGoal: g\nFiles:\n- a.ts\nVerification: t\n\n> [!decision]\n> chose A\n",
       ),
     );
-    expect(plan.sections[0]!.visualCount).toBe(2);
+    expect(plan.sections[0]!.visualCount).toBe(0);
     const phase = plan.sections[1]!.phases![0]!;
-    expect(phase.visualCount).toBe(1);
-    expect(phase.fields.verification!.budgetedLineCount).toBe(1); // callout didn't touch it
-  });
-
-  test("callouts inside Details do not count toward the phase visual cap", () => {
-    const plan = parsePlan(
-      planWith(
-        "## Phases\n\n### Phase 1 — x\n\nGoal: g\n\n#### Details\n\n> [!risk]\n> detail-level\n",
-      ),
-    );
-    const phase = plan.sections[0]!.phases![0]!;
     expect(phase.visualCount).toBe(0);
-    expect(phase.details!.lineCount).toBeGreaterThan(0);
+    expect(phase.fields.verification!.budgetedLineCount).toBe(1); // callout didn't touch it
   });
 });
 
@@ -478,12 +516,28 @@ describe("table (decision matrix) detection", () => {
     expect(inDetails.sections[0]!.phases![0]!.visualCount).toBe(0);
   });
 
-  test("callouts and tables share the per-section visual count", () => {
+  test("a callout blockquote does not share the visual count — only tables count", () => {
     const plan = parsePlan(
       planWith(
         "## Summary\n\n> [!note]\n> n\n\n| a | b |\n| - | - |\n| 1 | 2 |\n",
       ),
     );
-    expect(plan.sections[0]!.visualCount).toBe(2);
+    // The table is the only visual; the `[!note]` quote is budgeted prose.
+    expect(plan.sections[0]!.visualCount).toBe(1);
+  });
+
+  test("a table bumps matrixCount; a callout-only Summary leaves both 0", () => {
+    const withMatrix = parsePlan(
+      planWith("## Summary\n\nShip it.\n\n| Pick | Option |\n| --- | --- |\n| ✓ | A |\n| | B |\n"),
+    ).sections[0]!;
+    expect(withMatrix.matrixCount).toBe(1);
+
+    // A callout badge is inline prose, not a visual, so L7 must keep nudging a
+    // Summary whose only markup is a callout (it shows no shape).
+    const calloutOnly = parsePlan(
+      planWith("## Summary\n\nShip it.\n\n> [!risk]\n> rolling the key drops live sessions\n"),
+    ).sections[0]!;
+    expect(calloutOnly.visualCount).toBe(0);
+    expect(calloutOnly.matrixCount).toBe(0);
   });
 });

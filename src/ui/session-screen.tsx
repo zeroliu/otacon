@@ -49,6 +49,7 @@ import { ReviewHeader } from "./review/header";
 import type { InterviewTarget } from "./review/interview";
 import { InterviewPanel } from "./review/interview";
 import { useInterviewOpen } from "./review/interview-open";
+import { PromptCard } from "./review/prompt-card";
 import { useKeyboardInset, useScrollLock } from "./review/keyboard";
 import { isAgentActive } from "./review/console-model";
 import { LiveConsole } from "./review/live-console";
@@ -693,6 +694,10 @@ function ReviewLoop({
       )}
       <div className="review-layout">
         <div className="review-main">
+          {/* The reviewer's verbatim request, echoed at the top of the column:
+              present from session start (not gated on a plan), collapsed by
+              default, absent when no prompt was captured. */}
+          <PromptCard prompt={session.prompt} />
           {over && <ApprovedNote path={approvedPath} home={approvedHome} />}
           {finalizing && <ApprovingNote sessionId={session.id} />}
           {hasPlan && (

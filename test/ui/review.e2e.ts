@@ -47,11 +47,19 @@ test("the dossier renders the plan schema under stable slug ids", async ({ page,
   await expect(page.locator("#summary .section-title")).toHaveText("Summary");
   await expect(page.locator("#phase-1 .phase-name")).toHaveText("Token issuance");
   await expect(page.locator("#phase-1 .phase-n")).toHaveText("01");
-  await expect(page.locator("#phase-1 .field-label")).toHaveText(["Goal", "Files", "Verification"]);
+  // Files is rendered last and labelless, so phase-1 shows only Goal + Verification labels.
+  await expect(page.locator("#phase-1 .field-label")).toHaveText(["Goal", "Verification"]);
   await expect(page.locator("#decisions .md li").first()).toContainText("RS256 over HS256");
+  // Phase 1 keeps a legacy Files list (still labelless, full-width).
   await expect(page.locator("#phase-1 .field-files .field-value")).toContainText(
     "src/auth/issuer.ts",
   );
+  await expect(page.locator("#phase-1 .field-files .field-label")).toHaveCount(0);
+  // Phase 2 authors Files as a table: labelless, with a "what changed" column.
+  await expect(page.locator("#phase-2 .field-files .field-label")).toHaveCount(0);
+  await expect(page.locator("#phase-2 .field-files table tbody tr")).toHaveCount(2);
+  await expect(page.locator("#phase-2 .field-files table")).toContainText("src/middleware/jwt.ts");
+  await expect(page.locator("#phase-2 .field-files table")).toContainText("wire the verifier");
 
   // Details are collapsed by default, with accurate size badges (the linter
   // measured Phase 1 at 86 raw lines — the badge must quote the same number).

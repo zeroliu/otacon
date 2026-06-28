@@ -129,7 +129,11 @@ Rotation notes, exhaustively:
 **Goal:** Verify JWTs in the API middleware.
 **Files:**
 
-- src/middleware/jwt.ts
+| File | What changed |
+| ---- | ------------ |
+| `src/middleware/jwt.ts` | verify the JWT and reject expired or bad-signature requests |
+| `src/middleware/index.ts` | wire the verifier into the middleware chain |
+
 **Verification:** Integration tests hit a protected route with valid and expired tokens.
 
 #### Details

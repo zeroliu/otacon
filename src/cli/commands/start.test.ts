@@ -136,3 +136,21 @@ test("a plain start omits socratic from the wire body (config default applies)",
   // The fake daemon defaults to false, which the CLI echoes back verbatim.
   expect(printed.socratic).toBe(false);
 });
+
+test("--prompt forwards the trimmed verbatim request in the wire body", async () => {
+  await listen();
+
+  const { code } = await run(["--title", "capture", "--prompt", "  build me a widget  "]);
+
+  expect(code).toBe(0);
+  expect(lastBody.prompt).toBe("build me a widget");
+});
+
+test("a whitespace-only --prompt omits prompt from the wire body", async () => {
+  await listen();
+
+  const { code } = await run(["--title", "blank", "--prompt", "   "]);
+
+  expect(code).toBe(0);
+  expect("prompt" in lastBody).toBe(false);
+});

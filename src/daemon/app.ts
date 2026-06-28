@@ -625,9 +625,12 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
 
   app.post("/api/sessions", async (c) => {
     const body = (await readJsonBody(c)) ?? {};
-    const { title, repo, branch, quick, socratic } = body;
+    const { title, prompt, repo, branch, quick, socratic } = body;
     if (typeof title !== "string" || title.trim() === "") {
       return badRequest(c, "title must be a non-empty string");
+    }
+    if (prompt !== undefined && typeof prompt !== "string") {
+      return badRequest(c, "prompt must be a string");
     }
     if (typeof repo !== "string" || !isAbsolute(repo)) {
       return badRequest(c, "repo must be an absolute path");
@@ -651,7 +654,17 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     if (quick === true && socraticEffective) {
       return badRequest(c, "socratic and quick are mutually exclusive");
     }
-    const session = store.createSession({ title, repo, branch, quick, socratic: socraticEffective });
+    // Trim once here and only forward a non-empty prompt, so a whitespace-only
+    // request stores no field (the store mirrors this defensively).
+    const trimmedPrompt = typeof prompt === "string" ? prompt.trim() : "";
+    const session = store.createSession({
+      title,
+      repo,
+      branch,
+      quick,
+      socratic: socraticEffective,
+      ...(trimmedPrompt !== "" ? { prompt: trimmedPrompt } : {}),
+    });
     // Attach the transcript tailer now: the agent is already working in `repo`,
     // so its live transcript may already exist (and if not, the tailer re-locates
     // until it appears). A repo whose agent has no adapter attaches nothing.

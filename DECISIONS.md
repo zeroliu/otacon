@@ -55,6 +55,8 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** A visual genuinely needs structure plain markdown can't express (the
   blast-radius file tree was cut from v1 for exactly this reason), or the cap default of
   2 proves wrong in real use.
+- _(Superseded for callouts by "Callouts are inline badges, matched like scope pills"
+  (2026-06-27); matrices and pills unchanged.)_
 
 ## Mermaid diagrams are exempt from the per-section fence cap
 
@@ -3788,11 +3790,11 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   the delete actions `.card-delete`/`.session-delete`/`.sl-delete`), tabs (`.scope-tab`),
   toggles and action labels (`.grill-note-toggle`, `.ctrl-changelog`,
   `.thread-followup-open`, `.drawer-whole`/`.drawer-tally`, `.approving-escape`,
-  `.grill-undo`, `.pending-act`), the section menu item (`.sec-item`), and the mono form
+  `.grill-undo`, `.pending-act`), the section menu item (`.sec-item`) and the section menu hint (`.sec-hint`), and the mono form
   controls (`.field-input`, `.field-reset`, `.repo-picker-select select`). Mono *content*
   stays at ui (14): code (`.fence pre`), diff (`.dline`), live-changelog/status text
-  (`.lc-main`, `.lc-detail-body`, `.lc-empty`, `.now-playing`), and path/hint/error labels
-  (`.path-banner-path`, `.sec-hint`, `.field-error`, `.settings-save-error`). All sans
+  (`.lc-main`, `.lc-detail-body`, `.lc-empty`, `.now-playing`), and path/error labels
+  (`.path-banner-path`, `.field-error`, `.settings-save-error`). All sans
   rules are unchanged. No new token: this reuses `--fs-meta`, so the five-role scale and
   its four guards in `src/ui/styles.test.ts` are untouched (12 sits on the floor, not
   below it).
@@ -3811,6 +3813,22 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** A mono control needs more prominence than the 12px label tier gives
   (then it earns its own size, and the guard's expected token set is updated in the same
   commit), or the 12px floor moves (then mono controls move with it).
+
+### Sub-note: the section ⋯ popover is content-sized, not fixed-width (2026-06-28)
+
+- **Decision:** `.sec-pop` is content-sized (`width: max-content` clamped by
+  `min-width: 240px` and `max-width: min(360px, calc(100vw - 24px))`) rather than a fixed
+  `272px`. Its rows carry fixed copy (the widest, "comment on section", needs ~290px), so
+  the popover grows to fit them; a long section slug truncates via the existing
+  `.sec-slug` ellipsis at the clamp.
+- **Why:** The fixed `272px` was brittle: it was narrower than the widest fixed-copy row,
+  so the `white-space: nowrap` hint clipped past the right edge. Sizing to `max-content`
+  lets the box track its own (fixed, known) copy and never clip, while the min/max clamp
+  keeps it from collapsing on short rows or overflowing a narrow viewport; the only
+  variable-length content (the slug) already has its own ellipsis.
+- **Revisit when:** A row gains variable-length content that should not stretch the
+  popover (then it needs its own truncation, like `.sec-slug`), or the clamp bounds no
+  longer fit the copy.
 
 ## Reuse an existing open tab: daemon-wide live-tab heartbeat + TTL (2026-06-24)
 
@@ -4065,3 +4083,169 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   "is this still in flight?" without dragging in checks/reviews complexity.
 - **Revisit when:** GitHub rate limits bite the poll cadence, or users want richer status
   (CI passing, review approved, draft) surfaced alongside the merge state.
+
+## Callouts are inline badges, matched like scope pills (2026-06-27)
+
+- **Decision:** A callout marker — `[!risk]`, `[!note]`, `[!decision]`, `[!assumption]` —
+  is detected as a marked inline token (like the scope pills), matched anywhere in prose
+  (case-insensitive, the `!` keeps false matches near-zero), and rendered as a small mono
+  uppercase badge in the type's hue (label only, `user-select: none`). The old
+  blockquote-panel rendering path is dropped, and so is the linter's callout
+  visual/budget exemption: a callout line is now ordinary budgeted prose and the badge is
+  free (never counted toward the line budget or the per-section visual cap). All four
+  types are uniform badges. Supersedes the callout portion of "Plan visuals:
+  markdown-native, semantic-ink, budget-capped"; the decision matrix stays the one capped
+  read-path visual, and scope pills are unchanged.
+- **Why:** A bare `[!assumption] body` line (marker inline with text, no `>`) rendered as
+  literal text under the old whole-first-line panel rule — a real bug. Matching the
+  marker inline like a pill fixes that and unifies the two "small inline tag" primitives,
+  and the user disliked the flat panel visual. Inline-and-free is the correct budget
+  posture once the marker is mid-prose: the line is prose either way, so exempting it (or
+  capping it as a "visual") was double-counting that confused the budget.
+- **Revisit when:** A callout needs more than one line of dedicated, set-apart treatment
+  again (a return of the panel), or mid-prose `[!type]` false matches show up in practice.
+
+## Original prompt: captured once at start, stored on the session record, uncapped (2026-06-27)
+
+- **Decision:** The user's verbatim request is captured once at `otacon start` via a
+  `--prompt` flag, threaded through `POST /api/sessions`, and persisted (trimmed only,
+  no length cap) on the registry session record rather than in a dedicated per-session
+  file. A whitespace-only or absent prompt stores no field. It rides the existing
+  `...session` spread into `SessionSummary`, so the UI surfaces it for free.
+- **Why:** Real requests are short, so the cost of carrying the text in the global
+  registry (a whole-file rewrite per mutation) is negligible, and a record field is far
+  simpler than minting and reading a side file. Capturing at `start` means the agent
+  records the request once, at the one moment it has the verbatim text, instead of
+  re-deriving it later. Trimming-only keeps the stored text faithful; a cap would risk
+  silently truncating the very intent the reviewer needs.
+- **Revisit when:** Prompts routinely get large enough that the per-mutation registry
+  rewrite is a real cost: then add a length cap or move the prompt to a per-session
+  file read on demand.
+
+## Diagram guidance: match the visual to the content's shape, not graph-TD-by-default (2026-06-27)
+
+- **Decision:** The wrapper's diagram guidance no longer tells the agent to "lead with a
+  diagram (~90% of plans), `graph TD` is the natural default." It keeps the strong
+  visual-first lead but redirects it: a one-line test (a visual must reveal structure a
+  table or sentence can't show at a glance), a content-shape-to-type rubric (lifecycle to a
+  state diagram, actor interaction to sequence, branching flow to flowchart, classification
+  to a table, linear chain to a sentence), and five named anti-patterns drawn from real
+  shipped plans. Guidance-only: no hard lint block.
+- **Why:** Across past sessions the "lead with a diagram, graph TD default" mandate
+  manufactured forced flowcharts: tables, call-chains, traceability maps, and plain
+  sentences bent into box-and-arrow shapes (the lookup-table-as-decision-tree mistake
+  recurred in three separate sessions). The mandate, not the model, was the root cause. The
+  user wanted the visual-first identity kept but steered toward a higher-quality,
+  shape-matched visual (q3), taught with concrete examples rather than enforcement (q4).
+- **Revisit when:** The named anti-patterns stop matching what agents actually produce, or
+  soft guidance proves insufficient and the linter needs teeth (a shape heuristic that
+  flags a branchless flowchart or a single-diamond fan-out) after all.
+
+## gen:skill emits the committed dogfood SKILL.md, not just the published one (2026-06-27)
+
+- **Decision:** `scripts/gen-skill-asset.ts` now writes both generated wrappers: the
+  published `dist/skills/otacon/SKILL.md` (skillMd) and the committed
+  `.claude/skills/otacon-dev/SKILL.md` (dogfoodSkillMd). A skill-text edit is regenerated
+  by one `bun run gen:skill` instead of a hand-rewrite of the committed file.
+- **Why:** The committed dogfood file is generated but was regenerated by hand; an edit to
+  `protocolCard()` that forgot to regenerate it tripped the assets.test.ts D7 guard with no
+  one-command fix. Emitting it from the generator (the same codegen-into-source pattern as
+  `gen-version.ts` writing `src/shared/version.ts`) makes the dev cycle edit-source, then
+  `gen:skill`, then commit both. D7 stays the guard and stays honest because CI runs
+  `bun test` before `bun run build`, so the test reads the as-committed file.
+- **Revisit when:** CI is reordered to build before test (which would let a build-time
+  regenerate mask drift), or the dogfood wrapper stops being a committed artifact.
+
+## L7 accepts a lead decision-matrix table as a satisfying lead visual (2026-06-27)
+
+- **Decision:** The L7 lead-visual nudge is satisfied by a Summary that leads with a
+  decision-matrix table, not only by a `mermaid` diagram. The parser tracks a per-section
+  `matrixCount` (distinct from `visualCount`, which also counts callouts) and `checkL7`
+  early-returns when the Summary has a diagram, a lead matrix, or the opt-out marker. The
+  message is reworded to name both lead options. Still a non-blocking warning, never a block.
+- **Why:** The rewritten guidance tells the agent to lead a classification with a table, so
+  the nudge must not then nag for a diagram. It keys off `matrixCount`, not `visualCount`,
+  so a Summary whose only visual is a `[!risk]` callout still nudges: a callout annotates,
+  it does not show the change's shape.
+- **Revisit when:** Another lead visual (a paired before/after, an image) should also
+  satisfy L7, or a thin table passing the nudge proves to be a problem in practice.
+
+## Grill questions: format long ones, guide rather than lint (2026-06-27)
+
+- **Decision:** The skill wrapper now tells the agent to ask one focused, short question
+  per card and, when a question must run long, to format it into short paragraphs authored
+  in a `$TMPDIR` temp file and passed via `--question "$(cat …)"` (then removed). This is
+  guidance only; the daemon does not lint or reject unbroken questions.
+- **Why:** Long unbroken grill questions are agent-authored, not a render bug. The daemon
+  stores the question verbatim and the UI renders `white-space: pre-wrap`, so newlines
+  already display (sessions that contain `\n\n` render fine). No formatting guidance existed,
+  so the cheapest correct move is to add it, with a wall-versus-formatted anti-example,
+  before reaching for enforcement. A "long + zero newlines" lint was considered and deferred:
+  guidance was never tried, and a hard reject mid-grill adds a failure mode plus a threshold
+  to tune.
+- **Revisit when:** Walls keep appearing despite the guidance; then add the deferred
+  "long + unbroken" lint next to `E_SOCRATIC_FREE_TEXT_ONLY` as the backstop.
+
+## Files field is authored as a GFM table and rendered as-is (2026-06-28)
+
+- **Decision:** A phase's **Files** field is authored directly as a
+  `| File | What changed |` GFM table, and the review renderer renders whatever markdown
+  the author wrote. There is no render-time list→table conversion; a legacy plain list is
+  still accepted and rendered unchanged.
+- **Why:** A reviewer rejected render-time parsing of a list into a table as fragile (the
+  renderer would have to guess structure from free text and could silently mangle it).
+  Authoring the table in markdown keeps markdown the single source of truth, makes the
+  per-file "what changed" an explicit part of what the author wrote (so a comment can
+  anchor to one row), and lets every old plan render exactly as before with no migration.
+- **Revisit when:** A structured, non-markdown Files format is ever needed (e.g. a machine
+  consumer that wants typed file metadata rather than rendered prose).
+
+## The Files label is dropped and Files renders last (2026-06-28)
+
+- **Decision:** The review always removes the "Files" label and renders the field
+  full-width, and the phase fields read in a fixed order with **Files last**: Goal,
+  Verification, Out of scope, then Files, regardless of source order (source order
+  previously put Files second).
+- **Why:** The file list is the least-read subsection of a phase; a reviewer reads the
+  goal and the verification far more often than the touched-files inventory. Demoting Files
+  to last and dropping its label puts verification first on the reading path and lets the
+  full-width file table breathe without a redundant heading.
+- **Revisit when:** File lists become a primary read path again (e.g. review starts keying
+  off touched files), making a label and an earlier slot worth the reading cost.
+
+## Files table renders at ui-14, not body-16 (2026-06-28)
+
+- **Decision:** The per-phase **Files table** renders at `--fs-ui` (14px), an explicit
+  exception to the body-16 rule that governs other review table cells. A legacy Files
+  **list** keeps its own mono 16px treatment.
+- **Why:** File paths are operational, mono content, not primary reading prose; this is the
+  same reasoning that already sits code and diff at ui 14 rather than body 16. Setting the file
+  table at the reading-prose size would over-weight an inventory the reviewer scans, not
+  reads.
+- **Revisit when:** The type scale is restructured (e.g. a dedicated operational/data tier
+  is added), changing where operational content belongs.
+
+## Lint requires a filled "What changed" cell in a Files table, but stays permissive on list-vs-table (2026-06-28)
+
+- **Decision:** When **Files** is a table, L1 requires ≥2 columns and a non-empty 2nd
+  ("What changed") cell on every body row (`E_FILES_NO_SUMMARY`). A list is accepted
+  as-is; `E_FILES_EMPTY` fires only when Files has neither a table nor a list. The linter
+  does not force a list to become a table.
+- **Why:** The agent must always state what changed per file, which a table with a filled
+  summary column guarantees and a bare path list does not. But forcing every legacy
+  list-style plan to migrate to a table on its next resubmit would be a gratuitous churn
+  cost on plans that predate the table format, so list-vs-table stays the author's choice
+  while the per-file summary is mandatory only where the table structure promises it.
+- **Revisit when:** Lists are fully deprecated (every plan is expected to use the table),
+  at which point the list path can be removed and the summary required universally.
+
+## A Files table is exempt from the per-phase visual cap (2026-06-28)
+
+- **Decision:** A phase's Files table does not count against the per-read-path-section
+  visual cap (default 2) that governs decision matrices.
+- **Why:** The Files table is required structure, present in every phase, not a decorative
+  visual the author chose to add. Counting it would silently consume one of the two
+  visual slots in every phase, halving the matrix budget for content that is
+  genuinely optional, which is the opposite of what the cap exists to ration.
+- **Revisit when:** The visual-cap model changes (e.g. required structural elements get a
+  separate budget, or the cap is replaced by a different "no wall of widgets" mechanism).

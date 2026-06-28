@@ -29,7 +29,7 @@
    * the dark-mode :root. Ordered small -> large. */
   --fs-meta: 12px;   /* labels & telemetry: eyebrows, chip/badge text, ids, repo·branch, timestamps, fence headers, field labels; + mono control labels (buttons, tabs, toggles, menu items, delete/approve actions) */
   --fs-ui: 14px;     /* sans text inputs + monospace code & diff (one notch below body); mono control labels drop to meta */
-  --fs-body: 16px;   /* primary reading content: prose, field values, callout bodies, table cells, quotes, grill questions */
+  --fs-body: 16px;   /* primary reading content: prose, field values, table cells, quotes, grill questions */
   --fs-title: 18px;  /* headings: card titles, phase names, md h1/h2, icon-glyph buttons */
   --fs-display: 22px; /* the one masthead session title (compact 18) + the big phase numeral */
 
@@ -1002,51 +1002,40 @@ code {
   color: var(--ink-soft);
 }
 
-/* ── callouts: semantic ink (plan structure, lint, and anchoring visuals, review UI) ──
- * A typed blockquote (`> [!risk]`) renders flat: a 2px top rule and a
- * glyph+label inked in the type's hue, no fill and no radius. Hues are drawn
- * only from the tested chip/accent palette, so contrast holds in light + dark
- * and only `decision` leans on the per-session accent (by design). */
-.callout {
+/* ── callouts: inline badges (plan structure, lint, and anchoring visuals, review UI) ──
+ * A typed marker (`[!risk]`) renders as a small mono uppercase pill inked in
+ * the type's hue (label only, no glyph). Chrome: `user-select: none` so the
+ * badge never lands inside a comment anchor — the prose after it carries the
+ * anchor. Hues are drawn only from the tested chip/accent palette, so contrast
+ * holds in light + dark and only `decision` leans on the per-session accent. */
+.callout-badge {
   --callout-ink: var(--ink-soft);
-  margin: 0 0 0.85em;
-  padding: 9px 0 1px;
-  border-top: 2px solid var(--callout-ink);
+  margin-inline-end: 0.4em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font: 600 max(12px, 0.8em) var(--mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  user-select: none;
+  color: var(--callout-ink);
+  background: color-mix(in srgb, var(--callout-ink) 12%, transparent);
 }
 
-.callout-risk {
+.callout-badge-risk {
   --callout-ink: var(--chip-await-ink);
 }
 
-.callout-note {
+.callout-badge-note {
   --callout-ink: var(--chip-revise-ink);
 }
 
-.callout-decision {
+.callout-badge-decision {
   --callout-ink: var(--accent);
 }
 
-.callout-assumption {
+.callout-badge-assumption {
   --callout-ink: var(--ink-soft);
-}
-
-/* Chrome: the marker line. Unselectable so it never lands inside a comment
- * anchor (the body text below carries the anchor instead). */
-.callout-label {
-  margin: 0 0 0.4em;
-  font: 600 var(--fs-meta)/1.2 var(--mono);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--callout-ink);
-  user-select: none;
-}
-
-.callout-body > :first-child {
-  margin-top: 0;
-}
-
-.callout-body > :last-child {
-  margin-bottom: 0;
 }
 
 /* ── inline scope pills (plan structure, lint, and anchoring) ──
@@ -1268,13 +1257,19 @@ code {
   margin-bottom: 0.4em;
 }
 
-.field-files .field-value .md {
-  font: var(--fs-body)/1.75 var(--mono);
+/* Files is the labelless change manifest: no 104px label column, so it spans
+ * the full card width (a single content column). */
+.field-files {
+  grid-template-columns: minmax(0, 1fr);
 }
 
+/* Legacy plans write Files as a mono ▸-bulleted list — keep that voice, scoped
+ * to the list itself (not the whole .md container) so a GFM table inside Files
+ * is free to render as a sans 14px change table below. */
 .field-files .field-value .md ul {
   list-style: none;
   padding-left: 0;
+  font: var(--fs-body)/1.75 var(--mono);
 }
 
 .field-files .field-value .md li {
@@ -1284,6 +1279,30 @@ code {
 .field-files .field-value .md li::before {
   content: "▸ ";
   color: color-mix(in srgb, var(--accent) 70%, var(--ink-soft));
+}
+
+/* CodeRabbit-style file-change table: the whole table drops to --fs-ui (14px,
+ * one notch below body) and reads as sans prose — NOT the mono voice the legacy
+ * list uses. Borders reuse var(--line) like the base .md th/.md td. */
+.field-files .field-value .md table {
+  font: var(--fs-ui)/1.5 var(--sans);
+}
+
+/* The "What changed" column is muted sans summary prose. The file-path column
+ * is inline code (`src/foo.ts`), so its <code> chip keeps the base mono style;
+ * code reads at max(12px, 0.92em) of the 14px table, which is fine. */
+.field-files .field-value .md td {
+  font: var(--fs-ui)/1.5 var(--sans);
+  color: var(--ink-soft);
+}
+
+/* Header cells ("File" / "What changed") stay a muted column label, sized to
+ * the 14px table so they don't balloon to the base .md th's 16px. */
+.field-files .field-value .md th {
+  font: 600 var(--fs-ui)/1.4 var(--sans);
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: var(--ink-soft);
 }
 
 @media (max-width: 479px) {
@@ -3110,6 +3129,89 @@ code {
   animation: details-in 0.2s ease-out both;
 }
 
+/* ──────────────────── the Prompt card (review UI) ────────────────────
+ * The reviewer's own request, echoed at the top of the column. It is the
+ * inverse of the transmission cards (the grill card, the revision banner):
+ * those signal "incoming from the agent" with an accent-tinted fill and a 2px
+ * accent TOP border; this is the reviewer's words going the other way, so it
+ * stays quiet — a plain surface fill with a left accent rule (a margin-quote
+ * motif), muted ink on the collapsed preview, and the same eyebrow label
+ * treatment the Interview toggle wears.
+ */
+.prompt-card {
+  margin-bottom: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent);
+  animation: card-in 0.35s cubic-bezier(0.22, 0.7, 0.3, 1) both;
+}
+
+.prompt-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  width: 100%;
+  min-height: 44px;
+  padding: 12px 14px;
+  border: none;
+  background: none;
+  color: var(--ink-soft);
+  font: 600 var(--fs-meta)/1 var(--mono);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  cursor: pointer;
+  text-align: left;
+}
+
+.prompt-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.prompt-toggle:hover {
+  color: var(--ink);
+}
+
+.prompt-glyph {
+  color: var(--accent);
+}
+
+.prompt-word {
+  color: var(--ink);
+}
+
+/* The collapsed one-liner: the request clipped to a single muted line, in the
+ * reading sans (not mono) since it is the user's prose, not telemetry. */
+.prompt-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font: var(--fs-meta)/1.3 var(--sans);
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ink-soft);
+}
+
+.prompt-caret {
+  margin-left: auto;
+  color: var(--accent);
+}
+
+/* Expanded: the full request verbatim, plain text with line breaks preserved
+ * (it is echoed, not parsed as markdown). */
+.prompt-body {
+  margin: 0;
+  padding: 2px 15px 14px;
+  border-top: 1px dashed var(--line-strong);
+  font-size: var(--fs-body);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  animation: details-in 0.2s ease-out both;
+}
+
 /* ──────────────────── now-playing bar + live console ────────────────────
  * The always-on "what is the agent doing right now?" status bar (the
  * live-activity stream §10a, review UI), pinned directly under the sticky
@@ -3996,7 +4098,9 @@ code {
 }
 
 .sec-pop {
-  width: 272px;
+  width: max-content;
+  min-width: 240px;
+  max-width: min(360px, calc(100vw - 24px));
   transform: translateX(-100%);
   animation: pop-in 0.14s cubic-bezier(0.22, 0.7, 0.3, 1) both;
 }
@@ -4081,7 +4185,7 @@ code {
 
 .sec-hint {
   margin-left: auto;
-  font: 500 var(--fs-ui)/1 var(--mono);
+  font: 500 var(--fs-meta)/1 var(--mono);
   letter-spacing: 0.12em;
   color: var(--ink-soft);
 }

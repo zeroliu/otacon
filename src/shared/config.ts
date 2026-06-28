@@ -15,7 +15,7 @@ export interface Budgets {
   risksMaxItems: number;
   riskEntryLines: number;
   maxFencesPerReadSection: number;
-  /** Markdown-native visuals (callouts, decision matrices) per read-path section. */
+  /** Markdown-native visuals (decision matrices) per read-path section. */
   maxVisualsPerReadSection: number;
   detailsSoftCapLines: number;
 }
@@ -252,7 +252,7 @@ export const CONFIG_SCHEMA: ConfigField[] = [
     section: "budgets",
     key: "maxVisualsPerReadSection",
     label: "Max visuals per section",
-    description: "Max markdown-native visuals (callouts, matrices) per read-path section.",
+    description: "Max markdown-native visuals (decision matrices) per read-path section.",
     type: "int",
     default: DEFAULT_CONFIG.budgets.maxVisualsPerReadSection,
     min: 1,
