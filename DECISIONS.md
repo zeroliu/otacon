@@ -3790,11 +3790,11 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   the delete actions `.card-delete`/`.session-delete`/`.sl-delete`), tabs (`.scope-tab`),
   toggles and action labels (`.grill-note-toggle`, `.ctrl-changelog`,
   `.thread-followup-open`, `.drawer-whole`/`.drawer-tally`, `.approving-escape`,
-  `.grill-undo`, `.pending-act`), the section menu item (`.sec-item`), and the mono form
+  `.grill-undo`, `.pending-act`), the section menu item (`.sec-item`) and the section menu hint (`.sec-hint`), and the mono form
   controls (`.field-input`, `.field-reset`, `.repo-picker-select select`). Mono *content*
   stays at ui (14): code (`.fence pre`), diff (`.dline`), live-changelog/status text
-  (`.lc-main`, `.lc-detail-body`, `.lc-empty`, `.now-playing`), and path/hint/error labels
-  (`.path-banner-path`, `.sec-hint`, `.field-error`, `.settings-save-error`). All sans
+  (`.lc-main`, `.lc-detail-body`, `.lc-empty`, `.now-playing`), and path/error labels
+  (`.path-banner-path`, `.field-error`, `.settings-save-error`). All sans
   rules are unchanged. No new token: this reuses `--fs-meta`, so the five-role scale and
   its four guards in `src/ui/styles.test.ts` are untouched (12 sits on the floor, not
   below it).
@@ -3813,6 +3813,22 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** A mono control needs more prominence than the 12px label tier gives
   (then it earns its own size, and the guard's expected token set is updated in the same
   commit), or the 12px floor moves (then mono controls move with it).
+
+### Sub-note: the section ⋯ popover is content-sized, not fixed-width (2026-06-28)
+
+- **Decision:** `.sec-pop` is content-sized (`width: max-content` clamped by
+  `min-width: 240px` and `max-width: min(360px, calc(100vw - 24px))`) rather than a fixed
+  `272px`. Its rows carry fixed copy (the widest, "comment on section", needs ~290px), so
+  the popover grows to fit them; a long section slug truncates via the existing
+  `.sec-slug` ellipsis at the clamp.
+- **Why:** The fixed `272px` was brittle: it was narrower than the widest fixed-copy row,
+  so the `white-space: nowrap` hint clipped past the right edge. Sizing to `max-content`
+  lets the box track its own (fixed, known) copy and never clip, while the min/max clamp
+  keeps it from collapsing on short rows or overflowing a narrow viewport; the only
+  variable-length content (the slug) already has its own ellipsis.
+- **Revisit when:** A row gains variable-length content that should not stretch the
+  popover (then it needs its own truncation, like `.sec-slug`), or the clamp bounds no
+  longer fit the copy.
 
 ## Reuse an existing open tab: daemon-wide live-tab heartbeat + TTL (2026-06-24)
 
