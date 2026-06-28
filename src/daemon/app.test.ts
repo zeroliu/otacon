@@ -2058,6 +2058,45 @@ describe("transcript tailer lifecycle (live-progress-activity-redesign)", () => 
     expect(stubs[0]?.stopped).toBe(1);
   });
 
+  test("startTailer wires a markActive that bumps lastContactAt AND publishes a session frame (keep-agent-live-during-implementation)", async () => {
+    // Capture the deps handed to the tailer so we can invoke its markActive and
+    // observe the liveness refresh — without a real fs poll.
+    let captured: { markActive?: () => void } | undefined;
+    const wired = createApp({
+      store,
+      uiDir,
+      presence,
+      notify: () => {},
+      makeTailer: (deps) => {
+        captured = deps;
+        return { start() {}, stop() {} };
+      },
+    });
+    // Open the index SSE stream so we can see the browser-facing frames: a
+    // `stream` frame carries no lastContactAt, so the dot only moves when a
+    // `session` frame is published — exactly what markActive must trigger.
+    const reader = sseReader(await wired.request("/api/stream"));
+    expect((await reader.next()).event).toBe("snapshot");
+
+    const { id } = (await (await post(wired, "/api/sessions", { title: "t", repo })).json()) as { id: string };
+    // Creation publishes a session frame; a fresh session has no contact yet.
+    const created = await reader.next();
+    expect(created.event).toBe("session");
+    expect((created.data as { session: { lastContactAt?: number } }).session.lastContactAt).toBeUndefined();
+
+    // Captured transcript activity refreshes liveness: it must publish a session
+    // frame carrying a defined lastContactAt, or the browser's AgentDot never sees it.
+    expect(typeof captured?.markActive).toBe("function");
+    captured?.markActive?.();
+    const refreshed = await reader.next();
+    expect(refreshed.event).toBe("session");
+    const summary = (refreshed.data as { session: { id: string; lastContactAt?: number } }).session;
+    expect(summary.id).toBe(id);
+    expect(typeof summary.lastContactAt).toBe("number");
+
+    await reader.cancel();
+  });
+
   test("FLOOR: with no adapter, no tailer activity occurs yet progress still streams", async () => {
     // The default app (no makeTailer override) uses the real Tailer; the temp
     // repo has no ~/.claude transcript, so findAdapter returns null and the

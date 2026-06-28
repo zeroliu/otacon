@@ -297,6 +297,16 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   const publishStream = (id: string, events: StreamEvent[]): void =>
     notifier.publish({ type: "stream", session: id, data: { session: id, events } });
 
+  // Bump liveness AND tell the browser: a `stream` frame never carries
+  // lastContactAt — only a `session` frame does — so the AgentDot only moves on
+  // a publishSession. Re-fetch via store.getSession (not a possibly-stale
+  // closure) so the published summary reflects current status.
+  const refreshLiveness = (id: string): void => {
+    bumpContact(id);
+    const session = store.getSession(id);
+    if (session) publishSession(session);
+  };
+
   // Monotonic per-session seq source for the live-activity stream (the
   // automatic, cross-agent activity stream): one StreamSeq per session id,
   // seeded lazily from stream.jsonl's max seq so a daemon restart never re-mints
@@ -339,6 +349,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       append: (events) => appendStreamEvents(store.streamPath(session.id), events, loadStreamCap(session.id)),
       publish: (events) => publishStream(session.id, events),
       config: () => loadConfig(session.repo).stream,
+      markActive: () => refreshLiveness(session.id),
     });
     tailers.set(session.id, tailer);
     tailer.start();
