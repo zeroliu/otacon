@@ -91,22 +91,44 @@ describe("parsePlan on the valid fixture", () => {
       startLine: 32,
       budgetedLineCount: 1,
       listItemCount: 0,
+      contentLines: [], // the goal text rides the label line, which is not captured
     });
     expect(phase.fields.files).toEqual({
       startLine: 33,
       budgetedLineCount: 3,
       listItemCount: 2,
+      contentLines: [
+        { text: "- src/auth/issuer.ts", line: 34 },
+        { text: "- src/auth/keys.ts", line: 35 },
+      ],
     });
     expect(phase.fields.verification?.budgetedLineCount).toBe(1);
     expect(phase.fields.outOfScope).toBeUndefined();
     expect(phase.details).toEqual({ startLine: 38, lineCount: 6 });
   });
 
-  test("phase 2: bold labels, hyphen dash, out of scope", () => {
+  test("phase 2: bold labels, hyphen dash, Files table, out of scope", () => {
     const phase = plan.sections[2]!.phases![1]!;
     expect(phase).toMatchObject({ n: 2, name: "Middleware verification", headingValid: true });
     expect(phase.fields.goal?.budgetedLineCount).toBe(1);
-    expect(phase.fields.files).toMatchObject({ budgetedLineCount: 2, listItemCount: 1 });
+    // Files authored as a GFM table: no list items, budget-exempt, captured as
+    // content lines so rules.ts can require a filled "What changed" cell.
+    expect(phase.fields.files).toMatchObject({
+      startLine: 49,
+      budgetedLineCount: 1,
+      listItemCount: 0,
+      contentLines: [
+        { text: "| File | What changed |", line: 51 },
+        { text: "| ---- | ------------ |", line: 52 },
+        {
+          text: "| `src/middleware/jwt.ts` | verify the JWT and reject expired or bad-signature requests |",
+          line: 53,
+        },
+        { text: "| `src/middleware/index.ts` | wire the verifier into the middleware chain |", line: 54 },
+      ],
+    });
+    // A Files table is exempt from the per-phase visual cap (required structure).
+    expect(phase.visualCount).toBe(0);
     expect(phase.fields.verification?.budgetedLineCount).toBe(1);
     expect(phase.fields.outOfScope?.budgetedLineCount).toBe(1);
     expect(phase.details).toBeUndefined();
@@ -211,6 +233,33 @@ describe("parsePlan structure handling", () => {
     );
     const details = plan.sections[0]!.phases![0]!.details!;
     expect(details.lineCount).toBe(6);
+  });
+});
+
+describe("phase field content-line capture", () => {
+  test("a Files list captures each bullet line (label line excluded)", () => {
+    const plan = parsePlan(
+      planWith("## Phases\n\n### Phase 1 — x\n\nGoal: g\nFiles:\n- a.ts\n- b.ts\nVerification: t\n"),
+    );
+    const files = plan.sections[0]!.phases![0]!.fields.files!;
+    expect(files.contentLines).toEqual([
+      { text: "- a.ts", line: 15 },
+      { text: "- b.ts", line: 16 },
+    ]);
+  });
+
+  test("a Files table captures the header, delimiter, and body rows", () => {
+    const plan = parsePlan(
+      planWith(
+        "## Phases\n\n### Phase 1 — x\n\nGoal: g\nFiles:\n| File | What changed |\n| - | - |\n| `a.ts` | adds X |\nVerification: t\n",
+      ),
+    );
+    const files = plan.sections[0]!.phases![0]!.fields.files!;
+    expect(files.contentLines).toEqual([
+      { text: "| File | What changed |", line: 15 },
+      { text: "| - | - |", line: 16 },
+      { text: "| `a.ts` | adds X |", line: 17 },
+    ]);
   });
 });
 
@@ -485,5 +534,20 @@ describe("table (decision matrix) detection", () => {
       ),
     );
     expect(plan.sections[0]!.visualCount).toBe(2);
+  });
+
+  test("a table bumps matrixCount; a callout-only Summary leaves it 0", () => {
+    const withMatrix = parsePlan(
+      planWith("## Summary\n\nShip it.\n\n| Pick | Option |\n| --- | --- |\n| ✓ | A |\n| | B |\n"),
+    ).sections[0]!;
+    expect(withMatrix.matrixCount).toBe(1);
+
+    // A callout still counts as a visual, but it is not a matrix, so L7 must keep
+    // nudging a Summary whose only visual is a callout (it doesn't show shape).
+    const calloutOnly = parsePlan(
+      planWith("## Summary\n\nShip it.\n\n> [!risk]\n> rolling the key drops live sessions\n"),
+    ).sections[0]!;
+    expect(calloutOnly.visualCount).toBe(1);
+    expect(calloutOnly.matrixCount).toBe(0);
   });
 });

@@ -1185,13 +1185,19 @@ code {
   margin-bottom: 0.4em;
 }
 
-.field-files .field-value .md {
-  font: var(--fs-body)/1.75 var(--mono);
+/* Files is the labelless change manifest: no 104px label column, so it spans
+ * the full card width (a single content column). */
+.field-files {
+  grid-template-columns: minmax(0, 1fr);
 }
 
+/* Legacy plans write Files as a mono ▸-bulleted list — keep that voice, scoped
+ * to the list itself (not the whole .md container) so a GFM table inside Files
+ * is free to render as a sans 14px change table below. */
 .field-files .field-value .md ul {
   list-style: none;
   padding-left: 0;
+  font: var(--fs-body)/1.75 var(--mono);
 }
 
 .field-files .field-value .md li {
@@ -1201,6 +1207,30 @@ code {
 .field-files .field-value .md li::before {
   content: "▸ ";
   color: color-mix(in srgb, var(--accent) 70%, var(--ink-soft));
+}
+
+/* CodeRabbit-style file-change table: the whole table drops to --fs-ui (14px,
+ * one notch below body) and reads as sans prose — NOT the mono voice the legacy
+ * list uses. Borders reuse var(--line) like the base .md th/.md td. */
+.field-files .field-value .md table {
+  font: var(--fs-ui)/1.5 var(--sans);
+}
+
+/* The "What changed" column is muted sans summary prose. The file-path column
+ * is inline code (`src/foo.ts`), so its <code> chip keeps the base mono style;
+ * code reads at max(12px, 0.92em) of the 14px table, which is fine. */
+.field-files .field-value .md td {
+  font: var(--fs-ui)/1.5 var(--sans);
+  color: var(--ink-soft);
+}
+
+/* Header cells ("File" / "What changed") stay a muted column label, sized to
+ * the 14px table so they don't balloon to the base .md th's 16px. */
+.field-files .field-value .md th {
+  font: 600 var(--fs-ui)/1.4 var(--sans);
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: var(--ink-soft);
 }
 
 @media (max-width: 479px) {

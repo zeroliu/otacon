@@ -19,6 +19,13 @@ export interface PhaseField {
   startLine: number;
   budgetedLineCount: number;
   listItemCount: number;
+  /**
+   * The field's non-blank content lines (the label line excluded), each with its
+   * raw text and 1-based line number. Purely structural capture — rules.ts reads
+   * the Files field's lines to decide whether they form a GFM table and to anchor
+   * per-row verdicts; the parser never judges them.
+   */
+  contentLines: { text: string; line: number }[];
 }
 
 export interface DetailsBlock {
@@ -74,6 +81,12 @@ export interface Section {
   visualCount: number;
   /** Mermaid fences in the section read path — the lead-diagram check (L7). */
   diagramCount: number;
+  /**
+   * GFM (decision-matrix) tables in the section read path. Tracked apart from
+   * visualCount (which also counts callouts) because L7 accepts a lead matrix as
+   * a satisfying lead visual, but a callout alone never satisfies the nudge.
+   */
+  matrixCount: number;
   /** A `<!-- no-lead-diagram -->` escape-hatch marker was seen in this section. */
   leadDiagramOptOut: boolean;
   /**
@@ -338,6 +351,7 @@ export function parsePlan(content: string): ParsedPlan {
           fenceCount: 0,
           visualCount: 0,
           diagramCount: 0,
+          matrixCount: 0,
           leadDiagramOptOut: false,
           gwtBlocks: [],
           listItems: [],
@@ -411,16 +425,34 @@ export function parsePlan(content: string): ParsedPlan {
     }
 
     // GFM table runs (outside Details): budget-exempt, one visual each. A table
-    // starts where a pipe-bearing line is followed by a delimiter row.
+    // starts where a pipe-bearing line is followed by a delimiter row. A table's
+    // rows are also captured onto the active field's contentLines (structural
+    // only) — a Files table reaches this branch, never the field content branches
+    // below, so without this rules.ts could never see its rows. A table that IS
+    // the Files field is required structure (the canonical Files shape), not a
+    // decorative matrix — it is exempt from the per-phase visual cap so adopting
+    // the table form never quietly eats a phase's decorative-visual budget.
     if (inTable) {
-      if (TABLE_ROW_RE.test(line)) continue;
+      if (TABLE_ROW_RE.test(line)) {
+        if (field) field.contentLines.push({ text: line, line: lineNo });
+        continue;
+      }
       inTable = false; // a non-row line ends the table; fall through
     }
     if (TABLE_ROW_RE.test(line) && isTableDelimiter(lines[idx + 1] ?? "")) {
       inTable = true;
       closeItem();
-      if (phase) phase.visualCount++;
-      else if (section) section.visualCount++;
+      if (field) field.contentLines.push({ text: line, line: lineNo });
+      const filesTable = fieldName === "files";
+      if (!filesTable) {
+        if (phase) phase.visualCount++;
+        else if (section) {
+          section.visualCount++;
+          // A matrix also bumps matrixCount so L7 can treat a lead table as a
+          // satisfying lead visual without crediting callouts (visualCount counts both).
+          section.matrixCount++;
+        }
+      }
       continue;
     }
 
@@ -438,7 +470,7 @@ export function parsePlan(content: string): ParsedPlan {
       if (fm) {
         closeField();
         fieldName = FIELD_LABELS[fm[1]!]!;
-        field = { startLine: lineNo, budgetedLineCount: 1, listItemCount: 0 };
+        field = { startLine: lineNo, budgetedLineCount: 1, listItemCount: 0, contentLines: [] };
         phase.fields[fieldName] = field;
         continue;
       }
@@ -454,6 +486,7 @@ export function parsePlan(content: string): ParsedPlan {
       if (field) {
         field.listItemCount++;
         field.budgetedLineCount++;
+        field.contentLines.push({ text: line, line: lineNo });
       } else if (!phase && section) {
         item = { startLine: lineNo, lineCount: 1, text: line };
         section.listItems.push(item);
@@ -464,6 +497,7 @@ export function parsePlan(content: string): ParsedPlan {
 
     if (field) {
       field.budgetedLineCount++;
+      field.contentLines.push({ text: line, line: lineNo });
     } else if (item && section) {
       item.lineCount++;
       item.text += `\n${line}`;

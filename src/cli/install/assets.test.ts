@@ -96,13 +96,24 @@ describe("single-source wrappers (D7)", () => {
     }
   });
 
-  test("every wrapper tells the agent to draw tree-shaped content as a mermaid diagram", () => {
+  test("every wrapper teaches shape-matched lead visuals and demotes graph TD from the default", () => {
     for (const text of [skillMd(), dogfoodSkillMd()]) {
-      // Tree/hierarchy-shaped content goes to a mermaid diagram, not a monospace
-      // outline; the agent picks the shape (graph TD is the default).
-      expect(text).toContain("When plan content is shaped as a hierarchy or tree");
-      expect(text).toContain("not as a monospace nested outline");
-      expect(text).toContain("`graph TD` (a top-down flowchart) is the natural default");
+      // Tree/hierarchy-shaped content still goes to a mermaid diagram, not a
+      // monospace outline.
+      expect(text).toContain("a hierarchy or tree");
+      expect(text).toContain("monospace nested outline");
+      // graph TD is demoted from "the natural default" to one option among many.
+      expect(text).not.toContain("is the natural default");
+      expect(text).toContain("is one option, not the");
+      // The shape->type rubric and the named anti-patterns ship in every wrapper.
+      expect(text).toContain("Match the representation to the content's shape");
+      expect(text).toContain("Diagram anti-patterns");
+      expect(text).toContain("decision-matrix table");
+      // Deprecated guidance must not slip back into either wrapper: the old
+      // "lead with a diagram" mandate, or the stale fence rule that capped
+      // mermaid at one per read-path section (mermaid is exempt from the cap).
+      expect(text.toLowerCase()).not.toContain("lead with a diagram");
+      expect(text).not.toContain("max one per read-path section");
     }
   });
 
@@ -137,6 +148,19 @@ describe("single-source wrappers (D7)", () => {
       expect(text).toContain('populates a "Prompt" card');
       // The quick reference advertises the optional flag.
       expect(text).toContain('start --title <t> [--prompt "<request>"] [--quick]');
+    }
+  });
+
+  test("every wrapper teaches focused, formatted questions (no walls)", () => {
+    for (const text of [skillMd(), dogfoodSkillMd()]) {
+      // Ask one decision per card, short by default.
+      expect(text).toContain("One question, well-shaped.");
+      // Long questions go through a temp file passed via --question "$(cat ...)".
+      expect(text).toContain('ask --question "$(cat');
+      // The wall-versus-formatted anti-example is present.
+      expect(text).toContain("Wall (avoid):");
+      // Socratic context-feeding points back at the question-shape rule.
+      expect(text).toContain("never one wall");
     }
   });
 
