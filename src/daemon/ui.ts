@@ -35,6 +35,13 @@ export interface UiDeps {
   uiDir?: string | null;
   /** Test override; production keeps the 25s default. */
   heartbeatMs?: number;
+  /**
+   * Fired when a client opens an SSE stream, with `onlySession` (undefined for
+   * the index stream, the id for a per-session stream). The daemon uses the
+   * index-stream connect to refresh PR state on demand. Optional and defensive:
+   * absence is a no-op.
+   */
+  onConnect?: (onlySession?: string) => void;
 }
 
 type UiContext = Context<{ Bindings: NodeBindings }>;
@@ -116,6 +123,14 @@ function sse(
       // gone wrong), the error propagates out of sse() into app.onError with
       // no subscription or heartbeat left behind to leak.
       const snapshotFrame = frame("snapshot", snapshot());
+      // A client just connected: let the daemon react (e.g. refresh PR state on
+      // an index-stream connect). Defensive (optional), and a throw here would
+      // tear down a stream that is otherwise fine, so swallow it.
+      try {
+        deps.onConnect?.(onlySession);
+      } catch {
+        // an onConnect side-effect must never break the stream
+      }
       const close = () => {
         dispose();
         try {

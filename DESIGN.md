@@ -850,8 +850,11 @@ HTTP requests, no contention.
 
 **UI switching.** The **app shell sidebar** is the persistent session list (§10): one
 condensed row per active session — accent, title, repo/branch, status icon, agent dot,
-unread badge — with approved (and implemented / implement_failed) sessions folded into a
-collapsed `approved (n)` disclosure below, the same split the old index read. On desktop
+unread badge, with terminal sessions split below into two collapsible groups: a **PR
+review** group (terminal sessions whose latest PR is still open, expanded by default and
+carrying a count, so work waiting on review stays visible) and a **Done** group (finished
+work: Save-only approvals, merged or closed PRs, failed builds, collapsed by default and
+uncounted), the same split every session surface reads. On desktop
 (≥960px) it's a drag-resizable, collapsible column (240px by default) wrapping every
 route, so switching is one click from anywhere; `/` itself is a welcome pane, not the
 index. Below 960px the sidebar is hidden: the home route renders the list inline (the
@@ -1180,13 +1183,17 @@ browser↔daemon link dot, which now lives in the review header's bar (labelled
 `agent` vs `link`); the status chip stays the primary "your turn" signal. The dot is live while the agent is parked in
 `otacon wait` or its last contact is recent, and is hidden on approved sessions.
 
-**Approved sessions group separately.** The main list holds only active sessions
-(drafting / in review / revising / **implementing** — a live build is active work, so
-it stays in the list, not grouped away); approved (and implemented / implement_failed)
-ones fold into a collapsed `approved (n)` disclosure below it, one click to expand (the
-same disclosure idiom as the activity panel). Approved plans stay readable: opening an
-approved row shows its read-only plan — the disclosure is the only entry point now the
-list no longer keeps them in the active set.
+**Terminal sessions group separately.** The main list holds only active sessions
+(drafting / in review / revising / finalizing / **implementing**; a live build is active
+work, so it stays in the list, not grouped away, and a reopened amendment that carries a
+PR URL but is still non-terminal also stays here). Terminal sessions fall into two
+collapsible groups below the list, keyed off the PR rather than the status alone: a **PR
+review** group (terminal sessions whose latest PR is still open, or not yet probed,
+expanded by default and counted) and a **Done** group (the rest of the terminal set:
+Save-only approvals with no PR, merged or closed PRs, and failed builds, collapsed by
+default and uncounted). Both use the same disclosure idiom as the activity panel.
+Finished plans stay readable: opening a row shows its read-only plan, and the disclosure
+is the only entry point now the list no longer keeps them in the active set.
 
 **Welcome pane.** With no session open, `/` depends on width. At ≥960px it shows a short
 welcome in the content track: when the registry is empty, the empty-state copy (run
@@ -1542,7 +1549,7 @@ Operational requirement: the Mac stays awake while a plan is in review
 | `~/.otacon/sessions/<id>/`                        | Per-session working state, keyed by session id: `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), threads (`threads.json`: comment + question threads with answers, agent replies, reviewer-resolve closes, and anchor states inline), the grill transcript (`transcript.json`), the capped live-activity feed (`activity.json`: the newest ~N `otacon progress` notes), the live-activity stream (`stream.jsonl`: the normalized, capped, append-only event stream, §10a), queues, AND the canonical approved plan `YYYY-MM-DD-<slug>.md`. Removed outright when the session is deleted | n/a (global)                              |
 | `~/.otacon/worktrees/<slug>/`                     | Implement build's git worktree on branch `otacon/impl-<slug>` (base dir is `worktree.dir`, default `~/.otacon/worktrees` — outside the repo)                    | n/a (global, outside the repo)             |
 | `<repo>/<plans.dir>/YYYY-MM-DD-<slug>.md`         | Save-time project copy (default `.otacon/plans`; set `plans.dir=docs/plans` to group with tracked plans)       | yours to commit (or not)                   |
-| `~/.otacon/registry.json`                         | Session registry: ID → repo, branch, title, status, the optional `prompt` (the user's verbatim request from `--prompt`, trimmed and uncapped), `prUrl`, and `impl` (the build's worktree + branch, recorded at Implement-approve; see below)                                                             | n/a (global)                               |
+| `~/.otacon/registry.json`                         | Session registry: ID → repo, branch, title, status, the optional `prompt` (the user's verbatim request from `--prompt`, trimmed and uncapped), `prUrl`, `prState` (the latest PR's GitHub state, refreshed by a `gh` poller; see below), and `impl` (the build's worktree + branch, recorded at Implement-approve; see below)                                                             | n/a (global)                               |
 
 Every session's working state (and its approved plan) lives in the home store keyed
 by its session id (`~/.otacon/sessions/<id>/`), repo-independent. On **Save** it
@@ -1673,6 +1680,17 @@ on the summary (surfaced as the home card's PR link, §10). `otacon clean` shoul
 finished or aborted build's impl worktree and branch alongside archiving its session
 state. The whole build runs in native in-session subagents (subscription-covered, §13);
 the daemon never spawns a model.
+
+Once a session carries a `prUrl`, the daemon tracks that PR's fate with `prState`
+(open / merged / closed). It is the session's LATEST PR state only (no history),
+paired with `prUrl`: a re-opened session that cuts a fresh PR overwrites both via
+implement-done. The state is refreshed by polling GitHub through the `gh` CLI
+(`gh pr view <url> --json state`), reusing the user's existing `gh auth` (no token
+for otacon to store), and a local OS call, never a model API (§13). It is best-effort:
+when `gh` is unavailable, unauthenticated, or the probe otherwise fails, `prState`
+stays absent, and a PR-bearing session with an absent `prState` is treated as still
+open (the home UI degrades to a plain link). otacon tracks only open/merged/closed,
+not CI or review status.
 
 ---
 

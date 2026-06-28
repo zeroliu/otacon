@@ -22,7 +22,7 @@ import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent a
 import { useSessions } from "./api";
 import { linkClick, usePath } from "./router";
 import { useSessionNav } from "./review/session-nav";
-import { partitionByApproval } from "./session-filter";
+import { partitionSessions } from "./session-filter";
 import { SessionList } from "./session-list";
 import { SessionSheetProvider } from "./session-sheet";
 import {
@@ -50,9 +50,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   // `[` / `]` walk the active (non-over) set in activity order — the same set the
   // sidebar list and the mobile session sheet show — so the keyboard never stops
   // on a hidden over session. Mounted unconditionally here (stable hook order) so it's live on
-  // every route, not just the review screen. partitionByApproval is the shared
-  // split (session-filter), never reimplemented.
-  const { active } = partitionByApproval(sessions);
+  // every route, not just the review screen. partitionSessions is the shared
+  // split (session-filter), never reimplemented; only `active` matters here, and
+  // its meaning (the non-terminal set) is unchanged by the three-way split.
+  const { active } = partitionSessions(sessions);
   useSessionNav(active.map((s) => s.id), currentId ?? "");
 
   const [collapsed, toggleCollapsed] = useSidebarCollapsed();

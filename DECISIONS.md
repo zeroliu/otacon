@@ -4067,6 +4067,23 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** The type scale gains a tier between body and title, or grill questions
   need to visually outrank surrounding dossier prose again.
 
+## PR merge detection by polling GitHub via the `gh` CLI (2026-06-27)
+
+- **Decision:** The daemon learns a session's PR fate (`prState`: open / merged / closed)
+  by polling GitHub through the `gh` CLI (`gh pr view <url> --json state`), reusing the
+  user's existing `gh auth`. It tracks open/merged/closed only (no CI or review status),
+  and when `gh` is missing, unauthenticated, or the probe fails, it degrades to leaving
+  `prState` absent (the UI falls back to a plain link). Chosen over (a) no detection at all,
+  which leaves the implemented section a graveyard of stale links, and (b) a manual
+  mark-merged button, which is easy to forget and drifts from reality.
+- **Why:** Live PR status (like Conductor's) lets the home UI section a build by what
+  actually happened to it. The `gh` CLI reuses the user's auth, so otacon stores no token
+  and manages no OAuth, and the call is a local OS invocation, never a model API (the
+  zero-API-spend invariant holds). open/merged/closed is the smallest signal that answers
+  "is this still in flight?" without dragging in checks/reviews complexity.
+- **Revisit when:** GitHub rate limits bite the poll cadence, or users want richer status
+  (CI passing, review approved, draft) surfaced alongside the merge state.
+
 ## Callouts are inline badges, matched like scope pills (2026-06-27)
 
 - **Decision:** A callout marker — `[!risk]`, `[!note]`, `[!decision]`, `[!assumption]` —

@@ -746,6 +746,89 @@ code {
   gap: 10px 14px;
 }
 
+/* The implementation locator: a quieter second row under the bar (only on a
+ * built session), in the same muted/mono telemetry voice as `.rh-loc` so it
+ * never competes with the title. Render-gated on `!compact` in header.tsx, with
+ * a defensive `display: none` under `.compact` below. */
+.rh-impl {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 8px;
+  min-width: 0;
+  font: var(--fs-meta)/1.4 var(--mono);
+  color: var(--ink-soft);
+}
+
+.review-header.compact .rh-impl {
+  display: none;
+}
+
+/* The "Implementation" eyebrow: an uppercase field label leading the line so the
+ * branch / worktree / PR values that follow are self-explanatory, not bare. Same
+ * eyebrow voice (tracked, uppercase, soft ink) used elsewhere; not interactive. */
+.rh-impl-label {
+  flex: none;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.rh-impl-branch {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* The worktree path: ellipsized so a long `/Users/.../worktrees/<slug>` can
+ * never blow out the header; the full path shows on hover via the `title` attr. */
+.rh-impl-worktree {
+  min-width: 0;
+  max-width: 40ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The PR badge: the `.session-badge` pill, recolored by GitHub PR state. Open
+ * keeps the accent "live/attention" tone; merged reads done (the approved
+ * green); closed goes muted/caution (the failed palette). */
+.pr-badge {
+  flex: none;
+  font: 600 var(--fs-meta)/1 var(--mono);
+  letter-spacing: 0.04em;
+  border-radius: 999px;
+  padding: 3px 8px;
+  text-decoration: none;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--accent) 85%, var(--ink-soft));
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.pr-badge:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-color: var(--accent);
+}
+
+.pr-badge:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.pr-badge[data-state="merged"] {
+  color: var(--chip-approved-ink);
+  background: var(--chip-approved-bg);
+  border-color: color-mix(in srgb, var(--chip-approved-ink) 40%, transparent);
+}
+
+.pr-badge[data-state="closed"] {
+  color: var(--chip-failed-ink);
+  background: var(--chip-failed-bg);
+  border-color: color-mix(in srgb, var(--chip-failed-ink) 40%, transparent);
+}
+
 .review-wait {
   margin-top: 20px;
   padding: 22px;
@@ -4944,14 +5027,15 @@ code {
   outline-offset: 1px;
 }
 
-/* The collapsed approved disclosure, parallel to home's .approved-group but
- * sized for the sidebar: the same button + count + caret idiom, holding the
- * condensed over rows. */
-.sl-approved {
+/* A collapsible sidebar group of terminal sessions (PR review + Done), parallel
+ * to home's .approved-group but sized for the sidebar: the same button + caret
+ * idiom holding the condensed rows. PR review shows the count chip; Done omits
+ * it (the .sl-group-count span simply isn't rendered there). */
+.sl-group {
   border-top: 1px solid var(--line);
 }
 
-.sl-approved-toggle {
+.sl-group-toggle {
   display: flex;
   align-items: center;
   gap: 9px;
@@ -4968,26 +5052,26 @@ code {
   text-align: left;
 }
 
-.sl-approved-toggle:hover {
+.sl-group-toggle:hover {
   color: var(--ink);
 }
 
-.sl-approved-toggle:focus-visible {
+.sl-group-toggle:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
 
-.sl-approved-word {
+.sl-group-word {
   flex: none;
   color: var(--ink);
 }
 
-.sl-approved-count {
+.sl-group-count {
   flex: none;
   color: var(--accent);
 }
 
-.sl-approved-caret {
+.sl-group-caret {
   margin-left: auto;
   flex: none;
   color: var(--accent);
@@ -4995,7 +5079,7 @@ code {
 
 /* Drop the first row's top rule — the toggle already rules the section off, so
  * a doubled hairline would read as a gap. */
-.sl-approved-rows .sl-row:first-child {
+.sl-group-rows .sl-row:first-child {
   border-top: none;
 }
 

@@ -18,7 +18,7 @@ import type { MouseEvent } from "react";
 import { useEffect, useState } from "react";
 import type { LiveSession } from "../api";
 import { AgentDot, StatusChip } from "../chip";
-import { relativeTime, repoName } from "../format";
+import { prNumber, relativeTime, repoName } from "../format";
 import { navigate } from "../router";
 import { SessionMenuButton } from "../session-sheet";
 import type { ReviewView } from "./banner";
@@ -150,6 +150,35 @@ export function ReviewHeader({
             the list (CSS). Sits where the switcher used to, at the bar's end. */}
         <SessionMenuButton className="rh-menu" />
       </div>
+      {/* The implementation locator: a quiet second row carrying the build's
+          branch, its (ellipsized) worktree path, and a PR badge, only once a
+          build has been approved (`session.impl`). Hidden while compact so a
+          dropped scroll frame can't leave it half-shown, and so plan-review
+          sessions (no impl) gain zero clutter. */}
+      {session.impl && !compact && (
+        <div className="rh-impl">
+          <span className="rh-impl-label">Implementation</span>
+          <span className="rh-impl-branch" title={session.impl.branch}>
+            {session.impl.branch}
+          </span>
+          <span className="rh-impl-worktree" title={session.impl.worktree}>
+            {session.impl.worktree}
+          </span>
+          {session.prUrl && (
+            <a
+              className="pr-badge"
+              data-state={session.prState ?? "open"}
+              href={session.prUrl}
+              target="_blank"
+              rel="noreferrer"
+              aria-label={`pull request ${prNumber(session.prUrl) ?? ""} (${session.prState ?? "open"})`}
+              title={`pull request ${prNumber(session.prUrl) ?? ""} (${session.prState ?? "open"})`}
+            >
+              {prNumber(session.prUrl) ?? "PR"}
+            </a>
+          )}
+        </div>
+      )}
     </header>
   );
 }

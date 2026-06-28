@@ -61,6 +61,7 @@ import { diffPlans } from "./diff.js";
 import { lint } from "./linter/index.js";
 import { slugify } from "./linter/parse.js";
 import { Notifier } from "./notify.js";
+import { startPrPolling } from "./pr-status.js";
 import { Presence } from "./presence.js";
 import type { ParkHandle } from "./queue.js";
 import { SessionQueue } from "./queue.js";
@@ -296,6 +297,20 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     notifier.publish({ type: "grill", session: id, data: { session: id, entry } });
   const publishStream = (id: string, events: StreamEvent[]): void =>
     notifier.publish({ type: "stream", session: id, data: { session: id, events } });
+
+  // The PR poller refreshes un-settled PRs (timer + on-demand) and publishes any
+  // state change so the home UI re-sections an implemented plan when its PR
+  // merges or closes (see pr-status.ts). `pollNow` is kicked once at startup and
+  // again whenever the index stream connects (the onConnect hook below).
+  const prPoller = startPrPolling({
+    listSessions: () => store.listSessions(),
+    updateSession: (id, patch) => store.updateSession(id, patch),
+    publish: (id) => {
+      const session = store.getSession(id);
+      if (session) publishSession(session);
+    },
+  });
+  void prPoller.pollNow(); // fire-and-forget: never blocks server creation
 
   // Monotonic per-session seq source for the live-activity stream (the
   // automatic, cross-agent activity stream): one StreamSeq per session id,
@@ -1773,7 +1788,10 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     const status = failed === true ? "implement_failed" : "implemented";
     const updated = store.updateSession(session.id, {
       status,
-      ...(typeof pr === "string" ? { prUrl: pr } : {}),
+      // Stamp the fresh PR `open` so the home UI sections it immediately, without
+      // waiting for the poller. Overwrites both fields atomically: a re-opened
+      // session that cut a new PR after a merge resets to the new open one.
+      ...(typeof pr === "string" ? { prUrl: pr, prState: "open" as const } : {}),
     });
     stopTailer(session.id); // build is over (both outcomes terminal): stop tailing
     publishSession(updated); // the chip flips + the PR link appears live
@@ -1821,6 +1839,12 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     getTranscript: (id) => readTranscript(store.transcriptPath(id)),
     getActivity: (id) => readActivity(store.activityPath(id)),
     getStream: (id) => readStream(store.streamPath(id), loadStreamCap(id)),
+    // The index stream (onlySession === undefined) connecting means the home UI
+    // is showing the section list: refresh un-settled PRs so a merge/close that
+    // landed while no tab was open re-sections within a frame, not a poll cycle.
+    onConnect: (onlySession) => {
+      if (onlySession === undefined) void prPoller.pollNow();
+    },
     uiDir: options.uiDir,
     heartbeatMs: options.sseHeartbeatMs,
   });

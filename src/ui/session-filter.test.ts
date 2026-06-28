@@ -1,14 +1,21 @@
-// Pins the one split both the switcher and the home list read (session registry and switcher,
-// review UI, approval and archive lifecycle): the terminal set is the only divider, order is preserved on both
-// sides, and no session is dropped or duplicated — the property the "they can
-// never disagree" claim rests on. `implementing` is active, not over. Runs
+// Pins the split every session surface reads (session registry and switcher,
+// review UI, approval and archive lifecycle): `isOver` is the binary terminal
+// divider, and `partitionSessions` layers the three-way active / PR review / done
+// split keyed off the PR. Order is preserved within each group, and no session
+// is dropped or duplicated (the property the "they can never disagree" claim
+// rests on). `implementing` is active, not over; a reopened amendment that
+// carries a prUrl but is still non-terminal stays active, NOT in PR review. Runs
 // under the root tsconfig/bun (no DOM needed).
 
 import { describe, expect, test } from "bun:test";
 import type { SessionStatus, SessionSummary } from "../shared/types.js";
-import { isOver, partitionByApproval } from "./session-filter.js";
+import { isOver, partitionSessions, prInReview } from "./session-filter.js";
 
-function session(id: string, status: SessionStatus): SessionSummary {
+function session(
+  id: string,
+  status: SessionStatus,
+  pr?: { prUrl?: string; prState?: "open" | "merged" | "closed" },
+): SessionSummary {
   return {
     id,
     title: id,
@@ -24,6 +31,7 @@ function session(id: string, status: SessionStatus): SessionSummary {
     pendingEvents: 0,
     openQuestions: 0,
     parked: false,
+    ...pr,
   };
 }
 
@@ -41,28 +49,69 @@ describe("isOver", () => {
   });
 });
 
-describe("partitionByApproval", () => {
-  test("splits on the terminal set; implementing stays active", () => {
-    const { active, over } = partitionByApproval([
-      session("a", "in_review"),
-      session("b", "approved"),
-      session("c", "implementing"),
-      session("d", "implemented"),
-      session("e", "implement_failed"),
-    ]);
-    expect(active.map((s) => s.id)).toEqual(["a", "c"]);
-    expect(over.map((s) => s.id)).toEqual(["b", "d", "e"]);
+describe("prInReview", () => {
+  test("terminal + prUrl + open → true", () => {
+    expect(prInReview(session("a", "implemented", { prUrl: "u", prState: "open" }))).toBe(true);
   });
 
-  test("preserves the input order within each list", () => {
-    const { active, over } = partitionByApproval([
+  test("terminal + prUrl + no prState → true (not yet probed counts as open)", () => {
+    expect(prInReview(session("a", "implemented", { prUrl: "u" }))).toBe(true);
+  });
+
+  test("terminal + prUrl + merged or closed → false", () => {
+    expect(prInReview(session("a", "implemented", { prUrl: "u", prState: "merged" }))).toBe(false);
+    expect(prInReview(session("a", "implemented", { prUrl: "u", prState: "closed" }))).toBe(false);
+  });
+
+  test("terminal with NO prUrl → false", () => {
+    expect(prInReview(session("a", "approved"))).toBe(false);
+    expect(prInReview(session("a", "implement_failed"))).toBe(false);
+  });
+
+  test("non-terminal WITH a prUrl → false (reopened amendment stays active)", () => {
+    expect(prInReview(session("a", "implementing", { prUrl: "u", prState: "open" }))).toBe(false);
+    expect(prInReview(session("a", "revising", { prUrl: "u" }))).toBe(false);
+  });
+});
+
+describe("partitionSessions", () => {
+  test("routes each membership case to exactly one bucket", () => {
+    const { active, prReview, done } = partitionSessions([
+      // terminal + open PR → prReview
+      session("pr-open", "implemented", { prUrl: "u", prState: "open" }),
+      // terminal + PR not yet probed → prReview (treated as open)
+      session("pr-unprobed", "implemented", { prUrl: "u" }),
+      // terminal + merged PR → done
+      session("pr-merged", "implemented", { prUrl: "u", prState: "merged" }),
+      // terminal + closed PR → done
+      session("pr-closed", "implemented", { prUrl: "u", prState: "closed" }),
+      // terminal approved, Save-only (no PR) → done
+      session("save-only", "approved"),
+      // terminal failed build, no PR → done
+      session("failed", "implement_failed"),
+      // non-terminal reopened amendment carrying a prUrl → active (NOT prReview)
+      session("amend", "implementing", { prUrl: "u", prState: "open" }),
+      // plain non-terminal → active
+      session("review", "in_review"),
+      session("draft", "draft"),
+    ]);
+    expect(active.map((s) => s.id)).toEqual(["amend", "review", "draft"]);
+    expect(prReview.map((s) => s.id)).toEqual(["pr-open", "pr-unprobed"]);
+    expect(done.map((s) => s.id)).toEqual(["pr-merged", "pr-closed", "save-only", "failed"]);
+  });
+
+  test("preserves the input order within each bucket", () => {
+    const { active, prReview, done } = partitionSessions([
       session("p3", "approved"),
       session("x2", "revising"),
+      session("r1", "implemented", { prUrl: "u", prState: "open" }),
       session("p1", "implemented"),
       session("x1", "implementing"),
+      session("r2", "implemented", { prUrl: "u" }),
     ]);
     expect(active.map((s) => s.id)).toEqual(["x2", "x1"]);
-    expect(over.map((s) => s.id)).toEqual(["p3", "p1"]);
+    expect(prReview.map((s) => s.id)).toEqual(["r1", "r2"]);
+    expect(done.map((s) => s.id)).toEqual(["p3", "p1"]);
   });
 
   test("never drops or duplicates a session", () => {
@@ -71,24 +120,35 @@ describe("partitionByApproval", () => {
       session("b", "in_review"),
       session("c", "implement_failed"),
       session("d", "implementing"),
+      session("e", "implemented", { prUrl: "u", prState: "open" }),
+      session("f", "implemented", { prUrl: "u", prState: "merged" }),
     ];
-    const { active, over } = partitionByApproval(input);
-    expect(active.length + over.length).toBe(input.length);
-    expect([...active, ...over].map((s) => s.id).sort()).toEqual(["a", "b", "c", "d"]);
+    const { active, prReview, done } = partitionSessions(input);
+    expect(active.length + prReview.length + done.length).toBe(input.length);
+    expect([...active, ...prReview, ...done].map((s) => s.id).sort()).toEqual([
+      "a",
+      "b",
+      "c",
+      "d",
+      "e",
+      "f",
+    ]);
   });
 
-  test("empty input yields two empty lists", () => {
-    const { active, over } = partitionByApproval([]);
+  test("empty input yields three empty lists", () => {
+    const { active, prReview, done } = partitionSessions([]);
     expect(active).toEqual([]);
-    expect(over).toEqual([]);
+    expect(prReview).toEqual([]);
+    expect(done).toEqual([]);
   });
 
   test("all-terminal leaves the active list empty", () => {
-    const { active, over } = partitionByApproval([
+    const { active, prReview, done } = partitionSessions([
       session("a", "approved"),
-      session("b", "implemented"),
+      session("b", "implemented", { prUrl: "u", prState: "open" }),
     ]);
     expect(active).toEqual([]);
-    expect(over.map((s) => s.id)).toEqual(["a", "b"]);
+    expect(prReview.map((s) => s.id)).toEqual(["b"]);
+    expect(done.map((s) => s.id)).toEqual(["a"]);
   });
 });

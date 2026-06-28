@@ -264,7 +264,7 @@ export class Store {
 
   updateSession(
     id: string,
-    patch: Partial<Pick<RegistrySession, "title" | "status" | "prUrl" | "impl">>,
+    patch: Partial<Pick<RegistrySession, "title" | "status" | "prUrl" | "prState" | "impl">>,
   ): RegistrySession {
     const session = this.require(id);
     Object.assign(session, patch);

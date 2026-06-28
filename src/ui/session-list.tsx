@@ -2,10 +2,15 @@
 // session — status glyph, agent dot, unread badge — over the live index SSE
 // stream. Rendered in two places off the same component: the persistent desktop
 // sidebar (≥960px) and the mobile session sheet the ☰ overflow menu opens
-// (<960px). Active sessions lead in delivered activity order; over (terminal)
-// sessions sit behind a collapsed `approved (n)` disclosure, mirroring the old
-// home screen's ApprovedSection so the two surfaces can never disagree about
-// what is hidden.
+// (<960px). The list splits three ways (session-filter `partitionSessions`):
+// active sessions lead in delivered activity order, then a "PR review" group
+// (terminal sessions whose latest PR is still open), EXPANDED by default and
+// counted, so work waiting on review stays visible, then a "Done" group
+// (finished work: Save-only approvals, merged/closed PRs, failed builds),
+// COLLAPSED by default and UNCOUNTED, decluttering the queue while keeping
+// finished plans one tap away. Both collapsible groups render through the one
+// SessionGroup component, so the two surfaces can never disagree about what is
+// hidden.
 
 import {
   Check,
@@ -26,7 +31,7 @@ import { repoName } from "./format";
 import { DeleteDialog } from "./review/delete";
 import { navigate } from "./router";
 import { unreadCount } from "./seen";
-import { isOver, partitionByApproval } from "./session-filter";
+import { isOver, partitionSessions } from "./session-filter";
 import type { NavIcon } from "./session-status";
 import { navState } from "./session-status";
 import { useNow } from "./tick";
@@ -56,10 +61,11 @@ export function SessionList({
   // One ticking clock for the whole list, like the index: keeps every row's
   // agent-presence dot honest while the sidebar idles between SSE frames.
   const now = useNow(30_000);
-  // The shared split (session-filter): active sessions stay in the main list,
-  // over (terminal) ones fall to the collapsed disclosure below — the same
-  // partition every session surface reads, so no surface disagrees.
-  const { active, over } = partitionByApproval(sessions);
+  // The shared three-way split (session-filter): active sessions stay in the main
+  // list, then a counted/expanded "PR review" group, then a collapsed/uncounted
+  // "Done" group: the same partition every session surface reads, so no surface
+  // disagrees.
+  const { active, prReview, done } = partitionSessions(sessions);
   return (
     <nav className="session-list" aria-label="sessions">
       {active.map((session) => (
@@ -71,48 +77,79 @@ export function SessionList({
           onNavigate={onNavigate}
         />
       ))}
-      {over.length > 0 && (
-        <ApprovedRows sessions={over} current={current} now={now} onNavigate={onNavigate} />
+      {prReview.length > 0 && (
+        <SessionGroup
+          key="pr-review"
+          label="PR review"
+          sessions={prReview}
+          defaultOpen={true}
+          showCount={true}
+          current={current}
+          now={now}
+          onNavigate={onNavigate}
+        />
+      )}
+      {done.length > 0 && (
+        <SessionGroup
+          key="done"
+          label="Done"
+          sessions={done}
+          defaultOpen={false}
+          showCount={false}
+          current={current}
+          now={now}
+          onNavigate={onNavigate}
+        />
       )}
     </nav>
   );
 }
 
 /**
- * Over sessions — the terminal set (approved, plus implemented/implement_failed
- * once a build finishes) — collapsed by default behind an `approved (n)`
- * disclosure, mirroring the home screen's ApprovedSection (button + aria-expanded
- * + caret + useState): declutters the live queue while keeping finished plans one
- * tap away, with the same condensed rows.
+ * One collapsible group of terminal sessions: the same button + aria-expanded +
+ * caret + useState disclosure idiom, holding the condensed rows. Drives both
+ * sidebar groups: "PR review" (defaultOpen + showCount, so work waiting on review
+ * leads and carries a count) and "Done" (collapsed, no count). When `showCount`
+ * is false the count span is omitted entirely (no hidden zero), and the
+ * aria-label folds the count in only when shown.
  */
-function ApprovedRows({
+function SessionGroup({
+  label,
   sessions,
+  defaultOpen,
+  showCount,
   current,
   now,
   onNavigate,
 }: {
+  label: string;
   sessions: LiveSession[];
+  defaultOpen: boolean;
+  showCount: boolean;
   current?: string;
   now: number;
   onNavigate?: () => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   return (
-    <section className="sl-approved" aria-label="approved sessions">
+    <section
+      className="sl-group"
+      aria-label={showCount ? `${label} sessions (${sessions.length})` : `${label} sessions`}
+    >
       <button
         type="button"
-        className="sl-approved-toggle"
+        className="sl-group-toggle"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
       >
-        <span className="sl-approved-word">approved</span>
-        <span className="sl-approved-count">{sessions.length}</span>
-        <span className="sl-approved-caret" aria-hidden="true">
+        <span className="sl-group-word">{label}</span>
+        {showCount && <span className="sl-group-count">{sessions.length}</span>}
+        <span className="sl-group-caret" aria-hidden="true">
           {open ? "▾" : "▸"}
         </span>
       </button>
       {open && (
-        <div className="sl-approved-rows">
+        <div className="sl-group-rows">
           {sessions.map((session) => (
             <SessionRow
               key={session.id}
