@@ -4249,3 +4249,21 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   genuinely optional, which is the opposite of what the cap exists to ration.
 - **Revisit when:** The visual-cap model changes (e.g. required structural elements get a
   separate budget, or the cap is replaced by a different "no wall of widgets" mechanism).
+
+## Implement PR body is a reviewer-first template ported from the plan
+
+- **Decision:** The Implement-loop Finish step authors the PR body from a fixed
+  reviewer-first template (Summary = Why/What + the plan's lead visual; Decisions ported
+  from the plan with the `← q<n>` cites stripped; Changes = one bullet per commit with goal
+  + behavior-to-verify; optional Notes). It omits the local-only otacon session hash and
+  the mechanical `bun test N pass` report. On an amendment the whole body is refreshed to
+  the PR's current cumulative state rather than appended with `### Update: Phase N` stubs.
+  It stays agent-authored prose (guidance in the wrapper), with no new linter/gate.
+- **Why:** The old "plan summary + per-phase log" instruction produced implementation-log
+  PR bodies (mixed why/what/how, file-by-file dumps the diff already shows, a useless
+  test-pass block, a session hash reviewers can't use). Porting the plan's own sections
+  gives reviewers why/what/decisions/goals for free; a linter would be heavy for
+  end-of-build free-form prose, so guidance + the wrapper guard test is the lighter
+  mechanism.
+- **Revisit when:** Agents drift from the template often enough to warrant a submit-time
+  or PR-time check, or the plan schema's section names change.
