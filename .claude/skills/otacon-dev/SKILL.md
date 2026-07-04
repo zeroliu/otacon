@@ -223,12 +223,25 @@ context stays lean.
      review still flags, or a subagent is stuck) → on the FIRST blocker,
      `./bin/otacon ask` with options `retry|skip|abort|guidance`, park in `./bin/otacon wait`,
      and act on the answer. No auto-retry.
-3. **Finish.** On a **fresh** build, open a PR against the default branch with
-   `gh pr create` (PR body = the plan summary + the per-phase log; fall back to the
-   local branch + path when there is no remote). On an **amendment**, the PR already
-   exists: push the branch and it updates, so reuse its URL (it is on the session;
-   `./bin/otacon status` reports `prUrl`). Either way finish with
-   `./bin/otacon implement-done --pr <url>`. On abort, run `./bin/otacon implement-done --failed`.
+3. **Finish — write a reviewer-first PR body.** Author the body by PORTING the approved
+   plan (read from the home `path`), not by re-describing the diff:
+   - `## Summary` — lead with the plan's Summary visual when it shows the change's
+     shape, then **Why** (the problem this PR fixes) and **What** (the behavior/output
+     that changes, not which files or modules moved).
+   - `## Decisions` — port the plan's Decisions (decision + rationale); drop the
+     `← q<n>` cites, which only index local grill questions.
+   - `## Changes` — one bullet per commit, led by its short SHA: what that commit
+     achieves + the behavior to verify (port each phase's Goal + Verification/gwt). No
+     file-by-file lists; the diff carries those.
+   - `## Notes / follow-ups` (optional) — pre-existing failures or deferred scope.
+   Omit the otacon session id/hash (local-only) and any mechanical test report
+   (`bun test N pass`, typecheck clean).
+   Open the PR against the default branch with `gh pr create` (fall back to noting the
+   local branch + `path` when there is no remote). On an **amendment** the PR already
+   exists: push to update it and **refresh the whole body** to the PR's current
+   cumulative state — do not append `### Update: Phase N` stubs — then reuse its URL (on
+   the session; `./bin/otacon status` reports `prUrl`). Either way finish with
+   `./bin/otacon implement-done --pr <url>`; on abort, run `./bin/otacon implement-done --failed`.
 
 While `implementing` the Stop hook still keeps you on the line — never end the turn
 until `implement-done`.

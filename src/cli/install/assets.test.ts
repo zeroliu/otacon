@@ -173,4 +173,21 @@ describe("single-source wrappers (D7)", () => {
       expect(text).toContain("next clean submit **finalizes**");
     }
   });
+
+  test("every wrapper teaches the reviewer-first PR body ported from the plan", () => {
+    for (const text of [skillMd(), dogfoodSkillMd()]) {
+      // The Finish step now authors a reviewer-first PR body by porting the plan,
+      // not a free-form implementation log.
+      expect(text).toContain("reviewer-first PR body");
+      // The template's per-commit Changes section.
+      expect(text).toContain("## Changes");
+      // Decisions are ported with the local grill-question cites stripped.
+      expect(text).toContain("drop the");
+      expect(text).toContain("← q<n>");
+      // On an amendment the whole body is refreshed, not appended as stubs.
+      expect(text).toContain("refresh the whole body");
+      // The old implementation-log phrasing is gone.
+      expect(text).not.toContain("the plan summary + the per-phase log");
+    }
+  });
 });
