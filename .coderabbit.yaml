@@ -1,0 +1,6 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# otacon opens Approve & Implement PRs as drafts by default (pr.draft), so ask
+# CodeRabbit to review draft PRs too instead of skipping them.
+reviews:
+  auto_review:
+    drafts: true
