@@ -93,6 +93,16 @@ export interface SocraticConfig {
   default: boolean;
 }
 
+/**
+ * PR creation defaults for Approve & Implement. When `draft` is true (default),
+ * the implement loop opens the PR as a draft (`gh pr create --draft`); set it
+ * false to open ready-for-review PRs. Governs PR creation only; amendments push
+ * to the existing PR and never change its draft state.
+ */
+export interface PrConfig {
+  draft: boolean;
+}
+
 export interface OtaconConfig {
   budgets: Budgets;
   activity: ActivityConfig;
@@ -102,6 +112,7 @@ export interface OtaconConfig {
   plans: PlansConfig;
   update: UpdateConfig;
   socratic: SocraticConfig;
+  pr: PrConfig;
 }
 
 export const DEFAULT_CONFIG: OtaconConfig = {
@@ -133,6 +144,7 @@ export const DEFAULT_CONFIG: OtaconConfig = {
   plans: { dir: ".otacon/plans" },
   update: { auto: true },
   socratic: { default: false },
+  pr: { draft: true },
 };
 
 export type ConfigFieldType = "int" | "bool" | "path";
@@ -358,6 +370,15 @@ export const CONFIG_SCHEMA: ConfigField[] = [
     type: "bool",
     default: DEFAULT_CONFIG.socratic.default,
   },
+  // pr — PR creation defaults for Approve & Implement
+  {
+    section: "pr",
+    key: "draft",
+    label: "Draft PRs by default",
+    description: "Open Approve & Implement PRs as drafts (gh pr create --draft); off opens ready-for-review PRs.",
+    type: "bool",
+    default: DEFAULT_CONFIG.pr.draft,
+  },
 ];
 
 type CoerceResult = { ok: true; value: number | boolean | string } | { ok: false };
@@ -446,6 +467,7 @@ function overlayConfig(base: OtaconConfig, raw: unknown, source: string): Otacon
     plans: { ...base.plans },
     update: { ...base.update },
     socratic: { ...base.socratic },
+    pr: { ...base.pr },
   };
   const mergedSections = merged as unknown as Record<string, Record<string, unknown>>;
   walkProvidedFields(raw, (section, field, result) => {
@@ -468,7 +490,7 @@ function overlayConfig(base: OtaconConfig, raw: unknown, source: string): Otacon
  * (`<repo>/.otacon/config.local.json`, personal). Closest wins. Loaded fresh
  * on every use so tuning takes effect immediately. Each file is overlaid field
  * by field against CONFIG_SCHEMA (budgets, activity, stream, notifications,
- * worktree, plans, update, socratic).
+ * worktree, plans, update, socratic, pr).
  */
 export function loadConfig(repoRoot?: string): OtaconConfig {
   const overlay = (source: string, into: OtaconConfig): OtaconConfig =>
