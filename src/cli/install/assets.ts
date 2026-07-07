@@ -226,11 +226,14 @@ context stays lean.
    - \`## Notes / follow-ups\` (optional) — pre-existing failures or deferred scope.
    Omit the otacon session id/hash (local-only) and any mechanical test report
    (\`bun test N pass\`, typecheck clean).
-   Open the PR against the default branch with \`gh pr create\` (fall back to noting the
-   local branch + \`path\` when there is no remote). On an **amendment** the PR already
+   Open the PR against the default branch with \`gh pr create\`, as a **draft by
+   default**: run \`${cmd} config get pr.draft\` and pass \`--draft\` to \`gh pr create\`
+   unless it returns \`false\` (fall back to noting the local branch + \`path\` when there
+   is no remote). \`pr.draft\` governs creation only. On an **amendment** the PR already
    exists: push to update it and **refresh the whole body** to the PR's current
    cumulative state — do not append \`### Update: Phase N\` stubs — then reuse its URL (on
-   the session; \`${cmd} status\` reports \`prUrl\`). Either way finish with
+   the session; \`${cmd} status\` reports \`prUrl\`); the amendment does NOT change the PR's
+   draft or ready state. Either way finish with
    \`${cmd} implement-done --pr <url>\`; on abort, run \`${cmd} implement-done --failed\`.
 
 While \`implementing\` the Stop hook still keeps you on the line — never end the turn

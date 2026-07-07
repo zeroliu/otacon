@@ -4267,3 +4267,17 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   mechanism.
 - **Revisit when:** Agents drift from the template often enough to warrant a submit-time
   or PR-time check, or the plan schema's section names change.
+
+## Approve & Implement opens PRs as draft by default (2026-07-06)
+
+- **Decision:** The Implement loop opens a fresh PR as a draft by default, via a new
+  `pr.draft` config (default true): the agent reads `pr.draft` and passes `--draft` to
+  `gh pr create` unless it is false. The knob governs PR creation only; an amendment
+  pushes to the existing PR and never re-drafts it.
+- **Why:** Draft-first lets the human mark a PR ready deliberately after skimming, rather
+  than the PR announcing itself as review-ready the instant the build finishes. Making it
+  configurable respects repos and teams that prefer ready-for-review PRs. Scoping the knob
+  to creation only avoids surprising an in-flight review by flipping an already-open PR
+  back to draft on a later amendment.
+- **Revisit when:** Users want a per-session override (a start-time flag), or want the live
+  PR-status pill to distinguish draft from open (both deferred this round).

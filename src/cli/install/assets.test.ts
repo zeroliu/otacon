@@ -190,4 +190,18 @@ describe("single-source wrappers (D7)", () => {
       expect(text).not.toContain("the plan summary + the per-phase log");
     }
   });
+
+  test("every wrapper teaches draft-by-default PR creation via pr.draft / --draft", () => {
+    for (const text of [skillMd(), dogfoodSkillMd()]) {
+      // The Finish step reads the pr.draft knob and passes --draft to gh pr create
+      // unless it returns false; draft governs creation only, so amendments never
+      // re-draft an open PR.
+      expect(text).toContain("pr.draft");
+      expect(text).toContain("--draft");
+      expect(text).toContain("config get pr.draft");
+      expect(text).toContain("governs creation only");
+      // The amendment sentence spells out that draft is a creation-time knob only.
+      expect(text).toContain("does NOT change the PR's");
+    }
+  });
 });
