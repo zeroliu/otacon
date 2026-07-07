@@ -808,8 +808,10 @@ session.
    a separate `/code-review --fix` subagent that resolves findings, committing each
    clean+green phase. On the **first** blocked phase it pauses with an `otacon ask`
    (retry / skip / abort / guidance) and parks in `wait`. On success it opens a PR
-   against the default branch (PR body is a reviewer-first template ported from the
-   plan: Summary (Why/What + the plan's lead visual), Decisions, per-commit Changes,
+   against the default branch, **as a draft by default** (governed by the `pr.draft`
+   config, default true; creation only, so an amendment pushes to the existing PR and
+   never changes its draft state). The PR body is a reviewer-first template ported from
+   the plan: Summary (Why/What + the plan's lead visual), Decisions, per-commit Changes,
    Notes; no plan file
    rides in the PR; the full plan lives only in the home dir until the session is deleted) and reports it with
    `otacon implement-done --pr <url>` (or `--failed` on abort), which flips the session
@@ -1674,11 +1676,14 @@ subagent (scoped to that phase's Goal/Files/Verification), then a separate
 `/code-review --fix` subagent that applies findings; a clean+green phase is committed
 (**one commit per green phase**) before the next begins. On the **first** blocked phase
 the agent pauses with an `otacon ask` and parks. When every phase is green it opens a PR
-against the repo's **default branch** with `gh` (PR body is a reviewer-first template
+against the repo's **default branch** with `gh`, **as a draft by default**: it reads the
+`pr.draft` config (default true) and passes `--draft` to `gh pr create` unless that
+returns false. The knob governs creation only. (PR body is a reviewer-first template
 ported from the plan: Summary (Why/What + the plan's lead visual), Decisions, per-commit
 Changes, Notes; it falls back to noting the local branch + path when there is no remote).
 On an **amendment** the body is refreshed to the PR's current cumulative state, not
-appended as `### Update: Phase N` revision stubs. The agent then reports the outcome
+appended as `### Update: Phase N` revision stubs, and the push does not change the PR's
+draft state. The agent then reports the outcome
 with `otacon implement-done --pr <url>` (or `--failed` on
 abort) — flipping the session to `implemented` / `implement_failed` and recording `prUrl`
 on the summary (surfaced as the home card's PR link, §10). `otacon clean` should prune a
@@ -1887,7 +1892,8 @@ live-activity stream (`stream.cap`, `stream.detailMaxChars`, `stream.labelMaxCha
 `notifications.desktop`, `worktree.dir` (base dir for Implement build worktrees, default
 `~/.otacon/worktrees`, outside the repo), `plans.dir` (where **Save** writes the
 project copy of the approved plan, default `.otacon/plans`; set it to `docs/plans` to
-group it with other tracked plans), `update.auto` (auto-update at `otacon start`,
+group it with other tracked plans), `pr.draft` (bool, default true; open Approve &
+Implement PRs as drafts), `update.auto` (auto-update at `otacon start`,
 default true; see Updating below), and `socratic.default` (mint new sessions in
 Socratic mode unless `otacon start --socratic` overrides it, default false). The home session store location is fixed
 (`~/.otacon/sessions/`), not configurable.

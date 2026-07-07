@@ -251,6 +251,17 @@ describe("loadConfig update", () => {
   });
 });
 
+describe("loadConfig pr", () => {
+  test("pr.draft defaults to true", () => {
+    expect(loadConfig(repo).pr.draft).toBe(true);
+  });
+
+  test("project-scope config can turn draft off", () => {
+    writeRepo({ pr: { draft: false } });
+    expect(loadConfig(repo).pr.draft).toBe(false);
+  });
+});
+
 describe("CONFIG_SCHEMA guard", () => {
   test("enumerates exactly the leaf keys of DEFAULT_CONFIG", () => {
     const schemaLeaves = new Set(CONFIG_SCHEMA.map((f) => `${f.section}.${f.key}`));
