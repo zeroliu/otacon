@@ -19,7 +19,7 @@ import {
   opencodeSkillPath,
   settingsRegisterStopHook,
 } from "../install/locations.js";
-import { ensureWrapper, type WrapperMode } from "../install/wrapper.js";
+import { ensureSkill, type WrapperMode } from "../install/wrapper.js";
 import { fail, notice, printJson, usageError } from "../output.js";
 import { findRepoRoot } from "../session.js";
 
@@ -40,8 +40,8 @@ function installAgent(
       const skill = claudeSkillPath(scope);
       // The skill wrapper is symlinked at user scope (auto-refreshes on binary
       // upgrade) and copied at project scope (a committed file must be machine
-      // independent); ensureWrapper decides and reports which.
-      const { mode } = ensureWrapper(skill, scope.kind);
+      // independent); ensureSkill decides and reports which.
+      const { mode } = ensureSkill(skill, scope.kind);
       // The Stop hook script lives in the user home only — it is never written at
       // project scope (DECISIONS.md "Stop hook deferred at project scope"), so a
       // committed `.claude/` ships an inert skill wrapper, never a hook pointing at
@@ -55,12 +55,12 @@ function installAgent(
     }
     case "codex": {
       const skill = codexSkillPath(scope);
-      const { mode } = ensureWrapper(skill, scope.kind);
+      const { mode } = ensureSkill(skill, scope.kind);
       return { agent, files: [skill], mode };
     }
     case "opencode": {
       const skill = opencodeSkillPath(scope);
-      const { mode } = ensureWrapper(skill, scope.kind);
+      const { mode } = ensureSkill(skill, scope.kind);
       return { agent, files: [skill], mode };
     }
   }

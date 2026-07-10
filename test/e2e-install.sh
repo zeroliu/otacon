@@ -48,6 +48,7 @@ BASE="http://127.0.0.1:$PORT"
 otacon() { node "$ROOT/dist/cli/main.js" "$@"; }
 
 SKILL="$HOME/.claude/skills/otacon/SKILL.md"
+SKILL_DIR="$(dirname "$SKILL")"
 HOOK="$HOME/.claude/hooks/otacon-stop.sh"
 SETTINGS="$HOME/.claude/settings.json"
 
@@ -55,6 +56,8 @@ SETTINGS="$HOME/.claude/settings.json"
 otacon install --agent claude > "$TMP/install1.json" 2> /dev/null
 [ "$(json_field ok "$TMP/install1.json")" = "true" ] || fail "install did not report ok"
 [ -f "$SKILL" ] || fail "SKILL.md missing at $SKILL"
+[ -L "$SKILL_DIR" ] || fail "claude skill directory is not a symlink"
+[ ! -L "$SKILL" ] || fail "claude SKILL.md itself must not be a symlink"
 grep -q 'managed by `otacon install`' "$SKILL" || fail "SKILL.md missing the managed marker"
 for needle in 'otacon start --title' 'otacon ask --question' 'otacon wait --timeout 540' \
   'otacon submit --resolutions resolutions.json' 'otacon answer' 'otacon status' \
@@ -64,7 +67,7 @@ done
 head -2 "$SKILL" | grep -q '^name: otacon$' || fail "SKILL.md frontmatter lacks name: otacon"
 [ -x "$HOOK" ] || fail "Stop hook script missing or not executable at $HOOK"
 grep -q '"decision":"block"' "$HOOK" || fail "hook script lacks the block decision JSON"
-ok "install --agent claude wrote SKILL.md (markers + protocol commands) and the hook script"
+ok "install --agent claude linked the skill directory and wrote the hook script"
 
 # --- 2. reinstall is idempotent ------------------------------------------------
 cp "$SKILL" "$TMP/skill.before"; cp "$HOOK" "$TMP/hook.before"
@@ -103,21 +106,27 @@ ok "--hooks merged additively (keys survive, backup once) and reruns are no-ops"
 
 # --- 4. codex: SKILL.md in its own skills dir ----------------------------------
 CODEX_SKILL="$HOME/.codex/skills/otacon/SKILL.md"
+CODEX_SKILL_DIR="$(dirname "$CODEX_SKILL")"
 otacon install --agent codex > /dev/null 2>&1
 [ -f "$CODEX_SKILL" ] || fail "codex SKILL.md missing at $CODEX_SKILL"
+[ -L "$CODEX_SKILL_DIR" ] || fail "codex skill directory is not a symlink"
+[ ! -L "$CODEX_SKILL" ] || fail "codex SKILL.md itself must not be a symlink"
 grep -q 'managed by `otacon install`' "$CODEX_SKILL" || fail "codex SKILL.md missing the managed marker"
 grep -q 'otacon wait --timeout 540' "$CODEX_SKILL" || fail "codex SKILL.md missing the protocol"
 cp "$CODEX_SKILL" "$TMP/codex.before"
 otacon install --agent codex > /dev/null 2>&1
 cmp -s "$CODEX_SKILL" "$TMP/codex.before" || fail "codex reinstall changed SKILL.md"
-ok "codex install wrote SKILL.md at ~/.codex/skills/otacon/SKILL.md (reinstall is a fixpoint)"
+ok "codex install linked the complete otacon skill directory (reinstall is a fixpoint)"
 
 # --- 5. --all covers opencode too ----------------------------------------------
 otacon install --all > /dev/null 2>&1
 OC_SKILL="$HOME/.config/opencode/skills/otacon/SKILL.md"
+OC_SKILL_DIR="$(dirname "$OC_SKILL")"
 [ -f "$OC_SKILL" ] || fail "opencode SKILL.md missing at $OC_SKILL"
+[ -L "$OC_SKILL_DIR" ] || fail "opencode skill directory is not a symlink"
+[ ! -L "$OC_SKILL" ] || fail "opencode SKILL.md itself must not be a symlink"
 grep -q 'otacon wait --timeout 540' "$OC_SKILL" || fail "opencode SKILL.md missing the protocol"
-ok "install --all wrote the opencode wrapper at ~/.config/opencode/skills/otacon/SKILL.md"
+ok "install --all linked the opencode skill directory"
 
 # --- 6. open: index URL with no session, session URL afterwards ----------------
 cd "$REPO"

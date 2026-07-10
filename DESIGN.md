@@ -1799,12 +1799,14 @@ full loop (§6), grill discipline (§8), and the never-end-your-turn rule (§13)
 each agent's skill location: Claude Code `~/.claude/skills/otacon/SKILL.md` plus the
 Stop hook script `~/.claude/hooks/otacon-stop.sh`; Codex
 `$CODEX_HOME/skills/otacon/SKILL.md` (default `~/.codex/`); OpenCode
-`$XDG_CONFIG_HOME/opencode/skills/otacon/SKILL.md`. All three are the same SKILL.md
-skill folder. Wrappers are managed files (reinstall overwrites them).
+`$XDG_CONFIG_HOME/opencode/skills/otacon/SKILL.md`. All three consume the same skill
+folder. Otacon manages the complete `skills/otacon/` directory (reinstall replaces it).
 
-A **user-scope** wrapper is a **symlink** to the `SKILL.md` shipped inside the package
-(`dist/skills/otacon/SKILL.md`, generated from the one protocol source at build time),
-so a binary upgrade refreshes the installed skill text for free without a reinstall.
+A **user-scope** skill directory is a **symlink** to the complete skill directory
+shipped inside the package (`dist/skills/otacon/`, whose `SKILL.md` is generated from
+the one protocol source at build time), so a binary upgrade refreshes every packaged
+skill asset for free without a reinstall. Claude Code, Codex, and OpenCode all discover
+this directory-level layout; Codex does not discover a link whose leaf is `SKILL.md`.
 Two cases fall back to **copying** the current text instead: when symlinks are
 unsupported on the filesystem (e.g. Windows without the privilege, or a cross-device
 link), and when there is no stable packaged file to point at (a source run, or an
@@ -1819,10 +1821,10 @@ JSON reports each wrapper's resulting `mode` (`"symlink"` or `"copy"`).
 `otacon start` **self-heals already-installed wrappers** on every run, as the
 fallback/migration path for installs that predate the symlink era or could never
 symlink at all. It re-asserts each wrapper that is already present to its desired
-state: a user-scope copy (left by a copy-fallback install, or a legacy pre-symlink
-install) is promoted to a symlink to the packaged file, a dangling or wrong-target
-user symlink is repaired, and a committed/legacy project-scope copy whose text drifted
-is rewritten to the current protocol. It **never creates a wrapper that does not
+state: a user-scope copy or legacy file-level symlink is promoted to the common
+directory-level symlink, a dangling or wrong-target user symlink is repaired, and a
+committed/legacy project-scope copy whose text drifted is rewritten to the current
+protocol. It **never creates a wrapper that does not
 already exist** (it heals what is there, it does not install), it leaves a hand-written
 foreign `SKILL.md` untouched (only files carrying the managed marker, or a symlink at
 one of our own locations, are ours to re-assert), and it is a no-op for a correct
@@ -1830,7 +1832,8 @@ symlink, so for the common symlink install it costs nothing. It is **skipped ent
 on a source run** so this repo's committed `otacon-dev` dogfood wrapper is never
 rewritten, and it is best-effort and fail-open: a refresh never blocks `start`. Each
 heal that actually changes a file prints a one-line stderr notice (stdout stays the
-single JSON line). The Stop hook registration in
+single JSON line). Agents with startup-only skill discovery, including Codex, need to
+be relaunched after an update changes the link target's contents. The Stop hook registration in
 `~/.claude/settings.json` is optional, applied only by `--hooks`: an additive,
 idempotent merge that preserves every existing key and backs the file up before the
 first change (unparseable settings are refused, never clobbered). The hook is a

@@ -1,9 +1,6 @@
-// Resolves the in-package SKILL.md asset that the installed wrapper symlinks to.
-// `otacon install` copies the wrapper text today, so it goes stale when the binary
-// auto-updates; the fix is to SYMLINK the installed wrapper to a real file shipped
-// inside the npm package (`dist/skills/otacon/SKILL.md`, generated from `skillMd()`
-// by scripts/gen-skill-asset.ts), so a binary upgrade refreshes the skill for free.
-// A symlink target must be a STABLE on-disk path, so only the packaged file qualifies;
+// Resolves the in-package SKILL.md asset whose containing skill directory user
+// installs link to (project/fallback installs copy the file instead).
+// A symlink target must be a STABLE on-disk path, so only the packaged directory qualifies;
 // when there is no such file (running from source, or an ephemeral npx cache that a
 // later invocation may have wiped), callers must fall back to COPYING instead.
 
@@ -62,9 +59,10 @@ export type WrapperMode = "symlink" | "copy";
 /**
  * Converge the wrapper at `path` to its desired state and report how (idempotent).
  *
- * User-scope wrappers SYMLINK to the packaged `SKILL.md` so a binary upgrade
- * refreshes the protocol text for free (the file the symlink points at is the one
- * the new build emits). Two cases fall back to a COPY of `skillMd()` instead:
+ * User-scope installs SYMLINK the complete skill directory to the packaged skill
+ * directory, so a binary upgrade refreshes every skill asset for free. Claude Code,
+ * Codex, and OpenCode all support this common layout; Codex specifically ignores a
+ * symlink whose leaf is `SKILL.md`. Two cases fall back to a COPY of `skillMd()`:
  * - **Project scope** always copies. A `--project` wrapper is committed/shared, so it
  *   must be machine-independent: it cannot point at a machine-local global path that
  *   a teammate (or CI) does not have.
@@ -83,23 +81,23 @@ export type WrapperMode = "symlink" | "copy";
  * inspects the link itself, so a symlink is never mistaken for a regular file, and
  * `{ throwIfNoEntry: false }` makes a missing path a plain `undefined`, never a throw.
  */
-export function ensureWrapper(
+export function ensureSkill(
   path: string,
   scope: "user" | "project",
   pkgPath: string | undefined = packagedSkillPath(),
   // testability seam: inject a throwing linker to exercise the copy fallback
-  symlink: (target: string, linkPath: string) => void = (t, l) => symlinkSync(t, l),
+  symlink: (target: string, linkPath: string) => void = (target, linkPath) =>
+    symlinkSync(target, linkPath, process.platform === "win32" ? "junction" : "dir"),
 ): { mode: WrapperMode; changed: boolean } {
-  mkdirSync(dirname(path), { recursive: true });
+  const linkPath = dirname(path);
+  const target = pkgPath === undefined ? undefined : dirname(pkgPath);
 
-  // Symlink branch: user scope only, and only when there is a stable file to point at.
-  if (scope === "user" && pkgPath !== undefined) {
-    const info = lstatSync(path, { throwIfNoEntry: false });
+  // Every supported agent discovers the same directory-level skill link.
+  if (scope === "user" && target !== undefined) {
+    const info = lstatSync(linkPath, { throwIfNoEntry: false });
     if (info?.isSymbolicLink()) {
-      // realpathSync resolves both sides so a correct link (even via a differently
-      // spelled but equivalent path) reads as a no-op.
       try {
-        if (realpathSync(path) === realpathSync(pkgPath)) {
+        if (realpathSync(linkPath) === realpathSync(target)) {
           return { mode: "symlink", changed: false };
         }
       } catch {
@@ -107,21 +105,30 @@ export function ensureWrapper(
       }
     }
     try {
-      rmSync(path, { force: true }); // clear a stale link, an old copy, or a dangling link
-      symlink(pkgPath, path);
+      mkdirSync(dirname(linkPath), { recursive: true });
+      rmSync(linkPath, { recursive: true, force: true });
+      symlink(target, linkPath);
       return { mode: "symlink", changed: true };
     } catch {
       // Symlinks are unsupported on this filesystem/privilege level; copy instead.
+      rmSync(linkPath, { recursive: true, force: true });
     }
   }
 
   // Copy branch: project scope, no packaged path, or the symlink above threw.
   const content = skillMd();
   const info = lstatSync(path, { throwIfNoEntry: false });
-  if (info?.isFile() && readFileSync(path, "utf8") === content) {
+  const skillDirInfo = lstatSync(dirname(path), { throwIfNoEntry: false });
+  if (
+    !skillDirInfo?.isSymbolicLink() &&
+    info?.isFile() &&
+    !info.isSymbolicLink() &&
+    readFileSync(path, "utf8") === content
+  ) {
     return { mode: "copy", changed: false };
   }
-  rmSync(path, { force: true }); // clear a stale symlink or an out-of-date copy
+  rmSync(dirname(path), { recursive: true, force: true });
+  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content);
   return { mode: "copy", changed: true };
 }
@@ -138,15 +145,15 @@ export interface RefreshDeps {
 
 /**
  * The fallback/migration mechanism: on every `otacon start`, re-assert each
- * ALREADY-INSTALLED managed wrapper to its desired state (`ensureWrapper`), so an
+ * ALREADY-INSTALLED managed wrapper to its desired state (`ensureSkill`), so an
  * install done before the symlink era (or one that could not symlink at all)
  * heals itself the next time the tool runs.
  *
- * For a correct symlink this is entirely INERT: `ensureWrapper` no-ops a link that
- * already resolves to the packaged file, so symlink installs (the common case) cost
+ * For a correct symlink this is entirely INERT: `ensureSkill` no-ops a link that
+ * already resolves to the packaged directory, so symlink installs (the common case) cost
  * nothing and emit no notice. It only does work on real drift:
  * - a user-scope COPY left by a copy-fallback install (Windows/npx) is promoted to a
- *   symlink to the packaged file (so future binary upgrades refresh it for free);
+ *   symlink to the packaged directory (so future binary upgrades refresh it for free);
  * - a dangling or wrong-target user symlink is repaired;
  * - a committed/legacy PROJECT-scope copy whose text drifted is rewritten to the
  *   current `skillMd()` (still a copy, never a machine-local symlink).
@@ -197,7 +204,7 @@ export function refreshInstalledWrappers(
     for (const { path, scope } of candidates) {
       if (!isManagedWrapper(path)) continue; // only heal what is already installed
       try {
-        const result = ensureWrapper(path, scope, pkgPath);
+        const result = ensureSkill(path, scope, pkgPath);
         if (result.changed) {
           notice(`refreshed otacon skill at ${path} (${result.mode})`);
           refreshed.push({ path, mode: result.mode });
@@ -217,13 +224,15 @@ export function refreshInstalledWrappers(
 /**
  * Whether `path` already holds an otacon-owned wrapper this pass may re-assert.
  * A SYMLINK at one of our skill locations is ours (created by a prior symlink
- * install), so it counts even when the link dangles (`ensureWrapper` repairs it).
+ * install), so it counts even when the link dangles (`ensureSkill` repairs it).
  * A regular FILE counts only when it carries `MANAGED_MARKER`, so a foreign SKILL.md
  * a user wrote by hand is left alone. Anything else (no entry, a dir) is not present.
  * `lstatSync` inspects the link itself (a symlink is never read as a file), and
  * `{ throwIfNoEntry: false }` turns a missing path into `undefined`, never a throw.
  */
 function isManagedWrapper(path: string): boolean {
+  const skillDirInfo = lstatSync(dirname(path), { throwIfNoEntry: false });
+  if (skillDirInfo?.isSymbolicLink()) return true;
   const info = lstatSync(path, { throwIfNoEntry: false });
   if (info === undefined) return false;
   if (info.isSymbolicLink()) return true;
