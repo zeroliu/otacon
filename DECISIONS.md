@@ -4281,3 +4281,22 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   back to draft on a later amendment.
 - **Revisit when:** Users want a per-session override (a start-time flag), or want the live
   PR-status pill to distinguish draft from open (both deferred this round).
+
+## Link the complete skill directory for every user-scope agent (2026-07-10)
+
+- **Decision:** Claude Code, Codex, and OpenCode user installs all use the same layout:
+  their `skills/otacon/` directory symlinks to the packaged `dist/skills/otacon/`
+  directory. There is no agent-specific wrapper, flag, or post-install script.
+  `ensureSkill` owns this one convergence rule. Project installs and environments where
+  a durable directory link cannot be created continue to receive a regular managed
+  `SKILL.md` copy. On `otacon start`, the existing refresh pass migrates a managed copy
+  or legacy file-level link to the directory link; it never installs an absent skill.
+- **Why:** Controlled discovery tests verified directory links in Claude Code 2.1.206,
+  Codex 0.144.1, and OpenCode 1.17.13 plus 1.17.18. Codex alone rejects a symlink whose
+  leaf is `SKILL.md`, while all three accept the parent directory symlink. Converging on
+  the common supported shape removes agent-specific behavior and keeps every packaged
+  skill asset current across binary upgrades. A package post-install hook would be both
+  unnecessary and unable to reliably infer which agent locations a user wants managed.
+- **Revisit when:** An agent drops directory-symlink discovery, package managers no
+  longer provide a stable package directory, or Otacon needs to preserve user-owned
+  files inside `skills/otacon/` rather than owning that directory wholesale.
