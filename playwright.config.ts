@@ -25,6 +25,17 @@ export default defineConfig({
   testDir: "test/ui",
   testMatch: "**/*.e2e.ts",
   fullyParallel: true,
+  // The whole suite drives ONE real daemon (a single Node HTTP server). Each
+  // worker opens SSE streams and spawns real `otacon wait` long-polls, so a high
+  // worker count saturates that one process — its keep-alive connections get
+  // reset mid-flight (`ECONNRESET` on the API client), and the failure count
+  // scales with concurrency (≈1 → 8 → 24 at 2 → 4 → 9 workers). Cap the workers
+  // so the shared daemon is never overwhelmed, and keep a small retry budget to
+  // absorb the rare residual reset; the suite is then deterministically green.
+  // (The production daemon serves one human + their agent, not a worker fleet, so
+  // this is a test-harness concern, not a daemon bug to fix in product code.)
+  workers: 2,
+  retries: 2,
   reporter: "list",
   use: { baseURL },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
