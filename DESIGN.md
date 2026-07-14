@@ -1397,6 +1397,94 @@ returns to the index.
   VisualViewport API — so its actions never hide under the fold, and the plan
   behind a sheet is locked so it stops drifting while you type.
 
+### PR explanation review
+
+A PR review is a distinct reading session, not a terminal group of plan sessions. The
+sidebar therefore keeps **Plans / Reviews** as a switch inside Otacon's existing vertical
+application sidebar; the wordmark/settings/fold header stays above it, and the session
+list stays below it. Folding hides the whole sidebar and leaves a visible expand control;
+on phones the same hierarchy opens as a vertical drawer. The plan-side group that collects
+implemented work waiting on GitHub is named **Open PRs**, leaving “Reviews” to mean
+explanation sessions. Open PRs uses the existing `SessionList` disclosure grammar and derives
+its displayed count from the items in that group. Both modes render through the same
+`SessionList` / `.sl-row` visual grammar—status glyph, title, location subline, hairline,
+current-row treatment—rather than introducing boxed prototype cards or a second divider
+system. The mode switch is the only new control in the existing sidebar hierarchy; it never
+moves into a horizontal top bar.
+
+Every PR explanation has one fixed reading path: **Background → Intuition → Code →
+Quiz**. The header establishes repository, PR number and author, base/head branches,
+head SHA, change size, report revision, and the knowledge altitude used to personalize
+that revision. A table of contents repeats the fixed path. The first three sections form
+one editorial teaching rhythm rather than three unrelated widget layouts:
+
+- **Background** teaches the prerequisites needed before the change—such as the relevant
+  system, coordinate model, or subsystems—at the reader's knowledge altitude. An expert report
+  can compress or skip already-demonstrated prerequisites.
+- **Intuition** opens with a one-sentence goal, then uses ordered prose examples or a mental
+  model to give the essence before implementation detail. A small explanatory figure is an
+  optional block only when it materially improves understanding; Intuition is never a
+  fixed-count card grid.
+- **Code** always reads in three layers. **Interface changes** first names the caller-visible
+  contract delta, **Integration path** follows that delta across runtime/data-flow module
+  boundaries, and **Implementation walkthrough** is the literate diff ordered by causal
+  comprehension rather than filename or raw diff order. Integration opens with one compact,
+  selectable call-site trace that names the values crossing module boundaries, then expands
+  those same boundaries into ordered ownership and handoff details. Every walkthrough group
+  introduces the behavior in prose before its selectable code excerpt, then names the
+  high-level `file#symbol` surfaces worth inspecting.
+
+Background and Intuition use a typed, ordered narrative block list. A block is either prose
+(`id`, optional eyebrow/title, paragraphs) or a sequence figure (`id`, title, steps, optional
+caption); Intuition additionally requires its one-sentence goal. The renderer handles one,
+two, or many blocks without changing layouts or schemas. Balanced and expert reports may
+compress or regroup content, but never change the fixed reading path or shared editorial
+styling.
+
+Code is likewise one required typed object, not an unclassified group array. Its interface
+items name `kind` (type definition, function signature, route, command, or event),
+`file#symbol`, caller impact, and a discriminated `added` / `changed` / `removed` delta:
+added items carry an after excerpt, changed items carry before and after excerpts, and
+removed items carry a before excerpt. Every excerpt is a real selectable code fence. New
+contract kinds use the same content-adaptive vertical renderer rather than kind-specific
+layout CSS. The integration layer is an ordered list of required module, symbol, role, and
+handoff fields; it must explain how output crosses into the next module from the entry
+through storage/authoring to grading and a future revision, not merely inventory files.
+The final walkthrough retains ordered prose, optional excerpts, and high-level code
+surfaces. Balanced and expert reports may vary the amount of detail in all three layers,
+but neither altitude may omit the changed interface or integration seam.
+
+Quiz cards expose four legible states: unanswered, agent grading, retry with actionable
+feedback, and passed with a knowledge-destination receipt. Open answers are the default;
+the user writes the mechanism in their own words and can retry until the explanation is
+sound. Reading a file records exposure only. A passed quiz is the evidence that can
+promote a concept to demonstrated understanding.
+
+Selecting report prose or text inside a rendered code fence opens the same compact contextual actions used
+by plan review: **Ask** or **Comment**. There is no direct code-mutation intent at the
+selection. The shared anchored composer can optionally remember either exchange in
+**User** or **Project** knowledge (Project is the initial scope). Submitted items render
+as conversation cards in a desktop rail and a phone drawer, including the selected quote,
+an agent response when applicable, and the exact knowledge destination when one was
+selected. A Comment card alone offers **Conduct code change**; choosing it is the explicit
+second step that moves the thread into worktree/subagent handoff state. An Ask thread can
+never trigger that path. This separates review discussion from authorization to alter the
+PR branch.
+
+**Done** is deliberate rather than destructive. If quizzes or conversation threads are
+still unresolved, the confirmation names both counts and offers Continue or Close anyway;
+a force-closed session keeps the report readable. The Knowledge screen is a Markdown
+editor with explicit User/Project targets and saved, dirty, and concurrent-change states.
+On conflict it preserves the local draft, exposes the newer disk value, and makes the
+reviewer choose which version survives.
+
+The same production React components and `styles.css` render in the application and in a
+permanent dev-only Storybook. Storybook provides full-page balanced/expert desktop and
+phone fixtures plus hard-to-reach quiz, thread, Done, and Knowledge editor states. It is
+a repeatable design-review surface, not part of the shipped daemon UI artifact. Its balanced
+fixture includes a longer multi-block Intuition, while its expert fixture uses one block, so
+the lab continuously proves that the narrative does not depend on a magic block count.
+
 ### Cross-cutting
 
 UI updates over SSE (watch status flip from _revising_ to _new revision_, answers

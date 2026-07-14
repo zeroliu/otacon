@@ -4300,3 +4300,110 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** An agent drops directory-symlink discovery, package managers no
   longer provide a stable package directory, or Otacon needs to preserve user-owned
   files inside `skills/otacon/` rather than owning that directory wholesale.
+
+## Storybook is a permanent dev-only React/Vite lab (2026-07-14)
+
+- **Decision:** Keep the official `@storybook/react-vite` framework and the
+  accessibility addon as development dependencies, with dedicated `storybook` and
+  `build-storybook` scripts. Stories import the application's shared stylesheet and are
+  excluded from the published `dist` runtime.
+- **Why:** PR review has many important states that are expensive to reach through a
+  daemon—grading, retry, memory receipts, conflict, and phone layouts. A permanent lab
+  makes those states reproducible and reviewable without adding Storybook to the CLI or
+  daemon dependency surface.
+- **Revisit when:** Storybook stops supporting the repository's Vite/React versions, or
+  another dev-only harness provides the same full-page state coverage with less upkeep.
+
+## PR-review stories render production components through an adapter (2026-07-14)
+
+- **Decision:** The full-page stories mount `PrReviewScreen`, `QuizCard`, the feedback
+  and thread surfaces, and `KnowledgeScreen` directly. They receive a deterministic
+  in-memory `ReviewAdapter`; stories do not copy markup, fork CSS, or call daemon APIs.
+- **Why:** A disposable mock can win design approval and still leave the real UI
+  untested. An adapter keeps the approved composition identical across Storybook and the
+  application, while preserving a clean seam for the later daemon-backed implementation.
+- **Revisit when:** The production data flow can no longer be expressed as snapshot,
+  subscribe, and intent methods; extend the adapter before introducing story-only views.
+
+## The complete PR-review prototype is a human gate before service integration (2026-07-14)
+
+- **Decision:** The balanced/expert desktop and phone stories must expose the complete
+  report, quiz, feedback, Done, and Knowledge interactions and receive explicit human
+  approval before daemon, storage, CLI, or Git worktree integration begins.
+- **Why:** Information order and grouping are the core product here. Settling those
+  decisions against a real interactive page first prevents backend contracts from
+  hardening around an explanation flow the reviewer has not accepted.
+- **Revisit when:** The review information architecture is stable enough that backend
+  and UI changes can safely proceed in parallel without multiplying contract churn.
+
+## PR-review selection feedback uses a two-stage comment-to-change flow (2026-07-14)
+
+- **Decision:** Selecting prose or a code surface in a PR report reuses the plan-review
+  selection bar and anchored composer, with only **Ask** and **Comment** actions. PR review
+  positions the compact bar next to the selected passage while plan review keeps its
+  existing docked placement. A Comment becomes a normal thread first; only its later
+  **Conduct code change** action may request the worktree/subagent handoff. Ask threads
+  never expose that action.
+- **Why:** A suggestion about the explanation is not permission to mutate the PR branch.
+  Making branch work a second, explicit decision preserves that boundary, while reusing
+  the established selection interaction avoids teaching reviewers a second feedback
+  model. The contextual placement keeps the PR action visibly attached to either prose
+  or code without adding a permanent fixture card to every report.
+- **Revisit when:** Reviewers need more initial intents than Ask/Comment, browsers make
+  contextual selection placement unreliable, or code-change authorization moves to a
+  separate repository-level approval workflow.
+
+## Plans and Reviews share the production sidebar row grammar (2026-07-14)
+
+- **Decision:** The Plans / Reviews switch sits immediately below the unchanged production
+  sidebar header. Both modes render their items with the existing `SessionList` / `.sl-row`
+  visual grammar and the same hairlines, typography, current-row treatment, fold handle,
+  and phone drawer. Plans retain the production disclosure grammar for the **Open PRs**
+  collection, with its count derived from member items. The switch has an inline active
+  underline, not a boxed segmented-control card, and it never becomes a horizontal top
+  navigation fallback.
+- **Why:** Plans and reviews are two collections in one Otacon shell, not two applications.
+  Prototype-specific rows and divider treatments made the modes feel structurally different
+  and competed with the already-established sidebar hierarchy. Reusing the production row
+  grammar preserves recognition and makes mode changes affect content only.
+- **Revisit when:** Plans and reviews need genuinely different navigation metadata that the
+  shared row cannot express, or the production sidebar itself adopts a new collection switch
+  pattern.
+
+## PR explanations use typed editorial blocks instead of fixed Intuition cards (2026-07-14)
+
+- **Decision:** Background and Intuition are ordered typed narrative sections made from
+  discriminated prose or sequence-figure blocks. Intuition additionally requires one
+  sentence that states the change's goal. The sections render as one continuous document;
+  figures are optional and used only when they clarify a mental model. Code remains ordered
+  by comprehension and places explanatory prose before every selectable excerpt.
+- **Why:** A three-card Intuition encoded a fixture count as product structure: long ideas
+  became cramped, while one or two ideas left an obviously broken composition. The useful
+  invariant is pedagogical order—prerequisites, essence, then literate implementation—not a
+  number of boxes. Typed ordered blocks support one, two, or many ideas and give future
+  report producers a scalable schema without pushing content cases into CSS selectors.
+- **Revisit when:** Reports need richer block kinds such as interactive simulations or
+  diagrams with their own data contracts; add another explicit union member rather than a
+  story-specific escape hatch.
+
+## Code explanations put contract deltas and integration before internals (2026-07-14)
+
+- **Decision:** `ReviewReport.code` is one required typed object in the reader order
+  **Interface changes → Integration path → Implementation walkthrough**. Interface items
+  use an `added` / `changed` / `removed` discriminated union so the schema requires the
+  appropriate before/after selectable excerpts, and all contract kinds share one vertical
+  renderer. Integration starts with one abridged call-site trace of the values crossing
+  modules, followed by an ordered sequence of module/symbol ownership and handoff details;
+  the existing literate `CodeGroup` becomes only the final walkthrough layer.
+- **Why:** A flat list could mention a type or file but could not prove what changed for a
+  caller or show how modules compose at runtime. Readers otherwise had to reconstruct the
+  contract delta and data flow from implementation prose. A step list alone still makes the
+  reader mentally reconstruct arguments and returned values, while full implementation code
+  hides the boundary in noise; the abridged trace establishes value flow before the list adds
+  ownership detail. Making both layers mandatory puts the cheapest, most consequential review
+  questions first while keeping the detailed walkthrough comprehension-ordered. The
+  discriminated delta also prevents producers from labeling a contract "changed" while
+  supplying only its final declaration.
+- **Revisit when:** Contract reviews need richer comparisons than before/after code (for
+  example generated schema diffs), or runtime integration becomes a branching graph that
+  an ordered handoff path cannot explain without loss.
