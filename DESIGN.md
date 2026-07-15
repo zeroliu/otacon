@@ -580,7 +580,13 @@ POST /api/sessions/:id/threads/:tid/resolve   the reviewer's Resolve verb: {reso
                                             non-boolean `resolved` → 400; refused on a
                                             terminal session (E_SESSION_OVER)
 GET  /api/sessions/:id/threads              comment + question threads (the UI's rail)
-POST /api/reviews/:id/threads               create an anchored Ask/Comment on the exact current report/head
+POST /api/reviews/:id/threads               create an anchored Ask/Comment on the exact current
+                                            report/head. The anchor quote is what the browser
+                                            selection rendered, so presence is checked against a
+                                            rendered-text projection of the report (inline
+                                            markdown syntax stripped, whitespace collapsed), not
+                                            its raw bytes; a quote from any other revision is
+                                            still refused (E_REVIEW_ANCHOR)
 POST /api/reviews/:id/threads/:tid/respond  agent answer/report response + optional matching memory acknowledgement
 POST /api/reviews/:id/threads/:tid/code-action
                                             explicit reviewer authorization for code work on a persisted Comment only

@@ -4790,3 +4790,18 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   controls or lose their place after dismissal.
 - **Revisit when:** The surfaces move to a native dialog/popover primitive that provides the
   same containment and focus restoration across supported browsers.
+
+## Review anchors are validated against rendered text, not report bytes (2026-07-15)
+
+- **Decision:** `POST /api/reviews/:id/threads` checks the anchor quote against a
+  rendered-text projection of the submitted report (fence delimiters, heading/list/quote
+  markers, and link syntax removed; backticks and asterisks stripped from both sides;
+  whitespace collapsed), falling back from an exact byte match. A quote absent from both
+  forms is still refused as E_REVIEW_ANCHOR.
+- **Why:** The browser captures `exact` with Range#toString(), which yields the rendered
+  DOM text. Any selection touching inline code, emphasis, links, or a block boundary can
+  never equal the raw markdown, so byte-exact validation rejected most Code-section
+  comments outright. The check guards revision identity, not authenticity; a permissive
+  projection keeps stale-revision refusal while accepting every legitimate selection.
+- **Revisit when:** Anchors carry structured source positions (section id + source line
+  range) captured at render time, making text projection unnecessary.

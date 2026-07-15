@@ -80,6 +80,7 @@ import { startPrPolling } from "./pr-status.js";
 import { Presence } from "./presence.js";
 import type { ParkHandle } from "./queue.js";
 import { SessionQueue } from "./queue.js";
+import { reportContainsAnchorQuote } from "./review-anchor.js";
 import {
   ReviewReportInvalidError,
   ReviewRevisionCorruptError,
@@ -1433,7 +1434,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     if (report.revision.status !== "submitted" || report.revision.headRevision !== current.review.revision || report.revision.headSha !== current.review.head.sha) {
       return c.json({ error: { code: "E_REVIEW_THREAD_STALE", message: "current report has not been submitted for the current PR head" } }, 409);
     }
-    if (report.report === undefined || !report.report.includes(anchor.exact!)) {
+    if (report.report === undefined || !reportContainsAnchorQuote(report.report, anchor.exact!)) {
       return c.json({ error: { code: "E_REVIEW_ANCHOR", message: "selected quote is not present in the named report revision" } }, 409);
     }
     const path = store.threadsPath(current.id);
