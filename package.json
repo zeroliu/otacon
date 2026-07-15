@@ -25,7 +25,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json && bun run scripts/gen-skill-asset.ts && vite build src/ui && chmod +x dist/cli/main.js dist/daemon/main.js",
     "typecheck": "tsc --noEmit && tsc -p src/ui && tsc -p src/ui/tsconfig.test.json",
-    "test": "bun test",
+    "test": "bun test --parallel=1",
     "dev:daemon": "bun run src/daemon/main.ts",
     "dev:ui": "vite src/ui",
     "storybook": "storybook dev -p 6006",

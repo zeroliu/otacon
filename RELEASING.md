@@ -58,7 +58,7 @@ bun run release patch --dry-run   # rehearse: runs gates, prints commands, mutat
 `bun run release [patch|minor|major]` ([`scripts/release.sh`](scripts/release.sh)):
 
 1. **Preflight gates** — aborts unless the working tree is clean and you are on the
-   default branch (`main`), then runs `bun test`, `bun run typecheck`, and
+   default branch (`main`), then runs `bun run test`, `bun run typecheck`, and
    `bun run build`. Any failure stops before anything mutates.
 2. **`npm version <kind>`** — bumps `package.json`, fires the `version` lifecycle hook
    that regenerates and stages `src/shared/version.ts` (via
@@ -79,7 +79,7 @@ The pushed `v[0-9]*` tag triggers the **Release** workflow
 1. Checks out, sets up bun + Node 22, upgrades npm to latest (trusted publishing needs
    npm ≥ 11.5.1 / Node ≥ 22.14), installs with `--frozen-lockfile`.
 2. **Verifies the tag matches `package.json`'s version** (refuses a mismatch).
-3. Re-runs the gates: `bun run typecheck`, `bun test`, `bun run build`.
+3. Re-runs the gates: `bun run typecheck`, `bun run test`, `bun run build`.
 4. **`npm publish --access public`** — authenticated by the job's `id-token: write`
    OIDC token via the Trusted Publisher configured above (no token env). Provenance is
    attached automatically.
