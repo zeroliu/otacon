@@ -25,7 +25,12 @@ import {
 } from "../../shared/paths.js";
 import { parseReviewReport } from "../../shared/review-report.js";
 import type { ReviewReportRevisionPayload } from "../../shared/review-report.js";
-import type { ReviewRegistrySession } from "../../shared/types.js";
+import {
+  reviewWorktreeLeaseAction,
+  reviewWorktreeLeaseOwner,
+} from "../../shared/review-worktree-lease.js";
+import type { ReviewWorktreeLeaseAction } from "../../shared/review-worktree-lease.js";
+import type { ReviewRegistrySession, ReviewThread } from "../../shared/types.js";
 import { parseReviewQuizGrade } from "../../shared/review-quiz.js";
 import { api, baseUrl, ensureDaemon } from "../client.js";
 import type { ApiResponse } from "../client.js";
@@ -88,6 +93,51 @@ function parseSource(raw: unknown): { reportRevision: number; headRevision: numb
     !Number.isSafeInteger(value.headRevision) || (value.headRevision as number) < 1 ||
     typeof value.headSha !== "string" || !/^[0-9a-f]{40}$/i.test(value.headSha)) return undefined;
   return value as unknown as { reportRevision: number; headRevision: number; headSha: string };
+}
+
+function codeActionLeaseFromThread(raw: unknown): ReviewWorktreeLeaseAction | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const thread = raw as Partial<ReviewThread>;
+  if (typeof thread.id !== "string" || !/^t[1-9]\d{0,8}$/.test(thread.id) ||
+      typeof thread.identity !== "object" || thread.identity === null ||
+      typeof thread.codeAction !== "object" || thread.codeAction === null ||
+      !["requested", "working", "completed", "failed"].includes(String(thread.codeAction.status)) ||
+      typeof thread.codeAction.requestedAt !== "string" || Number.isNaN(Date.parse(thread.codeAction.requestedAt)) ||
+      typeof thread.identity.session !== "string" || !Number.isSafeInteger(thread.identity.reportRevision) ||
+      !Number.isSafeInteger(thread.identity.headRevision) || typeof thread.identity.headSha !== "string" ||
+      !/^[0-9a-f]{40}$/i.test(thread.identity.headSha)) return undefined;
+  return reviewWorktreeLeaseAction(thread as ReviewThread);
+}
+
+async function workingCodeAction(
+  session: ReviewRegistrySession,
+  deps: ReviewCommandDeps,
+): Promise<ReviewWorktreeLeaseAction> {
+  const response = await deps.api("GET", `/api/sessions/${session.id}/threads`);
+  if (response.status !== 200 || !Array.isArray(response.body.threads)) {
+    fail("E_INTERNAL", `review checkout could not read code actions: ${JSON.stringify(response.body)}`, undefined, 2);
+  }
+  const candidates: ReviewWorktreeLeaseAction[] = [];
+  for (const raw of response.body.threads) {
+    if (typeof raw !== "object" || raw === null ||
+        (raw as { codeAction?: { status?: unknown } }).codeAction?.status !== "working") continue;
+    const action = codeActionLeaseFromThread(raw);
+    if (action === undefined) {
+      fail("E_INTERNAL", "review checkout received a malformed working code action", undefined, 2);
+    }
+    if (action.session === session.id && action.headRevision === session.review.revision &&
+        action.headSha === session.review.head.sha.toLowerCase()) candidates.push(action);
+  }
+  if (candidates.length !== 1) {
+    fail(
+      "E_REVIEW_CODE_ACTION",
+      candidates.length === 0
+        ? "review checkout requires exactly one current code action already marked working"
+        : "review checkout found multiple working code actions; finish or fail all but the intended action",
+      { session: session.id, working: candidates.map((action) => action.thread) },
+    );
+  }
+  return candidates[0]!;
 }
 
 function readReviewOperation(
@@ -181,7 +231,17 @@ async function updateReviewCodeStatus(argv: string[], deps: ReviewCommandDeps | 
   }
   if (response.status !== 200) fail("E_INTERNAL", `review code-status failed: ${JSON.stringify(response.body)}`, undefined, 2);
   if (leaseSession !== undefined) {
-    releaseReviewWorktreeLease(leaseSession, commandDeps.worktree);
+    const returnedThread = response.body.thread as Partial<ReviewThread> | undefined;
+    const action = codeActionLeaseFromThread(response.body.thread);
+    if (action === undefined || action.session !== raw.session || action.thread !== thread ||
+        action.reportRevision !== (raw.source as { reportRevision: number }).reportRevision ||
+        action.headRevision !== (raw.source as { headRevision: number }).headRevision ||
+        action.headSha !== (raw.source as { headSha: string }).headSha.toLowerCase() ||
+        returnedThread?.codeAction?.status !== raw.status ||
+        returnedThread?.codeAction?.message !== raw.message) {
+      fail("E_INTERNAL", "review code-status returned a mismatched code action owner", undefined, 2);
+    }
+    releaseReviewWorktreeLease(leaseSession, action, commandDeps.worktree);
   }
   printJson({ ok: true, session: raw.session, thread, ...response.body });
   return 0;
@@ -304,6 +364,7 @@ async function reviseReview(argv: string[], deps: ReviewCommandDeps | undefined)
 
 async function checkoutReview(argv: string[], deps: ReviewCommandDeps | undefined): Promise<number> {
   const resolved = await requireReviewSession(argv, "checkout", deps);
+  const action = await workingCodeAction(resolved.session, resolved.deps);
   const fresh = freshReviewMetadata(resolved.session, resolved.deps.github);
   const frozen = resolved.session.review.head;
   if (
@@ -321,8 +382,19 @@ async function checkoutReview(argv: string[], deps: ReviewCommandDeps | undefine
     review: { ...resolved.session.review, pullRequest: fresh },
   };
   const result = resolved.deps.worktree === undefined
-    ? checkoutReviewWorktree(checkoutSession)
-    : checkoutReviewWorktree(checkoutSession, resolved.deps.worktree);
+    ? checkoutReviewWorktree(checkoutSession, action)
+    : checkoutReviewWorktree(checkoutSession, action, resolved.deps.worktree);
+  if (result.mode === "writable") {
+    try {
+      const stillWorking = await workingCodeAction(resolved.session, resolved.deps);
+      if (reviewWorktreeLeaseOwner(stillWorking) !== reviewWorktreeLeaseOwner(action)) {
+        fail("E_REVIEW_CODE_ACTION", "the working code action changed while checkout was being claimed");
+      }
+    } catch (error) {
+      releaseReviewWorktreeLease(checkoutSession, action, resolved.deps.worktree);
+      throw error;
+    }
+  }
   printJson({
     ok: true,
     session: resolved.session.id,

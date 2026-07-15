@@ -266,20 +266,20 @@ curl -sf -X POST "$BASE/api/reviews/$SID/threads/t1/code-action" -H 'content-typ
 otacon wait --session "$SID" --timeout 10 > "$TMP/code-event.json"
 [ "$(json_field work "$TMP/code-event.json")" = "code-change" ] || fail "explicit second step did not deliver code-change work"
 
+write_thread_operation working t1 1 "Subagent is implementing inside the exact review worktree." "$TMP/code-working.json"
+otacon review code-status t1 --file "$TMP/code-working.json" > "$TMP/code-working.out"
+[ "$(json_field thread.codeAction.status "$TMP/code-working.out")" = "working" ] \
+  || fail "code action did not reach working"
 otacon review checkout --session "$SID" > "$TMP/checkout.json"
 [ "$(json_field action "$TMP/checkout.json")" = "created" ] || fail "fake safe worktree was not created"
 [ "$(json_field push.remote "$TMP/checkout.json")" = "origin" ] || fail "checkout did not return a push destination"
 LEASE_PATH="$(json_field lock.path "$TMP/checkout.json")"
-[ -f "$LEASE_PATH" ] || fail "writable checkout did not publish its durable lease"
+[ -d "$LEASE_PATH" ] || fail "writable checkout did not publish its durable lease"
 if otacon review checkout --session "$SID" > "$TMP/checkout-race.json" 2>&1; then
   fail "a second clean handoff acquired the already-leased checkout"
 fi
 grep -q 'E_REVIEW_WORKTREE_LEASED' "$TMP/checkout-race.json" \
   || fail "second clean handoff did not report the durable lease"
-write_thread_operation working t1 1 "Subagent is implementing inside the exact review worktree." "$TMP/code-working.json"
-otacon review code-status t1 --file "$TMP/code-working.json" > "$TMP/code-working.out"
-[ "$(json_field thread.codeAction.status "$TMP/code-working.out")" = "working" ] \
-  || fail "code action did not reach working"
 write_thread_operation completed t1 1 "Reviewed and verified without touching a real remote." "$TMP/code-complete.json"
 otacon review code-status t1 --file "$TMP/code-complete.json" > "$TMP/code-complete.out"
 [ "$(json_field thread.codeAction.status "$TMP/code-complete.out")" = "completed" ] || fail "code action did not reach completed"

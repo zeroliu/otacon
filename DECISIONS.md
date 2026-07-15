@@ -4808,12 +4808,29 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   before unlink is repaired by repeating the idempotent terminal transition. Owner mismatch
   refuses rather than deleting another workflow's lease.
 - **Why:** Git's lock is an ownership signal but an unlocked checkout has no exclusive
-  handoff: cleanliness is an observation, not a claim. A small atomic file gives the
+  handoff: cleanliness is an observation, not a claim. A small atomic record gives the
   orchestrator a durable lease across the short-lived checkout CLI and the implementation
   subagent, while terminal retry ordering prevents both concurrent editing and premature
   release on a rejected status update.
 - **Revisit when:** Checkout and code-action state share one transactional coordinator that
   can acquire and release ownership without a filesystem compare-and-release seam.
+
+## Review worktree leases belong to an immutable code-action generation (2026-07-15)
+
+- **Decision:** Checkout requires exactly one current code action already marked `working`
+  and derives its lease owner from session, thread, report revision, PR-head generation/SHA,
+  and action request time. The PR-keyed lease is a complete atomically-published directory
+  with an owner-specific record, so terminal cleanup compare-and-releases only that action.
+  Done and deletion refuse requested/working actions even with force. Repeating an already
+  terminal status remains available after Done, while deletion compare-and-releases terminal
+  action leases before erasing their session records.
+- **Why:** A session can conduct several code actions over time. Session-only ownership lets a
+  crash-repair retry for action A delete action B's newer lease, and a plain read-then-unlink
+  has the same race between duplicate cleanup retries. Terminalizing or deleting active work
+  also removes the only durable proof needed for safe cleanup. Generation identity plus an
+  owner-specific directory record makes late retries harmless without canceling live work.
+- **Revisit when:** The daemon and checkout worker share a transactional lease coordinator,
+  or code actions gain an explicit cancellation handshake that can safely replace refusal.
 
 ## Review modals contain and restore focus (2026-07-15)
 

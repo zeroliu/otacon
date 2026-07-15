@@ -33,6 +33,12 @@ import { parseReviewQuizGrade } from "../shared/review-quiz.js";
 import type { ReviewQuizAnswerEvent, ReviewQuizPublicState } from "../shared/review-quiz.js";
 import type { ReviewReportRevisionPayload } from "../shared/review-report.js";
 import {
+  releaseReviewWorktreeLeaseFile,
+  reviewWorktreeLeaseAction,
+  reviewWorktreeLeaseOwner,
+  reviewWorktreeLeasePathForPr,
+} from "../shared/review-worktree-lease.js";
+import {
   expandTilde,
   globalConfigPath,
   otaconPort,
@@ -543,6 +549,29 @@ export function createApp(options: AppOptions): DaemonApp {
       if (thread.response === undefined || unresolvedCodeAction) unresolved.add(root);
     }
     return unresolved.size;
+  };
+  const reviewCodeActionThreads = (
+    session: Extract<RegistrySession, { kind: "review" }>,
+  ): ReviewThread[] => readReviewThreads(store.threadsPath(session.id), session.id)
+    .filter((thread) => thread.codeAction !== undefined);
+  const activeReviewCodeActions = (
+    session: Extract<RegistrySession, { kind: "review" }>,
+  ): ReviewThread[] => reviewCodeActionThreads(session).filter((thread) =>
+    thread.codeAction?.status === "requested" || thread.codeAction?.status === "working"
+  );
+  const releaseTerminalReviewWorktreeLeases = (
+    session: Extract<RegistrySession, { kind: "review" }>,
+  ): void => {
+    const path = reviewWorktreeLeasePathForPr(session.review.pullRequest.identity.key);
+    for (const thread of reviewCodeActionThreads(session)) {
+      if (thread.codeAction?.status !== "completed" && thread.codeAction?.status !== "failed") continue;
+      const action = reviewWorktreeLeaseAction(thread);
+      if (action !== undefined) {
+        // Mismatch means the PR lease belongs to another action generation.
+        // It is intentionally left untouched.
+        releaseReviewWorktreeLeaseFile(path, reviewWorktreeLeaseOwner(action));
+      }
+    }
   };
   const safePendingReviewWork = (session: Extract<RegistrySession, { kind: "review" }>): number => {
     if (isTerminalSession(session)) return 0;
@@ -1401,6 +1430,16 @@ export function createApp(options: AppOptions): DaemonApp {
         }, 409);
       }
     }
+    const activeCodeActions = activeReviewCodeActions(current);
+    if (activeCodeActions.length > 0) {
+      return c.json({
+        error: {
+          code: "E_REVIEW_CODE_ACTION_ACTIVE",
+          message: "finish or fail the active code action before closing this review",
+        },
+        active: activeCodeActions.map((thread) => thread.id),
+      }, 409);
+    }
 
     const reportRevision = reviews.latestSubmittedRevision(current.id);
     if (reportRevision < 1) {
@@ -1796,11 +1835,16 @@ export function createApp(options: AppOptions): DaemonApp {
     }
     const current = store.getSession(before.id);
     if (current?.kind !== "review") return notFound(c, `unknown review: ${before.id}`);
-    if (current.status === "done") return sessionOver(c, current.id);
     const thread = readReviewThreads(store.threadsPath(current.id), current.id).find((candidate) => candidate.id === c.req.param("tid"));
     if (thread === undefined) return notFound(c, `unknown review thread: ${c.req.param("tid")}`);
     if (source.reportRevision !== thread.identity.reportRevision || source.headRevision !== thread.identity.headRevision || source.headSha !== thread.identity.headSha) {
       return c.json({ error: { code: "E_REVIEW_THREAD_IDENTITY", message: "code-action status does not match the persisted Comment" } }, 409);
+    }
+    if (current.status === "done") {
+      if (thread.codeAction?.status === body.status && thread.codeAction.message === body.message) {
+        return c.json({ thread: publicReviewThread(thread), repeated: true });
+      }
+      return sessionOver(c, current.id);
     }
     try {
       const result = updateReviewCodeAction(store.threadsPath(current.id), thread.id, {
@@ -1950,6 +1994,22 @@ export function createApp(options: AppOptions): DaemonApp {
     const terminalOnly = c.req.query("terminalOnly");
     if (terminalOnly !== undefined && terminalOnly !== "true") {
       return badRequest(c, "terminalOnly must be true when present");
+    }
+    if (session.kind === "review") {
+      const activeCodeActions = activeReviewCodeActions(session);
+      if (activeCodeActions.length > 0) {
+        return c.json({
+          error: {
+            code: "E_REVIEW_CODE_ACTION_ACTIVE",
+            message: "finish or fail the active code action before deleting this review",
+          },
+          active: activeCodeActions.map((thread) => thread.id),
+        }, 409);
+      }
+      // A terminal code-status may have committed immediately before its CLI
+      // crashed. Delete removes the only durable action record, so repair its
+      // exact generation first; another action's PR lease is never touched.
+      releaseTerminalReviewWorktreeLeases(session);
     }
     // `otacon clean` selects from an earlier registry snapshot. Enforce its
     // terminal-only contract here, in the same synchronous handler that

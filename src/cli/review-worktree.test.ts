@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { CanonicalGitHubRepo } from "../shared/knowledge.js";
 import type { ReviewRegistrySession } from "../shared/types.js";
 import { CliError } from "./output.js";
+import { reviewWorktreeLeaseOwner } from "../shared/review-worktree-lease.js";
 import {
   checkoutReviewWorktree,
   freshReviewMetadata,
@@ -17,6 +18,19 @@ const OTHER = "b".repeat(40);
 const REPO = "/repo";
 const EXISTING = "/worktrees/existing";
 const WORKTREE_ROOT = "/repo/.otacon-worktrees";
+const ACTION = {
+  session: "otc_review1",
+  thread: "t1",
+  reportRevision: 1,
+  headRevision: 2,
+  headSha: SHA,
+  requestedAt: "2026-07-15T00:01:00.000Z",
+} as const;
+const NEXT_ACTION = {
+  ...ACTION,
+  thread: "t2",
+  requestedAt: "2026-07-15T00:02:00.000Z",
+} as const;
 
 function session(options: {
   fork?: boolean;
@@ -104,7 +118,7 @@ function fake(
       releaseLease: (path, reason) => {
         const lease = leases.get(path);
         if (lease === undefined) return "absent";
-        if (lease.reason !== reason) return "mismatch";
+        if (lease.owner !== reason) return "mismatch";
         leases.delete(path);
         return "released";
       },
@@ -171,7 +185,7 @@ describe("parseReviewWorktrees", () => {
 describe("checkoutReviewWorktree", () => {
   test("a done review refuses before any git mutation", () => {
     const { deps, calls, made } = fake({});
-    expect(() => checkoutReviewWorktree(session({ status: "done" }), deps)).toThrow(expect.objectContaining({
+    expect(() => checkoutReviewWorktree(session({ status: "done" }), ACTION, deps)).toThrow(expect.objectContaining({
       code: "E_REVIEW_DONE",
       message: expect.stringContaining("start a new review"),
     }));
@@ -182,7 +196,7 @@ describe("checkoutReviewWorktree", () => {
   test("a closed or merged pull request refuses before any git mutation", () => {
     for (const prState of ["closed", "merged"] as const) {
       const { deps, calls, made } = fake({});
-      expect(() => checkoutReviewWorktree(session({ prState }), deps)).toThrow(expect.objectContaining({
+      expect(() => checkoutReviewWorktree(session({ prState }), ACTION, deps)).toThrow(expect.objectContaining({
         code: "E_REVIEW_PR_STATE",
         message: expect.stringContaining(prState),
       }));
@@ -193,7 +207,7 @@ describe("checkoutReviewWorktree", () => {
 
   test("forks return an explicit read-only result with zero git or filesystem mutation", () => {
     const { deps, calls, made } = fake({});
-    expect(checkoutReviewWorktree(session({ fork: true }), deps)).toMatchObject({
+    expect(checkoutReviewWorktree(session({ fork: true }), ACTION, deps)).toMatchObject({
       mode: "read-only",
       action: "read-only",
       reason: "fork",
@@ -204,7 +218,7 @@ describe("checkoutReviewWorktree", () => {
 
   test("insufficient permission returns read-only before any git command", () => {
     const { deps, calls } = fake({});
-    expect(checkoutReviewWorktree(session({ permission: "read" }), deps)).toMatchObject({
+    expect(checkoutReviewWorktree(session({ permission: "read" }), ACTION, deps)).toMatchObject({
       mode: "read-only",
       reason: "permission",
     });
@@ -218,7 +232,7 @@ describe("checkoutReviewWorktree", () => {
       [`${EXISTING} :: rev-parse --verify HEAD^{commit}`]: `${SHA}\n`,
       [`${EXISTING} :: status --porcelain=v1 -z --untracked-files=all`]: "",
     });
-    expect(checkoutReviewWorktree(session(), deps)).toEqual({
+    expect(checkoutReviewWorktree(session(), ACTION, deps)).toEqual({
       mode: "writable",
       action: "reused",
       worktree: EXISTING,
@@ -226,7 +240,7 @@ describe("checkoutReviewWorktree", () => {
       head: SHA,
       push: { remote: "origin", ref: "feature" },
       lock: {
-        reason: "otacon-review:otc_review1",
+        reason: reviewWorktreeLeaseOwner(ACTION),
         path: reviewWorktreeLeasePath(session()),
       },
     });
@@ -240,7 +254,7 @@ describe("checkoutReviewWorktree", () => {
       [`${EXISTING} :: rev-parse --verify HEAD^{commit}`]: `${SHA}\n`,
       [`${EXISTING} :: status --porcelain=v1 -z --untracked-files=all`]: "?? scratch.txt\0",
     });
-    expect(() => checkoutReviewWorktree(session(), deps)).toThrow(expect.objectContaining({
+    expect(() => checkoutReviewWorktree(session(), ACTION, deps)).toThrow(expect.objectContaining({
       code: "E_REVIEW_WORKTREE_DIRTY",
       message: expect.stringContaining("commit, stash, or remove"),
     }));
@@ -251,7 +265,7 @@ describe("checkoutReviewWorktree", () => {
     const { deps, calls } = fake(writablePreamble(
       porcelain([{ path: EXISTING, head: OTHER, branch: "feature" }]),
     ));
-    expect(() => checkoutReviewWorktree(session(), deps)).toThrow(expect.objectContaining({
+    expect(() => checkoutReviewWorktree(session(), ACTION, deps)).toThrow(expect.objectContaining({
       code: "E_REVIEW_WORKTREE_STALE",
     }));
     expect(mutating(calls)).toEqual([]);
@@ -260,7 +274,7 @@ describe("checkoutReviewWorktree", () => {
   test("a locked exact clean worktree is refused before inspection or mutation", () => {
     const locked = `worktree ${EXISTING}\0HEAD ${SHA}\0branch refs/heads/feature\0locked owned by another agent\0\0`;
     const { deps, calls } = fake(writablePreamble(locked));
-    expect(() => checkoutReviewWorktree(session(), deps)).toThrow(expect.objectContaining({
+    expect(() => checkoutReviewWorktree(session(), ACTION, deps)).toThrow(expect.objectContaining({
       code: "E_REVIEW_WORKTREE_STALE",
     }));
     expect(mutating(calls)).toEqual([]);
@@ -271,7 +285,7 @@ describe("checkoutReviewWorktree", () => {
       writablePreamble(porcelain([{ path: "/repo", head: SHA, branch: "main" }])),
       { exists: true },
     );
-    expect(() => checkoutReviewWorktree(session(), deps)).toThrow(expect.objectContaining({
+    expect(() => checkoutReviewWorktree(session(), ACTION, deps)).toThrow(expect.objectContaining({
       code: "E_REVIEW_WORKTREE_COLLISION",
     }));
     expect(mutating(calls)).toEqual([]);
@@ -280,7 +294,7 @@ describe("checkoutReviewWorktree", () => {
 
   test("malformed worktree state refuses before fetch or directory creation", () => {
     const { deps, calls, made } = fake(writablePreamble("not porcelain\0\0"));
-    expect(() => checkoutReviewWorktree(session(), deps)).toThrow(expect.objectContaining({
+    expect(() => checkoutReviewWorktree(session(), ACTION, deps)).toThrow(expect.objectContaining({
       code: "E_REVIEW_WORKTREE_STATE",
     }));
     expect(mutating(calls)).toEqual([]);
@@ -291,7 +305,7 @@ describe("checkoutReviewWorktree", () => {
     const { deps, calls, made } = fake({
       [`${REPO} :: remote get-url origin`]: new Error("No such remote 'origin'"),
     });
-    expect(() => checkoutReviewWorktree(session(), deps)).toThrow(expect.objectContaining({
+    expect(() => checkoutReviewWorktree(session(), ACTION, deps)).toThrow(expect.objectContaining({
       code: "E_REVIEW_GIT_REMOTE",
       message: expect.stringContaining("cannot read origin"),
     }));
@@ -304,7 +318,7 @@ describe("checkoutReviewWorktree", () => {
       ...writablePreamble(porcelain([{ path: "/repo", head: SHA, branch: "main" }])),
       [`${REPO} :: ls-remote --exit-code origin refs/heads/feature`]: new Error("remote ref does not exist"),
     });
-    expect(() => checkoutReviewWorktree(session(), deps)).toThrow(expect.objectContaining({
+    expect(() => checkoutReviewWorktree(session(), ACTION, deps)).toThrow(expect.objectContaining({
       code: "E_REVIEW_HEAD_REF",
       message: expect.stringContaining("does not exist or cannot be read"),
     }));
@@ -317,7 +331,7 @@ describe("checkoutReviewWorktree", () => {
       ...writablePreamble(porcelain([{ path: "/repo", head: SHA, branch: "main" }])),
       [`${REPO} :: ls-remote --exit-code origin refs/heads/feature`]: `${OTHER}\trefs/heads/feature\n`,
     });
-    expect(() => checkoutReviewWorktree(session(), deps)).toThrow(expect.objectContaining({
+    expect(() => checkoutReviewWorktree(session(), ACTION, deps)).toThrow(expect.objectContaining({
       code: "E_REVIEW_HEAD_STALE",
       message: expect.stringContaining("refresh-head"),
     }));
@@ -338,7 +352,7 @@ describe("checkoutReviewWorktree", () => {
       [`${target} :: rev-parse --verify HEAD^{commit}`]: `${SHA}\n`,
       [`${target} :: status --porcelain=v1 -z --untracked-files=all`]: "",
     });
-    const result = checkoutReviewWorktree(session(), deps);
+    const result = checkoutReviewWorktree(session(), ACTION, deps);
     expect(result).toMatchObject({
       mode: "writable",
       action: "created",
@@ -361,11 +375,11 @@ describe("checkoutReviewWorktree", () => {
     const first = fake(outputs, { leases });
     const second = fake(outputs, { leases });
 
-    expect(checkoutReviewWorktree(session(), first.deps)).toMatchObject({
+    expect(checkoutReviewWorktree(session(), ACTION, first.deps)).toMatchObject({
       mode: "writable",
-      lock: { reason: "otacon-review:otc_review1" },
+      lock: { reason: reviewWorktreeLeaseOwner(ACTION) },
     });
-    expect(() => checkoutReviewWorktree(session(), second.deps)).toThrow(expect.objectContaining({
+    expect(() => checkoutReviewWorktree(session(), ACTION, second.deps)).toThrow(expect.objectContaining({
       code: "E_REVIEW_WORKTREE_LEASED",
     }));
     expect(leases.size).toBe(1);
@@ -380,16 +394,37 @@ describe("checkoutReviewWorktree", () => {
     };
     const leases = new Map<string, ReviewWorktreeLease>();
     const crashed = fake(outputs, { leases });
-    checkoutReviewWorktree(session(), crashed.deps);
-    expect(() => checkoutReviewWorktree(session(), fake(outputs, { leases }).deps)).toThrow(
+    checkoutReviewWorktree(session(), ACTION, crashed.deps);
+    expect(() => checkoutReviewWorktree(session(), ACTION, fake(outputs, { leases }).deps)).toThrow(
       expect.objectContaining({ code: "E_REVIEW_WORKTREE_LEASED" }),
     );
 
-    expect(releaseReviewWorktreeLease(session(), crashed.deps)).toBe("released");
-    expect(releaseReviewWorktreeLease(session(), crashed.deps)).toBe("absent");
-    expect(checkoutReviewWorktree(session(), fake(outputs, { leases }).deps)).toMatchObject({
+    expect(releaseReviewWorktreeLease(session(), ACTION, crashed.deps)).toBe("released");
+    expect(releaseReviewWorktreeLease(session(), ACTION, crashed.deps)).toBe("absent");
+    expect(checkoutReviewWorktree(session(), NEXT_ACTION, fake(outputs, { leases }).deps)).toMatchObject({
       mode: "writable",
     });
+  });
+
+  test("a terminal retry from an older action cannot release a newer handoff in the same session", () => {
+    const outputs = {
+      ...writablePreamble(porcelain([{ path: EXISTING, head: SHA, branch: "feature" }])),
+      [`${EXISTING} :: symbolic-ref --quiet --short HEAD`]: "feature\n",
+      [`${EXISTING} :: rev-parse --verify HEAD^{commit}`]: `${SHA}\n`,
+      [`${EXISTING} :: status --porcelain=v1 -z --untracked-files=all`]: "",
+    };
+    const leases = new Map<string, ReviewWorktreeLease>();
+    const actionA = fake(outputs, { leases });
+    const actionB = fake(outputs, { leases });
+
+    checkoutReviewWorktree(session(), ACTION, actionA.deps);
+    expect(releaseReviewWorktreeLease(session(), ACTION, actionA.deps)).toBe("released");
+    checkoutReviewWorktree(session(), NEXT_ACTION, actionB.deps);
+
+    expect(() => releaseReviewWorktreeLease(session(), ACTION, actionA.deps)).toThrow(
+      expect.objectContaining({ code: "E_REVIEW_WORKTREE_LEASE_OWNER" }),
+    );
+    expect(leases.size).toBe(1);
   });
 
   test("an existing stale local branch is not reset", () => {
@@ -400,7 +435,7 @@ describe("checkoutReviewWorktree", () => {
       [`${REPO} :: rev-parse --verify refs/remotes/origin/feature^{commit}`]: `${SHA}\n`,
       [`${REPO} :: rev-parse --verify refs/heads/feature^{commit}`]: `${OTHER}\n`,
     });
-    expect(() => checkoutReviewWorktree(session(), deps)).toThrow(expect.objectContaining({
+    expect(() => checkoutReviewWorktree(session(), ACTION, deps)).toThrow(expect.objectContaining({
       code: "E_REVIEW_WORKTREE_STALE",
       message: expect.stringContaining("will not reset"),
     }));

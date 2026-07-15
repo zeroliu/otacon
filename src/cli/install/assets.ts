@@ -546,7 +546,9 @@ does not inherit the root's Remember request.
   authorizes code edits. Its ordered \`conversation.turns\` are the complete,
   immutable scope authorized when the reviewer clicked; do not add later or
   unrelated requests. Mark it \`working\` with \`${cmd} review code-status\`, then run
-  \`${cmd} review checkout --session <id>\`. If checkout reports a fork,
+  \`${cmd} review checkout --session <id>\`; checkout requires this to be the
+  only current action marked working and binds its lease to that exact action
+  generation. If checkout reports a fork,
   insufficient permission, a stale/dirty worktree, or any read-only path, make
   no mutation; explain the advice and mark the action \`failed\`.
 
@@ -573,9 +575,11 @@ report/quiz for the new head, respond to every authorized Comment turn in
 new submitted report revision, and mark the code action \`completed\`. On any
 failure, preserve the worktree and mark it \`failed\` with an actionable message;
 the daemon will restore unanswered report-feedback work so the conversation can
-continue. Writable checkout returns only after claiming a durable lease; completed
-and failed status release it. If a terminal status committed but lease release was
-interrupted, rerun the identical code-status file to finish that idempotent cleanup.
+continue. Writable checkout returns only after claiming an action-generation lease;
+completed and failed status release only that exact owner. Done and deletion refuse
+while an action is requested or working. If a terminal status committed but lease
+release was interrupted, rerun the identical code-status file—even after Done—to
+finish that idempotent cleanup.
 Never reset, force-push, or silently switch branches.
 
 ## Remember requested knowledge

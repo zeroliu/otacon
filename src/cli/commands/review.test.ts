@@ -98,6 +98,29 @@ function reviewSession(head = "a".repeat(40)): ReviewRegistrySession {
   };
 }
 
+function codeActionThread(
+  status: "working" | "completed" | "failed",
+  message?: string,
+): Record<string, unknown> {
+  return {
+    id: "t2",
+    surface: "review",
+    intent: "comment",
+    identity: {
+      session: "otc_review1",
+      reportRevision: 2,
+      headRevision: 3,
+      headSha: "a".repeat(40),
+    },
+    codeAction: {
+      status,
+      requestedAt: "2026-07-15T00:01:00.000Z",
+      updatedAt: "2026-07-15T00:02:00.000Z",
+      ...(message === undefined ? {} : { message }),
+    },
+  };
+}
+
 function frozenPreparation(head = "a".repeat(40), revision = 4) {
   return {
     revision: {
@@ -480,6 +503,32 @@ describe("review grade", () => {
 });
 
 describe("review checkout", () => {
+  test("refuses before GitHub or worktree access unless one current code action is working", async () => {
+    let gitCalls = 0;
+    let error: CliError | undefined;
+    try {
+      await reviewCommand(["checkout", "--session", "otc_review1"], deps({
+        worktree: {
+          git: () => { gitCalls += 1; return ""; },
+          exists: () => false,
+          mkdir: () => undefined,
+          realpath: (path) => path,
+          worktreeDir: () => join(repo, "worktrees"),
+          claimLease: () => undefined,
+          releaseLease: () => "absent",
+        },
+        api: async (_method, path) => path.endsWith("/threads")
+          ? { status: 200, body: { session: "otc_review1", threads: [] } }
+          : { status: 200, body: reviewSession() as unknown as Record<string, unknown> },
+      }));
+    } catch (caught) {
+      error = caught as CliError;
+    }
+    expect(error?.code).toBe("E_REVIEW_CODE_ACTION");
+    expect(error?.message).toContain("marked working");
+    expect(gitCalls).toBe(0);
+  });
+
   test("reuses the exact clean worktree and prints the explicit push destination without pushing", async () => {
     const worktree = join(repo, "feature-worktree");
     const head = "a".repeat(40);
@@ -509,6 +558,9 @@ describe("review checkout", () => {
       worktree: worktreeDeps,
       api: async (method, path) => {
         expect(method).toBe("GET");
+        if (path === "/api/sessions/otc_review1/threads") {
+          return { status: 200, body: { session: "otc_review1", threads: [codeActionThread("working")] } };
+        }
         expect(path).toBe("/api/sessions/otc_review1");
         return { status: 200, body: reviewSession() as unknown as Record<string, unknown> };
       },
@@ -541,7 +593,9 @@ describe("review checkout", () => {
           claimLease: () => undefined,
           releaseLease: () => "absent",
         },
-        api: async () => ({ status: 200, body: reviewSession() as unknown as Record<string, unknown> }),
+        api: async (_method, path) => path.endsWith("/threads")
+          ? { status: 200, body: { session: "otc_review1", threads: [codeActionThread("working")] } }
+          : { status: 200, body: reviewSession() as unknown as Record<string, unknown> },
       }));
     } catch (caught) {
       error = caught as CliError;
@@ -564,7 +618,9 @@ describe("review checkout", () => {
         claimLease: () => undefined,
         releaseLease: () => "absent",
       },
-      api: async () => ({ status: 200, body: reviewSession() as unknown as Record<string, unknown> }),
+      api: async (_method, path) => path.endsWith("/threads")
+        ? { status: 200, body: { session: "otc_review1", threads: [codeActionThread("working")] } }
+        : { status: 200, body: reviewSession() as unknown as Record<string, unknown> },
     }));
     expect(printed).toMatchObject({
       ok: true,
@@ -843,7 +899,7 @@ describe("review thread agent commands", () => {
         if (method === "GET") {
           return { status: 200, body: reviewSession() as unknown as Record<string, unknown> };
         }
-        return { status: 200, body: { thread: { id: "t2", codeAction: { status: "completed" } } } };
+        return { status: 200, body: { thread: codeActionThread("completed", "Verified and pushed.") } };
       },
     }));
     expect(requests).toEqual([
@@ -876,7 +932,7 @@ describe("review thread agent commands", () => {
       },
       api: async (method) => method === "GET"
         ? { status: 200, body: reviewSession() as unknown as Record<string, unknown> }
-        : { status: 200, body: { repeated: true, thread: { id: "t2", codeAction: { status: "failed" } } } },
+        : { status: 200, body: { repeated: true, thread: codeActionThread("failed", "Implementation agent crashed.") } },
     }));
     expect(released).toBe(1);
   });

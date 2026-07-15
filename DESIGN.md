@@ -395,7 +395,7 @@ the model is suspended — no inference, no token spend.
 | `otacon config get <key>`                                                   | Read-only: print the merged effective value of one dotted key (`worktree.dir`, `budgets.summaryLines`, …) from the config files; no daemon. Unknown key → exit 1 |
 | `otacon review respond <thread> --file <response.json>`                     | Agent-only: land an Ask answer or Comment report response against the event's immutable report/head identity; may acknowledge exactly the requested User/Project memory scope |
 | `otacon review code-status <thread> --file <status.json>`                   | Agent-only: move an explicitly-authorized Comment code action through `working`, `completed`, or `failed`; terminal transitions release that action's durable checkout lease (a repeated terminal transition repairs a crash between state commit and release); never commits or pushes |
-| `otacon review checkout --session <id>`                                     | Resolve fresh PR permission/head metadata, reuse an exact clean PR-branch worktree or safely create one under `worktree.dir`, then atomically claim its durable PR lease before returning path/branch, lease metadata, and explicit push remote/ref; never commits or pushes |
+| `otacon review checkout --session <id>`                                     | Require exactly one current code action already marked `working`, resolve fresh PR permission/head metadata, reuse an exact clean PR-branch worktree or safely create one under `worktree.dir`, then atomically claim that action generation's durable PR lease before returning path/branch, lease metadata, and explicit push remote/ref; never commits or pushes |
 | `otacon review refresh-head --session <id>`                                 | Re-resolve the same canonical PR after an authorized push, refresh mutable metadata/head generation, and return fresh report/quiz/snapshot paths only for a prepared revision (`authoring:false` for an unchanged submitted report); never force-creates a session |
 | `otacon review revise --session <id>`                                       | Preflight that the latest submitted report belongs to the current session/head, prepare one immutable same-head report revision with a new frozen knowledge snapshot, and return its report/quiz authoring paths. A retry that finds the next revision already prepared for the current head (an earlier revise was interrupted before submit) returns that existing preparation instead of refusing, so recovery can finish the Comment. Used by Comment feedback; never changes code or PR identity |
 | `otacon knowledge get --scope user\|project [--repo <root>]`                 | Read the local Markdown profile through the daemon and print its path, text, and CAS hash as one JSON line. Project scope resolves the clone's GitHub origin to canonical `owner/repo` |
@@ -540,7 +540,8 @@ GET  /api/reviews/:id/diff?from=&to=        structural diff between submitted re
 POST /api/reviews/:id/done                  finish the current report/head. Without force,
                                             unresolved conversations/quizzes return 409
                                             E_REVIEW_INCOMPLETE plus both counts; force:true
-                                            preserves history and closes anyway
+                                            preserves history and closes anyway, but neither
+                                            mode closes across a requested/working code action
 POST /api/reviews/:id/quiz/:question/answer {revision,answer,idempotencyKey}; choice answers
                                             return pass/retry immediately, open answers persist
                                             grading state and enqueue one private quiz-answer event
@@ -555,6 +556,9 @@ DELETE /api/sessions/:id[?terminalOnly=true] deregister a session and permanentl
                                             woken with a terminal `deleted` event (§12). No
                                             archive. Publishes a terminal `removed` SSE
                                             frame; response carries no archive path.
+                                            Review deletion refuses requested/working code
+                                            actions and repairs any exact terminal-action lease
+                                            before removing its durable action record.
                                             terminalOnly atomically refuses a non-terminal
                                             session and is required by otacon clean; UI
                                             delete omits it after explicit confirmation
@@ -1368,7 +1372,9 @@ for an **approved** session the durable copy survives elsewhere (the Save copy u
 `plans.dir`, or the PR for Implement plans), a **pending** one has no committed plan to
 keep. The card
 control stops its click from following the card link; deleting from the review screen
-returns to the index.
+returns to the index. A PR review with requested or working code action cannot be deleted;
+the agent must first report `completed` or `failed`, preserving the checkout handoff until
+its exact action owner can release it.
 
 ### Review screen — desktop (Google-Docs margin model)
 
@@ -1752,14 +1758,22 @@ forks, insufficient permission, terminal sessions, and closed/merged PRs yield t
 non-mutating outcomes. For writable same-repository PRs it parses `git worktree list
 --porcelain -z`, reuses only an exact clean, unlocked ref/SHA worktree, refuses locked,
 dirty, stale, prunable, or colliding state without reset, or fetches and creates under the
-configured worktree directory after remote-ref verification. It returns the checkout and
-push destination for the skill only after atomically publishing a durable lease under
+configured worktree directory after remote-ref verification. Checkout requires exactly one
+current code action already marked `working`, derives an owner token from its immutable
+session/thread/report/head/request generation, and revalidates that same owner after the
+claim. It returns the checkout and push destination for the skill only after atomically
+publishing a complete PR-keyed lease directory under
 `~/.otacon/review-worktree-leases/`; another checkout of the same PR refuses even if both
-callers inspected the worktree before either made it dirty. `completed` and `failed`
-code-status transitions release the lease after the daemon commits the terminal action.
-If the CLI crashes between those steps, repeating that same terminal transition is the
-idempotent release repair; a crash before a terminal transition intentionally leaves the
-lease held until the recovered workflow marks the action failed or completed. The
+callers inspected the worktree before either made it dirty. The owner-specific record inside
+that directory makes compare-and-release generation-safe: a repeated cleanup for action A
+cannot remove a later action B lease, including when duplicate cleanup retries race.
+`completed` and `failed` code-status transitions release only their exact action lease after
+the daemon commits the terminal action. If the CLI crashes between those steps, repeating
+that same terminal transition remains accepted after review Done and repairs the release; a
+crash before a terminal transition intentionally leaves the lease held until the recovered
+workflow marks the action failed or completed. Done and deletion refuse while any code action
+is requested or working. Deletion first compare-and-releases crash-surviving leases for
+already-terminal actions because it is about to remove their durable owner records. The
 `otacon-review` skill owns its one implementation
 subagent; the main agent never implements the Comment itself. It marks the action working,
 delegates only inside the returned checkout, reviews the diff, runs verification, commits
@@ -2033,7 +2047,7 @@ Operational requirement: the Mac stays awake while a plan is in review
 | `<repo>/.otacon/`                                 | Project config only: `config.json` (team-shared) and `config.local.json` (personal override). On Save, also the project copy under `plans.dir` (default `.otacon/plans`). NO per-session working state                                              | the user's call (otacon manages no `.gitignore`) |
 | `~/.otacon/sessions/<id>/`                        | Per-session working state, keyed by session id. Plan sessions keep `plan.md`, `r1.md…rN.md`, warnings/changelogs, version-1 threads/transcript/activity/stream/queues, and the canonical approved plan. Review sessions keep working `review.md`/`quiz.json`, strict version-2 `threads.json`, a dedicated monotonic review event sequence, plus `review/revisions/rN/`: immutable `revision.json`, `knowledge-snapshot.json`, exact `user.md` + `project.md`, an atomically-published `submission/` containing private report/quiz, warnings, timestamp and integrity hashes, and mutable atomic `quiz-state.json` + backup for attempts/verdict recovery. Removed outright when the session is deleted | n/a (global)                              |
 | `~/.otacon/worktrees/<slug>/`                     | Implement build's git worktree on branch `otacon/impl-<slug>` (base dir is `worktree.dir`, default `~/.otacon/worktrees` — outside the repo)                    | n/a (global, outside the repo)             |
-| `~/.otacon/review-worktree-leases/<pr-hash>.json` | Atomic durable owner record for one writable PR-review handoff; removed only after its code action reaches `completed` or `failed`                           | n/a (global)                               |
+| `~/.otacon/review-worktree-leases/<pr-hash>.lease/` | Atomically-published durable lease directory for one writable PR-review handoff, containing the exact action-generation owner record; removed only by that terminal action or session deletion after the action is terminal | n/a (global)                               |
 | `<repo>/<plans.dir>/YYYY-MM-DD-<slug>.md`         | Save-time project copy (default `.otacon/plans`; set `plans.dir=docs/plans` to group with tracked plans)       | yours to commit (or not)                   |
 | `~/.otacon/registry.json`                         | Session registry: ID → `kind`, repo, branch, title, and kind-specific status. Plan entries retain optional `prompt`, `prUrl`, `prState`, and `impl`; review entries carry canonical PR metadata, head snapshot, and review revision. Legacy entries missing `kind` decode as plans.                                                             | n/a (global)                               |
 | `~/.otacon/knowledge/user.md` + `user.evidence.jsonl` | Implicit OS-user Markdown summary plus append-only learning evidence                                                                 | n/a (global)                               |

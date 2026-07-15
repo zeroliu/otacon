@@ -27,7 +27,13 @@ import { canonicalizeGitHubRepo, defaultKnowledgeMarkdown } from "../shared/know
 import type { CanonicalGitHubRepo } from "../shared/knowledge.js";
 import { pullRequestIdentity } from "../shared/review.js";
 import type { PullRequestMetadata } from "../shared/review.js";
-import type { RegistrySession, StreamEvent } from "../shared/types.js";
+import {
+  claimReviewWorktreeLeaseFile,
+  reviewWorktreeLeaseAction,
+  reviewWorktreeLeaseOwner,
+  reviewWorktreeLeasePathForPr,
+} from "../shared/review-worktree-lease.js";
+import type { RegistrySession, ReviewThread, StreamEvent } from "../shared/types.js";
 import { VERSION } from "../shared/version.js";
 import type { NodeBindings } from "./app.js";
 import { createApp } from "./app.js";
@@ -619,6 +625,117 @@ describe("review session identity and lifecycle", () => {
     expect(readFileSync(reviewRevisionReportPath(id, 1), "utf8")).toBe(before.report);
     expect(readFileSync(reviewRevisionQuizPath(id, 1), "utf8")).toBe(before.quiz);
     expect(readFileSync(threadsPath(id), "utf8")).toBe(before.threads);
+  });
+
+  test("force Done refuses while an authorized code action still owns its handoff", async () => {
+    const { id } = await submittedReview();
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "comment",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Make this change.",
+      ...source,
+      idempotencyKey: "active-code-done",
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/threads/t1/code-action`, { source })).status).toBe(202);
+    expect((await postJson(`/api/reviews/${id}/threads/t1/code-action/status`, {
+      source,
+      status: "working",
+    })).status).toBe(200);
+
+    const closed = await postJson(`/api/reviews/${id}/done`, { force: true });
+    expect(closed.status).toBe(409);
+    expect((await closed.json()) as object).toMatchObject({
+      error: { code: "E_REVIEW_CODE_ACTION_ACTIVE" },
+    });
+    expect(store.getSession(id)?.status).toBe("reviewing");
+  });
+
+  test("delete refuses while an authorized code action still owns its handoff", async () => {
+    const { id } = await submittedReview();
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "comment",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Make this change.",
+      ...source,
+      idempotencyKey: "active-code-delete",
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/threads/t1/code-action`, { source })).status).toBe(202);
+    expect((await postJson(`/api/reviews/${id}/threads/t1/code-action/status`, {
+      source,
+      status: "working",
+    })).status).toBe(200);
+
+    const deleted = await app.request(`/api/sessions/${id}`, { method: "DELETE" });
+    expect(deleted.status).toBe(409);
+    expect((await deleted.json()) as object).toMatchObject({
+      error: { code: "E_REVIEW_CODE_ACTION_ACTIVE" },
+    });
+    expect(store.getSession(id)?.kind).toBe("review");
+    expect(existsSync(sessionDir(id))).toBe(true);
+  });
+
+  test("delete repairs a crash-surviving terminal action lease before removing its owner record", async () => {
+    const { id } = await submittedReview();
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "comment",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Make this change.",
+      ...source,
+      idempotencyKey: "terminal-code-delete",
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/threads/t1/code-action`, { source })).status).toBe(202);
+    const failed = await postJson(`/api/reviews/${id}/threads/t1/code-action/status`, {
+      source,
+      status: "failed",
+      message: "implementation stopped",
+    });
+    const thread = ((await failed.json()) as { thread: ReviewThread }).thread;
+    const action = reviewWorktreeLeaseAction(thread);
+    if (action === undefined) throw new Error("expected terminal code action");
+    const session = store.getSession(id);
+    if (session?.kind !== "review") throw new Error("expected review session");
+    const leasePath = reviewWorktreeLeasePathForPr(session.review.pullRequest.identity.key);
+    claimReviewWorktreeLeaseFile(leasePath, {
+      version: 2,
+      owner: reviewWorktreeLeaseOwner(action),
+      action,
+      worktree: "/worktrees/review-acme-app-pr-42",
+      branch: "feature",
+      head: source.headSha,
+      acquiredAt: "2026-07-15T12:00:00.000Z",
+    });
+    expect(existsSync(leasePath)).toBe(true);
+
+    const deleted = await app.request(`/api/sessions/${id}`, { method: "DELETE" });
+    expect(deleted.status).toBe(200);
+    expect(existsSync(leasePath)).toBe(false);
+    expect(store.getSession(id)).toBeUndefined();
+  });
+
+  test("a repeated terminal code status can repair its lease after force Done", async () => {
+    const { id } = await submittedReview();
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "comment",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Make this change.",
+      ...source,
+      idempotencyKey: "terminal-code-done",
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/threads/t1/code-action`, { source })).status).toBe(202);
+    const terminal = { source, status: "failed", message: "implementation stopped" };
+    expect((await postJson(`/api/reviews/${id}/threads/t1/code-action/status`, terminal)).status).toBe(200);
+    expect((await postJson(`/api/reviews/${id}/done`, { force: true })).status).toBe(200);
+
+    const replay = await postJson(`/api/reviews/${id}/threads/t1/code-action/status`, terminal);
+    expect(replay.status).toBe(200);
+    expect((await replay.json()) as object).toMatchObject({
+      repeated: true,
+      thread: { id: "t1", codeAction: { status: "failed" } },
+    });
   });
 
   test("clean Done wakes a parked reviewer once and repeated Done is idempotent", async () => {
