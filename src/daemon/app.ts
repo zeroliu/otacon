@@ -646,11 +646,25 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   // downstream. A repo whose agent has no adapter attaches no tailer and runs on
   // the progress floor (the registry returns null). Tailers are injectable via
   // options.makeTailer so a test can drive `tick()` without a real fs poll.
-  const tailers = new Map<string, { start(): void; stop(): void }>();
+  const tailers = new Map<string, {
+    repoRoot: string;
+    tailer: { start(): void; stop(): void };
+  }>();
   const makeTailer = options.makeTailer ?? ((deps: TailerDeps) => new Tailer(deps));
   const startTailer = (session: RegistrySession): void => {
-    if (tailers.has(session.id)) return; // idempotent — already watching
-    if (isTerminalSession(session)) return; // over: nothing to tail
+    const existing = tailers.get(session.id);
+    if (isTerminalSession(session)) {
+      if (existing !== undefined) {
+        existing.tailer.stop();
+        tailers.delete(session.id);
+      }
+      return; // over: nothing to tail
+    }
+    if (existing?.repoRoot === session.repo) return; // idempotent — already watching this clone
+    if (existing !== undefined) {
+      existing.tailer.stop();
+      tailers.delete(session.id);
+    }
     const tailer = makeTailer({
       repoRoot: session.repo,
       nextSeq: () => nextStreamSeq(session.id),
@@ -658,13 +672,13 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       publish: (events) => publishStream(session.id, events),
       config: () => loadConfig(session.repo).stream,
     });
-    tailers.set(session.id, tailer);
+    tailers.set(session.id, { repoRoot: session.repo, tailer });
     tailer.start();
   };
   const stopTailer = (id: string): void => {
-    const tailer = tailers.get(id);
-    if (tailer === undefined) return;
-    tailer.stop();
+    const entry = tailers.get(id);
+    if (entry === undefined) return;
+    entry.tailer.stop();
     tailers.delete(id);
   };
   // Re-attach tailers to sessions that were already active when the daemon
@@ -1118,9 +1132,10 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     }
     const preparation = reviews.prepareForSession(result.session);
     // Review authoring begins immediately after `review start`, before the
-    // agent reads its frozen knowledge or researches the PR. Reuse/reopen is
-    // safe because startTailer is idempotent per session id; completed reviews
-    // remain untouched through the terminal guard.
+    // agent reads its frozen knowledge or researches the PR. Reuse/reopen
+    // rebinds the canonical review to this invocation's clone; startTailer is
+    // idempotent for the same path and replaces the watcher when the path moved.
+    // Completed reviews remain untouched through the terminal guard.
     startTailer(result.session);
     publishSession(result.session);
     return c.json({ ...result, preparation }, result.action === "created" ? 201 : 200);
@@ -1924,6 +1939,23 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.delete("/api/sessions/:id", (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    const terminalOnly = c.req.query("terminalOnly");
+    if (terminalOnly !== undefined && terminalOnly !== "true") {
+      return badRequest(c, "terminalOnly must be true when present");
+    }
+    // `otacon clean` selects from an earlier registry snapshot. Enforce its
+    // terminal-only contract here, in the same synchronous handler that
+    // performs removal, so a review reopened on a newer head cannot be deleted
+    // by the stale candidate. UI delete omits the condition and still supports
+    // deliberate deletion of any status after confirmation.
+    if (terminalOnly === "true" && !isTerminalSession(session)) {
+      return c.json({
+        error: {
+          code: "E_SESSION_NOT_TERMINAL",
+          message: `session ${session.id} is no longer ended`,
+        },
+      }, 409);
+    }
     const queue = queueFor(session.id);
     const pendingEvents = queue.size;
     stopTailer(session.id); // the session is going away — stop watching its transcript

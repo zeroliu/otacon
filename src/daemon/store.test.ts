@@ -279,6 +279,29 @@ describe("Store review lifecycle", () => {
       .toBe(forced.session.id);
   });
 
+  test("reuse rebinds local operations to the invoking clone and branch", () => {
+    const store = new Store();
+    const first = store.startReviewSession({ repo, branch: "main", pullRequest: pullRequest() });
+    const otherRepo = mkdtempSync(join(tmpdir(), "otacon-repo-clone-"));
+    try {
+      const reused = store.startReviewSession({
+        repo: otherRepo,
+        branch: "review-from-clone-b",
+        pullRequest: pullRequest(),
+      });
+      expect(reused.action).toBe("reused");
+      expect(reused.session.id).toBe(first.session.id);
+      expect(reused.session.repo).toBe(otherRepo);
+      expect(reused.session.branch).toBe("review-from-clone-b");
+      expect(new Store().getSession(first.session.id)).toMatchObject({
+        repo: otherRepo,
+        branch: "review-from-clone-b",
+      });
+    } finally {
+      rmSync(otherRepo, { recursive: true, force: true });
+    }
+  });
+
   test("head refresh cannot change canonical PR identity", () => {
     const store = new Store();
     const created = store.startReviewSession({ repo, pullRequest: pullRequest() });

@@ -35,10 +35,13 @@ async function listen(detailStatus: "draft" | "approved"): Promise<void> {
     if (request.method === "GET" && request.url === "/api/sessions") {
       return void response.end(JSON.stringify({ sessions: [session] }));
     }
-    if (request.method === "GET" && request.url === "/api/sessions/otc_clean1") {
-      return void response.end(JSON.stringify({ ...session, status: detailStatus }));
-    }
-    if (request.method === "DELETE" && request.url === "/api/sessions/otc_clean1") {
+    if (request.method === "DELETE" && request.url === "/api/sessions/otc_clean1?terminalOnly=true") {
+      if (detailStatus !== "approved") {
+        response.statusCode = 409;
+        return void response.end(JSON.stringify({
+          error: { code: "E_SESSION_NOT_TERMINAL", message: "session is no longer ended" },
+        }));
+      }
       deleted.push("otc_clean1");
       return void response.end(JSON.stringify({ ok: true, pendingEvents: 0 }));
     }
@@ -86,7 +89,7 @@ afterEach(async () => {
   else process.env.OTACON_PORT = savedPort;
 });
 
-test("revalidates a terminal snapshot before permanently deleting it", async () => {
+test("asks the daemon to atomically revalidate a terminal snapshot before deletion", async () => {
   await listen("draft");
   expect(await run()).toMatchObject({ ok: true, cleaned: [] });
   expect(deleted).toEqual([]);

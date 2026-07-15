@@ -379,7 +379,7 @@ the model is suspended — no inference, no token spend.
 | Command                                                                     | Effect                                                                        |
 | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | `otacon start --title <t> [--prompt <t>] [--quick] [--socratic]`            | Mint session, register it, print review URL (`--socratic` overrides the `socratic.default` config; `--prompt` records the user's verbatim request, trimmed and uncapped, on the session record) |
-| `otacon review start --pr <URL\|number> [--force]`                           | Resolve the PR against the current repo's GitHub origin; create, reuse, or head-revise its canonical review session. An unchanged completed review reports `reused-complete` and stays read-only; an unchanged active submitted report returns `authoring:false` so the skill waits without overwriting it; a changed completed head reports `reopened-changed` and returns fresh authoring paths. `--force` alone creates a separate session |
+| `otacon review start --pr <URL\|number> [--force]`                           | Resolve the PR against the current repo's GitHub origin; create, reuse, or head-revise its canonical review session. Every reuse rebinds clone-local operations and activity capture to the invoking repo/branch. An unchanged completed review reports `reused-complete` and stays read-only; an unchanged active submitted report returns `authoring:false` so the skill waits without overwriting it; a changed completed head reports `reopened-changed` and returns fresh authoring paths. `--force` alone creates a separate session |
 | `otacon review submit --report <report.md> --quiz <quiz.json>`                | Derive the session from fixed report frontmatter; strict-lint and immutably publish the report/quiz pair. A rejection prints bounded line-aware issues |
 | `otacon review grade <question-id> --file <grade.json>`                       | Complete one pending open-answer attempt with a schema-validated pass/retry verdict, specific feedback, report/head identity, and current knowledge CAS hash. Duplicate grades are idempotent; conflicts leave the attempt pending |
 | `otacon submit [plan.md] [--resolutions res.json]`                          | Lint → reject with errors, or store revision N, notify UI                     |
@@ -519,7 +519,8 @@ PUT  /api/knowledge                         {scope,repo?,markdown,baseHash}; ato
 GET  /api/sessions                          index (registry)
 POST /api/sessions                          mint + register a session (otacon start)
 GET  /api/reviews?repo=<owner/repo>&number=<n> canonical PR review lookup
-POST /api/reviews                           atomically create/reuse/revise a review;
+POST /api/reviews                           atomically create/reuse/revise a review and bind
+                                            its local repo/branch to this invocation;
                                             repo identity mismatch is 409 before creation
 POST /api/reviews/:id/head                  refresh metadata/head for the same canonical
                                             PR; a changed SHA increments revision,
@@ -547,13 +548,16 @@ POST /api/reviews/:id/quiz/:question/grade  agent-private, schema-validated grad
                                             attempt, verdict, feedback, and knowledgeBaseHash;
                                             CAS conflicts return 409 without completing the attempt
 GET  /api/sessions/:id                      session detail (+ revision, pending events)
-DELETE /api/sessions/:id                    deregister a session and permanently remove
+DELETE /api/sessions/:id[?terminalOnly=true] deregister a session and permanently remove
                                             its home folder ~/.otacon/sessions/<id>/ for
                                             ALL statuses (otacon clean + UI); a live
                                             (non-terminal) session's parked agent is first
                                             woken with a terminal `deleted` event (§12). No
                                             archive. Publishes a terminal `removed` SSE
-                                            frame; response carries no archive path
+                                            frame; response carries no archive path.
+                                            terminalOnly atomically refuses a non-terminal
+                                            session and is required by otacon clean; UI
+                                            delete omits it after explicit confirmation
 GET  /api/sessions/:id/events?wait=540      agent long-poll
 POST /api/sessions/:id/submit               lint; reject 422 with issues, or store revision N
 POST /api/sessions/:id/comments             flush a comment batch; a batch item may
@@ -958,6 +962,11 @@ with `open --session <returned-id>`, and only then reads the frozen knowledge sn
 researches the PR. An existing Otacon tab therefore switches to the new/reused review
 before authoring begins; the same session captures the research rather than appearing only
 after the completed report is submitted.
+Because canonical identity is clone-independent but refresh, checkout, config, and transcript
+capture are local, every successful non-forced start also replaces the session's local `repo`
+and `branch` with the invoking clone. If that repo path changes while the review is active, the
+daemon stops the old transcript tailer and starts one rooted at the new clone before research
+continues. The original clone can therefore disappear without breaking later local work.
 
 Review ids may use the generic session detail, delete, event-queue, visibility-presence,
 and per-session summary stream envelope. Accepted report publication emits the same
@@ -1929,8 +1938,9 @@ rule.
 **Capture: the transcript tailer.** While a session is active the daemon runs a
 per-session *tailer* that watches the coding agent's own on-disk transcript and feeds
 new activity into the stream — no per-agent hook, no cooperation from the agent. It is
-bound to the session lifecycle: it starts when the session is created (or, after a
-daemon restart, for every still-active plan or review session) and stops the moment the session goes
+bound to the session lifecycle and current local clone: it starts when the session is created (or,
+after a daemon restart, for every still-active plan or review session), is replaced when canonical
+review reuse moves the session to another clone, and stops the moment the session goes
 terminal (plan Save/approve or implement-done; review Done; either kind's delete). An `implementing` session keeps its
 tailer so the build's activity keeps streaming. The tailer polls the transcript on a
 short interval (a plain poll loop, chosen over `fs.watch` for cross-platform
@@ -2023,8 +2033,11 @@ plans.dir copies; otacon manages no `.gitignore`, so whether those are tracked o
 is the user's call. `otacon clean`
 permanently removes ended sessions' home folders: for every **terminal** session (approved, plus
 implemented / implement_failed once a build finishes) in the current repo (`--all`:
-everywhere), it re-reads the session detail immediately before deletion and skips anything
-that has reopened or become non-terminal, then calls `DELETE /api/sessions/:id`; the daemon drops the registry entry and
+everywhere), it asks the daemon to recheck the current terminal status and skip anything
+that has reopened or become non-terminal by calling
+`DELETE /api/sessions/:id?terminalOnly=true`; the daemon checks the current status and performs
+the destructive removal in one synchronous operation. A stale candidate that reopened is refused
+with `E_SESSION_NOT_TERMINAL`. For an accepted candidate the daemon drops the registry entry and
 `rmSync`s the session's home folder `~/.otacon/sessions/<id>/` outright. No archive: the
 durable copies are the Save copy under `plans.dir` and (for Implement plans) the PR.
 Events still queued on an ended session are removed with the folder rather

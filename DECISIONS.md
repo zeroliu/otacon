@@ -4908,3 +4908,34 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** The prepare route gains a durable idempotency key that would let the
   daemon safely answer retries itself, or revise stops being the recovery entry point for
   Comment feedback.
+
+## Canonical review reuse rebinds clone-local ownership (2026-07-15)
+
+- **Decision:** Every non-forced `review start` persists the invoking clone's absolute
+  repo root and current branch on the reused canonical session, even when the PR head and
+  metadata are otherwise unchanged. An active transcript tailer is keyed by session and
+  repo root: reuse in another clone stops the old tailer and starts a replacement in the
+  new clone. Head refresh alone does not change the local binding.
+- **Why:** Canonical GitHub identity correctly owns report history, but refresh, checkout,
+  project config, and transcript discovery are local operations. Leaving those operations
+  attached to whichever clone first created the review makes a later valid invocation
+  depend on stale or deleted filesystem state and can silently capture activity/config from
+  the wrong checkout. Rebinding at start follows the explicit current invocation without
+  conflating clone paths with canonical identity.
+- **Revisit when:** Local operations receive an explicit repo root per command instead of
+  reading the session binding, or one review intentionally tails several clones at once.
+
+## Clean uses daemon-conditional terminal deletion (2026-07-15)
+
+- **Decision:** `otacon clean` sends
+  `DELETE /api/sessions/:id?terminalOnly=true`. The daemon checks the session's current
+  kind-aware terminal status and, without yielding between that check and removal, either
+  deletes it or returns `409 E_SESSION_NOT_TERMINAL`. Confirmed UI deletion omits the
+  condition and retains its deliberate any-status behavior.
+- **Why:** Candidate selection and a separate detail GET cannot protect a later
+  unconditional DELETE: a completed PR review can reopen on a changed head between the
+  requests, turning the same id into active work whose home folder must survive. Keeping
+  the precondition beside the destructive mutation closes that race while preserving the
+  UI's explicit ability to discard a live session.
+- **Revisit when:** Session mutations move behind a general version/CAS token that can
+  express deletion preconditions consistently for every caller.

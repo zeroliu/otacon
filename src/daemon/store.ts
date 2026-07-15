@@ -392,12 +392,18 @@ export class Store {
       if (existing.review.head.sha === input.pullRequest.headSha) {
         return {
           action: existing.status === "done" ? "reused-complete" : "reused",
-          session: this.refreshReviewHead(existing.id, input.pullRequest),
+          session: this.refreshReviewHead(existing.id, input.pullRequest, {
+            repo: input.repo,
+            branch: input.branch ?? "",
+          }),
         };
       }
       return {
         action: existing.status === "done" ? "reopened-changed" : "revised",
-        session: this.refreshReviewHead(existing.id, input.pullRequest),
+        session: this.refreshReviewHead(existing.id, input.pullRequest, {
+          repo: input.repo,
+          branch: input.branch ?? "",
+        }),
       };
     }
 
@@ -435,18 +441,28 @@ export class Store {
     return { action: "created", session: structuredClone(session) };
   }
 
-  refreshReviewHead(id: string, pullRequest: PullRequestMetadata): ReviewRegistrySession {
+  refreshReviewHead(
+    id: string,
+    pullRequest: PullRequestMetadata,
+    local?: { repo: string; branch: string },
+  ): ReviewRegistrySession {
     const session = this.require(id);
     if (session.kind !== "review") throw new Error(`session ${id} is not a review`);
     if (session.review.pullRequest.identity.key !== pullRequest.identity.key) {
       throw new Error("cannot change a review session's canonical pull request identity");
     }
     const sameHead = session.review.head.sha === pullRequest.headSha;
-    if (sameHead && JSON.stringify(session.review.pullRequest) === JSON.stringify(pullRequest)) {
+    const sameLocal = local === undefined ||
+      (session.repo === local.repo && session.branch === local.branch);
+    if (sameHead && sameLocal && JSON.stringify(session.review.pullRequest) === JSON.stringify(pullRequest)) {
       return structuredClone(session);
     }
     const now = new Date().toISOString();
     session.title = `#${pullRequest.identity.number} ${pullRequest.title}`;
+    if (local !== undefined) {
+      session.repo = local.repo;
+      session.branch = local.branch;
+    }
     if (!sameHead) session.status = "working";
     session.updatedAt = now;
     session.prUrl = pullRequest.url;

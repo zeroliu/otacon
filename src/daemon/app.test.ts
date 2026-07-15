@@ -3527,7 +3527,7 @@ describe("progress and live activity (live-agent-activity)", () => {
 describe("transcript tailer lifecycle (live-progress-activity-redesign)", () => {
   // A stub tailer factory records start/stop per repo so the test observes the
   // lifecycle wiring without a real fs poll or any ~/.claude dependency.
-  type Stub = { start(): void; stop(): void; started: number; stopped: number };
+  type Stub = { start(): void; stop(): void; started: number; stopped: number; repoRoot: string };
   function tailedApp() {
     const stubs: Stub[] = [];
     const tailed = createApp({
@@ -3535,10 +3535,11 @@ describe("transcript tailer lifecycle (live-progress-activity-redesign)", () => 
       uiDir,
       presence,
       notify: () => {},
-      makeTailer: () => {
+      makeTailer: (deps) => {
         const stub: Stub = {
           started: 0,
           stopped: 0,
+          repoRoot: deps.repoRoot,
           start() {
             this.started += 1;
           },
@@ -3577,6 +3578,41 @@ describe("transcript tailer lifecycle (live-progress-activity-redesign)", () => 
     expect(stubs).toHaveLength(1);
     expect(stubs[0]?.started).toBe(1);
     expect(stubs[0]?.stopped).toBe(0);
+  });
+
+  test("reusing a review from another clone rebinds the session and replaces its tailer", async () => {
+    const { tailed, stubs } = tailedApp();
+    const input = {
+      repo,
+      repository: reviewRepo,
+      branch: "main",
+      pullRequest: reviewMetadata(),
+    };
+    const created = (await (await post(tailed, "/api/reviews", input)).json()) as {
+      session: { id: string };
+    };
+    const otherRepo = mkdtempSync(join(tmpdir(), "otacon-repo-clone-"));
+    try {
+      const reused = await post(tailed, "/api/reviews", {
+        ...input,
+        repo: otherRepo,
+        branch: "review-from-clone-b",
+      });
+      expect(reused.status).toBe(200);
+      expect(stubs).toHaveLength(2);
+      expect(stubs[0]).toMatchObject({ repoRoot: repo, started: 1, stopped: 1 });
+      expect(stubs[1]).toMatchObject({ repoRoot: otherRepo, started: 1, stopped: 0 });
+      expect(store.getSession(created.session.id)).toMatchObject({
+        repo: otherRepo,
+        branch: "review-from-clone-b",
+      });
+      // The original clone may disappear after the handoff; later local work
+      // and activity capture remain bound to the valid invoking clone.
+      rmSync(repo, { recursive: true, force: true });
+      expect(store.getSession(created.session.id)?.repo).toBe(otherRepo);
+    } finally {
+      rmSync(otherRepo, { recursive: true, force: true });
+    }
   });
 
   test("daemon restart reattaches one tailer to an active review", () => {
@@ -4523,6 +4559,42 @@ describe("DELETE /api/sessions/:id (otacon clean, M5)", () => {
   test("404 on an unknown session", async () => {
     const res = await app.request("/api/sessions/otc_nope", { method: "DELETE" });
     expect(res.status).toBe(404);
+  });
+
+  test("terminal-only delete refuses a Done review that reopened on a changed head", async () => {
+    const created = await postJson("/api/reviews", {
+      repo,
+      repository: reviewRepo,
+      branch: "main",
+      pullRequest: reviewMetadata(),
+    });
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const id = first.session.id;
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 1, first.preparation.snapshot.hash),
+      quiz: validReviewQuiz(id, 1),
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/done`, { force: true })).status).toBe(200);
+
+    const reopened = await postJson("/api/reviews", {
+      repo,
+      repository: reviewRepo,
+      branch: "main",
+      pullRequest: reviewMetadata("b".repeat(40)),
+    });
+    expect(((await reopened.json()) as { action: string }).action).toBe("reopened-changed");
+
+    const rejected = await app.request(`/api/sessions/${id}?terminalOnly=true`, {
+      method: "DELETE",
+    });
+    expect(rejected.status).toBe(409);
+    expect(((await rejected.json()) as { error: { code: string } }).error.code)
+      .toBe("E_SESSION_NOT_TERMINAL");
+    expect(store.getSession(id)).toMatchObject({ kind: "review", status: "working" });
+    expect(existsSync(reviewRevisionReportPath(id, 1))).toBe(true);
   });
 
   test("deregisters an approved session, removes its home dir, and reports pending events", async () => {
