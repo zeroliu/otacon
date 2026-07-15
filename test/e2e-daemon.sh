@@ -119,7 +119,7 @@ HTTP=$(curl -s -o "$TMP/submit.json" -w '%{http_code}' \
   --data-binary "@$TMP/submit-body.json")
 [ "$HTTP" = "200" ] || { cat "$TMP/submit.json" >&2; fail "valid plan did not pass (got $HTTP)"; }
 [ "$(json_field revision "$TMP/submit.json")" = "1" ] || fail "expected revision 1"
-[ -f "$REPO/.otacon/$SID/r1.md" ] || fail "r1.md not stored on disk"
+[ -f "$HOME_DIR/sessions/$SID/r1.md" ] || fail "r1.md not stored in the home session store"
 curl -s "$BASE/api/sessions/$SID/revisions/1" | cmp -s - "$TMP/plan.md" || fail "revision read-back differs"
 ok "valid plan stored as revision 1 and reads back byte-identical"
 
@@ -171,13 +171,13 @@ done
 ok "POST /api/shutdown exits the daemon"
 
 # --- corrupt session.json while stopped: quarantined on restart, never wedged --
-printf '{nope' > "$REPO/.otacon/$SID/session.json"
+printf '{nope' > "$HOME_DIR/sessions/$SID/session.json"
 start_daemon
 curl -sf "$BASE/api/sessions/$SID" > "$TMP/recovered.json" \
   || fail "corrupt session.json wedged the restarted daemon"
 [ "$(json_field revision "$TMP/recovered.json")" = "1" ] \
   || fail "revision was not recovered from the r1.md snapshot"
-ls "$REPO/.otacon/$SID/"session.json.corrupt-* > /dev/null 2>&1 \
+ls "$HOME_DIR/sessions/$SID/"session.json.corrupt-* > /dev/null 2>&1 \
   || fail "corrupt session.json was not quarantined aside"
 ok "corrupt session.json quarantined on restart; revision recovered from snapshots"
 curl -s -X POST "$BASE/api/shutdown" > /dev/null

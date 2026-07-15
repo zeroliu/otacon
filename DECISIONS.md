@@ -4733,3 +4733,19 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** Same-head revisions become automatic daemon jobs, code changes gain a
   transactional hosted executor, or review threads can safely carry narrower capabilities
   than the current explicit second-step event.
+
+## Realistic fixtures connect Storybook, production UI, and release E2E (2026-07-15)
+
+- **Decision:** One valid personalized Markdown report and private quiz companion seed both
+  the real built-daemon Playwright scenarios and local manual prototype sessions. Storybook
+  remains a production-component lab; a conformance test compares its major labels, order,
+  and shared component classes with the production page instead of blessing duplicate
+  screenshots. The hermetic shell loop fakes only `gh`/`git`, and the branch verifier opens
+  local balanced and expert sessions without resolving or mutating a real PR.
+- **Why:** Hand-built test JSON and a visually independent Storybook page would drift from
+  the strict authoring format while still appearing plausible. Reusing valid authored input
+  makes parser, daemon, browser, and design-lab failures meet at one contract; narrow process
+  fakes prove checkout routing without granting a release test authority over GitHub.
+- **Revisit when:** GitHub offers an official local PR emulator, visual-regression snapshots
+  become stable across supported browsers, or the authoring format gains a fixture generator
+  that can replace the committed human-readable examples.

@@ -64,6 +64,7 @@ git init -q -b main .
 printf 'node_modules/\n' > .gitignore
 otacon start --title "e2e plan" > "$TMP/start.json" 2> "$TMP/start.err"
 SID="$(json_field session "$TMP/start.json")"
+PLAN="$(json_field plan "$TMP/start.json")"
 [[ "$SID" == otc_* ]] || fail "start printed no otc_ session id"
 # otacon manages no .gitignore: the file is left exactly as the user wrote it
 # (DECISIONS.md "otacon manages no .gitignore").
@@ -76,8 +77,8 @@ otacon status > "$TMP/status3.json"
 ok "start minted $SID, left .gitignore untouched, registered it"
 
 # --- 3. failing submit, then passing submit ----------------------------------
-mkdir -p ".otacon/$SID"
-printf '# not a plan\n' > ".otacon/$SID/plan.md"
+mkdir -p "$(dirname "$PLAN")"
+printf '# not a plan\n' > "$PLAN"
 set +e
 otacon submit > "$TMP/lint.json" 2> /dev/null
 CODE=$?
@@ -86,7 +87,7 @@ set -e
 [ "$(json_field ok "$TMP/lint.json")" = "false" ] || fail "lint reject did not say ok:false"
 grep -q '"rule":"L1"' "$TMP/lint.json" || fail "lint reject carried no machine-readable issues"
 
-sed "s/otc_test01/$SID/" "$ROOT/test/fixtures/valid-plan.md" > ".otacon/$SID/plan.md"
+sed "s/otc_test01/$SID/" "$ROOT/test/fixtures/valid-plan.md" > "$PLAN"
 otacon submit > "$TMP/submit.json"
 [ "$(json_field ok "$TMP/submit.json")" = "true" ] || fail "valid submit did not say ok:true"
 [ "$(json_field revision "$TMP/submit.json")" = "1" ] || fail "expected revision 1"

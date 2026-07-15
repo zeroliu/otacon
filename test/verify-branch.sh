@@ -13,6 +13,7 @@
 #   bun run verify:branch visuals
 #   bun run verify:branch notify
 #   bun run verify:branch activity
+#   bun run verify:branch review     # balanced + expert PR explanations
 #
 # Resolves the checkout root from the script's own location, so it works from any
 # subdirectory of the checkout.
@@ -23,8 +24,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BRANCH="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || basename "$ROOT")"
 
 case "$FLAVOR" in
-  full|visuals|notify|activity) ;;
-  *) echo "error: unknown flavor '$FLAVOR' (expected: full|visuals|notify|activity)" >&2; exit 1 ;;
+  full|visuals|notify|activity|review) ;;
+  *) echo "error: unknown flavor '$FLAVOR' (expected: full|visuals|notify|activity|review)" >&2; exit 1 ;;
 esac
 
 echo "# [$BRANCH] installing deps + building   ($ROOT)"
@@ -42,4 +43,8 @@ echo "# [$BRANCH] restarting daemon from current source"
 echo "# [$BRANCH] populating '$FLAVOR' session"
 # populate-session.sh runs against this checkout's own ./bin/otacon, so it hits
 # this checkout's isolated daemon and serves the built UI.
-( cd "$ROOT" && bash "$ROOT/test/populate-session.sh" "$FLAVOR" )
+if [ "$FLAVOR" = review ]; then
+  ( cd "$ROOT" && bash "$ROOT/test/populate-review-session.sh" "${OTACON_REVIEW_PROFILE:-balanced}" )
+else
+  ( cd "$ROOT" && bash "$ROOT/test/populate-session.sh" "$FLAVOR" )
+fi

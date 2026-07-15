@@ -19,6 +19,12 @@ export interface Session {
   repo: string;
 }
 
+export interface ReviewSession extends Session {
+  number: number;
+  headSha: string;
+  snapshotHash: string;
+}
+
 export const uniqueTitle = (label: string) =>
   `${label} ${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
@@ -32,6 +38,79 @@ export async function createSession(
   });
   expect(res.status()).toBe(201);
   return { ...((await res.json()) as { id: string; title: string }), repo };
+}
+
+/**
+ * Start one production PR-review session through its canonical identity API.
+ * The large per-test PR number prevents fully-parallel Playwright workers from
+ * accidentally reusing one another's session for the shared acme/app fixture.
+ */
+export async function createReviewSession(
+  request: APIRequestContext,
+  title: string,
+): Promise<ReviewSession> {
+  const repo = mkdtempSync(join(tmpdir(), "otacon-ui-e2e-review-repo-"));
+  const number = Date.now() * 1_000 + Math.floor(Math.random() * 1_000);
+  const headSha = "a".repeat(40);
+  const res = await request.post("/api/reviews", {
+    data: {
+      repo,
+      repository: "acme/app",
+      branch: "main",
+      pullRequest: {
+        identity: {
+          host: "github.com",
+          repository: "acme/app",
+          number,
+          key: `github.com/acme/app#${number}`,
+        },
+        url: `https://github.com/acme/app/pull/${number}`,
+        title,
+        author: "octo",
+        baseRef: "main",
+        headRef: "feature/review-e2e",
+        headRepository: "acme/app",
+        headSha,
+        state: "open",
+        isCrossRepository: false,
+        permissions: {
+          maintainerCanModify: true,
+          viewerPermission: "write",
+          readOnly: false,
+        },
+      },
+    },
+  });
+  expect(res.status()).toBe(201);
+  const body = (await res.json()) as {
+    session: { id: string; title: string };
+    preparation: { snapshot: { hash: string } };
+  };
+  return {
+    id: body.session.id,
+    title: body.session.title,
+    repo,
+    number,
+    headSha,
+    snapshotHash: body.preparation.snapshot.hash,
+  };
+}
+
+/** Submit the strict report + private quiz companions through the real API. */
+export async function submitFixtureReview(
+  request: APIRequestContext,
+  session: ReviewSession,
+): Promise<void> {
+  const replaceSentinels = (source: string): string => source
+    .replaceAll("otc_test01", session.id)
+    .replaceAll("0".repeat(64), session.snapshotHash)
+    .replaceAll("github.com/acme/app#42", `github.com/acme/app#${session.number}`);
+  const report = replaceSentinels(readFileSync(join(fixturesDir, "review-report.md"), "utf8"));
+  const quiz = replaceSentinels(readFileSync(join(fixturesDir, "review-quiz.json"), "utf8"));
+  const res = await request.post(`/api/reviews/${session.id}/submit`, {
+    data: { report, quiz },
+  });
+  expect(res.status()).toBe(201);
 }
 
 /**

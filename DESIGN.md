@@ -1753,6 +1753,20 @@ a repeatable design-review surface, not part of the shipped daemon UI artifact. 
 fixture includes a longer multi-block Intuition, while its expert fixture uses one block, so
 the lab continuously proves that the narrative does not depend on a magic block count.
 
+Release verification keeps that lab subordinate to the product. A Playwright conformance
+case seeds the real built daemon from the same valid report/quiz fixtures and asserts the
+major state labels, reading order, and shared component classes used by the full-page
+Storybook stories; it does not maintain a second screenshot-only specification. The
+hermetic review E2E runs the built CLI under Node and replaces only the `gh`/`git` process
+boundaries with narrow fakes, then crosses the real daemon/store for start, reuse, report
+submission, grading, conversations, revision, explicit code action, and Done. It rejects
+any unexpected fake command and proves checkout never resets, checks out, commits, or
+pushes. `bun run verify:branch review` rebuilds and restarts the current checkout, then
+leaves two local-only production sessions open: a balanced retry/thread state for Close
+anyway and an all-passed expert state for clean Done. The existing full plan E2E remains a
+release gate, and shipped `review`/`knowledge` commands are smoke-tested through the plain
+Node binary with Bun removed from runtime `PATH` and exactly one JSON line per invocation.
+
 ### Cross-cutting
 
 UI updates over SSE (watch status flip from _revising_ to _new revision_, answers
