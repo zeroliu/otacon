@@ -15,8 +15,13 @@ import {
   repoLocalConfigPath,
   revisionPath,
   sessionDir,
+  sessionStatePath,
+  threadsPath,
 } from "../shared/paths.js";
 import { canonicalizeGitHubRepo, defaultKnowledgeMarkdown } from "../shared/knowledge.js";
+import type { CanonicalGitHubRepo } from "../shared/knowledge.js";
+import { pullRequestIdentity } from "../shared/review.js";
+import type { PullRequestMetadata } from "../shared/review.js";
 import type { RegistrySession } from "../shared/types.js";
 import { VERSION } from "../shared/version.js";
 import type { NodeBindings } from "./app.js";
@@ -45,6 +50,23 @@ let presence: Presence;
 let viewers: Viewers;
 let viewerNow: number;
 const VIEWER_TTL = 1_000;
+const reviewRepo = "acme/app" as CanonicalGitHubRepo;
+
+function reviewMetadata(headSha = "a".repeat(40), number = 42): PullRequestMetadata {
+  return {
+    identity: pullRequestIdentity(reviewRepo, number),
+    url: `https://github.com/acme/app/pull/${number}`,
+    title: "Typed review sessions",
+    author: "octo",
+    baseRef: "main",
+    headRef: "feature",
+    headRepository: reviewRepo,
+    headSha,
+    state: "open",
+    isCrossRepository: false,
+    permissions: { maintainerCanModify: true, viewerPermission: "write", readOnly: false },
+  };
+}
 
 beforeEach(() => {
   savedHome = process.env.OTACON_HOME;
@@ -391,6 +413,126 @@ describe("session CRUD", () => {
   test("GET /api/sessions/:id 404s on unknown ids", async () => {
     const res = await app.request("/api/sessions/otc_zzzzzz");
     expect(res.status).toBe(404);
+  });
+});
+
+describe("review session identity and lifecycle", () => {
+  const startReview = (overrides: Record<string, unknown> = {}) => postJson("/api/reviews", {
+    repo,
+    repository: reviewRepo,
+    branch: "main",
+    pullRequest: reviewMetadata(),
+    ...overrides,
+  });
+
+  test("create and lookup use canonical PR identity without plan state", async () => {
+    const created = await startReview();
+    expect(created.status).toBe(201);
+    const body = (await created.json()) as {
+      action: string;
+      session: { id: string; kind: string; review: { revision: number } };
+    };
+    expect(body.action).toBe("created");
+    expect(body.session.kind).toBe("review");
+    expect(body.session.review.revision).toBe(1);
+    expect(existsSync(join(sessionDir(body.session.id), "session.json"))).toBe(false);
+
+    const lookup = await app.request("/api/reviews?repo=ACME%2FAPP&number=42");
+    expect(lookup.status).toBe(200);
+    const found = (await lookup.json()) as { session: { id: string; revision: number } };
+    expect(found.session.id).toBe(body.session.id);
+    expect(found.session.revision).toBe(1);
+  });
+
+  test("unchanged head reuses; changed head revises and reopens the same session", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as { session: { id: string } };
+    const reused = await startReview();
+    expect(reused.status).toBe(200);
+    expect(((await reused.json()) as { action: string }).action).toBe("reused");
+
+    store.updateSession(first.session.id, { status: "done" });
+    const revised = await startReview({ pullRequest: reviewMetadata("b".repeat(40)) });
+    expect(revised.status).toBe(200);
+    const body = (await revised.json()) as {
+      action: string;
+      session: { id: string; status: string; review: { revision: number; head: { sha: string } } };
+    };
+    expect(body.action).toBe("revised");
+    expect(body.session.id).toBe(first.session.id);
+    expect(body.session.status).toBe("working");
+    expect(body.session.review.revision).toBe(2);
+    expect(body.session.review.head.sha).toBe("b".repeat(40));
+  });
+
+  test("force creates a separate session", async () => {
+    const first = await startReview();
+    const firstId = ((await first.json()) as { session: { id: string } }).session.id;
+    const forced = await startReview({ force: true });
+    expect(forced.status).toBe(201);
+    expect(((await forced.json()) as { session: { id: string } }).session.id).not.toBe(firstId);
+  });
+
+  test("repo mismatch is rejected before creation", async () => {
+    const mismatch = await startReview({ repository: "other/repo" });
+    expect(mismatch.status).toBe(409);
+    expect(((await mismatch.json()) as { error: { code: string } }).error.code).toBe("E_REPO_MISMATCH");
+    expect(store.listSessions()).toEqual([]);
+  });
+
+  test("explicit head refresh preserves canonical identity", async () => {
+    const created = await startReview();
+    const id = ((await created.json()) as { session: { id: string } }).session.id;
+    const refreshed = await postJson(`/api/reviews/${id}/head`, {
+      pullRequest: reviewMetadata("c".repeat(40)),
+    });
+    expect(refreshed.status).toBe(200);
+    expect(((await refreshed.json()) as { action: string }).action).toBe("revised");
+
+    const changedIdentity = await postJson(`/api/reviews/${id}/head`, {
+      pullRequest: reviewMetadata("d".repeat(40), 43),
+    });
+    expect(changedIdentity.status).toBe(409);
+    expect(((await changedIdentity.json()) as { error: { code: string } }).error.code).toBe("E_REVIEW_IDENTITY");
+  });
+
+  test("review ids are rejected by plan-only routes before plan artifacts are written", async () => {
+    const created = await startReview();
+    const id = ((await created.json()) as { session: { id: string } }).session.id;
+
+    const submit = await app.request(`/api/sessions/${id}/submit`, {
+      method: "POST",
+      body: validPlanFor(id),
+    });
+    const comments = await postJson(`/api/sessions/${id}/comments`, {
+      items: [{ anchor: null, body: "change this" }],
+    });
+
+    expect(submit.status).toBe(400);
+    expect(((await submit.json()) as { error: { code: string } }).error.code).toBe("E_SESSION_KIND");
+    expect(comments.status).toBe(400);
+    expect(((await comments.json()) as { error: { code: string } }).error.code).toBe("E_SESSION_KIND");
+    expect(existsSync(sessionStatePath(id))).toBe(false);
+    expect(existsSync(threadsPath(id))).toBe(false);
+  });
+
+  test("review ids keep the generic session SSE snapshot used by SessionScreen", async () => {
+    const created = await startReview();
+    const id = ((await created.json()) as { session: { id: string } }).session.id;
+    const response = await app.request(`/api/sessions/${id}/stream`);
+    expect(response.status).toBe(200);
+    const reader = sseReader(response);
+    const snapshot = await reader.next();
+    expect(snapshot.event).toBe("snapshot");
+    expect(snapshot.data).toMatchObject({
+      session: { id, kind: "review", revision: 1, status: "working" },
+      threads: [],
+      transcript: [],
+      activity: [],
+      stream: [],
+    });
+    await reader.cancel();
+    expect(existsSync(sessionStatePath(id))).toBe(false);
   });
 });
 

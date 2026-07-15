@@ -39,6 +39,16 @@ function isWorking(status: SessionStatus): status is keyof typeof WORKING_WORDS 
 }
 
 export function navState(session: LiveSession, now: number): NavState {
+  if (session.kind === "review") {
+    switch (session.status) {
+      case "working":
+        return { icon: "working", word: "building review", attention: false };
+      case "reviewing":
+        return { icon: "review", word: "reviewing", attention: true };
+      case "done":
+        return { icon: "implemented", word: "done", attention: false };
+    }
+  }
   // questionsPending is the chips' derivation (chip.tsx): it already excludes
   // terminal statuses and counts `implementing` as live, so a build blocker's
   // `otacon ask` lights here too. Answering is the user's move, so it outranks

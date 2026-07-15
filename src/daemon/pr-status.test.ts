@@ -61,8 +61,9 @@ describe("fetchPrState", () => {
 });
 
 /** Minimal RegistrySession stub: only the fields the poller reads matter. */
-function session(over: Partial<RegistrySession>): RegistrySession {
+function session(over: Partial<Extract<RegistrySession, { kind: "plan" }>>): RegistrySession {
   return {
+    kind: "plan",
     id: "otc_x",
     title: "t",
     repo: "/r",

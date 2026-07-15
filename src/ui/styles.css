@@ -5450,7 +5450,8 @@ code {
   background: var(--bg);
 }
 
-.pr-sidebar-switch {
+.pr-sidebar-switch,
+.session-kind-switch {
   display: grid;
   flex: none;
   grid-template-columns: 1fr 1fr;
@@ -5458,7 +5459,8 @@ code {
   margin: 0;
 }
 
-.pr-sidebar-switch button {
+.pr-sidebar-switch button,
+.session-kind-switch button {
   min-height: 44px;
   padding: 9px 6px;
   border: 0;
@@ -5469,7 +5471,8 @@ code {
   cursor: pointer;
 }
 
-.pr-sidebar-switch button[aria-pressed="true"] {
+.pr-sidebar-switch button[aria-pressed="true"],
+.session-kind-switch button[aria-pressed="true"] {
   color: var(--accent);
   box-shadow: inset 0 -2px var(--accent);
 }

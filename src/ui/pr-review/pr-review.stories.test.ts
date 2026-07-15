@@ -25,7 +25,7 @@ test("desktop stories fill the available Storybook canvas instead of forcing a c
 test("review navigation stays vertical and reuses the production session-row grammar", () => {
   expect(css).not.toMatch(/\.pr-sidebar\s*\{/);
   expect(css).not.toMatch(/\.pr-side-list a\s*\{/);
-  const switchRule = css.match(/\.pr-sidebar-switch\s*\{([^}]*)\}/)?.[1];
+  const switchRule = css.match(/\.pr-sidebar-switch,\s*\.session-kind-switch\s*\{([^}]*)\}/)?.[1];
   expect(switchRule).toBeDefined();
   expect(switchRule).not.toContain("border-bottom");
   expect(css).toMatch(/\.pr-nav-row\s*\{[^}]*width:\s*100%;[^}]*\}/);

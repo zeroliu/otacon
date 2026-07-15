@@ -58,7 +58,9 @@ export async function listSessions(): Promise<RegistrySession[]> {
  */
 export function worktreeOwners(sessions: RegistrySession[], cwd: string): RegistrySession[] {
   const root = findRepoRoot(cwd) ?? realpathOr(cwd);
-  return sessions.filter((s) => s.impl !== undefined && realpathOr(s.impl.worktree) === root);
+  return sessions.filter(
+    (s) => s.kind !== "review" && s.impl !== undefined && realpathOr(s.impl.worktree) === root,
+  );
 }
 
 // Exactly the terminal states are inactive (the single source of truth in
@@ -77,6 +79,9 @@ export function resolveSession(
     if (!session) {
       fail("E_UNKNOWN_SESSION", `--session ${explicit}: not in the daemon registry`);
     }
+    if (session.kind === "review") {
+      fail("E_SESSION_KIND", `--session ${explicit} is a PR review, not a plan session`);
+    }
     return session;
   }
 
@@ -90,7 +95,8 @@ export function resolveSession(
   // is unrecoverable confusion.
   const root = findRepoRoot(cwd) ?? realpathOr(cwd);
   const here = sessions.filter(
-    (s) => isActive(s) && (realpathOr(s.repo) === root || (s.impl !== undefined && realpathOr(s.impl.worktree) === root)),
+    (s) => s.kind !== "review" && isActive(s) &&
+      (realpathOr(s.repo) === root || (s.impl !== undefined && realpathOr(s.impl.worktree) === root)),
   );
   if (here.length === 1) return here[0] as RegistrySession;
   if (here.length === 0) {

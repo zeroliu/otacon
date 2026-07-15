@@ -15,7 +15,7 @@
 import type { MouseEvent, ReactNode, RefObject } from "react";
 import { Component, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { accentStyle } from "./accent";
-import type { Anchor, CommentDraft, LiveSession, StreamEvent, Thread, TranscriptEntry } from "./api";
+import type { Anchor, CommentDraft, PlanLiveSession, StreamEvent, Thread, TranscriptEntry } from "./api";
 import {
   postCommentFollowup,
   postComments,
@@ -60,7 +60,7 @@ import { SectionMenu } from "./review/section-menu";
 import { isTypingTarget } from "./review/session-nav";
 import { navigate } from "./router";
 import { markSeen } from "./seen";
-import { isOver } from "./session-filter";
+import { isOver, shouldRedirectAfterTerminalTransition } from "./session-filter";
 import { useNow } from "./tick";
 
 const PlanView = lazy(() => import("./plan/plan-view"));
@@ -144,7 +144,7 @@ function ReviewLoop({
   stream,
   now,
 }: {
-  session: LiveSession;
+  session: PlanLiveSession;
   threads: Thread[];
   transcript: TranscriptEntry[];
   /** The normalized live-activity stream (§10a) powering the bar + console. */
@@ -831,6 +831,7 @@ function ReviewLoop({
       {deleteOpen && (
         <DeleteDialog
           sessionId={session.id}
+          sessionKind="plan"
           approved={over}
           onClose={() => setDeleteOpen(false)}
           // The session is gone — leave for the index rather than waiting for
@@ -932,9 +933,11 @@ export function SessionScreen({ id }: { id: string }) {
   }, [id]);
   useEffect(() => {
     if (!session) return;
-    if (isOver(session.status)) {
-      if (sawActive.current) navigate("/");
-    } else {
+    // Review reports remain readable after Done. Their terminal lifecycle is
+    // independent from the plan switcher's active -> archive redirect.
+    if (shouldRedirectAfterTerminalTransition(session, sawActive.current)) {
+      navigate("/");
+    } else if (session.kind === "plan" && !isOver(session.status)) {
       sawActive.current = true;
     }
   }, [session]);
@@ -979,6 +982,21 @@ export function SessionScreen({ id }: { id: string }) {
     return (
       <div className="page">
         <p className="loading">connecting…</p>
+      </div>
+    );
+  }
+
+  if (session.kind === "review") {
+    return (
+      <div className="page">
+        <main className="empty">
+          <p className="empty-title">{session.title}</p>
+          <p className="empty-body">
+            Review revision {session.review.revision} is being prepared for head{" "}
+            <code>{session.review.head.sha.slice(0, 12)}</code>. The report renderer will attach
+            when this session receives its first persisted review revision.
+          </p>
+        </main>
       </div>
     );
   }

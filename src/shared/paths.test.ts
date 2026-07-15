@@ -13,6 +13,8 @@ import {
   projectKnowledgeEvidencePath,
   projectKnowledgePath,
   revisionChangelogPath,
+  reviewDraftPath,
+  reviewQuizDraftPath,
   revisionPath,
   revisionWarningsPath,
   sessionDir,
@@ -89,6 +91,8 @@ describe("per-session working state lives in the home store", () => {
 
   test("every per-session file nests under the home session dir", () => {
     expect(planPath(id)).toBe(join(dir, "plan.md"));
+    expect(reviewDraftPath(id)).toBe(join(dir, "review.md"));
+    expect(reviewQuizDraftPath(id)).toBe(join(dir, "quiz.json"));
     expect(sessionStatePath(id)).toBe(join(dir, "session.json"));
     expect(eventsPath(id)).toBe(join(dir, "events.json"));
     expect(threadsPath(id)).toBe(join(dir, "threads.json"));

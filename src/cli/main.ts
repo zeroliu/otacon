@@ -14,6 +14,7 @@ import { installCommand } from "./commands/install.js";
 import { knowledgeCommand } from "./commands/knowledge.js";
 import { openCommand } from "./commands/open.js";
 import { progressCommand } from "./commands/progress.js";
+import { reviewCommand } from "./commands/review.js";
 import { resumeCommand } from "./commands/resume.js";
 import { startCommand } from "./commands/start.js";
 import { statusCommand } from "./commands/status.js";
@@ -23,7 +24,7 @@ import { waitCommand } from "./commands/wait.js";
 import { CliError, printJson } from "./output.js";
 
 const USAGE =
-  "usage: otacon <start|submit|wait|ask|answer|progress|implement-done|resume|status|open|config|knowledge|clean|install|doctor|expose|update> [options]\n" +
+  "usage: otacon <start|review|submit|wait|ask|answer|progress|implement-done|resume|status|open|config|knowledge|clean|install|doctor|expose|update> [options]\n" +
   "       otacon config [open]      open the Settings web UI in the browser\n" +
   "       otacon config get <key>   print the merged value of one config key\n" +
   "       otacon update [--check]   update the global install to the latest published version";
@@ -32,6 +33,8 @@ async function dispatch(command: string | undefined, argv: string[]): Promise<nu
   switch (command) {
     case "start":
       return startCommand(argv);
+    case "review":
+      return reviewCommand(argv);
     case "submit":
       return submitCommand(argv);
     case "wait":

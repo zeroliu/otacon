@@ -379,6 +379,7 @@ the model is suspended — no inference, no token spend.
 | Command                                                                     | Effect                                                                        |
 | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | `otacon start --title <t> [--prompt <t>] [--quick] [--socratic]`            | Mint session, register it, print review URL (`--socratic` overrides the `socratic.default` config; `--prompt` records the user's verbatim request, trimmed and uncapped, on the session record) |
+| `otacon review start --pr <URL\|number> [--force]`                           | Resolve the PR against the current repo's GitHub origin; create, reuse, or head-revise its canonical review session. `--force` alone creates a separate session. Prints report/quiz working paths and both knowledge paths |
 | `otacon submit [plan.md] [--resolutions res.json]`                          | Lint → reject with errors, or store revision N, notify UI                     |
 | `otacon wait [--timeout 540] [--session <id>]`                              | Long-poll this session's queue; print next event as JSON                      |
 | `otacon ask --question "…" [--options "A\|B\|C"] [--recommend A] [--multi]` | Post agent question card to UI (or a batch of independent questions via `--batch <file\|->`); answer arrives via `wait` |
@@ -508,6 +509,12 @@ PUT  /api/knowledge                         {scope,repo?,markdown,baseHash}; ato
                                             Markdown returns 422 and writes nothing
 GET  /api/sessions                          index (registry)
 POST /api/sessions                          mint + register a session (otacon start)
+GET  /api/reviews?repo=<owner/repo>&number=<n> canonical PR review lookup
+POST /api/reviews                           atomically create/reuse/revise a review;
+                                            repo identity mismatch is 409 before creation
+POST /api/reviews/:id/head                  refresh metadata/head for the same canonical
+                                            PR; a changed SHA increments revision and
+                                            reopens the review to working
 GET  /api/sessions/:id                      session detail (+ revision, pending events)
 DELETE /api/sessions/:id                    deregister a session and permanently remove
                                             its home folder ~/.otacon/sessions/<id>/ for
@@ -850,6 +857,33 @@ uncapped, absent when not supplied). The registry record flows verbatim into the
 `SessionSummary`, so the UI surfaces the prompt for free. The registry is
 the single source of truth — there is no local session pointer:
 
+Every in-memory registry entry has an explicit `kind: "plan" | "review"`
+discriminant. Registry v1 files created before this field existed decode a missing
+`kind` as `plan`; loading them does not change the plan state machine or require a
+migration rewrite. New plan sessions store `kind:"plan"`. Review sessions use an
+independent `working → reviewing → done` lifecycle and carry canonical GitHub base
+repository + PR number, current metadata, an immutable head snapshot, and a review
+revision counter. They do not create or reinterpret the plan-specific `session.json`;
+report and quiz persistence are separate review state introduced by the report layer.
+
+`otacon review start` is repository-bound. It refuses a non-git directory or a clone
+without a GitHub origin. The CLI resolves a URL or positive number with `gh pr view`,
+then compares the PR URL's canonical base `owner/repo` with the current clone before it
+contacts the create API. Canonical repo + PR number is the durable identity: an unchanged
+head returns the existing session without mutation; a changed head updates metadata,
+increments the same session's review revision, and reopens it to `working`; `--force`
+creates another session for the same identity. The `gh` process boundary is injectable
+and uses argument arrays, not a shell. A second `gh repo view --json viewerPermission`
+query records the authenticated viewer's base-repository capability. V1 is read-only for
+every fork and for same-repository PRs unless that permission is Write, Maintain, or Admin;
+`maintainerCanModify` is retained as PR metadata but never treated as viewer authority.
+
+Review ids may use the generic session detail, delete, event-queue, visibility-presence,
+and per-session summary stream envelope. Every plan-state route under `/api/sessions/:id/*` rejects a review id with
+`E_SESSION_KIND` before parsing or writing plan state. This prevents review creation from
+materializing `session.json`, revisions, plan threads, transcripts, or counters before the
+dedicated report layer exists.
+
 - Commands default to the repo's single active session: the CLI reads the registry
   and picks the one non-approved session matched by repo root **or** build-worktree
   root. A session's `.repo` is the main repo where planning happened, so a reopened
@@ -867,8 +901,9 @@ HTTP requests, no contention.
 
 **UI switching.** The **app shell sidebar** is the persistent session list (§10): one
 condensed row per active session — accent, title, repo/branch, status icon, agent dot,
-unread badge, with terminal sessions split below into two collapsible groups: a **PR
-review** group (terminal sessions whose latest PR is still open, expanded by default and
+unread badge. Plans and PR explanation reviews are partitioned by `kind` behind the
+**Plans / Reviews** switch described in §10. Plan terminal sessions split below into two
+collapsible groups: an **Open PRs** group (terminal sessions whose latest PR is still open, expanded by default and
 carrying a count, so work waiting on review stays visible) and a **Done** group (finished
 work: Save-only approvals, merged or closed PRs, failed builds, collapsed by default and
 uncounted), the same split every session surface reads. On desktop
@@ -1424,7 +1459,10 @@ its displayed count from the items in that group. Both modes render through the 
 `SessionList` / `.sl-row` visual grammar—status glyph, title, location subline, hairline,
 current-row treatment—rather than introducing boxed prototype cards or a second divider
 system. The mode switch is the only new control in the existing sidebar hierarchy; it never
-moves into a horizontal top bar.
+moves into a horizontal top bar. Review rows identify the canonical base repository and PR
+head repository/ref, never the branch of whichever local checkout launched the review.
+Deleting a review names its report, quiz, thread, and local metadata history explicitly and
+never claims an approved plan survives; deletion does not modify the GitHub pull request.
 
 Every PR explanation has one fixed reading path: **Background → Intuition → Code →
 Quiz**. The header establishes repository, PR number and author, base/head branches,
@@ -1691,7 +1729,7 @@ Operational requirement: the Mac stays awake while a plan is in review
 | `~/.otacon/sessions/<id>/`                        | Per-session working state, keyed by session id: `plan.md`, revision snapshots `r1.md…rN.md` (each with the lint warnings it was accepted with, `rN.warnings.json`, and its agent changelog, `rN.changelog.md`), threads (`threads.json`: comment + question threads with answers, agent replies, reviewer-resolve closes, and anchor states inline), the grill transcript (`transcript.json`), the capped live-activity feed (`activity.json`: the newest ~N `otacon progress` notes), the live-activity stream (`stream.jsonl`: the normalized, capped, append-only event stream, §10a), queues, AND the canonical approved plan `YYYY-MM-DD-<slug>.md`. Removed outright when the session is deleted | n/a (global)                              |
 | `~/.otacon/worktrees/<slug>/`                     | Implement build's git worktree on branch `otacon/impl-<slug>` (base dir is `worktree.dir`, default `~/.otacon/worktrees` — outside the repo)                    | n/a (global, outside the repo)             |
 | `<repo>/<plans.dir>/YYYY-MM-DD-<slug>.md`         | Save-time project copy (default `.otacon/plans`; set `plans.dir=docs/plans` to group with tracked plans)       | yours to commit (or not)                   |
-| `~/.otacon/registry.json`                         | Session registry: ID → repo, branch, title, status, the optional `prompt` (the user's verbatim request from `--prompt`, trimmed and uncapped), `prUrl`, `prState` (the latest PR's GitHub state, refreshed by a `gh` poller; see below), and `impl` (the build's worktree + branch, recorded at Implement-approve; see below)                                                             | n/a (global)                               |
+| `~/.otacon/registry.json`                         | Session registry: ID → `kind`, repo, branch, title, and kind-specific status. Plan entries retain optional `prompt`, `prUrl`, `prState`, and `impl`; review entries carry canonical PR metadata, head snapshot, and review revision. Legacy entries missing `kind` decode as plans.                                                             | n/a (global)                               |
 | `~/.otacon/knowledge/user.md` + `user.evidence.jsonl` | Implicit OS-user Markdown summary plus append-only learning evidence                                                                 | n/a (global)                               |
 | `~/.otacon/knowledge/projects/github.com/<owner>/<repo>/` | Canonical GitHub project `knowledge.md` plus `evidence.jsonl`; shared by every local clone and never written into the checkout       | n/a (global)                               |
 

@@ -56,12 +56,14 @@ ok "status auto-spawned otacond (pid $DAEMON_PID)"
 # --- 2. start mints and registers a session ----------------------------------
 otacon start --title "smoke plan" > "$TMP/start.json" 2> /dev/null
 SID="$(json_field session "$TMP/start.json")"
+PLAN="$(json_field plan "$TMP/start.json")"
 [[ "$SID" == otc_* ]] || fail "start printed no otc_ session id"
+[ -n "$PLAN" ] || fail "start printed no plan path"
 ok "start minted session $SID"
 
 # --- 3. failing submit, then passing submit ----------------------------------
-mkdir -p ".otacon/$SID"
-printf '# not a plan\n' > ".otacon/$SID/plan.md"
+mkdir -p "$(dirname "$PLAN")"
+printf '# not a plan\n' > "$PLAN"
 set +e
 otacon submit > "$TMP/lint.json" 2> /dev/null
 CODE=$?
@@ -69,7 +71,7 @@ set -e
 [ "$CODE" = "1" ] || fail "failing submit exited $CODE, expected 1"
 grep -q '"rule":"L1"' "$TMP/lint.json" || fail "lint reject carried no machine-readable issues"
 
-sed "s/otc_test01/$SID/" "$ROOT/test/fixtures/valid-plan.md" > ".otacon/$SID/plan.md"
+sed "s/otc_test01/$SID/" "$ROOT/test/fixtures/valid-plan.md" > "$PLAN"
 otacon submit > "$TMP/submit.json"
 [ "$(json_field revision "$TMP/submit.json")" = "1" ] || fail "expected revision 1"
 ok "bad plan rejected (exit 1, lint issues); fixed plan stored as revision 1"

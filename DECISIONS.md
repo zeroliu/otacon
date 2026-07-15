@@ -4455,3 +4455,43 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   Quarantine keeps the daemon usable while retaining damaged bytes for inspection.
 - **Revisit when:** Multiple daemon processes or remote writers require an OS-level lock,
   summaries need field-level merges, or a database owns transactional summary/evidence updates.
+
+## Legacy session kinds decode at the registry boundary (2026-07-14)
+
+- **Decision:** New registry records carry `kind:"plan"` or `kind:"review"`; a v1 record
+  with no `kind` is normalized in memory to `plan`. Review lifecycle and PR metadata live
+  on the review record, while existing plan `session.json` files and status transitions are
+  unchanged. The same boundary defaults an absent legacy `socratic` field to `false`.
+- **Why:** Reusing plan statuses or rewriting every legacy file would make review semantics
+  leak into a mature approval/implementation machine and turn a compatible feature into a
+  migration. Boundary normalization gives all downstream code a real discriminant without
+  making old sessions disappear or behave differently.
+- **Revisit when:** The registry gains a versioned migration framework or session detail
+  becomes large enough to move both kinds behind dedicated stores.
+
+## Canonical PR identity owns review reuse (2026-07-14)
+
+- **Decision:** Lowercase GitHub base `owner/repo` plus PR number identifies a review.
+  An unchanged head reuses it untouched, a changed head increments and reopens the same
+  session, and only `--force` creates a parallel session. The CLI rejects a base-repo
+  mismatch before calling the daemon.
+- **Why:** Local clone paths, branches, and head SHAs all change while the human review
+  target remains one PR. Keeping head as revision input rather than identity preserves
+  history and makes reopening deterministic; the pre-create repo check prevents a command
+  run in the wrong checkout from polluting the registry.
+- **Revisit when:** Reviews support non-GitHub forges, a repository transfer needs aliasing,
+  or GitHub's immutable repository/node id becomes necessary to survive renames.
+
+## PR writability comes from authenticated repository permission (2026-07-14)
+
+- **Decision:** PR metadata records the authenticated viewer's base-repository permission
+  from `gh repo view`. A review is writable only when it is same-repository and that
+  permission is Write, Maintain, or Admin. `maintainerCanModify` remains descriptive fork
+  metadata and does not grant authority by itself.
+- **Why:** `maintainerCanModify` is chosen by the PR author and says nothing about whether
+  the current `gh` identity is a maintainer. Treating it as capability would mark unrelated
+  viewers writable and could authorize a later code-change path incorrectly. Persisting the
+  verified permission gives the worktree phase a conservative boundary it can re-check.
+- **Revisit when:** GitHub exposes a direct pull-request `viewerCanUpdate` field through
+  `gh pr view`, fork pushes become an explicitly supported V1 path, or code-change execution
+  adopts a narrower per-branch capability check.

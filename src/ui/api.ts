@@ -62,9 +62,9 @@ const ACTIVITY_VIEW_CAP = 60;
 const STREAM_VIEW_CAP = 500;
 
 /** A summary plus the client-side "this card just changed" timestamp. */
-export interface LiveSession extends SessionSummary {
-  changedAt?: number;
-}
+export type LiveSession = SessionSummary & { changedAt?: number };
+export type PlanLiveSession = Extract<LiveSession, { kind: "plan" }>;
+export type ReviewLiveSession = Extract<LiveSession, { kind: "review" }>;
 
 type SessionMap = ReadonlyMap<string, LiveSession>;
 
@@ -77,7 +77,10 @@ function on<T>(source: EventSource, type: string, handler: (data: T) => void): v
 function patch(prev: SessionMap, id: string, fields: Partial<LiveSession>): SessionMap {
   const existing = prev.get(id);
   if (!existing) return prev;
-  return new Map(prev).set(id, { ...existing, ...fields, changedAt: Date.now() });
+  return new Map(prev).set(
+    id,
+    { ...existing, ...fields, changedAt: Date.now() } as LiveSession,
+  );
 }
 
 export interface SessionsState {

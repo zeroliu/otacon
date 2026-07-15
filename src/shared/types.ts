@@ -2,6 +2,7 @@
 // Wire shapes (EventPayload) follow review loop and daemon API exactly.
 
 import type { QuestionSpec } from "./question-spec.js";
+import type { ReviewSessionDetail, ReviewSessionStatus } from "./review.js";
 
 export type { QuestionSpec };
 
@@ -14,6 +15,8 @@ export type SessionStatus =
   | "implementing"
   | "implemented"
   | "implement_failed";
+
+export type AnySessionStatus = SessionStatus | ReviewSessionStatus;
 
 export const SESSION_STATUSES: readonly SessionStatus[] = [
   "draft",
@@ -41,14 +44,15 @@ export const SESSION_STATUSES: readonly SessionStatus[] = [
  * instead of spawning a second worktree). Terminal means "over until explicitly
  * reopened", not "forever".
  */
-export const TERMINAL_STATUSES: readonly SessionStatus[] = [
+export const TERMINAL_STATUSES: readonly AnySessionStatus[] = [
   "approved",
   "implemented",
   "implement_failed",
+  "done",
 ];
 
 /** One entry in ~/.otacon/registry.json. */
-export interface RegistrySession {
+interface RegistrySessionBase {
   id: string;
   title: string;
   /** The user's verbatim request that triggered this session; absent when not captured. */
@@ -64,7 +68,6 @@ export interface RegistrySession {
    * end-to-end like `quick` with no behavior change yet.
    */
   socratic: boolean;
-  status: SessionStatus;
   createdAt: string;
   updatedAt: string;
   /**
@@ -90,13 +93,31 @@ export interface RegistrySession {
   impl?: { worktree: string; branch: string };
 }
 
+export interface PlanRegistrySession extends RegistrySessionBase {
+  kind: "plan";
+  status: SessionStatus;
+  review?: never;
+}
+
+export interface ReviewRegistrySession extends RegistrySessionBase {
+  kind: "review";
+  status: ReviewSessionStatus;
+  quick: false;
+  socratic: false;
+  review: ReviewSessionDetail;
+  impl?: never;
+}
+
+/** Every in-memory registry entry has an explicit discriminant. */
+export type RegistrySession = PlanRegistrySession | ReviewRegistrySession;
+
 export interface RegistryFile {
   version: 1;
   sessions: Record<string, RegistrySession>;
 }
 
 /** Registry entry plus live detail — what the web UI renders (SSE snapshot/session frames). */
-export interface SessionSummary extends RegistrySession {
+interface SessionSummaryFields {
   revision: number;
   lastReviewedRevision: number;
   pendingEvents: number;
@@ -123,6 +144,8 @@ export interface SessionSummary extends RegistrySession {
   /** True while the agent is parked in `otacon wait` (a live long-poll connection). */
   parked: boolean;
 }
+
+export type SessionSummary = RegistrySession & SessionSummaryFields;
 
 /**
  * One entry in a session's append-only activity feed (review loop and daemon API) — a

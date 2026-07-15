@@ -15,9 +15,15 @@
 // so it stays out of the DOM-bound api.ts module and the root typecheck program
 // never pulls that in.
 
-import { TERMINAL_STATUSES, type SessionStatus } from "../shared/types.js";
+import {
+  TERMINAL_STATUSES,
+  type AnySessionStatus,
+  type PlanRegistrySession,
+  type ReviewRegistrySession,
+  type SessionStatus,
+} from "../shared/types.js";
 
-const TERMINAL = new Set<SessionStatus>(TERMINAL_STATUSES);
+const TERMINAL = new Set<AnySessionStatus>(TERMINAL_STATUSES);
 
 /**
  * A session is over once it reaches a terminal state (approval and archive lifecycle:
@@ -28,8 +34,29 @@ const TERMINAL = new Set<SessionStatus>(TERMINAL_STATUSES);
  * TERMINAL_STATUSES set so every surface (here, the app guard, the CLI
  * resolver) agrees on "done".
  */
-export function isOver(status: SessionStatus): boolean {
+export function isOver(status: AnySessionStatus): boolean {
   return TERMINAL.has(status);
+}
+
+/** Only plan sessions use the live active -> terminal redirect to the index. */
+export function shouldRedirectAfterTerminalTransition(
+  session: { kind: "plan" | "review"; status: AnySessionStatus },
+  sawActive: boolean,
+): boolean {
+  return session.kind === "plan" && sawActive && isOver(session.status);
+}
+
+export function partitionSessionKinds<T extends { kind: "plan" | "review" }>(sessions: T[]): {
+  plans: Array<T & PlanRegistrySession>;
+  reviews: Array<T & ReviewRegistrySession>;
+} {
+  const plans: Array<T & PlanRegistrySession> = [];
+  const reviews: Array<T & ReviewRegistrySession> = [];
+  for (const session of sessions) {
+    if (session.kind === "review") reviews.push(session as T & ReviewRegistrySession);
+    else plans.push(session as T & PlanRegistrySession);
+  }
+  return { plans, reviews };
 }
 
 /**

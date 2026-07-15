@@ -71,6 +71,15 @@ export function projectKnowledgeEvidencePath(repo: CanonicalGitHubRepo): string 
   return join(projectKnowledgeDir(repo), "evidence.jsonl");
 }
 
+/** Agent-authored working inputs. Phase 3 exposes paths; Phase 4 owns persistence. */
+export function reviewDraftPath(id: string): string {
+  return join(sessionDir(id), "review.md");
+}
+
+export function reviewQuizDraftPath(id: string): string {
+  return join(sessionDir(id), "quiz.json");
+}
+
 /**
  * One session's home dir (`<OTACON_HOME>/sessions/<id>`). The session id is a
  * globally-unique hash, so this never collides across repos. It is the

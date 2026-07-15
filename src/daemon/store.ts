@@ -11,7 +11,17 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import * as paths from "../shared/paths.js";
-import type { LintIssue, RegistryFile, RegistrySession, SessionStateFile } from "../shared/types.js";
+import { parsePullRequestMetadata } from "../shared/review.js";
+import type { PullRequestMetadata, ReviewStartAction } from "../shared/review.js";
+import type {
+  LintIssue,
+  PlanRegistrySession,
+  RegistryFile,
+  RegistrySession,
+  ReviewRegistrySession,
+  SessionStateFile,
+} from "../shared/types.js";
+import { SESSION_STATUSES } from "../shared/types.js";
 
 let tmpSerial = 0;
 let quarantineSerial = 0;
@@ -66,14 +76,54 @@ export function readJsonOr(path: string): unknown {
 }
 
 function parseRegistry(raw: unknown): RegistryFile | undefined {
-  const file = raw as RegistryFile;
+  const file = raw as { version?: unknown; sessions?: unknown };
   const valid =
     typeof file === "object" &&
     file !== null &&
     file.version === 1 &&
     typeof file.sessions === "object" &&
     file.sessions !== null;
-  return valid ? file : undefined;
+  if (!valid) return undefined;
+  const sessions: Record<string, RegistrySession> = {};
+  for (const [id, value] of Object.entries(file.sessions as Record<string, unknown>)) {
+    if (typeof value !== "object" || value === null) return undefined;
+    const stored = value as Record<string, unknown>;
+    // Registry v1 predates the discriminant. Decode, don't rewrite: a legacy
+    // entry remains byte-for-byte untouched until some later mutation flushes.
+    const kind = stored.kind ?? "plan";
+    if (kind !== "plan" && kind !== "review") return undefined;
+    if (
+      stored.id !== id || typeof stored.title !== "string" || typeof stored.repo !== "string" ||
+      typeof stored.branch !== "string" || typeof stored.quick !== "boolean" ||
+      (stored.socratic !== undefined && typeof stored.socratic !== "boolean") ||
+      typeof stored.createdAt !== "string" || typeof stored.updatedAt !== "string"
+    ) return undefined;
+    if (kind === "plan") {
+      if (!SESSION_STATUSES.includes(stored.status as never)) return undefined;
+    } else {
+      if (stored.status !== "working" && stored.status !== "reviewing" && stored.status !== "done") {
+        return undefined;
+      }
+      const review = stored.review as Record<string, unknown> | undefined;
+      const head = review?.head as Record<string, unknown> | undefined;
+      const pullRequest = parsePullRequestMetadata(review?.pullRequest);
+      if (
+        pullRequest === undefined || typeof head !== "object" || head === null ||
+        head.sha !== pullRequest.headSha || head.ref !== pullRequest.headRef ||
+        head.repository !== pullRequest.headRepository || typeof head.capturedAt !== "string" ||
+        !Number.isInteger(review?.revision) || (review?.revision as number) < 1
+      ) return undefined;
+    }
+    sessions[id] = {
+      ...stored,
+      kind,
+      // `socratic` was added after registry v1 shipped. Normalize the absent
+      // legacy field in memory just like the missing session discriminant; the
+      // file is not rewritten until a later real mutation flushes the registry.
+      socratic: stored.socratic ?? false,
+    } as unknown as RegistrySession;
+  }
+  return { version: 1, sessions };
 }
 
 function parseState(raw: unknown): SessionStateFile | undefined {
@@ -188,6 +238,18 @@ export interface CreateSessionInput {
   socratic?: boolean;
 }
 
+export interface StartReviewInput {
+  repo: string;
+  branch?: string;
+  pullRequest: PullRequestMetadata;
+  force?: boolean;
+}
+
+export interface StartReviewResult {
+  action: ReviewStartAction;
+  session: ReviewRegistrySession;
+}
+
 /**
  * Owns `$OTACON_HOME/registry.json` plus each session's working state in the
  * home store (`~/.otacon/sessions/<id>/`). Event seqs and the b/t/q stable ids
@@ -218,18 +280,19 @@ export class Store {
   }
 
   listSessions(): RegistrySession[] {
-    return Object.values(this.registry.sessions).map((s) => ({ ...s }));
+    return Object.values(this.registry.sessions).map((s) => structuredClone(s));
   }
 
   getSession(id: string): RegistrySession | undefined {
     const session = this.registry.sessions[id];
-    return session ? { ...session } : undefined;
+    return session ? structuredClone(session) : undefined;
   }
 
-  createSession(input: CreateSessionInput): RegistrySession {
+  createSession(input: CreateSessionInput): PlanRegistrySession {
     const id = this.mintId();
     const now = new Date().toISOString();
-    const session: RegistrySession = {
+    const session: PlanRegistrySession = {
+      kind: "plan",
       id,
       title: input.title,
       repo: input.repo,
@@ -259,7 +322,100 @@ export class Store {
     writeFileAtomic(paths.eventsPath(id), stringify({ version: 1, events: [] }));
     this.registry.sessions[id] = session;
     this.flushRegistry();
-    return { ...session };
+    return structuredClone(session);
+  }
+
+  findReviewSession(
+    repository: PullRequestMetadata["identity"]["repository"],
+    number: number,
+  ): ReviewRegistrySession | undefined {
+    const found = Object.values(this.registry.sessions)
+      .filter((session): session is ReviewRegistrySession =>
+        session.kind === "review" &&
+        session.review.pullRequest.identity.repository === repository &&
+        session.review.pullRequest.identity.number === number,
+      )
+      .reverse()
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+    return found ? structuredClone(found) : undefined;
+  }
+
+  /** Atomic create/reuse/head-refresh boundary for canonical PR identity. */
+  startReviewSession(input: StartReviewInput): StartReviewResult {
+    const identity = input.pullRequest.identity;
+    const existing = input.force === true
+      ? undefined
+      : this.findReviewSession(identity.repository, identity.number);
+    if (existing !== undefined) {
+      if (existing.review.head.sha === input.pullRequest.headSha) {
+        return { action: "reused", session: existing };
+      }
+      return {
+        action: "revised",
+        session: this.refreshReviewHead(existing.id, input.pullRequest),
+      };
+    }
+
+    const id = this.mintId();
+    const now = new Date().toISOString();
+    const session: ReviewRegistrySession = {
+      kind: "review",
+      id,
+      title: `#${identity.number} ${input.pullRequest.title}`,
+      repo: input.repo,
+      branch: input.branch ?? "",
+      quick: false,
+      socratic: false,
+      status: "working",
+      createdAt: now,
+      updatedAt: now,
+      prUrl: input.pullRequest.url,
+      prState: input.pullRequest.state,
+      review: {
+        pullRequest: structuredClone(input.pullRequest),
+        head: {
+          sha: input.pullRequest.headSha,
+          ref: input.pullRequest.headRef,
+          repository: input.pullRequest.headRepository,
+          capturedAt: now,
+        },
+        revision: 1,
+      },
+    };
+    // Review report/state files arrive in Phase 4. The queue file is the only
+    // per-session artifact Phase 3 needs; plan session.json is intentionally
+    // not created or repurposed for reviews.
+    writeFileAtomic(paths.eventsPath(id), stringify({ version: 1, events: [] }));
+    this.registry.sessions[id] = session;
+    this.flushRegistry();
+    return { action: "created", session: structuredClone(session) };
+  }
+
+  refreshReviewHead(id: string, pullRequest: PullRequestMetadata): ReviewRegistrySession {
+    const session = this.require(id);
+    if (session.kind !== "review") throw new Error(`session ${id} is not a review`);
+    if (session.review.pullRequest.identity.key !== pullRequest.identity.key) {
+      throw new Error("cannot change a review session's canonical pull request identity");
+    }
+    if (session.review.head.sha === pullRequest.headSha) return structuredClone(session);
+    const now = new Date().toISOString();
+    session.title = `#${pullRequest.identity.number} ${pullRequest.title}`;
+    session.status = "working";
+    session.updatedAt = now;
+    session.prUrl = pullRequest.url;
+    session.prState = pullRequest.state;
+    session.review = {
+      pullRequest: structuredClone(pullRequest),
+      head: {
+        sha: pullRequest.headSha,
+        ref: pullRequest.headRef,
+        repository: pullRequest.headRepository,
+        capturedAt: now,
+      },
+      revision: session.review.revision + 1,
+    };
+    this.flushRegistry();
+    return structuredClone(session);
   }
 
   updateSession(
@@ -267,10 +423,19 @@ export class Store {
     patch: Partial<Pick<RegistrySession, "title" | "status" | "prUrl" | "prState" | "impl">>,
   ): RegistrySession {
     const session = this.require(id);
+    if (patch.status !== undefined) {
+      const valid = session.kind === "plan"
+        ? SESSION_STATUSES.includes(patch.status as never)
+        : patch.status === "working" || patch.status === "reviewing" || patch.status === "done";
+      if (!valid) throw new Error(`invalid ${session.kind} status: ${patch.status}`);
+    }
+    if (session.kind === "review" && patch.impl !== undefined) {
+      throw new Error("review sessions cannot own plan implementation worktrees");
+    }
     Object.assign(session, patch);
     session.updatedAt = new Date().toISOString();
     this.flushRegistry();
-    return { ...session };
+    return structuredClone(session);
   }
 
   /**
@@ -281,7 +446,7 @@ export class Store {
     const session = this.require(id);
     delete this.registry.sessions[id];
     this.flushRegistry();
-    return { ...session };
+    return structuredClone(session);
   }
 
   /**

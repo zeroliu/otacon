@@ -23,6 +23,7 @@ import {
 import type { ScopeValues } from "../shared/config.js";
 import { canonicalizeGitHubRepo, parseKnowledgeHash } from "../shared/knowledge.js";
 import type { KnowledgeTarget } from "../shared/knowledge.js";
+import { parsePullRequestMetadata } from "../shared/review.js";
 import {
   expandTilde,
   globalConfigPath,
@@ -279,6 +280,17 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   // publishes, and the SSE routes in ui.ts fan the events out to browsers.
   const notifier = new Notifier();
   const summarize = (session: RegistrySession): SessionSummary => {
+    if (session.kind === "review") {
+      return {
+        ...session,
+        revision: session.review.revision,
+        lastReviewedRevision: 0,
+        pendingEvents: queueFor(session.id).size,
+        openQuestions: 0,
+        lastContactAt: lastContact.get(session.id),
+        parked: queueFor(session.id).waiterCount > 0,
+      };
+    }
     const state = store.readState(session.id);
     return {
       ...session,
@@ -309,7 +321,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   // merges or closes (see pr-status.ts). `pollNow` is kicked once at startup and
   // again whenever the index stream connects (the onConnect hook below).
   const prPoller = startPrPolling({
-    listSessions: () => store.listSessions(),
+    listSessions: () => store.listSessions().filter((session) => session.kind === "plan"),
     updateSession: (id, patch) => store.updateSession(id, patch),
     publish: (id) => {
       const session = store.getSession(id);
@@ -374,7 +386,9 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   // started (a restart mid-build): the registry survives the restart, so the
   // live transcript is still being written. New sessions wire their tailer at
   // creation; terminal ones are skipped by startTailer's guard.
-  for (const session of store.listSessions()) startTailer(session);
+  for (const session of store.listSessions()) {
+    if (session.kind === "plan") startTailer(session);
+  }
 
   // Desktop attention banners (review loop and daemon API). Presence tracks which sessions
   // have a *visible* review open; the notify sink fires the native macOS banner
@@ -543,6 +557,22 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
         { error: { code: "E_FORBIDDEN", message: "cross-origin requests are refused" } },
         403,
       );
+    }
+    await next();
+  });
+
+  // Review sessions deliberately share only the generic session envelope and
+  // event/presence plumbing in Phase 3. Keep every plan-state endpoint behind
+  // the discriminant before it can parse a body or create plan files such as
+  // session.json, threads.json, or transcript counters for a review id.
+  app.use("/api/sessions/:id/*", async (c, next) => {
+    const session = sessionFor(c);
+    if (session?.kind === "review") {
+      const base = `/api/sessions/${session.id}`;
+      const suffix = c.req.path.slice(base.length);
+      if (suffix !== "/events" && suffix !== "/presence" && suffix !== "/stream") {
+        return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a plan`);
+      }
     }
     await next();
   });
@@ -747,6 +777,76 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     startTailer(session);
     publishSession(session);
     return c.json(session, 201);
+  });
+
+  /** Canonical review lookup, independent of local clone paths. */
+  app.get("/api/reviews", (c) => {
+    const repository = canonicalizeGitHubRepo(`https://github.com/${c.req.query("repo") ?? ""}`);
+    const number = Number(c.req.query("number"));
+    if (repository === undefined || !Number.isInteger(number) || number < 1) {
+      return badRequest(c, "repo must be owner/repo and number must be a positive integer");
+    }
+    const session = store.findReviewSession(repository, number);
+    if (session === undefined) return notFound(c, `unknown review: ${repository}#${number}`);
+    return c.json({ session: summarize(session) });
+  });
+
+  /** Atomic create/reuse/revise path used by `otacon review start`. */
+  app.post("/api/reviews", async (c) => {
+    const body = (await readJsonBody(c)) ?? {};
+    const { repo, repository: rawRepository, branch, force } = body;
+    const repository = typeof rawRepository === "string"
+      ? canonicalizeGitHubRepo(`https://github.com/${rawRepository}`)
+      : undefined;
+    const pullRequest = parsePullRequestMetadata(body.pullRequest);
+    if (typeof repo !== "string" || !isAbsolute(repo)) {
+      return badRequest(c, "repo must be an absolute path");
+    }
+    if (repository === undefined) return badRequest(c, "repository must be owner/repo");
+    if (branch !== undefined && typeof branch !== "string") {
+      return badRequest(c, "branch must be a string");
+    }
+    if (force !== undefined && typeof force !== "boolean") {
+      return badRequest(c, "force must be a boolean");
+    }
+    if (pullRequest === undefined) return badRequest(c, "pullRequest metadata is invalid");
+    if (pullRequest.identity.repository !== repository) {
+      return c.json({
+        error: {
+          code: "E_REPO_MISMATCH",
+          message: `PR belongs to ${pullRequest.identity.repository}, not ${repository}`,
+        },
+      }, 409);
+    }
+    const result = store.startReviewSession({
+      repo,
+      branch,
+      pullRequest,
+      force: force === true,
+    });
+    publishSession(result.session);
+    return c.json(result, result.action === "created" ? 201 : 200);
+  });
+
+  /** Refresh one known review from freshly-resolved metadata. */
+  app.post("/api/reviews/:id/head", async (c) => {
+    const session = store.getSession(c.req.param("id"));
+    if (session === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.kind !== "review") {
+      return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a review`);
+    }
+    const body = (await readJsonBody(c)) ?? {};
+    const pullRequest = parsePullRequestMetadata(body.pullRequest);
+    if (pullRequest === undefined) return badRequest(c, "pullRequest metadata is invalid");
+    if (pullRequest.identity.key !== session.review.pullRequest.identity.key) {
+      return c.json({
+        error: { code: "E_REVIEW_IDENTITY", message: "head refresh cannot change PR identity" },
+      }, 409);
+    }
+    const unchanged = pullRequest.headSha === session.review.head.sha;
+    const updated = store.refreshReviewHead(session.id, pullRequest);
+    if (!unchanged) publishSession(updated);
+    return c.json({ action: unchanged ? "reused" : "revised", session: summarize(updated) });
   });
 
   app.get("/api/sessions/:id", (c) => {

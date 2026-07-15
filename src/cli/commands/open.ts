@@ -45,7 +45,15 @@ export async function openCommand(argv: string[]): Promise<number> {
 
   const sessions = await listSessions();
   try {
-    const session = resolveSession(sessions, values.session, realpathOr(process.cwd()));
+    // Explicit ids are read-only navigation, so either session kind is valid.
+    // Implicit routing remains plan-only: write-oriented plan commands and
+    // `open` keep the same never-guess behavior when reviews coexist.
+    const session = values.session === undefined
+      ? resolveSession(sessions, undefined, realpathOr(process.cwd()))
+      : sessions.find((candidate) => candidate.id === values.session);
+    if (session === undefined) {
+      throw new CliError("E_UNKNOWN_SESSION", `--session ${values.session}: not in the daemon registry`);
+    }
     const url = `${baseUrl()}/s/${session.id}`;
     deliver(url, { ok: true, session: session.id, title: session.title, url });
   } catch (error) {

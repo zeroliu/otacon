@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { RegistrySession } from "../shared/types.js";
+import type { RegistrySession, SessionStatus } from "../shared/types.js";
 import { CliError } from "./output.js";
 import { currentBranch, findRepoRoot, resolveSession, worktreeOwners } from "./session.js";
 
@@ -24,11 +24,12 @@ function gitInit(path: string): void {
 function session(
   id: string,
   repo: string,
-  status: RegistrySession["status"] = "draft",
+  status: SessionStatus = "draft",
   impl?: { worktree: string; branch: string },
 ): RegistrySession {
   const now = new Date().toISOString();
   return {
+    kind: "plan",
     id,
     title: `title for ${id}`,
     repo,
@@ -91,6 +92,17 @@ describe("resolveSession: explicit --session", () => {
     const sessions = [session("otc_aaaaaa", dir, "approved")];
     expect(resolveSession(sessions, "otc_aaaaaa", dir).id).toBe("otc_aaaaaa");
   });
+
+  test("plan command resolution refuses an explicit PR review session", () => {
+    const review = {
+      ...session("otc_review", dir),
+      kind: "review",
+      status: "working",
+      review: {},
+    } as unknown as RegistrySession;
+    const error = caught(() => resolveSession([review], "otc_review", dir));
+    expect(error.code).toBe("E_SESSION_KIND");
+  });
 });
 
 describe("resolveSession: registry scan", () => {
@@ -114,6 +126,16 @@ describe("resolveSession: registry scan", () => {
   test("approved sessions do not count toward ambiguity", () => {
     const sessions = [session("otc_aaaaaa", dir, "approved"), session("otc_bbbbbb", dir, "in_review")];
     expect(resolveSession(sessions, undefined, dir).id).toBe("otc_bbbbbb");
+  });
+
+  test("active PR reviews do not enter plan-command ambiguity", () => {
+    const review = {
+      ...session("otc_review", dir),
+      kind: "review",
+      status: "working",
+      review: {},
+    } as unknown as RegistrySession;
+    expect(resolveSession([review, session("otc_plan", dir)], undefined, dir).id).toBe("otc_plan");
   });
 
   test("two active sessions refuse with the candidate list — never guess", () => {

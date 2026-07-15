@@ -22,7 +22,7 @@ import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent a
 import { useSessions } from "./api";
 import { linkClick, usePath } from "./router";
 import { useSessionNav } from "./review/session-nav";
-import { partitionSessions } from "./session-filter";
+import { partitionSessionKinds, partitionSessions } from "./session-filter";
 import { SessionList } from "./session-list";
 import { SessionSheetProvider } from "./session-sheet";
 import {
@@ -53,7 +53,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   // every route, not just the review screen. partitionSessions is the shared
   // split (session-filter), never reimplemented; only `active` matters here, and
   // its meaning (the non-terminal set) is unchanged by the three-way split.
-  const { active } = partitionSessions(sessions);
+  const { plans } = partitionSessionKinds(sessions);
+  const { active } = partitionSessions(plans);
   useSessionNav(active.map((s) => s.id), currentId ?? "");
 
   const [collapsed, toggleCollapsed] = useSidebarCollapsed();
