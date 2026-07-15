@@ -189,6 +189,8 @@ export interface ReviewThread {
 
 export interface ReviewPresentation {
   id: string;
+  /** Current PR-head generation, distinct from the report revision. */
+  headRevision: number;
   pr: PullRequestMeta;
   navigation: ReviewNavigation;
   report: ReviewReport;
@@ -495,7 +497,8 @@ export class LiveReviewAdapter implements ReviewAdapter {
 
 export function unresolvedThreadCount(state: ReviewPresentation): number {
   return groupReviewThreads(state.threads.filter((thread) =>
-    thread.identity === undefined || thread.identity.headSha === state.pr.headSha
+    thread.identity === undefined ||
+      (thread.identity.headRevision === state.headRevision && thread.identity.headSha === state.pr.headSha)
   )).filter(conversationIsUnresolved).length;
 }
 

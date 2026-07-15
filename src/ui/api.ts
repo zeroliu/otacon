@@ -157,6 +157,13 @@ function postViewerHeartbeat(gone = false): void {
   }).catch(() => undefined);
 }
 
+/** Subscribe one unconditional heartbeat to every tab visibility transition. */
+export function observeViewerVisibility(target: EventTarget, heartbeat: () => void): () => void {
+  const sync = (): void => heartbeat();
+  target.addEventListener("visibilitychange", sync);
+  return () => target.removeEventListener("visibilitychange", sync);
+}
+
 /** Owns the single `/api/stream` connection and feeds every `useSessions()` reader. */
 export function SessionsProvider({ children }: { children: ReactNode }) {
   const [byId, setById] = useState<SessionMap>(new Map());
@@ -164,21 +171,18 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
 
   // Heartbeat this tab's liveness and visibility to the daemon: one per tab,
   // homed here because the provider mounts exactly once per page. Beat on mount,
-  // on a ~30s interval, and whenever the tab becomes visible again (the interval
-  // can be throttled while backgrounded; the 90s TTL comfortably outlasts that).
+  // on a ~30s interval, and on every visibility transition. Hidden must publish
+  // immediately so a background tab cannot outrank a genuinely visible tab.
   // Drop the tab immediately on close (`pagehide`) and on unmount.
   useEffect(() => {
     postViewerHeartbeat();
     const interval = setInterval(() => postViewerHeartbeat(), VIEWER_HEARTBEAT_MS);
-    const onVisible = (): void => {
-      if (document.visibilityState === "visible") postViewerHeartbeat();
-    };
+    const stopObservingVisibility = observeViewerVisibility(document, () => postViewerHeartbeat());
     const onUnload = (): void => postViewerHeartbeat(true);
-    document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("pagehide", onUnload);
     return () => {
       clearInterval(interval);
-      document.removeEventListener("visibilitychange", onVisible);
+      stopObservingVisibility();
       window.removeEventListener("pagehide", onUnload);
       postViewerHeartbeat(true);
     };

@@ -761,8 +761,8 @@ session again, so a client that ignored the frame must not pin the connection; t
 index stream stays open) — with a comment heartbeat to keep idle proxies from
 closing the stream.
 The daemon also tracks its live browser tabs via an explicit SPA heartbeat: each
-tab POSTs `/api/viewers/heartbeat` ({clientId, visible?, gone?}) once on load and on a ~30s
-interval, and the daemon counts the distinct clientIds seen within a 90s TTL,
+tab POSTs `/api/viewers/heartbeat` ({clientId, visible?, gone?}) once on load, on every
+visibility transition, and on a ~30s interval, and the daemon counts the distinct clientIds seen within a 90s TTL,
 exposed as `viewers` on `GET /api/health`. `viewers >= 1` means at least one
 otacon tab from this daemon is live (any session or the index; the app-shell
 sidebar lets that one tab reach every session). `otacon open` asks
@@ -1718,8 +1718,12 @@ thread/action is written before enqueue,
 and daemon startup reconstructs a missing wake by full immutable identity without minting a
 duplicate event sequence. A browser retry likewise reconstructs only still-pending work; it
 never resurrects a responded conversation or a working/terminal code action. Every response
-and code-action transition validates the complete candidate thread before its atomic write,
-so invalid persisted or derived state cannot be committed. Existing plan routes reject
+and code-action transition validates the complete candidate thread before its atomic write.
+Question answers and ordinary report-feedback responses also require the thread's head
+generation/SHA to remain current after request parsing. Only turns captured by an explicitly
+requested or working code action may finish against an older head, because that authorized
+work is what produced the replacement report after the head moved. Invalid persisted or
+derived state cannot be committed. Existing plan routes reject
 review sessions before parsing the version-2 file, so a plan helper can never quarantine or
 rewrite review threads.
 
@@ -1759,7 +1763,9 @@ unresolved while any turn lacks an agent response; requested, working, or failed
 also keeps it unresolved, and a completed code action cannot hide a missing response. A
 quiz is unresolved until passed.
 When a changed PR head reopens the session, older-head conversations remain readable history
-but are not re-enqueued and do not block completion of the new head.
+but are not re-enqueued and do not block completion of the new head. Both the daemon and
+browser compare head generation and SHA, so an A-B-A head sequence cannot revive generation
+one's conversations when generation three returns to the same commit hash.
 The clean case finishes immediately. Otherwise the dialog names both counts and offers
 Continue or Close anyway. The daemon derives those counts from the same public durable
 quiz/thread projection the browser renders; without `force:true` it returns 409 and writes

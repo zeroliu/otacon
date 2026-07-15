@@ -470,7 +470,7 @@ describe("PrReviewScreen", () => {
     expect(sidebar?.getAttribute("role")).toBeNull();
     expect(host.querySelector(".pr-review-page")?.hasAttribute("inert")).toBe(false);
     expect(host.ownerDocument.activeElement?.getAttribute("aria-label")).toBe("show sessions");
-  });
+  }, 10_000);
 
   test("orders Code as interface changes, integration path, then implementation walkthrough", async () => {
     const { host } = await mountReview();

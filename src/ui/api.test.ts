@@ -3,7 +3,8 @@ import { createElement } from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { Window } from "happy-dom";
-import { saveKnowledge, useReviewDetail, viewerNavigationPath } from "./api.js";
+import { Viewers } from "../daemon/viewers.js";
+import { observeViewerVisibility, saveKnowledge, useReviewDetail, viewerNavigationPath } from "./api.js";
 
 const originalFetch = globalThis.fetch;
 let root: Root | undefined;
@@ -123,6 +124,21 @@ describe("viewer navigation", () => {
       .toBeUndefined();
     expect(viewerNavigationPath("tab-a", { clientId: "tab-a", path: "https://example.com" }))
       .toBeUndefined();
+  });
+
+  test("reports hidden visibility immediately so an older visible tab becomes preferred", () => {
+    const visibilityEvents = new EventTarget();
+    const viewers = new Viewers();
+    viewers.beat("tab-older-visible", true);
+    viewers.beat("tab-current", true);
+    let visible = false;
+    const stop = observeViewerVisibility(visibilityEvents, () => viewers.beat("tab-current", visible));
+    visibilityEvents.dispatchEvent(new Event("visibilitychange"));
+    expect(viewers.preferred()).toBe("tab-older-visible");
+    visible = true;
+    visibilityEvents.dispatchEvent(new Event("visibilitychange"));
+    expect(viewers.preferred()).toBe("tab-current");
+    stop();
   });
 });
 

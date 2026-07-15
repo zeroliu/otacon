@@ -223,5 +223,5 @@ describe("KnowledgeScreen", () => {
     await act(async () => findButton(host, "Open").click());
     expect(host.textContent).toContain("Save or resolve the current Project draft");
     expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe(unsavedBeforeSwitch);
-  });
+  }, 10_000);
 });

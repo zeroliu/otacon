@@ -902,6 +902,7 @@ export function productionPresentation(
   const quizzes = quizDefinitions(payload.quiz);
   return {
     id: session.id,
+    headRevision: session.review.revision,
     pr: {
       owner,
       repo,

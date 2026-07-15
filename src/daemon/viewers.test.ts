@@ -31,6 +31,15 @@ describe("Viewers", () => {
     expect(viewers.preferred()).toBe("tab-visible");
   });
 
+  test("a newly hidden client loses precedence to an older visible client", () => {
+    const viewers = new Viewers();
+    viewers.beat("tab-older-visible", true);
+    viewers.beat("tab-current", true);
+    expect(viewers.preferred()).toBe("tab-current");
+    viewers.beat("tab-current", false);
+    expect(viewers.preferred()).toBe("tab-older-visible");
+  });
+
   test("falls back to the freshest live client when none are visible", () => {
     const viewers = new Viewers();
     viewers.beat("tab-old", false);

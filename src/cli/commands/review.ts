@@ -39,6 +39,8 @@ import { currentBranch, findRepoRoot, realpathOr } from "../session.js";
 
 export interface ReviewCommandDeps {
   cwd(): string;
+  findRepoRoot?(cwd: string): string | undefined;
+  currentBranch?(cwd: string): string;
   ensureDaemon(): Promise<unknown>;
   api(method: string, path: string, body?: unknown): Promise<ApiResponse>;
   github?: GitHubDeps;
@@ -432,8 +434,9 @@ async function startReview(
     usageError("otacon review start requires --pr <URL|number>");
   }
 
-  const cwd = realpathOr((deps ?? DEFAULT_DEPS).cwd());
-  const repo = findRepoRoot(cwd);
+  const commandDeps = deps ?? DEFAULT_DEPS;
+  const cwd = realpathOr(commandDeps.cwd());
+  const repo = (commandDeps.findRepoRoot ?? findRepoRoot)(cwd);
   if (repo === undefined) {
     fail("E_GIT_REPO", "otacon review start must run inside the target git repository");
   }
@@ -455,12 +458,11 @@ async function startReview(
     );
   }
 
-  const commandDeps = deps ?? DEFAULT_DEPS;
   await commandDeps.ensureDaemon();
   const response = await commandDeps.api("POST", "/api/reviews", {
     repo,
     repository,
-    branch: currentBranch(repo),
+    branch: (commandDeps.currentBranch ?? currentBranch)(repo),
     pullRequest,
     force: values.force === true,
   });

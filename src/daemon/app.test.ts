@@ -886,6 +886,106 @@ describe("review session identity and lifecycle", () => {
     expect(await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()).toEqual({ event: "timeout" });
   });
 
+  test("a delivered Question cannot be answered after the PR head changes", async () => {
+    const { id } = await submittedReview();
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "question",
+      anchor: { section: "background", exact: "The old input could move while the report was open." },
+      body: "Why is movement harmful?",
+      ...source,
+      idempotencyKey: "delivered-stale-question",
+    })).status).toBe(201);
+    expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as object)
+      .toMatchObject({ event: "review-thread", work: "question", thread: "q1" });
+
+    expect((await postJson(`/api/reviews/${id}/head`, {
+      pullRequest: reviewMetadata("c".repeat(40)),
+    })).status).toBe(200);
+    const response = await postJson(`/api/reviews/${id}/threads/q1/respond`, {
+      source,
+      body: "The answer arrived after the code changed.",
+    });
+    expect(response.status).toBe(409);
+    expect((await response.json()) as object).toMatchObject({ error: { code: "E_REVIEW_THREAD_STALE" } });
+  });
+
+  test("delivered ordinary Comment feedback cannot attach to a replacement report for a newer head", async () => {
+    const { id } = await submittedReview();
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "comment",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Keep this boundary explicit.",
+      ...source,
+      idempotencyKey: "delivered-stale-comment",
+    })).status).toBe(201);
+    expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as object)
+      .toMatchObject({ event: "review-thread", work: "report-feedback", thread: "t1" });
+
+    const refreshed = await postJson(`/api/reviews/${id}/head`, {
+      pullRequest: reviewMetadata("c".repeat(40)),
+    });
+    const preparation = (await refreshed.json()) as { preparation: { snapshot: { hash: string } } };
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 2, preparation.preparation.snapshot.hash, "c".repeat(40)),
+      quiz: validReviewQuiz(id, 2, "c".repeat(40), 2),
+    })).status).toBe(201);
+
+    const response = await postJson(`/api/reviews/${id}/threads/t1/respond`, {
+      source,
+      body: "This stale feedback must not claim the new report.",
+      responseReportRevision: 2,
+    });
+    expect(response.status).toBe(409);
+    expect((await response.json()) as object).toMatchObject({ error: { code: "E_REVIEW_THREAD_STALE" } });
+  });
+
+  test("requested and working code actions may finish their authorized turns after the head refresh", async () => {
+    const { id } = await submittedReview();
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    for (const [key, body] of [["requested", "Change the first boundary."], ["working", "Change the second boundary."]] as const) {
+      expect((await postJson(`/api/reviews/${id}/threads`, {
+        intent: "comment",
+        anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+        body,
+        ...source,
+        idempotencyKey: `authorized-${key}`,
+      })).status).toBe(201);
+      const thread = key === "requested" ? "t1" : "t2";
+      expect((await postJson(`/api/reviews/${id}/threads/${thread}/code-action`, { source })).status).toBe(202);
+    }
+    expect((await postJson(`/api/reviews/${id}/threads/t2/code-action/status`, {
+      source,
+      status: "working",
+    })).status).toBe(200);
+    expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as object)
+      .toMatchObject({ event: "review-thread", work: "code-change", thread: "t1" });
+    expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as object)
+      .toMatchObject({ event: "review-thread", work: "code-change", thread: "t2" });
+
+    const refreshed = await postJson(`/api/reviews/${id}/head`, {
+      pullRequest: reviewMetadata("c".repeat(40)),
+    });
+    const preparation = (await refreshed.json()) as { preparation: { snapshot: { hash: string } } };
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 2, preparation.preparation.snapshot.hash, "c".repeat(40)),
+      quiz: validReviewQuiz(id, 2, "c".repeat(40), 2),
+    })).status).toBe(201);
+
+    for (const thread of ["t1", "t2"]) {
+      expect((await postJson(`/api/reviews/${id}/threads/${thread}/respond`, {
+        source,
+        body: `Authorized code work for ${thread} is reflected in report r2.`,
+        responseReportRevision: 2,
+      })).status).toBe(200);
+      expect((await postJson(`/api/reviews/${id}/threads/${thread}/code-action/status`, {
+        source,
+        status: "completed",
+      })).status).toBe(200);
+    }
+  });
+
   test("review ids are rejected by plan-only routes before plan artifacts are written", async () => {
     const created = await startReview();
     const id = ((await created.json()) as { session: { id: string } }).session.id;

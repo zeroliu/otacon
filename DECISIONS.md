@@ -4448,7 +4448,8 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   dialog reports those counts. Force Done records the same counts and preserves reports,
   threads, actions, quiz attempts, and completion history rather than resolving or deleting
   them implicitly. Older-head conversations remain readable but do not block or wake work for
-  the newly reopened head.
+  the newly reopened head. Current-head counting compares both generation and SHA, including
+  in the browser's preflight warning, so an A-B-A sequence never treats old history as live.
 - **Why:** Visible durable state is the only deterministic definition both daemon and browser
   can reconstruct after refresh. Treating a comment as resolved merely because it was queued,
   or erasing incomplete learning on force-close, would turn a lifecycle action into silent
@@ -4778,8 +4779,10 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   three before any durable write. Report submission owns both head SHA and generation, quiz
   grades own the persisted attempt's answer-time knowledge hash, terminal queue envelopes own
   the completion event sequence, and thread creation cannot provide server-owned lifecycle fields. Thread
-  transitions validate the complete candidate before replacement, and the browser coalesces
-  duplicate Conduct requests per thread while one is in flight.
+  transitions validate the complete candidate before replacement. A thread response also
+  requires its head generation/SHA to remain current unless its turn is part of an explicitly
+  authorized requested/working code action that must finish after the resulting head refresh.
+  The browser coalesces duplicate Conduct requests per thread while one is in flight.
 - **Why:** SHA-only checks miss A-B-A head changes; trusting caller-supplied current hashes,
   lifecycle fields, or completion sequences lets stale or forged data cross ownership
   boundaries. Revalidation makes each persisted transition correspond to the exact state the
@@ -4828,7 +4831,8 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 
 - **Decision:** Superseding the earlier dedup-without-navigation rule, an interactive
   `otacon open [--session]` asks `POST /api/viewers/navigate` to route exactly one live
-  Otacon SPA to the resolved session/index. Heartbeats now carry `visible`; `Viewers`
+  Otacon SPA to the resolved session/index. Heartbeats now carry `visible` on every browser
+  visibility transition as well as the periodic liveness beat; `Viewers`
   chooses the freshest visible client, otherwise the freshest live client, and a global
   SSE frame carries `{clientId,path}` so every non-target tab ignores it. If no target
   remains, the CLI launches the browser. `OTACON_NO_BROWSER` remains side-effect-free.
@@ -4837,6 +4841,8 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   unrelated page and forced them back through the agent or sidebar. Targeted in-page
   navigation is reliable and local, while still avoiding the fragile OS/browser focus
   automation rejected by the prior decision and avoiding the worse all-tabs broadcast.
+  Publishing hidden immediately prevents a throttled background tab's stale `visible:true`
+  from outranking the tab the reviewer is actually using.
 - **Revisit when:** A browser integration can reliably raise the chosen window (add focus
   without changing target selection), or navigation must survive an SSE disconnect race
   (persist a short-lived targeted command until the SPA acknowledges it).

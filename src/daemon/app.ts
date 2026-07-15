@@ -1636,10 +1636,22 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     const current = store.getSession(before.id);
     if (current?.kind !== "review") return notFound(c, `unknown review: ${before.id}`);
     if (current.status === "done") return sessionOver(c, current.id);
-    const thread = readReviewThreads(store.threadsPath(current.id), current.id).find((candidate) => candidate.id === c.req.param("tid"));
+    const threads = readReviewThreads(store.threadsPath(current.id), current.id);
+    const thread = threads.find((candidate) => candidate.id === c.req.param("tid"));
     if (thread === undefined) return notFound(c, `unknown review thread: ${c.req.param("tid")}`);
     if (source.reportRevision !== thread.identity.reportRevision || source.headRevision !== thread.identity.headRevision || source.headSha !== thread.identity.headSha) {
       return c.json({ error: { code: "E_REVIEW_THREAD_IDENTITY", message: "response source does not match the persisted thread" } }, 409);
+    }
+    if (thread.identity.headRevision !== current.review.revision || thread.identity.headSha !== current.review.head.sha) {
+      const rootId = thread.replyTo ?? thread.id;
+      const root = threads.find((candidate) => candidate.id === rootId);
+      const authorizedTurns = root?.codeAction?.authorizedTurns ?? (root === undefined ? [] : [root.id]);
+      const finishingAuthorizedCodeAction = thread.intent === "comment" &&
+        (root?.codeAction?.status === "requested" || root?.codeAction?.status === "working") &&
+        authorizedTurns.includes(thread.id);
+      if (!finishingAuthorizedCodeAction) {
+        return c.json({ error: { code: "E_REVIEW_THREAD_STALE", message: "response belongs to an older PR head" } }, 409);
+      }
     }
     if (typeof body.body !== "string" || body.body.trim() === "" || body.body.length > 20_000) {
       return codedBadRequest(c, "E_REVIEW_THREAD_RESPONSE", "response body must be non-empty and bounded");

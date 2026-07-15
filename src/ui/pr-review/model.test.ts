@@ -242,10 +242,22 @@ describe("LiveReviewAdapter conversation transport", () => {
 
   test("does not count preserved unresolved conversations from an older head", () => {
     const fixture = structuredClone(balancedFixture);
+    fixture.headRevision = 2;
     fixture.pr.headSha = "b".repeat(40);
     fixture.threads = [
       { id: "q1", intent: "question", anchor: "old", body: "old", status: "open", identity: { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) } },
       { id: "q2", intent: "question", anchor: "new", body: "new", status: "open", identity: { reportRevision: 2, headRevision: 2, headSha: "b".repeat(40) } },
+    ];
+    expect(unresolvedThreadCount(fixture)).toBe(1);
+  });
+
+  test("does not count an old generation when an A-B-A head returns to the same SHA", () => {
+    const fixture = structuredClone(balancedFixture);
+    fixture.headRevision = 3;
+    fixture.pr.headSha = "a".repeat(40);
+    fixture.threads = [
+      { id: "q1", intent: "question", anchor: "old A", body: "old", status: "open", identity: { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) } },
+      { id: "q2", intent: "question", anchor: "new A", body: "new", status: "open", identity: { reportRevision: 3, headRevision: 3, headSha: "a".repeat(40) } },
     ];
     expect(unresolvedThreadCount(fixture)).toBe(1);
   });

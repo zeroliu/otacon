@@ -90,6 +90,7 @@ const threads = [
 
 export const balancedFixture: ReviewPresentation = {
   id: "otr_snapshot_balanced",
+  headRevision: 1,
   pr,
   navigation: {
     reviews: [

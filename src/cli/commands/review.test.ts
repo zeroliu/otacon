@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,7 +31,6 @@ beforeEach(() => {
   savedHome = process.env.OTACON_HOME;
   process.env.OTACON_HOME = realpathSync(mkdtempSync(join(tmpdir(), "otacon-review-home-")));
   repo = realpathSync(mkdtempSync(join(tmpdir(), "otacon-review-repo-")));
-  execFileSync("git", ["init", "-q", "-b", "main", repo], { stdio: "ignore" });
 });
 
 afterEach(() => {
@@ -52,6 +50,8 @@ function deps(options: {
 } = {}): ReviewCommandDeps {
   return {
     cwd: () => repo,
+    findRepoRoot: () => repo,
+    currentBranch: () => "main",
     ensureDaemon: options.ensure ?? (async () => undefined),
     api: options.api ?? (async () => ({ status: 500, body: {} })),
     github: {
