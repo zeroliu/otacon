@@ -397,7 +397,7 @@ the model is suspended — no inference, no token spend.
 | `otacon review code-status <thread> --file <status.json>`                   | Agent-only: move an explicitly-authorized Comment code action through `working`, `completed`, or `failed`; never commits or pushes |
 | `otacon review checkout --session <id>`                                     | Resolve fresh PR permission/head metadata, reuse an exact clean PR-branch worktree or safely create one under `worktree.dir`; returns path/branch plus explicit push remote/ref, but never commits or pushes |
 | `otacon review refresh-head --session <id>`                                 | Re-resolve the same canonical PR after an authorized push, refresh mutable metadata/head generation, and return fresh report/quiz/snapshot paths only for a prepared revision (`authoring:false` for an unchanged submitted report); never force-creates a session |
-| `otacon review revise --session <id>`                                       | Preflight that the latest submitted report belongs to the current session/head, prepare one immutable same-head report revision with a new frozen knowledge snapshot, and return its report/quiz authoring paths. Used by Comment feedback; never changes code or PR identity |
+| `otacon review revise --session <id>`                                       | Preflight that the latest submitted report belongs to the current session/head, prepare one immutable same-head report revision with a new frozen knowledge snapshot, and return its report/quiz authoring paths. A retry that finds the next revision already prepared for the current head (an earlier revise was interrupted before submit) returns that existing preparation instead of refusing, so recovery can finish the Comment. Used by Comment feedback; never changes code or PR identity |
 | `otacon knowledge get --scope user\|project [--repo <root>]`                 | Read the local Markdown profile through the daemon and print its path, text, and CAS hash as one JSON line. Project scope resolves the clone's GitHub origin to canonical `owner/repo` |
 | `otacon knowledge put --scope user\|project --file <md> --base-hash <hash> [--repo <root>]` | Replace the Markdown summary only if `base-hash` is current; a conflict returns `E_KNOWLEDGE_CONFLICT` plus the current disk document |
 | `otacon clean [--all]`                                                      | Permanently remove ended sessions' home folders (`~/.otacon/sessions/<id>/`) and prune the registry; no archive (§12) |
@@ -522,8 +522,9 @@ GET  /api/reviews?repo=<owner/repo>&number=<n> canonical PR review lookup
 POST /api/reviews                           atomically create/reuse/revise a review;
                                             repo identity mismatch is 409 before creation
 POST /api/reviews/:id/head                  refresh metadata/head for the same canonical
-                                            PR; a changed SHA increments revision and
-                                            reopens the review to working
+                                            PR; a changed SHA increments revision,
+                                            reopens the review to working, and drops
+                                            queued quiz/thread wakes of the older head
 GET  /api/reviews/:id[?revision=N]          latest (or exact requested) submitted report detail
                                             plus current prepared revision and frozen knowledge provenance
 POST /api/reviews/:id/revisions             with exact current submitted
@@ -936,13 +937,17 @@ revision; `session.review.revision` remains the PR-head generation.
 `otacon review start` is repository-bound. It refuses a non-git directory or a clone
 without a GitHub origin. The CLI resolves a URL or positive number with `gh pr view`,
 then compares the PR URL's canonical base `owner/repo` with the current clone before it
-queries repository permission or contacts the create API. Resolved metadata requires an
+queries repository permission or contacts the create API. A pasted PR URL may carry
+trailing tab segments (`/files`, `/commits`, `/checks`, …); they still name the same
+canonical PR and are accepted. Resolved metadata requires an
 exact 40-hex head SHA and self-consistent non-null identity/permission objects. Canonical
 repo + PR number is the durable identity: an unchanged
 active head returns the existing session, and an unchanged completed head returns that same
 read-only session as `reused-complete`. A changed head updates metadata, increments the same
-session's review revision, reopens it to `working` as `reopened-changed` when necessary, and
-marks the older head's quiz definition stale/read-only; `--force`
+session's review revision, reopens it to `working` as `reopened-changed` when necessary,
+marks the older head's quiz definition stale/read-only, and discards queued quiz/thread
+wakes prepared for the previous head (their stale identities would only be rejected by
+every grade/revise guard); `--force`
 creates another session for the same identity. The `gh` process boundary is injectable
 and uses argument arrays, not a shell. A second `gh repo view --json viewerPermission`
 query records the authenticated viewer's base-repository capability. V1 is read-only for

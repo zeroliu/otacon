@@ -428,8 +428,14 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       continue;
     }
     // A changed head reopens this same durable session. A terminal wake from
-    // its prior completion must not make the new review agent exit immediately.
+    // its prior completion must not make the new review agent exit immediately,
+    // and work queued for the previous head (a crash can land between the head
+    // update and its queue cleanup) must not wake the agent into stale rejects.
     queueFor(session.id).dropReviewDone();
+    queueFor(session.id).dropStaleReviewWork({
+      revision: session.review.revision,
+      sha: session.review.head.sha,
+    });
     try {
       const recovered = quizzes.recoverPending(session);
       const queue = queueFor(session.id);
@@ -1104,6 +1110,12 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       force: force === true,
     });
     if (result.action === "reopened-changed") queueFor(result.session.id).dropReviewDone();
+    if (result.action === "revised" || result.action === "reopened-changed") {
+      queueFor(result.session.id).dropStaleReviewWork({
+        revision: result.session.review.revision,
+        sha: result.session.review.head.sha,
+      });
+    }
     const preparation = reviews.prepareForSession(result.session);
     // Review authoring begins immediately after `review start`, before the
     // agent reads its frozen knowledge or researches the PR. Reuse/reopen is
@@ -1146,7 +1158,13 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     const unchanged = pullRequest.headSha === session.review.head.sha;
     const wasDone = session.status === "done";
     const updated = store.refreshReviewHead(session.id, pullRequest);
-    if (!unchanged) queueFor(updated.id).dropReviewDone();
+    if (!unchanged) {
+      queueFor(updated.id).dropReviewDone();
+      queueFor(updated.id).dropStaleReviewWork({
+        revision: updated.review.revision,
+        sha: updated.review.head.sha,
+      });
+    }
     const preparation = reviews.prepareForSession(updated);
     // Same-SHA refreshes still carry mutable title/state/ref/permissions and
     // must reach the registry/UI; only the head generation stays unchanged.

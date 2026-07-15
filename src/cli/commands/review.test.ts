@@ -731,6 +731,36 @@ describe("review revise", () => {
     });
   });
 
+  test("reuses an already-prepared revision instead of refusing the retry", async () => {
+    const calls: string[] = [];
+    const current = submitted(4);
+    const prepared = submitted(5);
+    prepared.revision.status = "prepared";
+    delete (prepared.revision as { submittedAt?: string }).submittedAt;
+    prepared.snapshot.hash = "e".repeat(64);
+    prepared.revision.snapshotHash = prepared.snapshot.hash;
+    const printed = await capture(["revise", "--session", "otc_review1"], deps({
+      api: async (method, path) => {
+        calls.push(`${method} ${path}`);
+        if (path === "/api/sessions/otc_review1") return { status: 200, body: reviewSession() as unknown as Record<string, unknown> };
+        return { status: 200, body: { session: reviewSession(), report: current, preparation: prepared } };
+      },
+    }));
+    // No POST: the interrupted retry resumes the existing preparation.
+    expect(calls).toEqual([
+      "GET /api/sessions/otc_review1",
+      "GET /api/reviews/otc_review1",
+    ]);
+    expect(printed).toMatchObject({
+      ok: true,
+      session: "otc_review1",
+      revision: 5,
+      headRevision: 3,
+      head: "a".repeat(40),
+      knowledge: { snapshot: { hash: "e".repeat(64) } },
+    });
+  });
+
   test("refuses a stale submitted report before creating a revision", async () => {
     let posts = 0;
     let error: CliError | undefined;

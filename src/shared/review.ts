@@ -136,7 +136,9 @@ export function pullRequestIdentityFromUrl(url: string): PullRequestIdentity | u
     return undefined;
   }
   if (parsed.hostname.toLowerCase() !== "github.com") return undefined;
-  const match = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)\/?$/.exec(parsed.pathname);
+  // Trailing segments (/files, /commits, /checks…) come from the PR tab bar
+  // and still name the same pull request; reviewers paste those constantly.
+  const match = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/.*)?$/.exec(parsed.pathname);
   if (!match) return undefined;
   const repository = canonicalizeGitHubRepo(`${match[1] ?? ""}/${match[2] ?? ""}`);
   const number = Number(match[3]);

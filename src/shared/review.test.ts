@@ -15,6 +15,19 @@ describe("canonical pull request identity", () => {
     );
   });
 
+  test("accepts PR tab URLs with trailing segments", () => {
+    for (
+      const url of [
+        "https://github.com/acme/app/pull/42/files",
+        "https://github.com/acme/app/pull/42/commits/0123abc",
+        "https://github.com/acme/app/pull/42/checks?check_run_id=7",
+        "https://github.com/acme/app/pull/42/files#diff-abc123",
+      ]
+    ) {
+      expect(pullRequestIdentityFromUrl(url)).toEqual(pullRequestIdentity(repo, 42));
+    }
+  });
+
   test("rejects non-GitHub, issue, and non-positive identities", () => {
     expect(pullRequestIdentityFromUrl("https://gitlab.com/acme/app/pull/42")).toBeUndefined();
     expect(pullRequestIdentityFromUrl("https://github.com/acme/app/issues/42")).toBeUndefined();

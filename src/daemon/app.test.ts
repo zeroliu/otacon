@@ -864,6 +864,28 @@ describe("review session identity and lifecycle", () => {
     expect(((await changedIdentity.json()) as { error: { code: string } }).error.code).toBe("E_REVIEW_IDENTITY");
   });
 
+  test("a changed head discards queued work prepared for the previous head", async () => {
+    const { id } = await submittedReview();
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "question",
+      anchor: { section: "background", exact: "The old input could move while the report was open." },
+      body: "Why is movement harmful?",
+      reportRevision: 1,
+      headRevision: 1,
+      headSha: "a".repeat(40),
+      idempotencyKey: "stale-head-question",
+    })).status).toBe(201);
+
+    const refreshed = await postJson(`/api/reviews/${id}/head`, {
+      pullRequest: reviewMetadata("c".repeat(40)),
+    });
+    expect(refreshed.status).toBe(200);
+    expect(((await refreshed.json()) as { action: string }).action).toBe("revised");
+    // The queued question belonged to head revision 1; delivering it now would
+    // only bounce off the stale-identity guards on respond/revise.
+    expect(await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()).toEqual({ event: "timeout" });
+  });
+
   test("review ids are rejected by plan-only routes before plan artifacts are written", async () => {
     const created = await startReview();
     const id = ((await created.json()) as { session: { id: string } }).session.id;

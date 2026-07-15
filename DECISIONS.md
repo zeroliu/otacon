@@ -4886,3 +4886,19 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   plus write-time CAS already make drift-tolerant application safe and idempotent.
 - **Revisit when:** Knowledge scopes gain per-concept storage (no shared-document hash), or
   grading moves into a transaction that spans attempt state and profile together.
+
+## Interrupted revise retries reuse the prepared revision from the CLI (2026-07-15)
+
+- **Decision:** `otacon review revise` reuses an already-prepared next revision for the
+  current head, printing its existing report/quiz/snapshot paths, instead of refusing
+  with `E_REVIEW_REVISION_STALE`. The daemon's `POST /api/reviews/:id/revisions` keeps
+  refusing already-prepared state; only the CLI preflight resolves the retry.
+- **Why:** Recovery re-delivers a still-unanswered Comment after an interruption, and the
+  documented loop re-runs `review revise`. If a prior run died between preparing the
+  revision and submitting the report, a hard refusal wedged the conversation until manual
+  repair. Reusing from the CLI keeps the daemon route strictly non-idempotent (one prepare
+  per source identity, no silent double-begin) while the retry path, which already knows
+  the session's current head, simply resumes authoring the revision that exists.
+- **Revisit when:** The prepare route gains a durable idempotency key that would let the
+  daemon safely answer retries itself, or revise stops being the recovery entry point for
+  Comment feedback.

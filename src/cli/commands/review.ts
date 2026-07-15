@@ -219,28 +219,37 @@ async function reviseReview(argv: string[], deps: ReviewCommandDeps | undefined)
     report.revision.headRevision !== resolved.session.review.revision ||
     report.revision.headSha !== resolved.session.review.head.sha ||
     preparation === null || preparation === undefined ||
-    preparation.revision.revision !== report.revision.revision ||
-    preparation.revision.status !== "submitted") {
+    (preparation.revision.status === "submitted" &&
+      preparation.revision.revision !== report.revision.revision)) {
     fail(
       "E_REVIEW_REVISION_STALE",
       `review ${resolved.session.id} has no current submitted report for head ${resolved.session.review.head.sha}`,
     );
   }
-  const response = await resolved.deps.api("POST", `/api/reviews/${resolved.session.id}/revisions`, {
-    source: {
-      reportRevision: report.revision.revision,
-      headRevision: report.revision.headRevision,
-      headSha: report.revision.headSha,
-    },
-  });
-  if (response.status === 400 || response.status === 404 || response.status === 409) {
-    const error = response.body.error as { code?: string; message?: string } | undefined;
-    fail(error?.code ?? "E_REVIEW_REVISION", error?.message ?? "review revision could not be prepared", response.body);
+  let next: ReviewReportRevisionPayload | undefined;
+  if (preparation.revision.status === "prepared") {
+    // A prior revise already prepared the next revision and the agent was
+    // interrupted before submitting it. Recovery re-delivers the Comment and
+    // re-runs revise; hand back the existing preparation instead of refusing,
+    // so the documented recovery loop can finish without manual repair.
+    next = preparation;
+  } else {
+    const response = await resolved.deps.api("POST", `/api/reviews/${resolved.session.id}/revisions`, {
+      source: {
+        reportRevision: report.revision.revision,
+        headRevision: report.revision.headRevision,
+        headSha: report.revision.headSha,
+      },
+    });
+    if (response.status === 400 || response.status === 404 || response.status === 409) {
+      const error = response.body.error as { code?: string; message?: string } | undefined;
+      fail(error?.code ?? "E_REVIEW_REVISION", error?.message ?? "review revision could not be prepared", response.body);
+    }
+    if (response.status !== 201) {
+      fail("E_INTERNAL", `review revise failed: ${JSON.stringify(response.body)}`, undefined, 2);
+    }
+    next = response.body.preparation as ReviewReportRevisionPayload | undefined;
   }
-  if (response.status !== 201) {
-    fail("E_INTERNAL", `review revise failed: ${JSON.stringify(response.body)}`, undefined, 2);
-  }
-  const next = response.body.preparation as ReviewReportRevisionPayload | undefined;
   if (next === undefined || next.revision.status !== "prepared" ||
     next.revision.session !== resolved.session.id ||
     next.revision.revision <= report.revision.revision ||

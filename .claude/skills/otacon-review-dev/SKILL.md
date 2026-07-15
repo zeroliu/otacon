@@ -188,6 +188,7 @@ and demonstrated understanding (quiz evidence).
 - `timeout`: park again immediately.
 
 Never end the turn while an active review is open. A quiet queue is not
-completion. If interrupted or compacted, run `./bin/otacon status`, recover the review
-session for this repository, and continue waiting until `review-done` or
-`deleted`.
+completion. If interrupted or compacted, run `./bin/otacon status --all` (an
+authorized code-change worktree lives outside the reviewed repository, so the
+cwd-scoped list can miss the active review), recover the review session for
+this repository, and continue waiting until `review-done` or `deleted`.

@@ -372,6 +372,44 @@ describe("SessionQueue persistence", () => {
     expect(new SessionQueue(file).size).toBe(0);
   });
 
+  test("a head change drops quiz and thread work for the previous head only", () => {
+    const q = new SessionQueue(file);
+    const thread: EventPayload = {
+      event: "review-thread",
+      work: "report-feedback",
+      session: "otc_abc123",
+      thread: "t1",
+      reportRevision: 1,
+      headRevision: 1,
+      headSha: "a".repeat(40),
+      anchor: { section: "code", exact: "selected text" },
+      body: "Change this.",
+    };
+    const quiz: EventPayload = {
+      event: "quiz-answer",
+      session: "otc_abc123",
+      revision: 1,
+      headRevision: 1,
+      headSha: "a".repeat(40),
+      question: "q1",
+      attempt: "qa1",
+      answer: "Because the queue is synchronous.",
+      concept: { id: "c1", label: "Queue", scope: "project" },
+      rubric: { criteria: ["Names the invariant"] },
+      knowledge: { scope: "project", baseHash: "b".repeat(64) },
+    } as EventPayload;
+    q.enqueue(thread, 1);
+    q.enqueue(quiz, 2);
+    q.enqueue({ ...thread, thread: "t2", headRevision: 2, headSha: "c".repeat(40) }, 3);
+    q.enqueue({ event: "question", session: "otc_abc123", id: "q9", anchor: null, body: "plan work" }, 4);
+    q.dropStaleReviewWork({ revision: 2, sha: "c".repeat(40) });
+    expect(q.size).toBe(2);
+    expect(q.take()?.payload).toMatchObject({ event: "review-thread", thread: "t2" });
+    expect(q.take()?.payload).toMatchObject({ event: "question", id: "q9" });
+    const restarted = new SessionQueue(file);
+    expect(restarted.size).toBe(2);
+  });
+
   test("a code handoff removes queued report feedback without touching other review work", () => {
     const q = new SessionQueue(file);
     const base: EventPayload = {

@@ -219,6 +219,22 @@ export class SessionQueue {
     this.flush();
   }
 
+  /**
+   * Drop quiz/thread work prepared for an older PR head. A changed head starts
+   * a new report generation; delivering the old head's wakes would only make
+   * the agent grind through work every stale-identity guard then rejects.
+   */
+  dropStaleReviewWork(head: { revision: number; sha: string }): void {
+    const keep = (event: QueuedEvent): boolean => {
+      const payload = event.payload;
+      if (payload.event !== "quiz-answer" && payload.event !== "review-thread") return true;
+      return payload.headRevision === head.revision && payload.headSha === head.sha;
+    };
+    this.events = this.events.filter(keep);
+    this.inFlight = this.inFlight.filter(keep);
+    this.flush();
+  }
+
   /** Supersede still-undelivered report feedback with one conversation code action. */
   dropQueuedReviewThreadWork(threadIds: ReadonlySet<string>, work: ReviewThreadEvent["work"]): void {
     this.events = this.events.filter((event) => {
