@@ -2499,6 +2499,22 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** The release wants a non-default base branch. (Prerelease dist-tag
   publishing is now wired, see "Staging channel" below.)
 
+## Release tests run in one isolated Bun worker
+
+- **Decision:** The package `test` script runs `bun test --parallel=1`, and both the local
+  release preflight and `.github/workflows/release.yml` call that script with `bun run
+  test` instead of invoking `bun test` independently.
+- **Why:** The suite contains hermetic files that temporarily mutate process-wide state
+  such as `process.cwd()` and browser globals. Bun's default cross-file execution let
+  those files race: under full-suite load the PR-review happy-dom tests could exceed the
+  default timeout, while install tests could observe another file's cwd and lose their
+  temporary git repository. One isolated worker preserves file isolation and ran the
+  complete suite faster than the contended default in the release environment. Keeping
+  the command in `package.json` also prevents the local and CI release gates from drifting.
+- **Revisit when:** The global-state tests are refactored to inject cwd/DOM ownership, or
+  Bun provides deterministic isolated file scheduling without constraining the worker
+  count.
+
 ## `package.json` is the single version source; `version.ts` is generated
 
 - **Decision:** `package.json`'s `version` is authoritative; `src/shared/version.ts`

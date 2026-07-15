@@ -110,8 +110,8 @@ echo "# release: mode=$MODE branch=$CURRENT_BRANCH (default=$DEFAULT_BRANCH)"
 # --- guard 3: gates green, abort on first failure, in this order --------------
 # Run for both prod and staging modes (and in dry-run too) to surface a broken
 # build before any mutation.
-echo "# release: running gates (bun test, typecheck, build)"
-bun test
+echo "# release: running gates (bun run test, typecheck, build)"
+bun run test
 bun run typecheck
 bun run build
 
