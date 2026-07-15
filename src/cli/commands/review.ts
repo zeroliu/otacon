@@ -12,6 +12,7 @@ import { readFileSync } from "node:fs";
 import {
   checkoutReviewWorktree,
   freshReviewMetadata,
+  releaseReviewWorktreeLease,
 } from "../review-worktree.js";
 import type { ReviewWorktreeDeps } from "../review-worktree.js";
 import {
@@ -157,6 +158,18 @@ async function updateReviewCodeStatus(argv: string[], deps: ReviewCommandDeps | 
     fail("E_REVIEW_CODE_ACTION", "code-status file has an invalid or mismatched shape");
   }
   await commandDeps.ensureDaemon();
+  let leaseSession: ReviewRegistrySession | undefined;
+  if (raw.status === "completed" || raw.status === "failed") {
+    const detail = await commandDeps.api("GET", `/api/sessions/${raw.session}`);
+    if (detail.status === 404) fail("E_UNKNOWN_SESSION", `unknown review session: ${raw.session}`);
+    if (detail.status !== 200) {
+      fail("E_INTERNAL", `review code-status could not read the session: ${JSON.stringify(detail.body)}`, undefined, 2);
+    }
+    if (detail.body.kind !== "review" || detail.body.id !== raw.session) {
+      fail("E_SESSION_KIND", `session ${raw.session} is not a PR review`);
+    }
+    leaseSession = detail.body as unknown as ReviewRegistrySession;
+  }
   const response = await commandDeps.api("POST", `/api/reviews/${raw.session}/threads/${thread}/code-action/status`, {
     source: raw.source,
     status: raw.status,
@@ -167,6 +180,9 @@ async function updateReviewCodeStatus(argv: string[], deps: ReviewCommandDeps | 
     fail(error?.code ?? "E_REVIEW_CODE_ACTION", error?.message ?? "code status was rejected", response.body);
   }
   if (response.status !== 200) fail("E_INTERNAL", `review code-status failed: ${JSON.stringify(response.body)}`, undefined, 2);
+  if (leaseSession !== undefined) {
+    releaseReviewWorktreeLease(leaseSession, commandDeps.worktree);
+  }
   printJson({ ok: true, session: raw.session, thread, ...response.body });
   return 0;
 }

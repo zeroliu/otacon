@@ -6,7 +6,10 @@ import {
   checkoutReviewWorktree,
   freshReviewMetadata,
   parseReviewWorktrees,
+  releaseReviewWorktreeLease,
+  reviewWorktreeLeasePath,
   type ReviewWorktreeDeps,
+  type ReviewWorktreeLease,
 } from "./review-worktree.js";
 
 const SHA = "a".repeat(40);
@@ -72,13 +75,15 @@ function porcelain(entries: Array<{ path: string; head: string; branch?: string;
 
 function fake(
   outputs: Record<string, string | Error>,
-  options: { exists?: boolean } = {},
-): { deps: ReviewWorktreeDeps; calls: string[]; made: string[] } {
+  options: { exists?: boolean; leases?: Map<string, ReviewWorktreeLease> } = {},
+): { deps: ReviewWorktreeDeps; calls: string[]; made: string[]; leases: Map<string, ReviewWorktreeLease> } {
   const calls: string[] = [];
   const made: string[] = [];
+  const leases = options.leases ?? new Map<string, ReviewWorktreeLease>();
   return {
     calls,
     made,
+    leases,
     deps: {
       git: (args, cwd) => {
         const key = `${cwd} :: ${args.join(" ")}`;
@@ -92,6 +97,17 @@ function fake(
       mkdir: (path) => { made.push(path); },
       realpath: (path) => path,
       worktreeDir: () => ".otacon-worktrees",
+      claimLease: (path, lease) => {
+        if (leases.has(path)) throw new Error("lease already exists");
+        leases.set(path, lease);
+      },
+      releaseLease: (path, reason) => {
+        const lease = leases.get(path);
+        if (lease === undefined) return "absent";
+        if (lease.reason !== reason) return "mismatch";
+        leases.delete(path);
+        return "released";
+      },
     },
   };
 }
@@ -209,6 +225,10 @@ describe("checkoutReviewWorktree", () => {
       branch: "feature",
       head: SHA,
       push: { remote: "origin", ref: "feature" },
+      lock: {
+        reason: "otacon-review:otc_review1",
+        path: reviewWorktreeLeasePath(session()),
+      },
     });
     expect(mutating(calls)).toEqual([]);
   });
@@ -328,6 +348,48 @@ describe("checkoutReviewWorktree", () => {
     });
     expect(made).toEqual([WORKTREE_ROOT]);
     expect(calls.some((call) => / :: (reset|checkout|commit|push)( |$)/.test(call))).toBe(false);
+  });
+
+  test("atomically refuses two clean checkout handoffs before either worktree becomes dirty", () => {
+    const outputs = {
+      ...writablePreamble(porcelain([{ path: EXISTING, head: SHA, branch: "feature" }])),
+      [`${EXISTING} :: symbolic-ref --quiet --short HEAD`]: "feature\n",
+      [`${EXISTING} :: rev-parse --verify HEAD^{commit}`]: `${SHA}\n`,
+      [`${EXISTING} :: status --porcelain=v1 -z --untracked-files=all`]: "",
+    };
+    const leases = new Map<string, ReviewWorktreeLease>();
+    const first = fake(outputs, { leases });
+    const second = fake(outputs, { leases });
+
+    expect(checkoutReviewWorktree(session(), first.deps)).toMatchObject({
+      mode: "writable",
+      lock: { reason: "otacon-review:otc_review1" },
+    });
+    expect(() => checkoutReviewWorktree(session(), second.deps)).toThrow(expect.objectContaining({
+      code: "E_REVIEW_WORKTREE_LEASED",
+    }));
+    expect(leases.size).toBe(1);
+  });
+
+  test("terminal retry releases a crash-surviving lease and permits a fresh handoff", () => {
+    const outputs = {
+      ...writablePreamble(porcelain([{ path: EXISTING, head: SHA, branch: "feature" }])),
+      [`${EXISTING} :: symbolic-ref --quiet --short HEAD`]: "feature\n",
+      [`${EXISTING} :: rev-parse --verify HEAD^{commit}`]: `${SHA}\n`,
+      [`${EXISTING} :: status --porcelain=v1 -z --untracked-files=all`]: "",
+    };
+    const leases = new Map<string, ReviewWorktreeLease>();
+    const crashed = fake(outputs, { leases });
+    checkoutReviewWorktree(session(), crashed.deps);
+    expect(() => checkoutReviewWorktree(session(), fake(outputs, { leases }).deps)).toThrow(
+      expect.objectContaining({ code: "E_REVIEW_WORKTREE_LEASED" }),
+    );
+
+    expect(releaseReviewWorktreeLease(session(), crashed.deps)).toBe("released");
+    expect(releaseReviewWorktreeLease(session(), crashed.deps)).toBe("absent");
+    expect(checkoutReviewWorktree(session(), fake(outputs, { leases }).deps)).toMatchObject({
+      mode: "writable",
+    });
   });
 
   test("an existing stale local branch is not reset", () => {

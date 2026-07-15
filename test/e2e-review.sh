@@ -141,6 +141,10 @@ case "$1 $2" in
   "check-ref-format --branch") printf '%s\n' "$3" ;;
   "worktree list")
     printf 'worktree %s\0HEAD %s\0branch refs/heads/main\0\0' "$FAKE_REPO" "$MAIN_SHA"
+    if [ -d "$WORKTREES/review-acme-app-pr-42" ]; then
+      printf 'worktree %s\0HEAD %s\0branch refs/heads/feature/review\0\0' \
+        "$WORKTREES/review-acme-app-pr-42" "$HEAD_SHA"
+    fi
     ;;
   "rev-parse --verify")
     case "$3" in
@@ -265,6 +269,13 @@ otacon wait --session "$SID" --timeout 10 > "$TMP/code-event.json"
 otacon review checkout --session "$SID" > "$TMP/checkout.json"
 [ "$(json_field action "$TMP/checkout.json")" = "created" ] || fail "fake safe worktree was not created"
 [ "$(json_field push.remote "$TMP/checkout.json")" = "origin" ] || fail "checkout did not return a push destination"
+LEASE_PATH="$(json_field lock.path "$TMP/checkout.json")"
+[ -f "$LEASE_PATH" ] || fail "writable checkout did not publish its durable lease"
+if otacon review checkout --session "$SID" > "$TMP/checkout-race.json" 2>&1; then
+  fail "a second clean handoff acquired the already-leased checkout"
+fi
+grep -q 'E_REVIEW_WORKTREE_LEASED' "$TMP/checkout-race.json" \
+  || fail "second clean handoff did not report the durable lease"
 write_thread_operation working t1 1 "Subagent is implementing inside the exact review worktree." "$TMP/code-working.json"
 otacon review code-status t1 --file "$TMP/code-working.json" > "$TMP/code-working.out"
 [ "$(json_field thread.codeAction.status "$TMP/code-working.out")" = "working" ] \
@@ -272,6 +283,7 @@ otacon review code-status t1 --file "$TMP/code-working.json" > "$TMP/code-workin
 write_thread_operation completed t1 1 "Reviewed and verified without touching a real remote." "$TMP/code-complete.json"
 otacon review code-status t1 --file "$TMP/code-complete.json" > "$TMP/code-complete.out"
 [ "$(json_field thread.codeAction.status "$TMP/code-complete.out")" = "completed" ] || fail "code action did not reach completed"
+[ ! -e "$LEASE_PATH" ] || fail "completed code action did not release its durable checkout lease"
 grep -q 'fetch --no-tags' "$FAKE_GIT_LOG" || fail "checkout did not exercise the fake fetch seam"
 grep -q 'worktree add' "$FAKE_GIT_LOG" || fail "checkout did not exercise the fake worktree seam"
 if grep -Eq '(^| )((reset)|(checkout)|(commit)|(push))($| )' "$FAKE_GIT_LOG"; then

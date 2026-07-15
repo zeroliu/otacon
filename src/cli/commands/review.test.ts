@@ -502,6 +502,8 @@ describe("review checkout", () => {
       mkdir: () => { throw new Error("reuse must not create a directory"); },
       realpath: (path) => path,
       worktreeDir: () => join(repo, "worktrees"),
+      claimLease: () => undefined,
+      releaseLease: () => "absent",
     };
     const printed = await capture(["checkout", "--session", "otc_review1"], deps({
       worktree: worktreeDeps,
@@ -536,6 +538,8 @@ describe("review checkout", () => {
           mkdir: () => undefined,
           realpath: (path) => path,
           worktreeDir: () => join(repo, "worktrees"),
+          claimLease: () => undefined,
+          releaseLease: () => "absent",
         },
         api: async () => ({ status: 200, body: reviewSession() as unknown as Record<string, unknown> }),
       }));
@@ -557,6 +561,8 @@ describe("review checkout", () => {
         mkdir: () => { throw new Error("read-only checkout must not create directories"); },
         realpath: (path) => path,
         worktreeDir: () => join(repo, "worktrees"),
+        claimLease: () => undefined,
+        releaseLease: () => "absent",
       },
       api: async () => ({ status: 200, body: reviewSession() as unknown as Record<string, unknown> }),
     }));
@@ -820,17 +826,59 @@ describe("review thread agent commands", () => {
       version: 1, session: "otc_review1", thread: "t2", source,
       status: "completed", message: "Verified and pushed.",
     }));
-    let request: { path: string; body?: unknown } | undefined;
+    const requests: Array<{ method: string; path: string; body?: unknown }> = [];
+    let releases = 0;
     await capture(["code-status", "t2", "--file", file], deps({
-      api: async (_method, path, body) => {
-        request = { path, body };
+      worktree: {
+        git: () => "",
+        exists: () => false,
+        mkdir: () => undefined,
+        realpath: (path) => path,
+        worktreeDir: () => join(repo, "worktrees"),
+        claimLease: () => undefined,
+        releaseLease: () => { releases += 1; return "released"; },
+      },
+      api: async (method, path, body) => {
+        requests.push({ method, path, body });
+        if (method === "GET") {
+          return { status: 200, body: reviewSession() as unknown as Record<string, unknown> };
+        }
         return { status: 200, body: { thread: { id: "t2", codeAction: { status: "completed" } } } };
       },
     }));
-    expect(request).toEqual({
-      path: "/api/reviews/otc_review1/threads/t2/code-action/status",
-      body: { source, status: "completed", message: "Verified and pushed." },
-    });
+    expect(requests).toEqual([
+      { method: "GET", path: "/api/sessions/otc_review1", body: undefined },
+      {
+        method: "POST",
+        path: "/api/reviews/otc_review1/threads/t2/code-action/status",
+        body: { source, status: "completed", message: "Verified and pushed." },
+      },
+    ]);
+    expect(releases).toBe(1);
+  });
+
+  test("failed code-status also releases the lease after the durable transition", async () => {
+    const file = join(repo, "code-failed.json");
+    writeFileSync(file, JSON.stringify({
+      version: 1, session: "otc_review1", thread: "t2", source,
+      status: "failed", message: "Implementation agent crashed.",
+    }));
+    let released = 0;
+    await capture(["code-status", "t2", "--file", file], deps({
+      worktree: {
+        git: () => "",
+        exists: () => false,
+        mkdir: () => undefined,
+        realpath: (path) => path,
+        worktreeDir: () => join(repo, "worktrees"),
+        claimLease: () => undefined,
+        releaseLease: () => { released += 1; return "released"; },
+      },
+      api: async (method) => method === "GET"
+        ? { status: 200, body: reviewSession() as unknown as Record<string, unknown> }
+        : { status: 200, body: { repeated: true, thread: { id: "t2", codeAction: { status: "failed" } } } },
+    }));
+    expect(released).toBe(1);
   });
 
   test("strict files reject mismatched thread ids, unknown keys, and false memory claims before daemon contact", async () => {

@@ -6,11 +6,20 @@
 // the refusals can be proven without mutating a real repository.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, realpathSync } from "node:fs";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { loadConfig } from "../shared/config.js";
 import { canonicalizeGitHubRepo } from "../shared/knowledge.js";
-import { expandTilde } from "../shared/paths.js";
+import { expandTilde, otaconHome } from "../shared/paths.js";
 import type { PullRequestMetadata } from "../shared/review.js";
 import type { ReviewRegistrySession } from "../shared/types.js";
 import { GitHubResolutionError, resolvePullRequest } from "./github.js";
@@ -23,6 +32,56 @@ export interface ReviewWorktreeDeps {
   mkdir(path: string): void;
   realpath(path: string): string;
   worktreeDir(repo: string): string;
+  /** Atomically publish one durable lease, or throw when it already exists. */
+  claimLease(path: string, lease: ReviewWorktreeLease): void;
+  /** Release only the expected owner; absent is an idempotent terminal retry. */
+  releaseLease(path: string, reason: string): "released" | "absent" | "mismatch";
+}
+
+export interface ReviewWorktreeLease {
+  version: 1;
+  session: string;
+  reason: string;
+  worktree: string;
+  branch: string;
+  head: string;
+  acquiredAt: string;
+}
+
+function claimLeaseFile(path: string, lease: ReviewWorktreeLease): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const temp = `${path}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
+  // Publish by hard-link: the complete temp file exists before the atomic
+  // no-overwrite link, so a crash cannot leave a partial durable owner record.
+  writeFileSync(temp, `${JSON.stringify(lease, null, 2)}\n`, { flag: "wx" });
+  try {
+    linkSync(temp, path);
+  } catch (error) {
+    try { unlinkSync(temp); } catch { /* best-effort cleanup after a failed claim */ }
+    throw error;
+  }
+  // The durable hard link is now the owner record. A temp cleanup failure must
+  // not turn that successful claim into a false checkout failure.
+  try { unlinkSync(temp); } catch { /* best-effort cleanup after a successful claim */ }
+}
+
+function releaseLeaseFile(path: string, reason: string): "released" | "absent" | "mismatch" {
+  let lease: unknown;
+  try {
+    lease = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "absent";
+    return "mismatch";
+  }
+  if (typeof lease !== "object" || lease === null || (lease as { reason?: unknown }).reason !== reason) {
+    return "mismatch";
+  }
+  try {
+    unlinkSync(path);
+    return "released";
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "mismatch";
+  }
 }
 
 const DEFAULT_DEPS: ReviewWorktreeDeps = {
@@ -35,6 +94,8 @@ const DEFAULT_DEPS: ReviewWorktreeDeps = {
   mkdir: (path) => mkdirSync(path, { recursive: true }),
   realpath: realpathSync,
   worktreeDir: (repo) => loadConfig(repo).worktree.dir,
+  claimLease: claimLeaseFile,
+  releaseLease: releaseLeaseFile,
 };
 
 export interface ReviewWorktreeEntry {
@@ -62,7 +123,7 @@ export type ReviewCheckoutResult =
     branch: string;
     head: string;
     push: { remote: "origin"; ref: string };
-    lock?: { reason?: string };
+    lock: { reason: string; path: string };
   };
 
 function detail(error: unknown): string {
@@ -204,6 +265,67 @@ export function reviewWorktreePath(session: ReviewRegistrySession, root: string)
   return join(root, `review-${slug}`);
 }
 
+export function reviewWorktreeLeasePath(session: ReviewRegistrySession): string {
+  const key = session.review.pullRequest.identity.key;
+  const digest = createHash("sha256").update(key).digest("hex");
+  return join(otaconHome(), "review-worktree-leases", `${digest}.json`);
+}
+
+const reviewWorktreeLeaseReason = (session: ReviewRegistrySession): string =>
+  `otacon-review:${session.id}`;
+
+function claimReviewWorktreeLease(
+  session: ReviewRegistrySession,
+  worktree: string,
+  branch: string,
+  head: string,
+  deps: ReviewWorktreeDeps,
+): { reason: string; path: string } {
+  const path = reviewWorktreeLeasePath(session);
+  const reason = reviewWorktreeLeaseReason(session);
+  const lease: ReviewWorktreeLease = {
+    version: 1,
+    session: session.id,
+    reason,
+    worktree,
+    branch,
+    head,
+    acquiredAt: new Date().toISOString(),
+  };
+  try {
+    deps.claimLease(path, lease);
+  } catch (error) {
+    fail(
+      "E_REVIEW_WORKTREE_LEASED",
+      `review checkout ${worktree} is already leased; finish or fail the active code action before retrying${detail(error)}`,
+      { session: session.id, worktree, lock: { reason, path } },
+    );
+  }
+  return { reason, path };
+}
+
+/**
+ * Release a checkout handoff only after its code action is terminal. Repeating
+ * the same terminal status is the crash-repair path when the daemon commit won
+ * but the first CLI died before unlinking the lease.
+ */
+export function releaseReviewWorktreeLease(
+  session: ReviewRegistrySession,
+  deps: ReviewWorktreeDeps = DEFAULT_DEPS,
+): "released" | "absent" {
+  const path = reviewWorktreeLeasePath(session);
+  const reason = reviewWorktreeLeaseReason(session);
+  const result = deps.releaseLease(path, reason);
+  if (result === "mismatch") {
+    fail(
+      "E_REVIEW_WORKTREE_LEASE_OWNER",
+      `review worktree lease ${path} does not belong to ${session.id}; it was left untouched`,
+      { session: session.id, lock: { reason, path } },
+    );
+  }
+  return result;
+}
+
 function verifyLiveWorktree(
   session: ReviewRegistrySession,
   path: string,
@@ -325,6 +447,7 @@ export function checkoutReviewWorktree(
       );
     }
     verifyLiveWorktree(session, entry.path, ref, sha, deps);
+    const lock = claimReviewWorktreeLease(session, entry.path, ref, sha, deps);
     return {
       mode: "writable",
       action: "reused",
@@ -332,6 +455,7 @@ export function checkoutReviewWorktree(
       branch: ref,
       head: sha,
       push: { remote: "origin", ref },
+      lock,
     };
   }
 
@@ -405,6 +529,7 @@ export function checkoutReviewWorktree(
     `could not create ${target}; no branch was reset`,
   );
   verifyLiveWorktree(session, target, ref, sha, deps);
+  const lock = claimReviewWorktreeLease(session, target, ref, sha, deps);
   return {
     mode: "writable",
     action: "created",
@@ -412,6 +537,7 @@ export function checkoutReviewWorktree(
     branch: ref,
     head: sha,
     push: { remote: "origin", ref },
+    lock,
   };
 }
 

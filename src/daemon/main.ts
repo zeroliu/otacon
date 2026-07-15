@@ -13,12 +13,16 @@ const port = otaconPort();
 
 const app = createApp({
   store: new Store(),
+  // Recovery flushes registry/queues, so it must run only after this process
+  // wins the OS port lock. An EADDRINUSE loser exits without calling start().
+  startOnCreate: false,
   // The shutdown route invokes this only after its response is written
   // (or the client is gone), so exiting immediately is safe.
   onShutdown: () => process.exit(0),
 });
 
 const server = serve({ fetch: app.fetch, hostname: HOST, port }, (info) => {
+  app.start();
   process.stdout.write(
     `${JSON.stringify({ app: "otacond", version: VERSION, host: HOST, port: info.port, pid: process.pid })}\n`,
   );

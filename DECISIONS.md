@@ -93,9 +93,13 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 ## Spawn race: the port is the lock
 
 - **Decision:** No lockfile. Two CLIs may both spawn a daemon; the loser exits 0 on
-  EADDRINUSE and both health-poll whoever won the bind.
+  EADDRINUSE and both health-poll whoever won the bind. App construction is read-only:
+  durable recovery, the first PR poll, and transcript tailers start only in the successful
+  listen callback after the process owns the port.
 - **Why:** The OS already serializes port binds; a lockfile adds stale-lock cleanup for
-  zero extra safety.
+  zero extra safety. Delaying writers is essential because each contender may have loaded a
+  different registry snapshot before the bind — an EADDRINUSE loser must not flush stale
+  recovery state over the winner's newer registry or queues.
 - **Revisit when:** The daemon ever listens on more than one resource.
 
 ## SessionQueue: synchronous methods only
@@ -4394,6 +4398,8 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   queue dedupe and the existing monotonic review event seq. Once code work is requested it
   owns recovery for the eventual report refresh, so an already-acked older feedback wake
   cannot be resurrected behind it; working and terminal code actions are never re-enqueued.
+  A failed code action restores only authorized unanswered turns whose persisted head
+  generation/SHA still match the session's current head.
 - **Why:** The durable conversation is the user's record; an event is only an at-least-once
   wake. Persist-first prevents a daemon crash from losing visible intent, while full identity
   prevents a retry or late response from attaching to a different report/head generation.
@@ -4790,16 +4796,24 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** Review state and its queues move into one transactional database or a
   serialized per-session actor makes these compare-before-write guards redundant.
 
-## Locked review worktrees are exclusive handoff leases (2026-07-15)
+## Review worktrees require an explicit durable handoff lease (2026-07-15)
 
-- **Decision:** `review checkout` never reuses a worktree reported as locked, even when its
-  ref, SHA, and cleanliness otherwise match. It returns the existing stale-worktree error and
-  leaves the checkout untouched.
-- **Why:** Git's lock is an ownership signal that another process may be using the worktree;
-  treating it as reusable would allow an implementation agent to edit another workflow's
-  checkout concurrently.
-- **Revisit when:** Checkout ownership has explicit lease metadata that can prove a lock
-  belongs to this exact review session and agent handoff.
+- **Decision:** `review checkout` never reuses a Git-reported locked worktree and, after
+  verifying or creating an otherwise usable checkout, atomically publishes a separate
+  PR-keyed owner record under `~/.otacon/review-worktree-leases/` before returning it.
+  Therefore two callers that both observed the same clean checkout still have one winner.
+  `completed` and `failed` code-status transitions release their matching lease only after
+  the daemon accepts the terminal state. A crash before terminal status deliberately leaves
+  the lease held; recovery marks the action terminal. A crash after the daemon commit but
+  before unlink is repaired by repeating the idempotent terminal transition. Owner mismatch
+  refuses rather than deleting another workflow's lease.
+- **Why:** Git's lock is an ownership signal but an unlocked checkout has no exclusive
+  handoff: cleanliness is an observation, not a claim. A small atomic file gives the
+  orchestrator a durable lease across the short-lived checkout CLI and the implementation
+  subagent, while terminal retry ordering prevents both concurrent editing and premature
+  release on a rejected status update.
+- **Revisit when:** Checkout and code-action state share one transactional coordinator that
+  can acquire and release ownership without a filesystem compare-and-release seam.
 
 ## Review modals contain and restore focus (2026-07-15)
 

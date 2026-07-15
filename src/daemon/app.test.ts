@@ -833,6 +833,53 @@ describe("review session identity and lifecycle", () => {
     expect(await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()).toEqual({ event: "timeout" });
   });
 
+  test("a pre-bind spawn loser cannot flush stale recovery over the winner's newer registry or queue", async () => {
+    const { id } = await submittedReview();
+    const current = store.getSession(id);
+    if (current?.kind !== "review") throw new Error("expected review session");
+    const eventSeq = store.bumpCounter(id, "eventSeq");
+    store.completeReviewSession(id, {
+      version: 1,
+      session: id,
+      completedAt: new Date().toISOString(),
+      reportRevision: 1,
+      headRevision: current.review.revision,
+      headSha: current.review.head.sha,
+      forced: true,
+      unresolved: { conversations: 0, quizzes: 1 },
+      eventSeq,
+      wake: "pending",
+    });
+
+    // The losing process loaded this pending recovery snapshot first. The
+    // winner then bound the port and committed newer registry + queue state.
+    const losingStore = new Store();
+    store.updateSession(id, { title: "winner owns the newest registry" });
+    writeFileSync(eventsPath(id), JSON.stringify({
+      version: 1,
+      events: [{
+        seq: eventSeq + 1,
+        queuedAt: new Date().toISOString(),
+        payload: { event: "deleted", session: id },
+      }],
+    }));
+    const queueAfterWinner = readFileSync(eventsPath(id), "utf8");
+
+    // main.ts constructs this app before serve(), but never calls start() when
+    // serve reports EADDRINUSE. Construction therefore has zero durable writes.
+    createApp({
+      store: losingStore,
+      startOnCreate: false,
+      uiDir,
+      notify: () => {},
+      makeTailer: () => ({ start: () => { throw new Error("loser started a tailer"); }, stop: () => {} }),
+    });
+    const durable = new Store().getSession(id);
+    expect(durable).toMatchObject({ title: "winner owns the newest registry" });
+    expect(durable?.kind === "review" && durable.review.completions?.at(-1)?.wake).toBe("pending");
+    expect(readFileSync(eventsPath(id), "utf8")).toBe(queueAfterWinner);
+  });
+
   test("force creates a separate session", async () => {
     const first = await startReview();
     const firstId = ((await first.json()) as { session: { id: string } }).session.id;
@@ -1690,6 +1737,37 @@ describe("review session identity and lifecycle", () => {
     const done = await postJson(`/api/reviews/${id}/done`, {});
     expect(done.status).toBe(409);
     expect((await done.json()) as object).toMatchObject({ warning: { unresolved: { conversations: 1 } } });
+  });
+
+  test("failing an old-head code action after refresh does not resurrect stale report feedback", async () => {
+    const { id } = await submittedReview();
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "comment",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Apply this boundary in code.",
+      ...source,
+      idempotencyKey: "old-head-code-failure",
+    })).status).toBe(201);
+    await app.request(`/api/sessions/${id}/events?wait=0`); // initial report-feedback
+    expect((await postJson(`/api/reviews/${id}/threads/t1/code-action`, { source })).status).toBe(202);
+    await app.request(`/api/sessions/${id}/events?wait=0`); // authorized code-change
+    expect((await postJson(`/api/reviews/${id}/threads/t1/code-action/status`, {
+      source,
+      status: "working",
+    })).status).toBe(200);
+
+    expect((await postJson(`/api/reviews/${id}/head`, {
+      pullRequest: reviewMetadata("b".repeat(40)),
+    })).status).toBe(200);
+    const failed = await postJson(`/api/reviews/${id}/threads/t1/code-action/status`, {
+      source,
+      status: "failed",
+      message: "replacement report could not be submitted",
+    });
+    expect(failed.status).toBe(200);
+    expect((await failed.json()) as object).toMatchObject({ thread: { codeAction: { status: "failed" } } });
+    expect(await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()).toEqual({ event: "timeout" });
   });
 
   test("a responded Comment can still escalate when its immutable source report is older on the same PR head", async () => {

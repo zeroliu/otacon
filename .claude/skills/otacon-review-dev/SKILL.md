@@ -168,7 +168,10 @@ report/quiz for the new head, respond to every authorized Comment turn in
 new submitted report revision, and mark the code action `completed`. On any
 failure, preserve the worktree and mark it `failed` with an actionable message;
 the daemon will restore unanswered report-feedback work so the conversation can
-continue. Never reset, force-push, or silently switch branches.
+continue. Writable checkout returns only after claiming a durable lease; completed
+and failed status release it. If a terminal status committed but lease release was
+interrupted, rerun the identical code-status file to finish that idempotent cleanup.
+Never reset, force-push, or silently switch branches.
 
 ## Remember requested knowledge
 

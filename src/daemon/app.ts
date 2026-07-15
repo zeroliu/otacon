@@ -124,6 +124,12 @@ export interface NodeBindings {
 
 export interface AppOptions {
   store: Store;
+  /**
+   * Defer durable recovery and background workers until the caller has won
+   * daemon ownership. The socket entry point sets this false, binds first,
+   * then calls app.start(); in-process tests keep the historical eager start.
+   */
+  startOnCreate?: boolean;
   /** Test seam for the local user/project knowledge store. */
   knowledge?: KnowledgeStore;
   /** Test seam for immutable review reports and their frozen knowledge snapshots. */
@@ -151,6 +157,8 @@ export interface AppOptions {
 }
 
 type AppContext = Context<{ Bindings: NodeBindings }>;
+
+export type DaemonApp = Hono<{ Bindings: NodeBindings }> & { start(): void };
 
 /** Hard ceiling on ?wait= (seconds); agents ask for 540 under their 600s Bash cap. */
 const MAX_WAIT_SECONDS = 600;
@@ -307,7 +315,7 @@ function sameOrigin(origin: string, host: string | undefined): boolean {
   }
 }
 
-export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }> {
+export function createApp(options: AppOptions): DaemonApp {
   const { store } = options;
   const knowledge = options.knowledge ?? new KnowledgeStore();
   const reviews = options.reviews ?? new ReviewStore(knowledge);
@@ -412,70 +420,71 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     return updated;
   };
 
-  // A crash may land after the attempt's atomic state write but before queue
-  // enqueue. Reconstruct from durable quiz state before any request/SSE can
-  // observe this daemon: deterministic choices finish locally, while missing
-  // open-answer work is appended once using its full immutable identity.
-  for (const session of store.listSessions()) {
-    if (session.kind !== "review") continue;
-    if (session.status === "done") {
+  const recoverStartupState = (): void => {
+    // A crash may land after the attempt's atomic state write but before queue
+    // enqueue. Reconstruct from durable quiz state only after this process owns
+    // the daemon socket: a spawn-race loser must never flush its stale Store.
+    for (const session of store.listSessions()) {
+      if (session.kind !== "review") continue;
+      if (session.status === "done") {
+        try {
+          ensureReviewDoneWake(session);
+        } catch {
+          // The detail/Done route surfaces malformed completion state. A single
+          // damaged review must not prevent the daemon starting.
+        }
+        continue;
+      }
+      // A changed head reopens this same durable session. A terminal wake from
+      // its prior completion must not make the new review agent exit immediately,
+      // and work queued for the previous head (a crash can land between the head
+      // update and its queue cleanup) must not wake the agent into stale rejects.
+      queueFor(session.id).dropReviewDone();
+      queueFor(session.id).dropStaleReviewWork({
+        revision: session.review.revision,
+        sha: session.review.head.sha,
+      });
       try {
-        ensureReviewDoneWake(session);
+        const recovered = quizzes.recoverPending(session);
+        const queue = queueFor(session.id);
+        for (const event of recovered.events) {
+          if (queue.hasPayload((payload) => sameQuizWork(payload, event))) continue;
+          queue.enqueue(event, store.bumpCounter(session.id, "eventSeq"));
+        }
       } catch {
-        // The detail/Done route surfaces malformed completion state. A single
-        // damaged review must not prevent the daemon starting.
+        // Detail routes surface corrupt/stale quiz state with typed errors. One
+        // damaged review must not prevent the daemon or other sessions starting.
       }
-      continue;
-    }
-    // A changed head reopens this same durable session. A terminal wake from
-    // its prior completion must not make the new review agent exit immediately,
-    // and work queued for the previous head (a crash can land between the head
-    // update and its queue cleanup) must not wake the agent into stale rejects.
-    queueFor(session.id).dropReviewDone();
-    queueFor(session.id).dropStaleReviewWork({
-      revision: session.review.revision,
-      sha: session.review.head.sha,
-    });
-    try {
-      const recovered = quizzes.recoverPending(session);
-      const queue = queueFor(session.id);
-      for (const event of recovered.events) {
-        if (queue.hasPayload((payload) => sameQuizWork(payload, event))) continue;
-        queue.enqueue(event, store.bumpCounter(session.id, "eventSeq"));
-      }
-    } catch {
-      // Detail routes surface corrupt/stale quiz state with typed errors. One
-      // damaged review must not prevent the daemon or other sessions starting.
-    }
-    try {
-      const threads = readReviewThreads(store.threadsPath(session.id), session.id);
-      const authorizedByRequestedAction = new Set(threads.flatMap((candidate) =>
-        candidate.codeAction?.status === "requested" ? (candidate.codeAction.authorizedTurns ?? [candidate.id]) : []
-      ));
-      for (const thread of threads) {
-        if (thread.identity.headRevision !== session.review.revision ||
-            thread.identity.headSha !== session.review.head.sha) continue;
-        // Once code work is explicitly requested it owns the eventual report
-        // refresh/response. Do not resurrect an already-acked older
-        // report-feedback wake after a restart and let it race the code result.
-        if (thread.response === undefined &&
-            (thread.codeAction === undefined || thread.codeAction.status === "failed") &&
-            !authorizedByRequestedAction.has(thread.id)) {
-          enqueueReviewThreadWork(reviewThreadEvent(
-            thread,
-            thread.intent === "question" ? "question" : "report-feedback",
-            threads,
-          ));
+      try {
+        const threads = readReviewThreads(store.threadsPath(session.id), session.id);
+        const authorizedByRequestedAction = new Set(threads.flatMap((candidate) =>
+          candidate.codeAction?.status === "requested" ? (candidate.codeAction.authorizedTurns ?? [candidate.id]) : []
+        ));
+        for (const thread of threads) {
+          if (thread.identity.headRevision !== session.review.revision ||
+              thread.identity.headSha !== session.review.head.sha) continue;
+          // Once code work is explicitly requested it owns the eventual report
+          // refresh/response. Do not resurrect an already-acked older
+          // report-feedback wake after a restart and let it race the code result.
+          if (thread.response === undefined &&
+              (thread.codeAction === undefined || thread.codeAction.status === "failed") &&
+              !authorizedByRequestedAction.has(thread.id)) {
+            enqueueReviewThreadWork(reviewThreadEvent(
+              thread,
+              thread.intent === "question" ? "question" : "report-feedback",
+              threads,
+            ));
+          }
+          if (thread.codeAction?.status === "requested") {
+            enqueueReviewThreadWork(reviewThreadEvent(thread, "code-change", threads));
+          }
         }
-        if (thread.codeAction?.status === "requested") {
-          enqueueReviewThreadWork(reviewThreadEvent(thread, "code-change", threads));
-        }
+      } catch {
+        // A corrupt review thread file is quarantined by its reader. Other
+        // sessions, quiz repair, and browser startup remain available.
       }
-    } catch {
-      // A corrupt review thread file is quarantined by its reader. Other
-      // sessions, quiz repair, and browser startup remain available.
     }
-  }
+  };
 
   const sessionFor = (c: AppContext) => store.getSession(c.req.param("id") ?? "");
 
@@ -603,17 +612,17 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
 
   // The PR poller refreshes un-settled PRs (timer + on-demand) and publishes any
   // state change so the home UI re-sections an implemented plan when its PR
-  // merges or closes (see pr-status.ts). `pollNow` is kicked once at startup and
-  // again whenever the index stream connects (the onConnect hook below).
-  const prPoller = startPrPolling({
+  // merges or closes (see pr-status.ts). It is not constructed until start(),
+  // after the socket bind has made this process the single daemon owner.
+  const prPollingDeps = {
     listSessions: () => store.listSessions().filter((session) => session.kind === "plan"),
     updateSession: (id, patch) => store.updateSession(id, patch),
     publish: (id) => {
       const session = store.getSession(id);
       if (session) publishSession(session);
     },
-  });
-  void prPoller.pollNow(); // fire-and-forget: never blocks server creation
+  } satisfies Parameters<typeof startPrPolling>[0];
+  let prPoller: ReturnType<typeof startPrPolling> | undefined;
 
   // Monotonic per-session seq source for the live-activity stream (the
   // automatic, cross-agent activity stream): one StreamSeq per session id,
@@ -681,11 +690,8 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     entry.tailer.stop();
     tailers.delete(id);
   };
-  // Re-attach tailers to sessions that were already active when the daemon
-  // started (a restart mid-build): the registry survives the restart, so the
-  // live transcript is still being written. New sessions wire their tailer at
-  // creation; terminal ones are skipped by startTailer's guard.
-  for (const session of store.listSessions()) startTailer(session);
+  // Existing active sessions are re-attached by start() only after this process
+  // wins daemon ownership. New sessions wire their tailer at creation.
 
   // Desktop attention banners (review loop and daemon API). Presence tracks which sessions
   // have a *visible* review open; the notify sink fires the native macOS banner
@@ -1805,7 +1811,9 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
         const allThreads = readReviewThreads(store.threadsPath(current.id), current.id);
         const authorized = new Set(result.thread.codeAction?.authorizedTurns ?? [result.thread.id]);
         for (const candidate of allThreads) {
-          if (!authorized.has(candidate.id) || candidate.response !== undefined) continue;
+          if (!authorized.has(candidate.id) || candidate.response !== undefined ||
+              candidate.identity.headRevision !== current.review.revision ||
+              candidate.identity.headSha !== current.review.head.sha) continue;
           enqueueReviewThreadWork(reviewThreadEvent(candidate, "report-feedback", allThreads));
         }
       }
@@ -3158,11 +3166,23 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     // is showing the section list: refresh un-settled PRs so a merge/close that
     // landed while no tab was open re-sections within a frame, not a poll cycle.
     onConnect: (onlySession) => {
-      if (onlySession === undefined) void prPoller.pollNow();
+      if (onlySession === undefined) void prPoller?.pollNow();
     },
     uiDir: options.uiDir,
     heartbeatMs: options.sseHeartbeatMs,
   });
 
-  return app;
+  let started = false;
+  const start = (): void => {
+    if (started) return;
+    started = true;
+    recoverStartupState();
+    prPoller = startPrPolling(prPollingDeps);
+    void prPoller.pollNow(); // fire-and-forget: never blocks socket readiness
+    for (const session of store.listSessions()) startTailer(session);
+  };
+  const daemonApp = app as DaemonApp;
+  daemonApp.start = start;
+  if (options.startOnCreate !== false) daemonApp.start();
+  return daemonApp;
 }
