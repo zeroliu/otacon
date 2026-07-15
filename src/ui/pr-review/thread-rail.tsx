@@ -35,7 +35,7 @@ function ThreadCard({
           <p>{thread.response}</p>
         </div>
       )}
-      {thread.intent === "comment" && thread.status === "open" && (
+      {thread.intent === "comment" && thread.codeActionStatus === undefined && thread.canConductCodeChange !== false && (
         <button
           type="button"
           className="btn btn-ghost pr-conduct-change"
@@ -45,10 +45,17 @@ function ThreadCard({
           Conduct code change
         </button>
       )}
-      {thread.intent === "comment" && thread.status === "change-requested" && (
+      {thread.intent === "comment" && thread.codeActionStatus !== undefined && (
         <div className="pr-change-receipt">
           <span>↗</span>
-          Worktree handoff requested · waiting for agent
+          {thread.codeActionStatus === "working"
+            ? "Code change in progress"
+            : thread.codeActionStatus === "completed"
+              ? "Code change completed"
+              : thread.codeActionStatus === "failed"
+                ? "Code change failed"
+                : "Worktree handoff requested · waiting for agent"}
+          {thread.actionMessage !== undefined && <> · {thread.actionMessage}</>}
         </div>
       )}
       {thread.receipt !== undefined && <div className="pr-memory-receipt">✓ {thread.receipt}</div>}

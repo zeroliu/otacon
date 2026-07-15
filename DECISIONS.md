@@ -4353,6 +4353,58 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   contextual selection placement unreliable, or code-change authorization moves to a
   separate repository-level approval workflow.
 
+## Review conversations use a disjoint version-2 thread envelope (2026-07-15)
+
+- **Decision:** A review session writes strict version-2 entries to its own `threads.json`;
+  plan sessions retain their byte-compatible version-1 shape. Generic plan thread routes
+  reject review ids before reading the file, while SSE/GET route by the session discriminant.
+- **Why:** Reusing the pathname preserves the per-session storage model, but extending plan
+  entries would entangle L5/Resolve semantics with report/head provenance, memory receipts,
+  and code actions. A version boundary makes malformed mixed state quarantine locally and
+  lets old plan sessions remain readable without migration.
+- **Revisit when:** Plan and PR conversations converge on one lifecycle and one linter
+  contract, making a shared versioned union simpler than two deliberately separate schemas.
+
+## Review work is durable before wake-up and keyed by immutable provenance (2026-07-15)
+
+- **Decision:** Ask, report-feedback, and code-change work carry session/thread/report/head
+  identity. Thread/action state lands through an atomic state-file write before enqueue;
+  startup and browser request-loss retries reconstruct only missing unresponded work, with
+  queue dedupe and the existing monotonic review event seq. Once code work is requested it
+  owns recovery for the eventual report refresh, so an already-acked older feedback wake
+  cannot be resurrected behind it; working and terminal code actions are never re-enqueued.
+- **Why:** The durable conversation is the user's record; an event is only an at-least-once
+  wake. Persist-first prevents a daemon crash from losing visible intent, while full identity
+  prevents a retry or late response from attaching to a different report/head generation.
+- **Revisit when:** The daemon gains a transactional queue/store primitive that can atomically
+  commit both state and wake-up without recovery scanning.
+
+## Memory receipts require an exact agent acknowledgement (2026-07-15)
+
+- **Decision:** A thread may request User or Project memory (Project is the composer default),
+  but renders no saved receipt until `review respond` explicitly acknowledges `updated:true`
+  for that same requested scope. Mismatched and unsolicited acknowledgements are rejected.
+- **Why:** Selecting “remember” tells the future skill what to update; it does not prove that a
+  CAS write succeeded. Separating request from receipt prevents optimistic UI copy from
+  becoming a false claim about the user's cognition profile.
+- **Revisit when:** Knowledge mutation moves into a daemon transaction that can return its own
+  authoritative receipt rather than relying on an agent acknowledgement.
+
+## PR checkout is conservative routing, not branch automation (2026-07-15)
+
+- **Decision:** `review checkout` re-resolves GitHub head/permission, returns read-only for
+  forks or insufficient access, reuses only an exact clean worktree, and otherwise verifies
+  local/remote refs before one fetch/create under `worktree.dir`. Dirty, stale, prunable,
+  colliding, terminal, and closed/merged cases refuse without reset; the command returns the
+  explicit push remote/ref and never commits or pushes. A same-SHA refresh updates mutable PR
+  metadata without incrementing the report head generation.
+- **Why:** The user authorizes code work from a Comment, not destructive repair of whatever
+  checkout happens to be current. Exact routing protects unrelated work and gives the skill
+  enough metadata to delegate one implementation task while keeping verification and publish
+  responsibility with the main agent.
+- **Revisit when:** Fork contribution branches can be safely authenticated/pushed, or Git
+  exposes an atomic worktree-creation API that removes the remaining fetch/create seam.
+
 ## Plans and Reviews share the production sidebar row grammar (2026-07-14)
 
 - **Decision:** The Plans / Reviews switch sits immediately below the unchanged production

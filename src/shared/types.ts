@@ -210,6 +210,68 @@ export interface Anchor {
   suffix?: string;
 }
 
+export type ReviewKnowledgeScope = "user" | "project";
+
+/**
+ * A conversation anchored to one immutable PR-review report revision. Review
+ * threads deliberately use a distinct persisted shape from plan threads: a
+ * report comment is feedback first, and becomes branch-mutation authority only
+ * after the reviewer explicitly requests a code action on that comment.
+ */
+export interface ReviewThread {
+  id: string; // q<n> for Ask, t<n> for Comment
+  surface: "review";
+  intent: "question" | "comment";
+  anchor: Anchor;
+  body: string;
+  createdAt: string;
+  identity: {
+    session: string;
+    reportRevision: number;
+    headRevision: number;
+    headSha: string;
+  };
+  /** Browser retry key. Persisted for exact create dedupe; omitted publicly. */
+  idempotencyKey: string;
+  /** A request for the agent to remember the exchange; not a saved receipt. */
+  remember?: { scope: ReviewKnowledgeScope };
+  response?: {
+    body: string;
+    respondedAt: string;
+    /** Required for report-feedback responses; absent for ordinary answers. */
+    reportRevision?: number;
+  };
+  /** Present only after the agent explicitly acknowledges the requested scope. */
+  saved?: { scope: ReviewKnowledgeScope; savedAt: string };
+  codeAction?: {
+    status: "requested" | "working" | "completed" | "failed";
+    requestedAt: string;
+    updatedAt: string;
+    message?: string;
+  };
+}
+
+/** Browser-safe projection; the persisted create idempotency key stays private. */
+export type PublicReviewThread = Omit<ReviewThread, "idempotencyKey">;
+
+/**
+ * Private, immutable work handed to `/otacon-review` through `otacon wait`.
+ * Questions never authorize checkout; report feedback asks for a report
+ * response/revision; code-change is the explicit second-step authorization.
+ */
+export interface ReviewThreadEvent {
+  event: "review-thread";
+  work: "question" | "report-feedback" | "code-change";
+  session: string;
+  thread: string;
+  reportRevision: number;
+  headRevision: number;
+  headSha: string;
+  anchor: Anchor;
+  body: string;
+  remember?: { scope: ReviewKnowledgeScope };
+}
+
 export interface CommentItem {
   thread: string;
   anchor: Anchor | null;
@@ -248,6 +310,7 @@ export type EventPayload =
       prior?: { choice?: string; choices?: string[]; text?: string };
     }
   | ReviewQuizAnswerEvent
+  | ReviewThreadEvent
   // The approval wake-up. `home` is the absolute canonical
   // copy under `~/.otacon/sessions/<id>/`. `path` is the copy the agent acts on:
   // on **Save** (no `implement`) the repo-relative project copy under `plans.dir`,

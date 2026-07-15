@@ -259,6 +259,73 @@ describe("PrReviewScreen", () => {
     expect(presentation.pr.deletions).toBeUndefined();
   });
 
+  test("fork review Comments do not offer an unsafe code-change handoff", () => {
+    const session = structuredClone(productionSession()) as unknown as {
+      review: { pullRequest: { headRepository: string; isCrossRepository: boolean } };
+    };
+    session.review.pullRequest.headRepository = "contributor/app";
+    session.review.pullRequest.isCrossRepository = true;
+    const presentation = productionPresentation(session as never, productionPayload(), [{
+      id: "t1",
+      surface: "review",
+      intent: "comment",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Explain this boundary.",
+      createdAt: "2026-07-14T00:03:00.000Z",
+      identity: { session: "otc_prod1", reportRevision: 1, headRevision: 1, headSha: "abc" },
+    }]);
+    expect(presentation.threads[0]?.canConductCodeChange).toBe(false);
+  });
+
+  test("older-head Comments remain readable without offering a stale branch handoff", () => {
+    const presentation = productionPresentation(productionSession(), productionPayload(), [{
+      id: "t1",
+      surface: "review",
+      intent: "comment",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Change this boundary.",
+      createdAt: "2026-07-14T00:03:00.000Z",
+      identity: { session: "otc_prod1", reportRevision: 1, headRevision: 0, headSha: "older" },
+    }] as never);
+    expect(presentation.threads[0]).toMatchObject({ body: "Change this boundary.", canConductCodeChange: false });
+  });
+
+  test("maps live review threads without claiming memory before agent acknowledgement", () => {
+    const base = {
+      id: "t1",
+      surface: "review",
+      intent: "comment",
+      anchor: { section: "code-interface-frozen-contract", exact: "selected code", prefix: "before", suffix: "after" },
+      body: "Keep this explicit.",
+      createdAt: "2026-07-14T00:00:00.000Z",
+      identity: { session: "otc_prod1", reportRevision: 1, headRevision: 1, headSha: "abc" },
+      remember: { scope: "project" },
+    } as const;
+    const requested = productionPresentation(productionSession(), productionPayload(), [base] as never);
+    expect(requested.threads[0]).toMatchObject({
+      anchor: "selected code",
+      sourceAnchor: base.anchor,
+      knowledgeScope: "project",
+      canConductCodeChange: false,
+    });
+    expect(requested.threads[0]?.receipt).toBeUndefined();
+
+    const acknowledged = productionPresentation(productionSession(), productionPayload(), [{
+      ...base,
+      response: { body: "Clarified in r2.", respondedAt: "2026-07-14T00:10:00.000Z", reportRevision: 2 },
+      saved: { scope: "project", savedAt: "2026-07-14T00:10:00.000Z" },
+      codeAction: {
+        status: "working", requestedAt: "2026-07-14T00:11:00.000Z", updatedAt: "2026-07-14T00:12:00.000Z",
+      },
+    }] as never);
+    expect(acknowledged.threads[0]).toMatchObject({
+      response: "Clarified in r2.",
+      receipt: "Saved in acme/app Project knowledge",
+      codeActionStatus: "working",
+      status: "change-requested",
+    });
+  });
+
   test("embeds one content landmark, shows exact stale-head provenance, and disables deferred actions", async () => {
     const active = await mountReview();
     await act(async () => active.root.render(
@@ -269,7 +336,7 @@ describe("PrReviewScreen", () => {
     expect(active.host.querySelector(".pr-review-page")?.tagName).toBe("DIV");
     expect(active.host.querySelector(".pr-stale-report")?.textContent).toContain("current head generation 2");
     expect(active.host.querySelector(".pr-report-revision-banner")?.textContent).toContain("report head generation 1");
-    expect(active.host.querySelector(".pr-report-capability-note")?.textContent).toContain("Quiz answers are live");
+    expect(active.host.querySelector(".pr-report-capability-note")?.textContent).toContain("Quiz answers and anchored conversations are live");
     expect(button(active.host, "Done").disabled).toBe(true);
     expect([...active.host.querySelectorAll(".pr-toc-group")].map((link) => [
       link.textContent,
@@ -482,7 +549,7 @@ describe("PrReviewScreen", () => {
     const newest = host.querySelector('[data-thread-id="t4"]');
     expect(newest?.textContent).toContain("Comment");
     expect(newest?.textContent).toContain("Explain why these writes stay separate.");
-    expect(newest?.textContent).toContain("Remembered in User knowledge");
+    expect(newest?.querySelector(".pr-memory-receipt")).toBeNull();
     expect(newest?.textContent).toContain("Conduct code change");
 
     await click(button(newest as HTMLElement, "Conduct code change"));
@@ -496,7 +563,7 @@ describe("PrReviewScreen", () => {
     await enterText(win, askComposer.querySelector("textarea") as HTMLTextAreaElement, "Why is this type the boundary?");
     await click(button(askComposer, "ask now"));
     await wait(1);
-    const question = host.querySelector('[data-thread-id="t5"]');
+    const question = host.querySelector('[data-thread-id="q2"]');
     expect(question?.textContent).toContain("Question");
     expect(question?.textContent).toContain("Without a boundary");
   });
@@ -517,7 +584,7 @@ describe("PrReviewScreen", () => {
       intent: "question",
       anchor: "moving target",
     });
-    expect(host.querySelector('[data-thread-id="t4"] .pr-conduct-change')).toBeNull();
+    expect(host.querySelector('[data-thread-id="q2"] .pr-conduct-change')).toBeNull();
 
     const codeFence = host.querySelector(".pr-integration-trace code") as HTMLElement;
     await selectText(win, codeFence, "knowledgeStore", { top: 420, bottom: 442, left: 310, width: 128 });
@@ -533,7 +600,7 @@ describe("PrReviewScreen", () => {
       anchor: "knowledgeStore",
       status: "open",
     });
-    expect(host.querySelector('[data-thread-id="t5"] .pr-conduct-change')).not.toBeNull();
+    expect(host.querySelector('[data-thread-id="t4"] .pr-conduct-change')).not.toBeNull();
   });
 
   test("warns with unresolved thread and quiz counts, then preserves a force-closed report", async () => {

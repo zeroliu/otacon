@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ApiResponse } from "../client.js";
 import { CliError } from "../output.js";
+import type { ReviewWorktreeDeps } from "../review-worktree.js";
+import type { ReviewRegistrySession } from "../../shared/types.js";
 import type { ReviewCommandDeps } from "./review.js";
 import { reviewCommand } from "./review.js";
 
@@ -42,8 +44,11 @@ afterEach(() => {
 
 function deps(options: {
   ghRepo?: string;
+  ghHead?: string;
+  viewerPermission?: string;
   api?: (method: string, path: string, body?: unknown) => Promise<ApiResponse>;
   ensure?: () => Promise<unknown>;
+  worktree?: ReviewWorktreeDeps;
 } = {}): ReviewCommandDeps {
   return {
     cwd: () => repo,
@@ -53,9 +58,70 @@ function deps(options: {
       run: (command, args) => command === "git"
         ? "git@github.com:Acme/App.git"
         : args[0] === "pr"
-          ? ghPayload(options.ghRepo ?? "acme/app")
-          : JSON.stringify({ viewerPermission: "WRITE" }),
+          ? ghPayload(options.ghRepo ?? "acme/app", options.ghHead)
+          : JSON.stringify({ viewerPermission: options.viewerPermission ?? "WRITE" }),
     },
+    worktree: options.worktree,
+  };
+}
+
+function reviewSession(head = "a".repeat(40)): ReviewRegistrySession {
+  const repository = "acme/app" as never;
+  return {
+    kind: "review",
+    id: "otc_review1",
+    title: "#42 Typed sessions",
+    repo,
+    branch: "main",
+    quick: false,
+    socratic: false,
+    status: "reviewing",
+    createdAt: "2026-07-15T00:00:00.000Z",
+    updatedAt: "2026-07-15T00:00:00.000Z",
+    review: {
+      pullRequest: {
+        identity: { host: "github.com", repository, number: 42, key: "github.com/acme/app#42" },
+        url: "https://github.com/acme/app/pull/42",
+        title: "Typed sessions",
+        author: "octo",
+        baseRef: "main",
+        headRef: "feature",
+        headRepository: repository,
+        headSha: head,
+        state: "open",
+        isCrossRepository: false,
+        permissions: { maintainerCanModify: true, viewerPermission: "write", readOnly: false },
+      },
+      head: { sha: head, ref: "feature", repository, capturedAt: "2026-07-15T00:00:00.000Z" },
+      revision: 3,
+    },
+  };
+}
+
+function frozenPreparation(head = "a".repeat(40), revision = 4) {
+  return {
+    revision: {
+      version: 1,
+      session: "otc_review1",
+      revision,
+      headRevision: 4,
+      headSha: head,
+      snapshotHash: "f".repeat(64),
+      createdAt: "2026-07-15T00:00:00.000Z",
+      status: "prepared",
+    },
+    snapshot: {
+      version: 1,
+      session: "otc_review1",
+      revision,
+      headRevision: 4,
+      headSha: head,
+      capturedAt: "2026-07-15T00:00:00.000Z",
+      hash: "f".repeat(64),
+      user: { hash: "a".repeat(64), markdown: "user" },
+      project: { repo: "acme/app", hash: "b".repeat(64), markdown: "project" },
+    },
+    warnings: [],
   };
 }
 
@@ -365,5 +431,245 @@ describe("review grade", () => {
     }
     expect(error?.code).toBe("E_QUIZ_GRADE");
     expect(ensured).toBe(0);
+  });
+});
+
+describe("review checkout", () => {
+  test("reuses the exact clean worktree and prints the explicit push destination without pushing", async () => {
+    const worktree = join(repo, "feature-worktree");
+    const head = "a".repeat(40);
+    const gitCalls: string[] = [];
+    const worktreeDeps: ReviewWorktreeDeps = {
+      git: (args, cwd) => {
+        gitCalls.push(`${cwd} :: ${args.join(" ")}`);
+        const command = args.join(" ");
+        if (cwd === repo && command === "remote get-url origin") return "git@github.com:acme/app.git\n";
+        if (cwd === repo && command === "check-ref-format --branch feature") return "feature\n";
+        if (cwd === repo && command === "worktree list --porcelain -z") {
+          return `worktree ${worktree}\0HEAD ${head}\0branch refs/heads/feature\0\0`;
+        }
+        if (cwd === worktree && command === "symbolic-ref --quiet --short HEAD") return "feature\n";
+        if (cwd === worktree && command === "rev-parse --verify HEAD^{commit}") return `${head}\n`;
+        if (cwd === worktree && command === "status --porcelain=v1 -z --untracked-files=all") return "";
+        throw new Error(`unexpected git call: ${command}`);
+      },
+      exists: () => false,
+      mkdir: () => { throw new Error("reuse must not create a directory"); },
+      realpath: (path) => path,
+      worktreeDir: () => join(repo, "worktrees"),
+    };
+    const printed = await capture(["checkout", "--session", "otc_review1"], deps({
+      worktree: worktreeDeps,
+      api: async (method, path) => {
+        expect(method).toBe("GET");
+        expect(path).toBe("/api/sessions/otc_review1");
+        return { status: 200, body: reviewSession() as unknown as Record<string, unknown> };
+      },
+    }));
+    expect(printed).toMatchObject({
+      ok: true,
+      session: "otc_review1",
+      mode: "writable",
+      action: "reused",
+      worktree,
+      branch: "feature",
+      head,
+      push: { remote: "origin", ref: "feature" },
+    });
+    expect(gitCalls.some((call) => / :: (fetch|reset|checkout|commit|push)( |$)/.test(call))).toBe(false);
+  });
+
+  test("fresh GitHub head drift refuses before any worktree git mutation", async () => {
+    let gitCalls = 0;
+    let error: CliError | undefined;
+    try {
+      await reviewCommand(["checkout", "--session", "otc_review1"], deps({
+        ghHead: "b".repeat(40),
+        worktree: {
+          git: () => { gitCalls += 1; return ""; },
+          exists: () => false,
+          mkdir: () => undefined,
+          realpath: (path) => path,
+          worktreeDir: () => join(repo, "worktrees"),
+        },
+        api: async () => ({ status: 200, body: reviewSession() as unknown as Record<string, unknown> }),
+      }));
+    } catch (caught) {
+      error = caught as CliError;
+    }
+    expect(error?.code).toBe("E_REVIEW_HEAD_STALE");
+    expect(error?.message).toContain("refresh-head");
+    expect(gitCalls).toBe(0);
+  });
+
+  test("prints a current permission downgrade as explicit read-only without mutating git", async () => {
+    let gitCalls = 0;
+    const printed = await capture(["checkout", "--session", "otc_review1"], deps({
+      viewerPermission: "READ",
+      worktree: {
+        git: () => { gitCalls += 1; throw new Error("read-only checkout must not run git"); },
+        exists: () => false,
+        mkdir: () => { throw new Error("read-only checkout must not create directories"); },
+        realpath: (path) => path,
+        worktreeDir: () => join(repo, "worktrees"),
+      },
+      api: async () => ({ status: 200, body: reviewSession() as unknown as Record<string, unknown> }),
+    }));
+    expect(printed).toMatchObject({
+      ok: true,
+      session: "otc_review1",
+      mode: "read-only",
+      action: "read-only",
+      reason: "permission",
+    });
+    expect(gitCalls).toBe(0);
+  });
+});
+
+describe("review refresh-head", () => {
+  test("resolves fresh GitHub metadata, posts only to the known session head route, and returns new authoring paths", async () => {
+    const nextHead = "b".repeat(40);
+    const calls: Array<{ method: string; path: string; body?: unknown }> = [];
+    const updated = reviewSession(nextHead);
+    updated.review.revision = 4;
+    updated.status = "working";
+    const printed = await capture(["refresh-head", "--session", "otc_review1"], deps({
+      ghHead: nextHead,
+      api: async (method, path, body) => {
+        calls.push({ method, path, body });
+        if (method === "GET") {
+          return { status: 200, body: reviewSession() as unknown as Record<string, unknown> };
+        }
+        return {
+          status: 200,
+          body: {
+            action: "revised",
+            session: updated,
+            preparation: frozenPreparation(nextHead),
+          },
+        };
+      },
+    }));
+    expect(calls.map(({ method, path }) => `${method} ${path}`)).toEqual([
+      "GET /api/sessions/otc_review1",
+      "POST /api/reviews/otc_review1/head",
+    ]);
+    expect(calls[1]?.body).toMatchObject({
+      pullRequest: { headSha: nextHead, identity: { key: "github.com/acme/app#42" } },
+    });
+    expect(printed).toMatchObject({
+      ok: true,
+      action: "revised",
+      session: "otc_review1",
+      revision: 4,
+      headRevision: 4,
+      head: nextHead,
+      report: expect.stringContaining("/sessions/otc_review1/review.md"),
+      quiz: expect.stringContaining("/sessions/otc_review1/quiz.json"),
+      knowledge: {
+        snapshot: {
+          hash: "f".repeat(64),
+          user: { path: expect.stringContaining("/review/revisions/r4/user.md") },
+          project: { path: expect.stringContaining("/review/revisions/r4/project.md") },
+        },
+      },
+    });
+    expect(calls.some(({ path }) => path === "/api/reviews")).toBe(false);
+  });
+
+  test("requires an explicit review session before contacting the daemon", async () => {
+    let ensured = 0;
+    let error: CliError | undefined;
+    try {
+      await reviewCommand(["refresh-head"], deps({ ensure: async () => { ensured += 1; } }));
+    } catch (caught) {
+      error = caught as CliError;
+    }
+    expect(error?.code).toBe("E_USAGE");
+    expect(ensured).toBe(0);
+  });
+});
+
+describe("review thread agent commands", () => {
+  const source = { reportRevision: 2, headRevision: 3, headSha: "a".repeat(40) };
+
+  test("respond validates identity, posts the exact response, and prints the thread", async () => {
+    const file = join(repo, "response.json");
+    writeFileSync(file, JSON.stringify({
+      version: 1,
+      session: "otc_review1",
+      thread: "t2",
+      source,
+      body: "Clarified in the replacement report.",
+      responseReportRevision: 3,
+      saved: { scope: "project", updated: true },
+    }));
+    let request: { path: string; body?: unknown } | undefined;
+    const printed = await capture(["respond", "t2", "--file", file], deps({
+      api: async (_method, path, body) => {
+        request = { path, body };
+        return { status: 200, body: { thread: { id: "t2", response: { body: "Clarified in the replacement report." } } } };
+      },
+    }));
+    expect(request).toEqual({
+      path: "/api/reviews/otc_review1/threads/t2/respond",
+      body: {
+        source,
+        body: "Clarified in the replacement report.",
+        responseReportRevision: 3,
+        saved: { scope: "project", updated: true },
+      },
+    });
+    expect(printed).toMatchObject({ ok: true, session: "otc_review1", thread: { id: "t2" } });
+  });
+
+  test("code-status posts only a typed lifecycle transition", async () => {
+    const file = join(repo, "code-status.json");
+    writeFileSync(file, JSON.stringify({
+      version: 1, session: "otc_review1", thread: "t2", source,
+      status: "completed", message: "Verified and pushed.",
+    }));
+    let request: { path: string; body?: unknown } | undefined;
+    await capture(["code-status", "t2", "--file", file], deps({
+      api: async (_method, path, body) => {
+        request = { path, body };
+        return { status: 200, body: { thread: { id: "t2", codeAction: { status: "completed" } } } };
+      },
+    }));
+    expect(request).toEqual({
+      path: "/api/reviews/otc_review1/threads/t2/code-action/status",
+      body: { source, status: "completed", message: "Verified and pushed." },
+    });
+  });
+
+  test("strict files reject mismatched thread ids, unknown keys, and false memory claims before daemon contact", async () => {
+    const cases = [
+      { version: 1, session: "otc_review1", thread: "t9", source, body: "answer" },
+      { version: 1, session: "otc_review1", thread: "t2", source, body: "answer", surprise: true },
+      { version: 1, session: "otc_review1", thread: "t2", source, body: "answer", saved: { scope: "project", updated: false } },
+    ];
+    let calls = 0;
+    for (const [index, value] of cases.entries()) {
+      const file = join(repo, `bad-${index}.json`);
+      writeFileSync(file, JSON.stringify(value));
+      await expect(reviewCommand(["respond", "t2", "--file", file], deps({
+        ensure: async () => { calls += 1; },
+      }))).rejects.toBeInstanceOf(CliError);
+    }
+    expect(calls).toBe(0);
+  });
+
+  test("typed daemon conflicts pass through without being collapsed", async () => {
+    const file = join(repo, "conflict.json");
+    writeFileSync(file, JSON.stringify({ version: 1, session: "otc_review1", thread: "q1", source, body: "answer" }));
+    let error: CliError | undefined;
+    try {
+      await reviewCommand(["respond", "q1", "--file", file], deps({
+        api: async () => ({ status: 409, body: { error: { code: "E_REVIEW_THREAD_STALE", message: "stale" } } }),
+      }));
+    } catch (caught) {
+      error = caught as CliError;
+    }
+    expect(error?.code).toBe("E_REVIEW_THREAD_STALE");
   });
 });

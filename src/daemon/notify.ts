@@ -10,6 +10,7 @@ import type {
   StreamEvent,
   Thread,
   TranscriptEntry,
+  PublicReviewThread,
 } from "../shared/types.js";
 import type { ReviewQuizPublicState } from "../shared/review-quiz.js";
 
@@ -38,7 +39,7 @@ export type UiEvent =
     }
   | { type: "queue"; session: string; data: { session: string; pending: number } }
   | { type: "quiz"; session: string; data: { session: string; quiz: ReviewQuizPublicState } }
-  | { type: "thread"; session: string; data: { session: string; thread: Thread } }
+  | { type: "thread"; session: string; data: { session: string; thread: Thread | PublicReviewThread } }
   | { type: "grill"; session: string; data: { session: string; entry: TranscriptEntry } }
   | { type: "activity"; session: string; data: { session: string; note: ActivityNote } }
   | { type: "stream"; session: string; data: { session: string; events: StreamEvent[] } };

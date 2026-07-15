@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { balancedFixture } from "./fixtures.js";
 import { LiveReviewAdapter } from "./model.js";
-import type { QuizDefinition } from "./model.js";
+import type { QuizDefinition, ReviewThread, ThreadDraft } from "./model.js";
 
 function passed(quizzes: QuizDefinition[], id: string): QuizDefinition[] {
   return quizzes.map((quiz) => quiz.id === id
@@ -74,5 +74,51 @@ describe("LiveReviewAdapter quiz transport", () => {
       answer: "server accepted answer",
       feedback: "Understood.",
     });
+  });
+});
+
+describe("LiveReviewAdapter conversation transport", () => {
+  const draft: ThreadDraft = {
+    intent: "comment",
+    anchor: "selected code",
+    sourceAnchor: { section: "code-interface", exact: "selected code", prefix: "before", suffix: "after" },
+    body: "Keep the boundary explicit.",
+    remember: true,
+    scope: "project",
+  };
+
+  test("reuses the durable create key after response loss and keeps full anchor identity", async () => {
+    const seen: string[] = [];
+    let fail = true;
+    const create = async (input: ThreadDraft, key: string): Promise<ReviewThread> => {
+      seen.push(key);
+      if (fail) {
+        fail = false;
+        throw new Error("response lost");
+      }
+      return {
+        id: "t9", intent: input.intent, anchor: input.anchor, sourceAnchor: input.sourceAnchor,
+        body: input.body, status: "open", identity: { reportRevision: 2, headRevision: 1, headSha: "a".repeat(40) },
+      };
+    };
+    const adapter = new LiveReviewAdapter(structuredClone(balancedFixture), undefined, create);
+    await expect(adapter.createThread(draft)).rejects.toThrow("response lost");
+    adapter.replaceSnapshot(structuredClone(balancedFixture));
+    await adapter.createThread(draft);
+    expect(seen[1]).toBe(seen[0]);
+    expect(adapter.getSnapshot().threads.at(-1)).toMatchObject({ id: "t9", sourceAnchor: draft.sourceAnchor });
+  });
+
+  test("conducts code work only through a persisted Comment callback", async () => {
+    const fixture = structuredClone(balancedFixture);
+    fixture.threads = [{
+      id: "t1", intent: "comment", anchor: "quote", body: "change", status: "answered",
+      identity: { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) },
+    }];
+    const adapter = new LiveReviewAdapter(fixture, undefined, undefined, async (thread) => ({
+      ...thread, status: "change-requested", codeActionStatus: "requested",
+    }));
+    await adapter.conductCodeChange("t1");
+    expect(adapter.getSnapshot().threads[0]).toMatchObject({ status: "change-requested", codeActionStatus: "requested" });
   });
 });

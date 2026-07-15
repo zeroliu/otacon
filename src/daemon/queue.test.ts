@@ -338,6 +338,36 @@ describe("SessionQueue persistence", () => {
     expect(q.hasPayload(() => true)).toBe(false);
   });
 
+  test("review-thread work round-trips only with its strict immutable identity", () => {
+    const event: EventPayload = {
+      event: "review-thread",
+      work: "report-feedback",
+      session: "otc_abc123",
+      thread: "t1",
+      reportRevision: 2,
+      headRevision: 1,
+      headSha: "a".repeat(40),
+      anchor: { section: "code", exact: "selected text", prefix: "before", suffix: "after" },
+      body: "Explain this boundary.",
+      remember: { scope: "project" },
+    };
+    const q = new SessionQueue(file);
+    q.enqueue(event, 1);
+    expect(new SessionQueue(file).take()?.payload).toEqual(event);
+
+    writeFileSync(file, JSON.stringify({
+      version: 1,
+      events: [{ seq: 1, queuedAt: "2026-07-14T00:00:00.000Z", payload: { ...event, surprise: true } }],
+    }));
+    expect(new SessionQueue(file).size).toBe(0);
+
+    writeFileSync(file, JSON.stringify({
+      version: 1,
+      events: [{ seq: 1, queuedAt: "2026-07-14T00:00:00.000Z", payload: { ...event, work: "question", thread: "t1" } }],
+    }));
+    expect(new SessionQueue(file).size).toBe(0);
+  });
+
   test("wrong-shape events files are quarantined too", () => {
     writeFileSync(file, JSON.stringify({ version: 2, events: [] }));
     expect(new SessionQueue(file).size).toBe(0);

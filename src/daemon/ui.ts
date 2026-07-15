@@ -14,6 +14,7 @@ import type {
   StreamEvent,
   Thread,
   TranscriptEntry,
+  PublicReviewThread,
 } from "../shared/types.js";
 import type { ReviewQuizPublicState } from "../shared/review-quiz.js";
 import { VERSION } from "../shared/version.js";
@@ -25,7 +26,7 @@ export interface UiDeps {
   listSummaries: () => SessionSummary[];
   getSummary: (id: string) => SessionSummary | undefined;
   /** The session's review threads — ride the per-session snapshot for the rail. */
-  getThreads: (id: string) => Thread[];
+  getThreads: (id: string) => (Thread | PublicReviewThread)[];
   /** The session's grill transcript — rides the snapshot for the Interview panel. */
   getTranscript: (id: string) => TranscriptEntry[];
   /** The session's activity feed — rides the snapshot for the live activity log. */

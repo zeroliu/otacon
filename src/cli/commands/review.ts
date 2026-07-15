@@ -1,5 +1,6 @@
-// otacon review start --pr <URL|number> [--force]
-// otacon review submit --report <report.md> --quiz <quiz.json>
+// `otacon review` owns PR resolution plus report/quiz authoring commands and
+// the conservative checkout/head-refresh bridge used by explicit code-change
+// handoffs. Checkout never commits or pushes; it only returns that metadata.
 //
 // Resolve GitHub metadata while still entirely client-side, reject a different
 // base repository before touching the daemon, then cross the one atomic start
@@ -8,6 +9,11 @@
 
 import { parseArgs } from "node:util";
 import { readFileSync } from "node:fs";
+import {
+  checkoutReviewWorktree,
+  freshReviewMetadata,
+} from "../review-worktree.js";
+import type { ReviewWorktreeDeps } from "../review-worktree.js";
 import {
   projectKnowledgePath,
   reviewDraftPath,
@@ -36,6 +42,7 @@ export interface ReviewCommandDeps {
   ensureDaemon(): Promise<unknown>;
   api(method: string, path: string, body?: unknown): Promise<ApiResponse>;
   github?: GitHubDeps;
+  worktree?: ReviewWorktreeDeps;
   readFile?(path: string): string;
 }
 
@@ -56,7 +63,219 @@ export async function reviewCommand(
   if (argv[0] === "start") return startReview(argv.slice(1), deps);
   if (argv[0] === "submit") return submitReview(argv.slice(1), deps);
   if (argv[0] === "grade") return gradeReview(argv.slice(1), deps);
-  usageError("usage: otacon review start --pr <URL|number> [--force] | otacon review submit --report <report.md> --quiz <quiz.json> | otacon review grade <question-id> --file <grade.json>");
+  if (argv[0] === "checkout") return checkoutReview(argv.slice(1), deps);
+  if (argv[0] === "refresh-head") return refreshReviewHead(argv.slice(1), deps);
+  if (argv[0] === "respond") return respondReviewThread(argv.slice(1), deps);
+  if (argv[0] === "code-status") return updateReviewCodeStatus(argv.slice(1), deps);
+  usageError("usage: otacon review start --pr <URL|number> [--force] | submit --report <report.md> --quiz <quiz.json> | grade <question-id> --file <grade.json> | respond <thread-id> --file <response.json> | code-status <thread-id> --file <status.json> | checkout --session <id> | refresh-head --session <id>");
+}
+
+function exactKeys(raw: Record<string, unknown>, keys: string[]): boolean {
+  const actual = Object.keys(raw).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function parseSource(raw: unknown): { reportRevision: number; headRevision: number; headSha: string } | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const value = raw as Record<string, unknown>;
+  if (!exactKeys(value, ["reportRevision", "headRevision", "headSha"]) ||
+    !Number.isSafeInteger(value.reportRevision) || (value.reportRevision as number) < 1 ||
+    !Number.isSafeInteger(value.headRevision) || (value.headRevision as number) < 1 ||
+    typeof value.headSha !== "string" || !/^[0-9a-f]{40}$/i.test(value.headSha)) return undefined;
+  return value as unknown as { reportRevision: number; headRevision: number; headSha: string };
+}
+
+function readReviewOperation(
+  argv: string[],
+  verb: "respond" | "code-status",
+  deps: ReviewCommandDeps | undefined,
+): { thread: string; raw: Record<string, unknown>; commandDeps: ReviewCommandDeps } {
+  const { positionals, values } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: { file: { type: "string" } },
+  });
+  const thread = positionals[0];
+  if (positionals.length !== 1 || thread === undefined || !/^[qt][1-9]\d{0,8}$/.test(thread) || values.file === undefined) {
+    usageError(`otacon review ${verb} requires <thread-id> --file <json>`);
+  }
+  const readFile = deps?.readFile ?? ((path: string) => readFileSync(path, "utf8"));
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFile(values.file)) as unknown;
+  } catch (error) {
+    fail("E_REVIEW_THREAD_INPUT", `could not read ${verb} file: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) fail("E_REVIEW_THREAD_INPUT", `${verb} file must be an object`);
+  return { thread, raw: raw as Record<string, unknown>, commandDeps: deps ?? DEFAULT_DEPS };
+}
+
+async function respondReviewThread(argv: string[], deps: ReviewCommandDeps | undefined): Promise<number> {
+  const { thread, raw, commandDeps } = readReviewOperation(argv, "respond", deps);
+  const optional = ["responseReportRevision", "saved"].filter((key) => raw[key] !== undefined);
+  if (!exactKeys(raw, ["version", "session", "thread", "source", "body", ...optional]) || raw.version !== 1 ||
+    typeof raw.session !== "string" || !/^otc_[0-9a-z]{6,64}$/.test(raw.session) || raw.thread !== thread ||
+    parseSource(raw.source) === undefined || typeof raw.body !== "string" || raw.body.trim() === "" || raw.body.length > 20_000 ||
+    (raw.responseReportRevision !== undefined && (!Number.isSafeInteger(raw.responseReportRevision) || (raw.responseReportRevision as number) < 1))) {
+    fail("E_REVIEW_THREAD_INPUT", "response file has an invalid or mismatched shape");
+  }
+  if (raw.saved !== undefined) {
+    if (typeof raw.saved !== "object" || raw.saved === null || Array.isArray(raw.saved) ||
+      !exactKeys(raw.saved as Record<string, unknown>, ["scope", "updated"]) ||
+      !["user", "project"].includes(String((raw.saved as Record<string, unknown>).scope)) ||
+      (raw.saved as Record<string, unknown>).updated !== true) {
+      fail("E_REVIEW_MEMORY_ACK", "saved acknowledgement must be {scope:user|project,updated:true}");
+    }
+  }
+  await commandDeps.ensureDaemon();
+  const response = await commandDeps.api("POST", `/api/reviews/${raw.session}/threads/${thread}/respond`, {
+    source: raw.source,
+    body: raw.body,
+    ...(raw.responseReportRevision === undefined ? {} : { responseReportRevision: raw.responseReportRevision }),
+    ...(raw.saved === undefined ? {} : { saved: raw.saved }),
+  });
+  if (response.status === 400 || response.status === 404 || response.status === 409) {
+    const error = response.body.error as { code?: string; message?: string } | undefined;
+    fail(error?.code ?? "E_REVIEW_THREAD_RESPONSE", error?.message ?? "review response was rejected", response.body);
+  }
+  if (response.status !== 200) fail("E_INTERNAL", `review respond failed: ${JSON.stringify(response.body)}`, undefined, 2);
+  printJson({ ok: true, session: raw.session, thread, ...response.body });
+  return 0;
+}
+
+async function updateReviewCodeStatus(argv: string[], deps: ReviewCommandDeps | undefined): Promise<number> {
+  const { thread, raw, commandDeps } = readReviewOperation(argv, "code-status", deps);
+  const optional = raw.message === undefined ? [] : ["message"];
+  if (!exactKeys(raw, ["version", "session", "thread", "source", "status", ...optional]) || raw.version !== 1 ||
+    typeof raw.session !== "string" || !/^otc_[0-9a-z]{6,64}$/.test(raw.session) || raw.thread !== thread || !thread.startsWith("t") ||
+    parseSource(raw.source) === undefined || !["working", "completed", "failed"].includes(String(raw.status)) ||
+    (raw.message !== undefined && (typeof raw.message !== "string" || raw.message.trim() === "" || raw.message.length > 20_000))) {
+    fail("E_REVIEW_CODE_ACTION", "code-status file has an invalid or mismatched shape");
+  }
+  await commandDeps.ensureDaemon();
+  const response = await commandDeps.api("POST", `/api/reviews/${raw.session}/threads/${thread}/code-action/status`, {
+    source: raw.source,
+    status: raw.status,
+    ...(raw.message === undefined ? {} : { message: raw.message }),
+  });
+  if (response.status === 400 || response.status === 404 || response.status === 409) {
+    const error = response.body.error as { code?: string; message?: string } | undefined;
+    fail(error?.code ?? "E_REVIEW_CODE_ACTION", error?.message ?? "code status was rejected", response.body);
+  }
+  if (response.status !== 200) fail("E_INTERNAL", `review code-status failed: ${JSON.stringify(response.body)}`, undefined, 2);
+  printJson({ ok: true, session: raw.session, thread, ...response.body });
+  return 0;
+}
+
+async function requireReviewSession(
+  argv: string[],
+  command: "checkout" | "refresh-head",
+  deps: ReviewCommandDeps | undefined,
+): Promise<{ session: ReviewRegistrySession; deps: ReviewCommandDeps }> {
+  const { values } = parseArgs({
+    args: argv,
+    options: { session: { type: "string" } },
+  });
+  if (values.session === undefined || values.session.trim() === "") {
+    usageError(`otacon review ${command} requires --session <id>`);
+  }
+  const commandDeps = deps ?? DEFAULT_DEPS;
+  await commandDeps.ensureDaemon();
+  const response = await commandDeps.api("GET", `/api/sessions/${values.session}`);
+  if (response.status === 404) fail("E_UNKNOWN_SESSION", `unknown review session: ${values.session}`);
+  if (response.status !== 200) {
+    fail("E_INTERNAL", `review ${command} could not read the session: ${JSON.stringify(response.body)}`, undefined, 2);
+  }
+  if (response.body.kind !== "review" || response.body.id !== values.session) {
+    if (response.body.kind !== "review") {
+      fail("E_SESSION_KIND", `--session ${values.session} is not a PR review`);
+    }
+    fail("E_INTERNAL", `review ${command} received inconsistent session identity`, undefined, 2);
+  }
+  return { session: response.body as unknown as ReviewRegistrySession, deps: commandDeps };
+}
+
+async function checkoutReview(argv: string[], deps: ReviewCommandDeps | undefined): Promise<number> {
+  const resolved = await requireReviewSession(argv, "checkout", deps);
+  const fresh = freshReviewMetadata(resolved.session, resolved.deps.github);
+  const frozen = resolved.session.review.head;
+  if (
+    fresh.headSha !== frozen.sha ||
+    fresh.headRef !== frozen.ref ||
+    fresh.headRepository !== frozen.repository
+  ) {
+    fail(
+      "E_REVIEW_HEAD_STALE",
+      `PR head changed since this review was prepared; run otacon review refresh-head --session ${resolved.session.id}`,
+    );
+  }
+  const checkoutSession: ReviewRegistrySession = {
+    ...resolved.session,
+    review: { ...resolved.session.review, pullRequest: fresh },
+  };
+  const result = resolved.deps.worktree === undefined
+    ? checkoutReviewWorktree(checkoutSession)
+    : checkoutReviewWorktree(checkoutSession, resolved.deps.worktree);
+  printJson({
+    ok: true,
+    session: resolved.session.id,
+    repository: fresh.identity.repository,
+    pr: fresh.url,
+    headRevision: resolved.session.review.revision,
+    head: frozen.sha,
+    branch: frozen.ref,
+    ...result,
+  });
+  return 0;
+}
+
+async function refreshReviewHead(argv: string[], deps: ReviewCommandDeps | undefined): Promise<number> {
+  const resolved = await requireReviewSession(argv, "refresh-head", deps);
+  const pullRequest = freshReviewMetadata(resolved.session, resolved.deps.github);
+  const response = await resolved.deps.api(
+    "POST",
+    `/api/reviews/${resolved.session.id}/head`,
+    { pullRequest },
+  );
+  if (response.status === 400 || response.status === 404 || response.status === 409) {
+    const fallback = response.status === 404 ? "E_UNKNOWN_SESSION" : response.status === 409 ? "E_REVIEW_CONFLICT" : "E_BAD_REQUEST";
+    const code = (response.body.error as { code?: string } | undefined)?.code ?? fallback;
+    fail(code, responseMessage(response));
+  }
+  if (response.status !== 200) {
+    fail("E_INTERNAL", `review refresh-head failed: ${JSON.stringify(response.body)}`, undefined, 2);
+  }
+  const session = response.body.session as unknown as ReviewRegistrySession;
+  const preparation = response.body.preparation as unknown as ReviewReportRevisionPayload | undefined;
+  if (session?.kind !== "review" || session.id !== resolved.session.id || preparation === undefined) {
+    fail("E_INTERNAL", "review refresh-head did not return a review session and frozen preparation", undefined, 2);
+  }
+  printJson({
+    ok: true,
+    action: response.body.action,
+    session: session.id,
+    revision: preparation.revision.revision,
+    headRevision: session.review.revision,
+    head: session.review.head.sha,
+    report: reviewDraftPath(session.id),
+    quiz: reviewQuizDraftPath(session.id),
+    knowledge: {
+      snapshot: {
+        hash: preparation.snapshot.hash,
+        user: {
+          hash: preparation.snapshot.user.hash,
+          path: reviewRevisionUserKnowledgePath(session.id, preparation.revision.revision),
+        },
+        project: {
+          hash: preparation.snapshot.project.hash,
+          path: reviewRevisionProjectKnowledgePath(session.id, preparation.revision.revision),
+        },
+      },
+    },
+    url: `${baseUrl()}/s/${session.id}`,
+  });
+  return 0;
 }
 
 async function gradeReview(argv: string[], deps: ReviewCommandDeps | undefined): Promise<number> {

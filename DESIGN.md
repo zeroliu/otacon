@@ -393,6 +393,10 @@ the model is suspended — no inference, no token spend.
 | `otacon open [--session <id>]`                                              | Open the review URL in the browser, or the index URL when no session resolves; skips the launch when an otacon tab from this daemon is already open (health `viewers >= 1`), dedup only, no focus (open-tab reuse, below); `OTACON_NO_BROWSER` prints it instead of launching (with `reused: true`/`false`) |
 | `otacon config [open]`                                                      | Open the Settings web UI in the browser: `/settings?repo=<cwd repo root>` inside a repo (Project scope), bare `/settings` outside one (User scope); `OTACON_NO_BROWSER` prints the URL instead |
 | `otacon config get <key>`                                                   | Read-only: print the merged effective value of one dotted key (`worktree.dir`, `budgets.summaryLines`, …) from the config files; no daemon. Unknown key → exit 1 |
+| `otacon review respond <thread> --file <response.json>`                     | Agent-only: land an Ask answer or Comment report response against the event's immutable report/head identity; may acknowledge exactly the requested User/Project memory scope |
+| `otacon review code-status <thread> --file <status.json>`                   | Agent-only: move an explicitly-authorized Comment code action through `working`, `completed`, or `failed`; never commits or pushes |
+| `otacon review checkout --session <id>`                                     | Resolve fresh PR permission/head metadata, reuse an exact clean PR-branch worktree or safely create one under `worktree.dir`; returns path/branch plus explicit push remote/ref, but never commits or pushes |
+| `otacon review refresh-head --session <id>`                                 | Re-resolve the same canonical PR after an authorized push, refresh mutable metadata/head generation, and return fresh report/quiz/snapshot authoring paths; never force-creates a session |
 | `otacon knowledge get --scope user\|project [--repo <root>]`                 | Read the local Markdown profile through the daemon and print its path, text, and CAS hash as one JSON line. Project scope resolves the clone's GitHub origin to canonical `owner/repo` |
 | `otacon knowledge put --scope user\|project --file <md> --base-hash <hash> [--repo <root>]` | Replace the Markdown summary only if `base-hash` is current; a conflict returns `E_KNOWLEDGE_CONFLICT` plus the current disk document |
 | `otacon clean [--all]`                                                      | Permanently remove ended sessions' home folders (`~/.otacon/sessions/<id>/`) and prune the registry; no archive (§12) |
@@ -566,6 +570,12 @@ POST /api/sessions/:id/threads/:tid/resolve   the reviewer's Resolve verb: {reso
                                             non-boolean `resolved` → 400; refused on a
                                             terminal session (E_SESSION_OVER)
 GET  /api/sessions/:id/threads              comment + question threads (the UI's rail)
+POST /api/reviews/:id/threads               create an anchored Ask/Comment on the exact current report/head
+POST /api/reviews/:id/threads/:tid/respond  agent answer/report response + optional matching memory acknowledgement
+POST /api/reviews/:id/threads/:tid/code-action
+                                            explicit reviewer authorization for code work on a persisted Comment only
+POST /api/reviews/:id/threads/:tid/code-action/status
+                                            agent code-action lifecycle acknowledgement
 POST /api/sessions/:id/ask                  agent grill question (otacon ask):
                                             {question, options?, recommend?, multi?}
                                             → 201 {id: "q<n>"}, or a batch
@@ -1613,6 +1623,34 @@ second step that moves the thread into worktree/subagent handoff state. An Ask t
 never trigger that path. This separates review discussion from authorization to alter the
 PR branch.
 
+Review conversations persist in the session's `threads.json` with a strict version-2
+envelope, disjoint from the byte-compatible version-1 plan-thread schema. Each entry owns
+the complete W3C-style anchor, immutable source report revision and PR head generation/SHA,
+the visible Ask/Comment intent, optional requested memory scope, agent response, exact saved
+receipt, and Comment-only code-action lifecycle. The browser projection omits its create
+idempotency key. Agent work is a private `review-thread` event whose `work` is `question`,
+`report-feedback`, or `code-change`; the durable thread/action is written before enqueue,
+and daemon startup reconstructs a missing wake by full immutable identity without minting a
+duplicate event sequence. A browser retry likewise reconstructs only still-pending work; it
+never resurrects a responded conversation or a working/terminal code action. Existing plan routes reject review sessions before parsing the
+version-2 file, so a plan helper can never quarantine or rewrite review threads.
+
+Remember is a request, not a receipt. Creation may request User or Project scope (Project is
+the UI default), and the private event carries that request. Only an agent response that
+explicitly acknowledges an update to that exact scope adds the visible saved receipt; an
+unacknowledged or mismatched scope never claims knowledge was changed.
+
+Code mutation stays outside the daemon. `review checkout` first re-resolves GitHub metadata;
+forks, insufficient permission, terminal sessions, and closed/merged PRs yield typed
+non-mutating outcomes. For writable same-repository PRs it parses `git worktree list
+--porcelain -z`, reuses only an exact clean ref/SHA worktree (including a live locked one),
+refuses dirty/stale/prunable/colliding state without reset, or fetches and creates under the
+configured worktree directory after remote-ref verification. It returns the checkout and
+push destination for the skill. The future skill owns its one implementation subagent; the
+main agent verifies, commits, pushes, calls `refresh-head`, and authors the replacement
+report. A same-SHA refresh updates mutable title/state/ref/permission metadata without
+advancing the head generation.
+
 **Done** is deliberate rather than destructive. If quizzes or conversation threads are
 still unresolved, the confirmation names both counts and offers Continue or Close anyway;
 a force-closed session keeps the report readable. The Knowledge screen is a Markdown
@@ -1826,7 +1864,7 @@ Operational requirement: the Mac stays awake while a plan is in review
 | Location                                          | Contents                                                                                                       | Git                                        |
 | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
 | `<repo>/.otacon/`                                 | Project config only: `config.json` (team-shared) and `config.local.json` (personal override). On Save, also the project copy under `plans.dir` (default `.otacon/plans`). NO per-session working state                                              | the user's call (otacon manages no `.gitignore`) |
-| `~/.otacon/sessions/<id>/`                        | Per-session working state, keyed by session id. Plan sessions keep `plan.md`, `r1.md…rN.md`, warnings/changelogs, threads/transcript/activity/stream/queues, and the canonical approved plan. Review sessions keep working `review.md`/`quiz.json`, a dedicated monotonic review event sequence, plus `review/revisions/rN/`: immutable `revision.json`, `knowledge-snapshot.json`, exact `user.md` + `project.md`, an atomically-published `submission/` containing private report/quiz, warnings, timestamp and integrity hashes, and mutable atomic `quiz-state.json` + backup for attempts/verdict recovery. Removed outright when the session is deleted | n/a (global)                              |
+| `~/.otacon/sessions/<id>/`                        | Per-session working state, keyed by session id. Plan sessions keep `plan.md`, `r1.md…rN.md`, warnings/changelogs, version-1 threads/transcript/activity/stream/queues, and the canonical approved plan. Review sessions keep working `review.md`/`quiz.json`, strict version-2 `threads.json`, a dedicated monotonic review event sequence, plus `review/revisions/rN/`: immutable `revision.json`, `knowledge-snapshot.json`, exact `user.md` + `project.md`, an atomically-published `submission/` containing private report/quiz, warnings, timestamp and integrity hashes, and mutable atomic `quiz-state.json` + backup for attempts/verdict recovery. Removed outright when the session is deleted | n/a (global)                              |
 | `~/.otacon/worktrees/<slug>/`                     | Implement build's git worktree on branch `otacon/impl-<slug>` (base dir is `worktree.dir`, default `~/.otacon/worktrees` — outside the repo)                    | n/a (global, outside the repo)             |
 | `<repo>/<plans.dir>/YYYY-MM-DD-<slug>.md`         | Save-time project copy (default `.otacon/plans`; set `plans.dir=docs/plans` to group with tracked plans)       | yours to commit (or not)                   |
 | `~/.otacon/registry.json`                         | Session registry: ID → `kind`, repo, branch, title, and kind-specific status. Plan entries retain optional `prompt`, `prUrl`, `prState`, and `impl`; review entries carry canonical PR metadata, head snapshot, and review revision. Legacy entries missing `kind` decode as plans.                                                             | n/a (global)                               |

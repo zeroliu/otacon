@@ -274,6 +274,25 @@ describe("Store review lifecycle", () => {
     };
     expect(() => store.refreshReviewHead(created.session.id, other)).toThrow(/identity/);
   });
+
+  test("same-head refresh persists mutable PR metadata without advancing the head generation", () => {
+    const store = new Store();
+    const created = store.startReviewSession({ repo, pullRequest: pullRequest() });
+    const fresh: PullRequestMetadata = {
+      ...pullRequest(),
+      title: "Renamed review",
+      headRef: "renamed-feature",
+      permissions: { maintainerCanModify: false, viewerPermission: "read", readOnly: true },
+    };
+    const refreshed = store.refreshReviewHead(created.session.id, fresh);
+    expect(refreshed.review.revision).toBe(1);
+    expect(refreshed.title).toBe("#42 Renamed review");
+    expect(refreshed.review.head).toMatchObject({ sha: "a".repeat(40), ref: "renamed-feature" });
+    expect(refreshed.review.pullRequest.permissions.readOnly).toBe(true);
+    expect(new Store().getSession(created.session.id)).toMatchObject({
+      review: { revision: 1, pullRequest: { title: "Renamed review", headRef: "renamed-feature" } },
+    });
+  });
 });
 
 describe("Store counters and revisions", () => {

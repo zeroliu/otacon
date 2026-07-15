@@ -34,6 +34,7 @@ import { Presence } from "./presence.js";
 import { KnowledgeStore } from "./knowledge-store.js";
 import { ReviewQuizConflictError, ReviewQuizStore } from "./review-quiz-store.js";
 import { ReviewStore } from "./review-store.js";
+import { createReviewThread, requestReviewCodeAction } from "./review-threads.js";
 import { Store } from "./store.js";
 import { Viewers } from "./viewers.js";
 
@@ -492,6 +493,19 @@ describe("review session identity and lifecycle", () => {
     pullRequest: reviewMetadata(),
     ...overrides,
   });
+
+  const submittedReview = async (): Promise<{ id: string; snapshot: string }> => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    expect((await postJson(`/api/reviews/${first.session.id}/submit`, {
+      report: validReviewReport(first.session.id, 1, first.preparation.snapshot.hash),
+      quiz: validReviewQuiz(first.session.id, 1),
+    })).status).toBe(201);
+    return { id: first.session.id, snapshot: first.preparation.snapshot.hash };
+  };
 
   test("create and lookup use canonical PR identity without plan state", async () => {
     const created = await startReview();
@@ -982,6 +996,270 @@ describe("review session identity and lifecycle", () => {
     expect(delivered.status).toBe(200);
     expect((await delivered.json()) as object).toMatchObject({ event: "quiz-answer", question: "q-open" });
     expect(((await (await restartedAgain.request(`/api/sessions/${id}/events?wait=0`)).json()) as { event: string }).event).toBe("timeout");
+  });
+
+  test("persists anchored Ask/Comment threads before private work and sanitizes SSE", async () => {
+    const { id } = await submittedReview();
+    const stream = sseReader(await app.request(`/api/sessions/${id}/stream`));
+    expect((await stream.next()).event).toBe("snapshot");
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    const anchor = {
+      section: "background",
+      exact: "The old input could move while the report was open.",
+      prefix: "",
+      suffix: " That made",
+    };
+    const created = await postJson(`/api/reviews/${id}/threads`, {
+      intent: "question",
+      anchor,
+      body: "Why can it move?",
+      ...source,
+      idempotencyKey: "ask-create-1",
+      rememberScope: "user",
+    });
+    expect(created.status).toBe(201);
+    const createdBody = (await created.json()) as { thread: { id: string; anchor: unknown; saved?: unknown }; seq: number };
+    expect(createdBody.thread).toMatchObject({ id: "q1", anchor, remember: { scope: "user" } });
+    expect(createdBody.thread).not.toHaveProperty("idempotencyKey");
+    expect(createdBody.thread).not.toHaveProperty("saved");
+    expect(createdBody.seq).toBe(1);
+
+    const frame = await stream.next();
+    expect(frame.event).toBe("thread");
+    expect(JSON.stringify(frame.data)).not.toContain("ask-create-1");
+    expect(frame.data).toMatchObject({ thread: { id: "q1", anchor } });
+    const event = (await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as object;
+    expect(event).toMatchObject({
+      event: "review-thread",
+      work: "question",
+      session: id,
+      thread: "q1",
+      ...source,
+      anchor,
+      remember: { scope: "user" },
+    });
+
+    const response = await postJson(`/api/reviews/${id}/threads/q1/respond`, {
+      source,
+      body: "The input was previously read live during rendering.",
+      saved: { scope: "user", updated: true },
+    });
+    expect(response.status).toBe(200);
+    expect((await response.json()) as object).toMatchObject({
+      thread: {
+        response: { body: "The input was previously read live during rendering." },
+        saved: { scope: "user" },
+      },
+    });
+    const replayAfterResponse = await postJson(`/api/reviews/${id}/threads`, {
+      intent: "question",
+      anchor,
+      body: "Why can it move?",
+      ...source,
+      idempotencyKey: "ask-create-1",
+      rememberScope: "user",
+    });
+    expect(replayAfterResponse.status).toBe(200);
+    expect(eventsOnDisk(id)).toHaveLength(0);
+    expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as object)
+      .toEqual({ event: "timeout" });
+    expect((await (await app.request(`/api/sessions/${id}`)).json()) as object).toMatchObject({ pendingEvents: 0 });
+    await stream.cancel();
+  });
+
+  test("Comment escalation is explicit/idempotent, Ask is refused, and report response names a real newer revision", async () => {
+    const { id } = await submittedReview();
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    const create = await postJson(`/api/reviews/${id}/threads`, {
+      intent: "comment",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Keep this boundary explicit.",
+      ...source,
+      idempotencyKey: "comment-create-1",
+      rememberScope: "project",
+    });
+    expect(create.status).toBe(201);
+    const createdThread = (await create.json()) as { thread: Record<string, unknown> };
+    expect(createdThread).toMatchObject({ thread: { id: "t1" } });
+    expect(createdThread.thread).not.toHaveProperty("codeAction");
+    const replay = await postJson(`/api/reviews/${id}/threads`, {
+      intent: "comment",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Keep this boundary explicit.",
+      ...source,
+      idempotencyKey: "comment-create-1",
+      rememberScope: "project",
+    });
+    expect(replay.status).toBe(200);
+    expect(eventsOnDisk(id)).toHaveLength(1);
+
+    const action = await postJson(`/api/reviews/${id}/threads/t1/code-action`, { source });
+    expect(action.status).toBe(202);
+    expect((await action.json()) as object).toMatchObject({ thread: { codeAction: { status: "requested" } } });
+    expect((await (await app.request(`/api/sessions/${id}`)).json()) as object).toMatchObject({ pendingEvents: 1 });
+    expect((await postJson(`/api/reviews/${id}/threads/t1/code-action`, { source })).status).toBe(200);
+    expect(eventsOnDisk(id)).toHaveLength(2);
+    expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as object)
+      .toMatchObject({ event: "review-thread", work: "report-feedback", thread: "t1" });
+    expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as object)
+      .toMatchObject({ event: "review-thread", work: "code-change", thread: "t1" });
+
+    expect((await postJson(`/api/reviews/${id}/threads/t1/respond`, {
+      source, body: "changed", responseReportRevision: 2,
+    })).status).toBe(409);
+    const next = await postJson(`/api/reviews/${id}/revisions`, {});
+    const preparation = (await next.json()) as { preparation: { snapshot: { hash: string } } };
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 2, preparation.preparation.snapshot.hash).replace("old input", "prior input"),
+      quiz: validReviewQuiz(id, 2),
+    })).status).toBe(201);
+    const responded = await postJson(`/api/reviews/${id}/threads/t1/respond`, {
+      source,
+      body: "The report now makes the boundary explicit.",
+      responseReportRevision: 2,
+      saved: { scope: "project", updated: true },
+    });
+    expect(responded.status).toBe(200);
+    expect((await responded.json()) as object).toMatchObject({
+      thread: { response: { reportRevision: 2 }, saved: { scope: "project" } },
+    });
+    expect((await postJson(`/api/reviews/${id}/threads/t1/code-action/status`, {
+      source,
+      status: "completed",
+      message: "pushed reviewed change",
+    })).status).toBe(200);
+    const terminalReplay = await postJson(`/api/reviews/${id}/threads/t1/code-action`, { source });
+    expect(terminalReplay.status).toBe(200);
+    expect(eventsOnDisk(id)).toHaveLength(0);
+
+    const ask = await postJson(`/api/reviews/${id}/threads`, {
+      intent: "question",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Why this order?",
+      reportRevision: 2,
+      headRevision: 1,
+      headSha: "a".repeat(40),
+      idempotencyKey: "ask-create-2",
+    });
+    expect(ask.status).toBe(201);
+    const askId = ((await ask.json()) as { thread: { id: string } }).thread.id;
+    expect((await postJson(`/api/reviews/${id}/threads/${askId}/code-action`, {
+      source: { reportRevision: 2, headRevision: 1, headSha: "a".repeat(40) },
+    })).status).toBe(409);
+  });
+
+  test("a responded Comment can still escalate when its immutable source report is older on the same PR head", async () => {
+    const { id } = await submittedReview();
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "comment",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Please make the boundary explicit.",
+      ...source,
+      idempotencyKey: "respond-then-change",
+    })).status).toBe(201);
+    await app.request(`/api/sessions/${id}/events?wait=0`);
+    const next = await postJson(`/api/reviews/${id}/revisions`, {});
+    const preparation = (await next.json()) as { preparation: { snapshot: { hash: string } } };
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 2, preparation.preparation.snapshot.hash),
+      quiz: validReviewQuiz(id, 2),
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/threads/t1/respond`, {
+      source,
+      body: "The report explanation is clearer in r2.",
+      responseReportRevision: 2,
+    })).status).toBe(200);
+    const escalated = await postJson(`/api/reviews/${id}/threads/t1/code-action`, { source });
+    expect(escalated.status).toBe(202);
+    expect((await escalated.json()) as object).toMatchObject({ thread: { response: { reportRevision: 2 }, codeAction: { status: "requested" } } });
+  });
+
+  test("a fork Comment remains conversational but cannot enqueue code work", async () => {
+    const pullRequest = {
+      ...reviewMetadata(),
+      headRepository: "contributor/app" as CanonicalGitHubRepo,
+      isCrossRepository: true,
+      permissions: { maintainerCanModify: true, viewerPermission: "write" as const, readOnly: true },
+    };
+    const created = await startReview({ pullRequest });
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    expect((await postJson(`/api/reviews/${first.session.id}/submit`, {
+      report: validReviewReport(first.session.id, 1, first.preparation.snapshot.hash),
+      quiz: validReviewQuiz(first.session.id, 1),
+    })).status).toBe(201);
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    expect((await postJson(`/api/reviews/${first.session.id}/threads`, {
+      intent: "comment",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Explain this boundary.",
+      ...source,
+      idempotencyKey: "fork-comment",
+    })).status).toBe(201);
+    const denied = await postJson(`/api/reviews/${first.session.id}/threads/t1/code-action`, { source });
+    expect(denied.status).toBe(409);
+    expect((await denied.json()) as object).toMatchObject({ error: { code: "E_REVIEW_READ_ONLY" } });
+    expect(eventsOnDisk(first.session.id)).toHaveLength(1);
+    expect((await (await app.request(`/api/sessions/${first.session.id}/threads`)).json()) as object)
+      .toMatchObject({ threads: [{ id: "t1" }] });
+    expect(JSON.stringify(await (await app.request(`/api/sessions/${first.session.id}/threads`)).json()))
+      .not.toContain("codeAction");
+  });
+
+  test("generic plan thread endpoints reject a review without quarantining its v2 file", async () => {
+    const { id } = await submittedReview();
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "question",
+      anchor: { section: "background", exact: "The old input could move while the report was open." },
+      body: "Why?",
+      ...source,
+      idempotencyKey: "isolation-1",
+    })).status).toBe(201);
+    const before = readFileSync(threadsPath(id), "utf8");
+    for (const response of [
+      await postJson(`/api/sessions/${id}/questions`, { body: "plan question" }),
+      await postJson(`/api/sessions/${id}/questions/q1/answer`, { body: "plan answer" }),
+      await postJson(`/api/sessions/${id}/threads/q1/resolve`, { resolved: true }),
+      await postJson(`/api/sessions/${id}/comments`, { items: [{ body: "plan comment", anchor: null }] }),
+    ]) {
+      expect(response.status).toBe(400);
+      expect((await response.json()) as object).toMatchObject({ error: { code: "E_SESSION_KIND" } });
+    }
+    const listed = await app.request(`/api/sessions/${id}/threads`);
+    const listedBody = await listed.json();
+    expect({ status: listed.status, body: listedBody }).toMatchObject({ status: 200, body: { threads: [{ id: "q1", surface: "review" }] } });
+    expect(readFileSync(threadsPath(id), "utf8")).toBe(before);
+    expect(existsSync(`${threadsPath(id)}.corrupt-`)).toBe(false);
+  });
+
+  test("repairs persisted-before-enqueue review work once after restart", async () => {
+    const { id } = await submittedReview();
+    const session = store.getSession(id);
+    if (session?.kind !== "review") throw new Error("review fixture disappeared");
+    const thread = {
+      id: "t1",
+      surface: "review" as const,
+      intent: "comment" as const,
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Change this.",
+      createdAt: "2026-07-15T10:00:00.000Z",
+      identity: { session: id, reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) },
+      idempotencyKey: "crash-thread",
+    };
+    createReviewThread(threadsPath(id), thread);
+    requestReviewCodeAction(threadsPath(id), "t1", "2026-07-15T10:01:00.000Z");
+    expect(existsSync(eventsPath(id))).toBe(true);
+    const restarted = createApp({ store: new Store(), uiDir, notify: () => {} });
+    expect(eventsOnDisk(id)).toHaveLength(1);
+    expect(eventsOnDisk(id)[0]).toMatchObject({ payload: { event: "review-thread", work: "code-change", thread: "t1" } });
+    createApp({ store: new Store(), uiDir, notify: () => {} });
+    expect(eventsOnDisk(id)).toHaveLength(1);
+    expect((await (await restarted.request(`/api/sessions/${id}/events?wait=0`)).json()) as object)
+      .toMatchObject({ event: "review-thread", work: "code-change", thread: "t1" });
   });
 });
 

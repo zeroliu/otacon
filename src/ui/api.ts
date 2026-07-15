@@ -25,6 +25,7 @@ import type {
   StreamKind,
   Thread,
   TranscriptEntry,
+  PublicReviewThread,
 } from "../shared/types";
 
 export type { ConfigField, KnowledgeDocument, KnowledgeScope, ScopeFieldError, ScopeValues };
@@ -225,7 +226,7 @@ export interface SessionDetail {
   /** Sanitized review quiz state, live on the same per-session stream. */
   quiz?: ReviewQuizPublicState;
   /** Review threads, oldest first; live over the stream's `thread` frames. */
-  threads: Thread[];
+  threads: (Thread | PublicReviewThread)[];
   /** The grill transcript, oldest first; live over `grill` frames (interview questions). */
   transcript: TranscriptEntry[];
   /** The live-activity feed, oldest first; live over `activity` frames (review loop and daemon API). */
@@ -255,7 +256,7 @@ function upsertById<T extends { id: string }>(prev: T[], item: T): T[] {
 
 export function useSession(id: string): SessionDetail {
   const [session, setSession] = useState<LiveSession>();
-  const [threads, setThreads] = useState<Thread[]>([]);
+  const [threads, setThreads] = useState<(Thread | PublicReviewThread)[]>([]);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [activity, setActivity] = useState<ActivityNote[]>([]);
   const [stream, setStream] = useState<StreamEvent[]>([]);
@@ -302,7 +303,7 @@ export function useSession(id: string): SessionDetail {
           on<{
             version?: string;
             session: SessionSummary;
-            threads?: Thread[];
+            threads?: (Thread | PublicReviewThread)[];
             transcript?: TranscriptEntry[];
             activity?: ActivityNote[];
             stream?: StreamEvent[];
@@ -331,7 +332,7 @@ export function useSession(id: string): SessionDetail {
           on<{ session: string; quiz: ReviewQuizPublicState }>(source, "quiz", (data) =>
             setQuiz(data.quiz),
           );
-          on<{ session: string; thread: Thread }>(source, "thread", ({ thread }) =>
+          on<{ session: string; thread: Thread | PublicReviewThread }>(source, "thread", ({ thread }) =>
             setThreads((prev) => upsertById(prev, thread)),
           );
           on<{ session: string; entry: TranscriptEntry }>(source, "grill", ({ entry }) =>
@@ -718,6 +719,44 @@ export async function postReviewQuizAnswer(
   };
   if (!response.ok || body.quiz === undefined) throw new Error(body.error?.message ?? `quiz answer failed: ${response.status}`);
   return body.quiz;
+}
+
+export async function postReviewThread(
+  id: string,
+  input: {
+    intent: "question" | "comment";
+    anchor: Anchor;
+    body: string;
+    reportRevision: number;
+    headRevision: number;
+    headSha: string;
+    idempotencyKey: string;
+    rememberScope?: "user" | "project";
+  },
+): Promise<PublicReviewThread> {
+  const response = await fetch(`/api/reviews/${id}/threads`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const payload = await response.json() as { thread?: PublicReviewThread; error?: { message?: string } };
+  if (!response.ok || payload.thread === undefined) throw new Error(payload.error?.message ?? "review thread was rejected");
+  return payload.thread;
+}
+
+export async function postReviewCodeAction(
+  id: string,
+  thread: string,
+  source: { reportRevision: number; headRevision: number; headSha: string },
+): Promise<PublicReviewThread> {
+  const response = await fetch(`/api/reviews/${id}/threads/${thread}/code-action`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ source }),
+  });
+  const payload = await response.json() as { thread?: PublicReviewThread; error?: { message?: string } };
+  if (!response.ok || payload.thread === undefined) throw new Error(payload.error?.message ?? "code change was rejected");
+  return payload.thread;
 }
 
 /** One scope's target file path and its sparse, currently-set overrides. */

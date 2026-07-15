@@ -348,7 +348,7 @@ export class Store {
       : this.findReviewSession(identity.repository, identity.number);
     if (existing !== undefined) {
       if (existing.review.head.sha === input.pullRequest.headSha) {
-        return { action: "reused", session: existing };
+        return { action: "reused", session: this.refreshReviewHead(existing.id, input.pullRequest) };
       }
       return {
         action: "revised",
@@ -396,10 +396,13 @@ export class Store {
     if (session.review.pullRequest.identity.key !== pullRequest.identity.key) {
       throw new Error("cannot change a review session's canonical pull request identity");
     }
-    if (session.review.head.sha === pullRequest.headSha) return structuredClone(session);
+    const sameHead = session.review.head.sha === pullRequest.headSha;
+    if (sameHead && JSON.stringify(session.review.pullRequest) === JSON.stringify(pullRequest)) {
+      return structuredClone(session);
+    }
     const now = new Date().toISOString();
     session.title = `#${pullRequest.identity.number} ${pullRequest.title}`;
-    session.status = "working";
+    if (!sameHead) session.status = "working";
     session.updatedAt = now;
     session.prUrl = pullRequest.url;
     session.prState = pullRequest.state;
@@ -411,7 +414,7 @@ export class Store {
         repository: pullRequest.headRepository,
         capturedAt: now,
       },
-      revision: session.review.revision + 1,
+      revision: sameHead ? session.review.revision : session.review.revision + 1,
     };
     this.flushRegistry();
     return structuredClone(session);

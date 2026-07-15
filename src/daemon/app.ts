@@ -51,6 +51,9 @@ import type {
   StreamEvent,
   Thread,
   TranscriptEntry,
+  PublicReviewThread,
+  ReviewThread,
+  ReviewThreadEvent,
 } from "../shared/types.js";
 import { VERSION } from "../shared/version.js";
 import { appendActivity, latestNote, readActivity } from "./activity.js";
@@ -83,6 +86,16 @@ import {
   ReviewQuizCorruptError,
   ReviewQuizStore,
 } from "./review-quiz-store.js";
+import {
+  createReviewThread,
+  publicReviewThread,
+  publicReviewThreads,
+  readReviewThreads,
+  requestReviewCodeAction,
+  respondToReviewThread,
+  ReviewThreadConflictError,
+  updateReviewCodeAction,
+} from "./review-threads.js";
 import type { Store } from "./store.js";
 import { writeFileAtomic } from "./store.js";
 import {
@@ -208,6 +221,40 @@ function parseAnchor(raw: unknown): Anchor | null | undefined {
   return anchor;
 }
 
+const hasExactKeys = (value: Record<string, unknown>, keys: string[]): boolean => {
+  const expected = [...keys].sort();
+  const actual = Object.keys(value).sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+};
+
+/** Review report selections always carry an exact quote and reject unknown wire keys. */
+function parseReviewAnchor(raw: unknown): Anchor | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const value = raw as Record<string, unknown>;
+  const keys = ["section", "exact", ...(value.prefix === undefined ? [] : ["prefix"]), ...(value.suffix === undefined ? [] : ["suffix"])];
+  if (!hasExactKeys(value, keys)) return undefined;
+  if (typeof value.section !== "string" || value.section.trim() === "" || value.section.length > 200 ||
+    typeof value.exact !== "string" || value.exact.trim() === "" || value.exact.length > 10_000 ||
+    (value.prefix !== undefined && (typeof value.prefix !== "string" || value.prefix.length > 1_000)) ||
+    (value.suffix !== undefined && (typeof value.suffix !== "string" || value.suffix.length > 1_000))) return undefined;
+  return {
+    section: value.section,
+    exact: value.exact,
+    ...(value.prefix === undefined ? {} : { prefix: value.prefix as string }),
+    ...(value.suffix === undefined ? {} : { suffix: value.suffix as string }),
+  };
+}
+
+function parseReviewSource(raw: unknown): { reportRevision: number; headRevision: number; headSha: string } | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const value = raw as Record<string, unknown>;
+  if (!hasExactKeys(value, ["reportRevision", "headRevision", "headSha"]) ||
+    !Number.isSafeInteger(value.reportRevision) || (value.reportRevision as number) < 1 ||
+    !Number.isSafeInteger(value.headRevision) || (value.headRevision as number) < 1 ||
+    typeof value.headSha !== "string" || !/^[0-9a-f]{40}$/i.test(value.headSha)) return undefined;
+  return value as unknown as { reportRevision: number; headRevision: number; headSha: string };
+}
+
 /**
  * Validate the submit body's `resolutions` (review loop and daemon API): an object with
  * only `changelog` (string) and `threads` (string → string). Strict — an
@@ -283,6 +330,39 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       candidate.question === event.question && candidate.attempt === event.attempt;
   };
 
+  const reviewThreadEvent = (
+    thread: ReviewThread,
+    work: ReviewThreadEvent["work"],
+  ): ReviewThreadEvent => ({
+    event: "review-thread",
+    work,
+    session: thread.identity.session,
+    thread: thread.id,
+    reportRevision: thread.identity.reportRevision,
+    headRevision: thread.identity.headRevision,
+    headSha: thread.identity.headSha,
+    anchor: thread.anchor,
+    body: thread.body,
+    ...(thread.remember === undefined ? {} : { remember: thread.remember }),
+  });
+
+  const sameReviewThreadWork = (payload: EventPayload, event: ReviewThreadEvent): boolean => {
+    if (typeof payload !== "object" || payload === null) return false;
+    const candidate = payload as Partial<ReviewThreadEvent>;
+    return candidate.event === "review-thread" && candidate.work === event.work &&
+      candidate.session === event.session && candidate.thread === event.thread &&
+      candidate.reportRevision === event.reportRevision && candidate.headRevision === event.headRevision &&
+      candidate.headSha === event.headSha;
+  };
+
+  const enqueueReviewThreadWork = (event: ReviewThreadEvent): number | undefined => {
+    const queue = queueFor(event.session);
+    if (queue.hasPayload((payload) => sameReviewThreadWork(payload, event))) return undefined;
+    const seq = store.bumpCounter(event.session, "eventSeq");
+    queue.enqueue(event, seq);
+    return seq;
+  };
+
   // A crash may land after the attempt's atomic state write but before queue
   // enqueue. Reconstruct from durable quiz state before any request/SSE can
   // observe this daemon: deterministic choices finish locally, while missing
@@ -291,7 +371,6 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     if (session.kind !== "review" || TERMINAL_STATUSES.includes(session.status)) continue;
     try {
       const recovered = quizzes.recoverPending(session);
-      if (recovered.events.length === 0) continue;
       const queue = queueFor(session.id);
       for (const event of recovered.events) {
         if (queue.hasPayload((payload) => sameQuizWork(payload, event))) continue;
@@ -300,6 +379,25 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     } catch {
       // Detail routes surface corrupt/stale quiz state with typed errors. One
       // damaged review must not prevent the daemon or other sessions starting.
+    }
+    try {
+      for (const thread of readReviewThreads(store.threadsPath(session.id), session.id)) {
+        // Once code work is explicitly requested it owns the eventual report
+        // refresh/response. Do not resurrect an already-acked older
+        // report-feedback wake after a restart and let it race the code result.
+        if (thread.response === undefined && thread.codeAction === undefined) {
+          enqueueReviewThreadWork(reviewThreadEvent(
+            thread,
+            thread.intent === "question" ? "question" : "report-feedback",
+          ));
+        }
+        if (thread.codeAction?.status === "requested") {
+          enqueueReviewThreadWork(reviewThreadEvent(thread, "code-change"));
+        }
+      }
+    } catch {
+      // A corrupt review thread file is quarantined by its reader. Other
+      // sessions, quiz repair, and browser startup remain available.
     }
   }
 
@@ -348,6 +446,16 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       return undefined;
     }
   };
+  const safePendingReviewWork = (session: Extract<RegistrySession, { kind: "review" }>): number => {
+    try {
+      return readReviewThreads(store.threadsPath(session.id), session.id).reduce((count, thread) => {
+        const activeCodeAction = thread.codeAction?.status === "requested" || thread.codeAction?.status === "working";
+        return count + (activeCodeAction ? 1 : thread.response === undefined ? 1 : 0);
+      }, 0);
+    } catch {
+      return 0;
+    }
+  };
   const summarize = (session: RegistrySession): SessionSummary => {
     if (session.kind === "review") {
       return {
@@ -356,7 +464,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
         // remains the PR-head generation and may advance before a report lands.
         revision: reviews.latestSubmittedRevision(session.id),
         lastReviewedRevision: 0,
-        pendingEvents: safePendingQuizCount(session),
+        pendingEvents: safePendingQuizCount(session) + safePendingReviewWork(session),
         openQuestions: 0,
         lastContactAt: lastContact.get(session.id),
         parked: queueFor(session.id).waiterCount > 0,
@@ -380,12 +488,14 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     notifier.publish({ type: "session", session: session.id, data: { session: summarize(session) } });
   const publishQueue = (id: string, pending: number): void => {
     const session = store.getSession(id);
-    const effective = session?.kind === "review" ? safePendingQuizCount(session) : pending;
+    const effective = session?.kind === "review"
+      ? safePendingQuizCount(session) + safePendingReviewWork(session)
+      : pending;
     notifier.publish({ type: "queue", session: id, data: { session: id, pending: effective } });
   };
   const publishQuiz = (id: string, quiz: ReviewQuizPublicState): void =>
     notifier.publish({ type: "quiz", session: id, data: { session: id, quiz } });
-  const publishThread = (id: string, thread: Thread): void =>
+  const publishThread = (id: string, thread: Thread | PublicReviewThread): void =>
     notifier.publish({ type: "thread", session: id, data: { session: id, thread } });
   const publishGrill = (id: string, entry: TranscriptEntry): void =>
     notifier.publish({ type: "grill", session: id, data: { session: id, entry } });
@@ -654,7 +764,8 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     if (session?.kind === "review") {
       const base = `/api/sessions/${session.id}`;
       const suffix = c.req.path.slice(base.length);
-      if (suffix !== "" && suffix !== "/events" && suffix !== "/presence" && suffix !== "/stream") {
+      const reviewThreadRead = suffix === "/threads" && c.req.method === "GET";
+      if (suffix !== "" && suffix !== "/events" && suffix !== "/presence" && suffix !== "/stream" && !reviewThreadRead) {
         return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a plan`);
       }
     }
@@ -931,7 +1042,9 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     const unchanged = pullRequest.headSha === session.review.head.sha;
     const updated = store.refreshReviewHead(session.id, pullRequest);
     const preparation = reviews.prepareForSession(updated);
-    if (!unchanged) publishSession(updated);
+    // Same-SHA refreshes still carry mutable title/state/ref/permissions and
+    // must reach the registry/UI; only the head generation stays unchanged.
+    publishSession(updated);
     return c.json({ action: unchanged ? "reused" : "revised", session: summarize(updated), preparation });
   });
 
@@ -1072,6 +1185,259 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       if (error instanceof ReviewRevisionCorruptError) {
         return reviewRevisionUnavailable(c, "one of the requested review revisions is missing or corrupt");
       }
+      throw error;
+    }
+  });
+
+  /** Browser creation of an anchored Ask or Comment on the exact current report. */
+  app.post("/api/reviews/:id/threads", async (c) => {
+    const before = store.getSession(c.req.param("id"));
+    if (before === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (before.kind !== "review") return codedBadRequest(c, "E_SESSION_KIND", `session ${before.id} is not a review`);
+    const body = (await readJsonBody(c)) ?? {};
+    const optional = body.rememberScope === undefined ? [] : ["rememberScope"];
+    if (!hasExactKeys(body, ["intent", "anchor", "body", "reportRevision", "headRevision", "headSha", "idempotencyKey", ...optional])) {
+      return codedBadRequest(c, "E_REVIEW_THREAD_INPUT", "review thread request has unknown or missing fields");
+    }
+    const current = store.getSession(before.id);
+    if (current?.kind !== "review") return notFound(c, `unknown review: ${before.id}`);
+    if (current.status === "done") return sessionOver(c, current.id);
+    const intent = body.intent;
+    const anchor = parseReviewAnchor(body.anchor);
+    const rememberScope = body.rememberScope;
+    if ((intent !== "question" && intent !== "comment") || anchor === undefined ||
+      typeof body.body !== "string" || body.body.trim() === "" || body.body.length > 20_000 ||
+      typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "" || body.idempotencyKey.length > 200 ||
+      !Number.isInteger(body.reportRevision) || !Number.isInteger(body.headRevision) ||
+      typeof body.headSha !== "string" || (rememberScope !== undefined && rememberScope !== "user" && rememberScope !== "project")) {
+      return codedBadRequest(c, "E_REVIEW_THREAD_INPUT", "review thread request is invalid");
+    }
+    const latest = reviews.latestSubmittedRevision(current.id);
+    if (body.reportRevision !== latest || body.headRevision !== current.review.revision || body.headSha !== current.review.head.sha) {
+      return c.json({ error: { code: "E_REVIEW_THREAD_STALE", message: "selection does not belong to the current report and PR head" } }, 409);
+    }
+    let report: ReviewReportRevisionPayload;
+    try {
+      report = reviews.readRevision(current.id, latest);
+    } catch {
+      return reviewRevisionUnavailable(c, `review revision ${latest} is missing or corrupt`);
+    }
+    if (report.revision.status !== "submitted" || report.revision.headRevision !== current.review.revision || report.revision.headSha !== current.review.head.sha) {
+      return c.json({ error: { code: "E_REVIEW_THREAD_STALE", message: "current report has not been submitted for the current PR head" } }, 409);
+    }
+    if (report.report === undefined || !report.report.includes(anchor.exact!)) {
+      return c.json({ error: { code: "E_REVIEW_ANCHOR", message: "selected quote is not present in the named report revision" } }, 409);
+    }
+    const path = store.threadsPath(current.id);
+    const existingThreads = readReviewThreads(path, current.id);
+    const existing = existingThreads.find((thread) => thread.idempotencyKey === body.idempotencyKey);
+    // Construct the durable queue before the first thread/counter write. A bad
+    // queue is quarantined now rather than after the browser believes the
+    // create succeeded; a crash after persistence is repaired at startup.
+    queueFor(current.id);
+    const createdAt = existing?.createdAt ?? new Date().toISOString();
+    const prefix = intent === "question" ? "q" : "t";
+    const nextOrdinal = existingThreads.reduce((max, thread) => {
+      if (!thread.id.startsWith(prefix)) return max;
+      return Math.max(max, Number(thread.id.slice(1)) || 0);
+    }, 0) + 1;
+    const id = existing?.id ?? `${prefix}${nextOrdinal}`;
+    try {
+      const result = createReviewThread(path, {
+        id,
+        surface: "review",
+        intent,
+        anchor,
+        body: body.body,
+        createdAt,
+        identity: {
+          session: current.id,
+          reportRevision: body.reportRevision as number,
+          headRevision: body.headRevision as number,
+          headSha: body.headSha,
+        },
+        idempotencyKey: body.idempotencyKey,
+        ...(rememberScope === undefined ? {} : { remember: { scope: rememberScope } }),
+      });
+      const event = reviewThreadEvent(result.thread, intent === "question" ? "question" : "report-feedback");
+      // A request-loss retry may arrive after the agent already responded (or
+      // after a Comment advanced to code work). The persisted thread is the
+      // authority: only reconstruct work that startup recovery would also own.
+      const seq = result.thread.response === undefined && result.thread.codeAction === undefined
+        ? enqueueReviewThreadWork(event)
+        : undefined;
+      const publicThread = publicReviewThread(result.thread);
+      publishThread(current.id, publicThread);
+      publishQueue(current.id, queueFor(current.id).size);
+      publishSession(current);
+      return c.json({ thread: publicThread, repeated: result.repeated, ...(seq === undefined ? {} : { seq }) }, result.repeated ? 200 : 201);
+    } catch (error) {
+      if (error instanceof ReviewThreadConflictError) {
+        return c.json({ error: { code: error.code, message: error.message } }, 409);
+      }
+      throw error;
+    }
+  });
+
+  /** Agent answer/report-feedback response, optionally acknowledging requested memory. */
+  app.post("/api/reviews/:id/threads/:tid/respond", async (c) => {
+    const before = store.getSession(c.req.param("id"));
+    if (before === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (before.kind !== "review") return codedBadRequest(c, "E_SESSION_KIND", `session ${before.id} is not a review`);
+    const body = (await readJsonBody(c)) ?? {};
+    const optional = ["responseReportRevision", "saved"].filter((key) => body[key] !== undefined);
+    if (!hasExactKeys(body, ["source", "body", ...optional])) {
+      return codedBadRequest(c, "E_REVIEW_THREAD_RESPONSE", "thread response has unknown or missing fields");
+    }
+    const source = parseReviewSource(body.source);
+    if (source === undefined) {
+      return codedBadRequest(c, "E_REVIEW_THREAD_RESPONSE", "thread source identity is invalid");
+    }
+    const current = store.getSession(before.id);
+    if (current?.kind !== "review") return notFound(c, `unknown review: ${before.id}`);
+    if (current.status === "done") return sessionOver(c, current.id);
+    const thread = readReviewThreads(store.threadsPath(current.id), current.id).find((candidate) => candidate.id === c.req.param("tid"));
+    if (thread === undefined) return notFound(c, `unknown review thread: ${c.req.param("tid")}`);
+    if (source.reportRevision !== thread.identity.reportRevision || source.headRevision !== thread.identity.headRevision || source.headSha !== thread.identity.headSha) {
+      return c.json({ error: { code: "E_REVIEW_THREAD_IDENTITY", message: "response source does not match the persisted thread" } }, 409);
+    }
+    if (typeof body.body !== "string" || body.body.trim() === "" || body.body.length > 20_000) {
+      return codedBadRequest(c, "E_REVIEW_THREAD_RESPONSE", "response body must be non-empty and bounded");
+    }
+    let saved: { scope: "user" | "project"; updated: true } | undefined;
+    if (body.saved !== undefined) {
+      if (typeof body.saved !== "object" || body.saved === null || Array.isArray(body.saved)) {
+        return codedBadRequest(c, "E_REVIEW_MEMORY_ACK", "saved acknowledgement is invalid");
+      }
+      const raw = body.saved as Record<string, unknown>;
+      if (!hasExactKeys(raw, ["scope", "updated"]) || (raw.scope !== "user" && raw.scope !== "project") || raw.updated !== true) {
+        return codedBadRequest(c, "E_REVIEW_MEMORY_ACK", "saved acknowledgement must name one requested scope and updated:true");
+      }
+      saved = { scope: raw.scope, updated: true };
+    }
+    const responseReportRevision = body.responseReportRevision;
+    if (thread.intent === "comment") {
+      const latest = reviews.latestSubmittedRevision(current.id);
+      if (!Number.isInteger(responseReportRevision) || (responseReportRevision as number) <= thread.identity.reportRevision || responseReportRevision !== latest) {
+        return c.json({ error: { code: "E_REVIEW_THREAD_RESPONSE_REVISION", message: "Comment response must name the latest submitted report revision newer than its source" } }, 409);
+      }
+      try {
+        const replacement = reviews.readRevision(current.id, responseReportRevision as number);
+        if (replacement.revision.status !== "submitted" || replacement.revision.headRevision !== current.review.revision || replacement.revision.headSha !== current.review.head.sha) {
+          return c.json({ error: { code: "E_REVIEW_THREAD_RESPONSE_REVISION", message: "replacement report is not current for this PR head" } }, 409);
+        }
+      } catch {
+        return reviewRevisionUnavailable(c, `review revision ${responseReportRevision as number} is missing or corrupt`);
+      }
+    } else if (responseReportRevision !== undefined) {
+      return codedBadRequest(c, "E_REVIEW_THREAD_RESPONSE", "Question answers do not create report revisions");
+    }
+    try {
+      const result = respondToReviewThread(store.threadsPath(current.id), thread.id, {
+        body: body.body,
+        ...(responseReportRevision === undefined ? {} : { reportRevision: responseReportRevision as number }),
+        ...(saved === undefined ? {} : { saved }),
+      }, new Date().toISOString(), current.id);
+      const publicThread = publicReviewThread(result.thread);
+      publishThread(current.id, publicThread);
+      publishQueue(current.id, queueFor(current.id).size);
+      publishSession(current);
+      return c.json({ thread: publicThread, repeated: result.repeated });
+    } catch (error) {
+      if (error instanceof ReviewThreadConflictError) return c.json({ error: { code: error.code, message: error.message } }, 409);
+      throw error;
+    }
+  });
+
+  /** Reviewer-only second step: explicitly authorize code work for one Comment. */
+  app.post("/api/reviews/:id/threads/:tid/code-action", async (c) => {
+    const before = store.getSession(c.req.param("id"));
+    if (before === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (before.kind !== "review") return codedBadRequest(c, "E_SESSION_KIND", `session ${before.id} is not a review`);
+    const body = (await readJsonBody(c)) ?? {};
+    if (!hasExactKeys(body, ["source"])) {
+      return codedBadRequest(c, "E_REVIEW_CODE_ACTION", "code-action source identity is required");
+    }
+    const source = parseReviewSource(body.source);
+    if (source === undefined) return codedBadRequest(c, "E_REVIEW_CODE_ACTION", "code-action source identity is invalid");
+    const current = store.getSession(before.id);
+    if (current?.kind !== "review") return notFound(c, `unknown review: ${before.id}`);
+    if (current.status === "done") return sessionOver(c, current.id);
+    if (current.review.pullRequest.state !== "open" || current.review.pullRequest.permissions.readOnly ||
+      !["write", "maintain", "admin"].includes(current.review.pullRequest.permissions.viewerPermission) ||
+      current.review.pullRequest.isCrossRepository ||
+      current.review.pullRequest.headRepository !== current.review.pullRequest.identity.repository) {
+      return c.json({ error: { code: "E_REVIEW_READ_ONLY", message: "this PR has no safe same-repository write path; discuss the Comment without conducting a code change" } }, 409);
+    }
+    const thread = readReviewThreads(store.threadsPath(current.id), current.id).find((candidate) => candidate.id === c.req.param("tid"));
+    if (thread === undefined) return notFound(c, `unknown review thread: ${c.req.param("tid")}`);
+    if (source.reportRevision !== thread.identity.reportRevision || source.headRevision !== thread.identity.headRevision || source.headSha !== thread.identity.headSha) {
+      return c.json({ error: { code: "E_REVIEW_THREAD_IDENTITY", message: "code action does not match the persisted Comment" } }, 409);
+    }
+    if (thread.identity.headRevision !== current.review.revision || thread.identity.headSha !== current.review.head.sha) {
+      return c.json({ error: { code: "E_REVIEW_THREAD_STALE", message: "Comment belongs to an older PR head; comment on the current report instead" } }, 409);
+    }
+    try {
+      const sourceReport = reviews.readRevision(current.id, thread.identity.reportRevision);
+      if (sourceReport.revision.status !== "submitted") throw new Error("not submitted");
+    } catch {
+      return reviewRevisionUnavailable(c, "the Comment source report is missing or corrupt");
+    }
+    try {
+      const result = requestReviewCodeAction(store.threadsPath(current.id), thread.id, new Date().toISOString(), current.id);
+      const event = reviewThreadEvent(result.thread, "code-change");
+      // Retry can repair a missing enqueue while requested, but must never
+      // resurrect work the agent already moved to working/terminal.
+      const seq = result.thread.codeAction?.status === "requested"
+        ? enqueueReviewThreadWork(event)
+        : undefined;
+      const publicThread = publicReviewThread(result.thread);
+      publishThread(current.id, publicThread);
+      publishQueue(current.id, queueFor(current.id).size);
+      publishSession(current);
+      return c.json({ thread: publicThread, repeated: result.repeated, ...(seq === undefined ? {} : { seq }) }, result.repeated ? 200 : 202);
+    } catch (error) {
+      if (error instanceof ReviewThreadConflictError) return c.json({ error: { code: error.code, message: error.message } }, 409);
+      throw error;
+    }
+  });
+
+  /** Agent lifecycle acknowledgement for already-authorized code work. */
+  app.post("/api/reviews/:id/threads/:tid/code-action/status", async (c) => {
+    const before = store.getSession(c.req.param("id"));
+    if (before === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (before.kind !== "review") return codedBadRequest(c, "E_SESSION_KIND", `session ${before.id} is not a review`);
+    const body = (await readJsonBody(c)) ?? {};
+    const optional = body.message === undefined ? [] : ["message"];
+    if (!hasExactKeys(body, ["source", "status", ...optional])) {
+      return codedBadRequest(c, "E_REVIEW_CODE_ACTION", "code-action status is invalid");
+    }
+    const source = parseReviewSource(body.source);
+    if (source === undefined ||
+      (body.status !== "working" && body.status !== "completed" && body.status !== "failed") ||
+      (body.message !== undefined && (typeof body.message !== "string" || body.message.trim() === "" || body.message.length > 20_000))) {
+      return codedBadRequest(c, "E_REVIEW_CODE_ACTION", "code-action status fields are invalid");
+    }
+    const current = store.getSession(before.id);
+    if (current?.kind !== "review") return notFound(c, `unknown review: ${before.id}`);
+    if (current.status === "done") return sessionOver(c, current.id);
+    const thread = readReviewThreads(store.threadsPath(current.id), current.id).find((candidate) => candidate.id === c.req.param("tid"));
+    if (thread === undefined) return notFound(c, `unknown review thread: ${c.req.param("tid")}`);
+    if (source.reportRevision !== thread.identity.reportRevision || source.headRevision !== thread.identity.headRevision || source.headSha !== thread.identity.headSha) {
+      return c.json({ error: { code: "E_REVIEW_THREAD_IDENTITY", message: "code-action status does not match the persisted Comment" } }, 409);
+    }
+    try {
+      const result = updateReviewCodeAction(store.threadsPath(current.id), thread.id, {
+        status: body.status,
+        ...(body.message === undefined ? {} : { message: body.message }),
+      }, new Date().toISOString(), current.id);
+      const publicThread = publicReviewThread(result.thread);
+      publishThread(current.id, publicThread);
+      publishQueue(current.id, queueFor(current.id).size);
+      publishSession(current);
+      return c.json({ thread: publicThread, repeated: result.repeated });
+    } catch (error) {
+      if (error instanceof ReviewThreadConflictError) return c.json({ error: { code: error.code, message: error.message } }, 409);
       throw error;
     }
   });
@@ -1254,6 +1620,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/submit", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.kind !== "plan") return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a plan`);
     // Raw markdown body, or {"plan": "...", "resolutions": {...}} JSON — the
     // CLI sends resolutions.json's content along (review loop and daemon API). The raw path
     // carries no resolutions, so L5 still rejects it when threads are open.
@@ -1550,6 +1917,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/comments", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.kind !== "plan") return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a plan`);
     const queue = queueFor(session.id); // before any state write: can throw on a corrupt file
     const body = (await readJsonBody(c)) ?? {};
     if (sessionEnded(session.id)) return sessionOver(c, session.id);
@@ -1670,6 +2038,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/questions", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.kind !== "plan") return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a plan`);
     const queue = queueFor(session.id); // before any state write: can throw on a corrupt file
     const body = (await readJsonBody(c)) ?? {};
     if (sessionEnded(session.id)) return sessionOver(c, session.id);
@@ -1756,6 +2125,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/questions/:qid/answer", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.kind !== "plan") return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a plan`);
     const body = (await readJsonBody(c)) ?? {};
     if (sessionEnded(session.id)) return sessionOver(c, session.id);
     bumpContact(session.id);
@@ -1793,6 +2163,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/threads/:tid/resolve", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.kind !== "plan") return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a plan`);
     const body = (await readJsonBody(c)) ?? {};
     if (sessionEnded(session.id)) return sessionOver(c, session.id);
     if (typeof body.resolved !== "boolean") {
@@ -1823,7 +2194,12 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.get("/api/sessions/:id/threads", (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
-    return c.json({ session: session.id, threads: readThreads(store.threadsPath(session.id)) });
+    return c.json({
+      session: session.id,
+      threads: session.kind === "review"
+        ? publicReviewThreads(store.threadsPath(session.id), session.id)
+        : readThreads(store.threadsPath(session.id)),
+    });
   });
 
   // The agent's grill question (`otacon ask`): persisted in
@@ -2081,6 +2457,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/approve", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.kind !== "plan") return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a plan`);
     const queue = queueFor(session.id); // before any state write: can throw on a corrupt file
     const body = (await readJsonBody(c)) ?? {};
     // Doubles as the double-approve guard: two concurrent approves both
@@ -2309,7 +2686,12 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       const session = store.getSession(id);
       return session ? summarize(session) : undefined;
     },
-    getThreads: (id) => readThreads(store.threadsPath(id)),
+    getThreads: (id) => {
+      const session = store.getSession(id);
+      return session?.kind === "review"
+        ? publicReviewThreads(store.threadsPath(id), id)
+        : readThreads(store.threadsPath(id));
+    },
     getTranscript: (id) => readTranscript(store.transcriptPath(id)),
     getActivity: (id) => readActivity(store.activityPath(id)),
     getStream: (id) => readStream(store.streamPath(id), loadStreamCap(id)),

@@ -24,7 +24,8 @@ import { parseReviewReport } from "../../shared/review-report";
 import type { ReviewReportRevisionPayload } from "../../shared/review-report";
 import type { ReviewQuizPublicState } from "../../shared/review-quiz";
 import type { ReviewLiveSession } from "../api";
-import { postReviewQuizAnswer } from "../api";
+import { postReviewCodeAction, postReviewQuizAnswer, postReviewThread } from "../api";
+import type { PublicReviewThread } from "../../shared/types";
 import { SessionMenuButton } from "../session-sheet";
 import { QuizSection } from "./quiz-section";
 
@@ -422,6 +423,8 @@ export function PrReviewScreen({
   revisionBanner,
   tocGroups,
   interactionsEnabled = true,
+  feedbackEnabled = interactionsEnabled,
+  doneEnabled = interactionsEnabled,
   interactionNotice,
 }: {
   adapter: ReviewAdapter;
@@ -435,6 +438,8 @@ export function PrReviewScreen({
   tocGroups?: ReportTocGroup[];
   /** Phase-gated production capabilities; Storybook remains fully interactive. */
   interactionsEnabled?: boolean;
+  feedbackEnabled?: boolean;
+  doneEnabled?: boolean;
   interactionNotice?: ReactNode;
 }) {
   const state = useSyncExternalStore(adapter.subscribe, adapter.getSnapshot, adapter.getSnapshot);
@@ -450,7 +455,7 @@ export function PrReviewScreen({
   const mobileNavWasOpenRef = useRef(false);
   const capturedSelection = useSelection(
     reportRef,
-    interactionsEnabled && !state.closed && composer === null && selectionOverride === undefined,
+    feedbackEnabled && !state.closed && composer === null && selectionOverride === undefined,
   );
   const selection = selectionOverride ?? capturedSelection;
   const looseEnds = unresolvedThreadCount(state) + incompleteQuizCount(state);
@@ -515,6 +520,7 @@ export function PrReviewScreen({
       await adapter.createThread({
         intent: mode === "ask" ? "question" : "comment",
         anchor: composer.anchor.exact,
+        sourceAnchor: composer.anchor,
         body: body.trim(),
         remember,
         scope,
@@ -585,21 +591,21 @@ export function PrReviewScreen({
         <footer className="pr-review-finish">
           <div>
             <strong>Reached the end.</strong>
-            <span>{!interactionsEnabled
-              ? "Interactive review actions are not enabled yet."
+            <span>{!doneEnabled
+              ? "Conversation review is live; Done is enabled by the lifecycle phase."
               : looseEnds === 0 ? "Everything is resolved." : `${looseEnds} items still need attention.`}</span>
           </div>
           <button
             type="button"
             className="btn btn-primary"
-            disabled={state.closed || !interactionsEnabled}
-            title={interactionsEnabled ? undefined : "Done is enabled by the review lifecycle phase"}
+            disabled={state.closed || !doneEnabled}
+            title={doneEnabled ? undefined : "Done is enabled by the review lifecycle phase"}
             onClick={() => {
             if (looseEnds === 0) adapter.close(false); else setDoneOpen(true);
           }}>Done</button>
         </footer>
       </Page>
-      {interactionsEnabled && selection !== null && selection !== undefined && composer === null && !state.closed && (
+      {feedbackEnabled && selection !== null && selection !== undefined && composer === null && !state.closed && (
         <SelectionBar
           selection={selection}
           placement="contextual"
@@ -694,6 +700,7 @@ export function quizDefinitions(raw: unknown): QuizDefinition[] {
 export function productionPresentation(
   session: ReviewLiveSession,
   payload: ReviewReportRevisionPayload,
+  liveThreads: PublicReviewThread[] = [],
 ): ReviewPresentation {
   const [owner = "", repo = ""] = session.review.pullRequest.identity.repository.split("/");
   const frontmatter = payload.report === undefined ? undefined : parseReviewReport(payload.report).frontmatter;
@@ -725,7 +732,39 @@ export function productionPresentation(
       },
     },
     quizzes,
-    threads: [],
+    threads: liveThreads.map((thread) => ({
+      id: thread.id,
+      intent: thread.intent,
+      anchor: thread.anchor.exact ?? thread.anchor.section,
+      sourceAnchor: thread.anchor,
+      body: thread.body,
+      status: thread.codeAction?.status === "completed" && thread.response !== undefined
+        ? "answered"
+        : thread.codeAction !== undefined ? "change-requested" : thread.response !== undefined ? "answered" : "open",
+      ...(thread.response === undefined ? {} : { response: thread.response.body }),
+      ...(thread.remember === undefined ? {} : { knowledgeScope: thread.remember.scope }),
+      ...(thread.saved === undefined ? {} : {
+        receipt: thread.saved.scope === "user"
+          ? "Saved in User knowledge"
+          : `Saved in ${session.review.pullRequest.identity.repository} Project knowledge`,
+      }),
+      identity: {
+        reportRevision: thread.identity.reportRevision,
+        headRevision: thread.identity.headRevision,
+        headSha: thread.identity.headSha,
+      },
+      canConductCodeChange: session.review.pullRequest.state === "open" &&
+        !session.review.pullRequest.permissions.readOnly &&
+        ["write", "maintain", "admin"].includes(session.review.pullRequest.permissions.viewerPermission) &&
+        !session.review.pullRequest.isCrossRepository &&
+        session.review.pullRequest.headRepository === session.review.pullRequest.identity.repository &&
+        thread.identity.headRevision === session.review.revision &&
+        thread.identity.headSha === session.review.head.sha,
+      ...(thread.codeAction === undefined ? {} : {
+        codeActionStatus: thread.codeAction.status,
+        ...(thread.codeAction.message === undefined ? {} : { actionMessage: thread.codeAction.message }),
+      }),
+    })),
     closed: session.status === "done",
   };
 }
@@ -735,10 +774,12 @@ export function ProductionPrReviewScreen({
   session,
   payload,
   liveQuiz,
+  liveThreads = [],
 }: {
   session: ReviewLiveSession;
   payload: ReviewReportRevisionPayload;
   liveQuiz?: ReviewQuizPublicState;
+  liveThreads?: PublicReviewThread[];
 }) {
   const matchingLiveQuiz = liveQuiz?.session === payload.revision.session &&
     liveQuiz.revision === payload.revision.revision &&
@@ -747,8 +788,8 @@ export function ProductionPrReviewScreen({
     ? liveQuiz
     : undefined;
   const presentation = useMemo(
-    () => productionPresentation(session, matchingLiveQuiz === undefined ? payload : { ...payload, quiz: matchingLiveQuiz }),
-    [session, payload, matchingLiveQuiz],
+    () => productionPresentation(session, matchingLiveQuiz === undefined ? payload : { ...payload, quiz: matchingLiveQuiz }, liveThreads),
+    [session, payload, matchingLiveQuiz, liveThreads],
   );
   // Keep transport state (especially a response-loss idempotency key) stable
   // across ordinary session/quiz SSE renders. A report revision is a new
@@ -763,6 +804,25 @@ export function ProductionPrReviewScreen({
         async (question, answer, idempotencyKey) => quizDefinitions(
           await postReviewQuizAnswer(session.id, payload.revision.revision, question, answer, idempotencyKey),
         ),
+        async (draft, idempotencyKey) => {
+          if (draft.sourceAnchor === undefined) throw new Error("review selection lost its anchor");
+          const thread = await postReviewThread(session.id, {
+            intent: draft.intent,
+            anchor: draft.sourceAnchor,
+            body: draft.body,
+            reportRevision: payload.revision.revision,
+            headRevision: payload.revision.headRevision,
+            headSha: payload.revision.headSha,
+            idempotencyKey,
+            ...(draft.remember ? { rememberScope: draft.scope } : {}),
+          });
+          return productionPresentation(session, payload, [thread]).threads[0]!;
+        },
+        async (thread) => {
+          if (thread.identity === undefined) throw new Error("review Comment lost its immutable identity");
+          const updated = await postReviewCodeAction(session.id, thread.id, thread.identity);
+          return productionPresentation(session, payload, [updated]).threads[0]!;
+        },
       ),
     };
   }
@@ -778,7 +838,8 @@ export function ProductionPrReviewScreen({
     <PrReviewScreen
       adapter={adapter}
       embedded
-      interactionsEnabled={false}
+      feedbackEnabled={!staleHead && !olderReport}
+      doneEnabled={false}
       tocGroups={parsed.codeGroups.map(({ id, title, kind }) => ({ id, title, kind }))}
       revisionBanner={(
         <div className="pr-report-revision-banner">
@@ -796,7 +857,7 @@ export function ProductionPrReviewScreen({
       )}
       interactionNotice={(
         <div className="pr-report-capability-note" role="note">
-          Quiz answers are live. Comments, code changes, and Done remain disabled until their review phases.
+          Quiz answers and anchored conversations are live. Done remains disabled until the review lifecycle phase.
         </div>
       )}
       renderReport={(state, liveAdapter) => (

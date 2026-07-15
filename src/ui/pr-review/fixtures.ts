@@ -61,7 +61,7 @@ const quizzes = [
 
 const threads = [
   {
-    id: "t1",
+    id: "q1",
     intent: "question" as const,
     anchor: "A report revision keeps the snapshot hashes that shaped its explanation.",
     body: "Does the snapshot store the full Markdown or only its hash?",

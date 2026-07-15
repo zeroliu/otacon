@@ -16,6 +16,7 @@ import type { MouseEvent, ReactNode, RefObject } from "react";
 import { Component, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { accentStyle } from "./accent";
 import type { Anchor, CommentDraft, PlanLiveSession, ReviewLiveSession, StreamEvent, Thread, TranscriptEntry } from "./api";
+import type { PublicReviewThread } from "../shared/types";
 import {
   postCommentFollowup,
   postComments,
@@ -139,7 +140,7 @@ const COMPOSER_GUESS_HEIGHT = 240;
 // opened a desktop popover anchored off-thumb would otherwise sit at 560–639px.
 const SHEET_VIEWPORT = 640;
 
-function PrReviewLoop({ session, quiz }: { session: ReviewLiveSession; quiz?: ReviewQuizPublicState }) {
+function PrReviewLoop({ session, quiz, threads }: { session: ReviewLiveSession; quiz?: ReviewQuizPublicState; threads: PublicReviewThread[] }) {
   const detail = useReviewDetail(session.id, session.revision);
   if (session.revision < 1) {
     return (
@@ -155,7 +156,7 @@ function PrReviewLoop({ session, quiz }: { session: ReviewLiveSession; quiz?: Re
   if (detail?.report === undefined || detail.report === null) {
     return <p className="loading">loading review r{session.revision}…</p>;
   }
-  return <ProductionPrReviewScreen session={session} payload={detail.report} liveQuiz={quiz} />;
+  return <ProductionPrReviewScreen session={session} payload={detail.report} liveQuiz={quiz} liveThreads={threads} />;
 }
 
 /** The review loop: plan + rail + grill + interview + now-playing/console + approve + composer + drawer. */
@@ -1009,7 +1010,11 @@ export function SessionScreen({ id }: { id: string }) {
   }
 
   if (session.kind === "review") {
-    return <PrReviewLoop session={session} quiz={quiz} />;
+    return <PrReviewLoop
+      session={session}
+      quiz={quiz}
+      threads={threads.filter((thread): thread is PublicReviewThread => "surface" in thread && thread.surface === "review")}
+    />;
   }
 
   return (
@@ -1022,7 +1027,7 @@ export function SessionScreen({ id }: { id: string }) {
       <ReviewLoop
         key={session.id}
         session={session}
-        threads={threads}
+        threads={threads.filter((thread): thread is Thread => !("surface" in thread))}
         transcript={transcript}
         stream={stream}
         now={now}

@@ -23,7 +23,39 @@ export interface ParkHandle {
   cancel(): void;
 }
 
-const EVENT_KINDS = new Set(["comments", "question", "answer", "quiz-answer", "approved", "deleted"]);
+const EVENT_KINDS = new Set(["comments", "question", "answer", "quiz-answer", "review-thread", "approved", "deleted"]);
+
+function validReviewThreadPayload(raw: Record<string, unknown>): boolean {
+  if (raw.event !== "review-thread") return true;
+  const optional = raw.remember === undefined ? [] : ["remember"];
+  const expected = ["event", "work", "session", "thread", "reportRevision", "headRevision", "headSha", "anchor", "body", ...optional].sort();
+  const actual = Object.keys(raw).sort();
+  if (actual.length !== expected.length || !actual.every((key, index) => key === expected[index])) return false;
+  if (raw.work !== "question" && raw.work !== "report-feedback" && raw.work !== "code-change") return false;
+  if (typeof raw.session !== "string" || !/^otc_[0-9a-z]{6,64}$/.test(raw.session) ||
+    typeof raw.thread !== "string" || !/^[qt][1-9]\d{0,8}$/.test(raw.thread) ||
+    (raw.work === "question" ? !raw.thread.startsWith("q") : !raw.thread.startsWith("t")) ||
+    !Number.isSafeInteger(raw.reportRevision) || (raw.reportRevision as number) < 1 ||
+    !Number.isSafeInteger(raw.headRevision) || (raw.headRevision as number) < 1 ||
+    typeof raw.headSha !== "string" || !/^[0-9a-f]{40}$/i.test(raw.headSha) ||
+    typeof raw.body !== "string" || raw.body.trim() === "" || raw.body.length > 20_000 ||
+    typeof raw.anchor !== "object" || raw.anchor === null || Array.isArray(raw.anchor)) return false;
+  const anchor = raw.anchor as Record<string, unknown>;
+  const anchorOptional = ["prefix", "suffix"].filter((key) => anchor[key] !== undefined);
+  const anchorExpected = ["section", "exact", ...anchorOptional].sort();
+  const anchorActual = Object.keys(anchor).sort();
+  if (anchorActual.length !== anchorExpected.length || !anchorActual.every((key, index) => key === anchorExpected[index]) ||
+    typeof anchor.section !== "string" || anchor.section.trim() === "" || anchor.section.length > 200 ||
+    typeof anchor.exact !== "string" || anchor.exact.trim() === "" || anchor.exact.length > 10_000 ||
+    (anchor.prefix !== undefined && (typeof anchor.prefix !== "string" || anchor.prefix.length > 1_000)) ||
+    (anchor.suffix !== undefined && (typeof anchor.suffix !== "string" || anchor.suffix.length > 1_000))) return false;
+  if (raw.remember !== undefined) {
+    if (typeof raw.remember !== "object" || raw.remember === null || Array.isArray(raw.remember)) return false;
+    const remember = raw.remember as Record<string, unknown>;
+    if (Object.keys(remember).length !== 1 || (remember.scope !== "user" && remember.scope !== "project")) return false;
+  }
+  return true;
+}
 
 function validQueuedEvent(value: unknown): value is QueuedEvent {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
@@ -35,7 +67,8 @@ function validQueuedEvent(value: unknown): value is QueuedEvent {
     typeof (payload as Record<string, unknown>).event === "string" &&
     EVENT_KINDS.has((payload as Record<string, unknown>).event as string) &&
     typeof (payload as Record<string, unknown>).session === "string" &&
-    ((payload as Record<string, unknown>).session as string) !== "";
+    ((payload as Record<string, unknown>).session as string) !== "" &&
+    validReviewThreadPayload(payload as Record<string, unknown>);
 }
 
 export class SessionQueue {

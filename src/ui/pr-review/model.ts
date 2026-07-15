@@ -1,3 +1,5 @@
+import type { Anchor } from "../../shared/types";
+
 /** Presentation contracts for the PR-review screen.
  *
  * Phase 1 deliberately stops at this boundary: production React components read
@@ -174,6 +176,11 @@ export interface ReviewThread {
   response?: string;
   knowledgeScope?: KnowledgeScope;
   receipt?: string;
+  sourceAnchor?: Anchor;
+  identity?: { reportRevision: number; headRevision: number; headSha: string };
+  codeActionStatus?: "requested" | "working" | "completed" | "failed";
+  actionMessage?: string;
+  canConductCodeChange?: boolean;
 }
 
 export interface ReviewPresentation {
@@ -189,6 +196,7 @@ export interface ReviewPresentation {
 export interface ThreadDraft {
   intent: FeedbackIntent;
   anchor: string;
+  sourceAnchor?: Anchor;
   body: string;
   remember: boolean;
   scope: KnowledgeScope;
@@ -263,21 +271,23 @@ export class MemoryReviewAdapter implements ReviewAdapter {
 
   async createThread(draft: ThreadDraft): Promise<void> {
     if (this.state.closed) return;
-    const number = this.state.threads.length + 1;
-    const scopeLabel = draft.scope === "project" ? `${this.state.pr.owner}/${this.state.pr.repo}` : "User";
-    const receipt = draft.remember ? `Remembered in ${scopeLabel} knowledge` : undefined;
+    const prefix = draft.intent === "question" ? "q" : "t";
+    const number = this.state.threads.reduce((max, thread) => (
+      thread.id.startsWith(prefix) ? Math.max(max, Number(thread.id.slice(1)) || 0) : max
+    ), 0) + 1;
     this.update({
       ...this.state,
       threads: [
         ...this.state.threads,
         {
-          id: `t${number}`,
+          id: `${prefix}${number}`,
           intent: draft.intent,
           anchor: draft.anchor,
           body: draft.body,
           status: "open",
           knowledgeScope: draft.remember ? draft.scope : undefined,
-          receipt,
+          sourceAnchor: draft.sourceAnchor,
+          canConductCodeChange: draft.intent === "comment",
         },
       ],
     });
@@ -286,11 +296,11 @@ export class MemoryReviewAdapter implements ReviewAdapter {
   async conductCodeChange(threadId: string): Promise<void> {
     if (this.state.closed) return;
     const thread = this.state.threads.find((item) => item.id === threadId);
-    if (thread?.intent !== "comment" || thread.status !== "open") return;
+    if (thread?.intent !== "comment" || thread.codeActionStatus !== undefined) return;
     this.update({
       ...this.state,
       threads: this.state.threads.map((item) => (
-        item.id === threadId ? { ...item, status: "change-requested" } : item
+        item.id === threadId ? { ...item, status: "change-requested", codeActionStatus: "requested" } : item
       )),
     });
   }
@@ -309,10 +319,9 @@ export class MemoryReviewAdapter implements ReviewAdapter {
 }
 
 /**
- * Production Phase-4 adapter: SSE/detail fetches replace its snapshot, while
- * quiz grading, thread persistence, code execution, and Done remain owned by
- * later phases. Those methods reject/no-op instead of inventing local server
- * state, but the shared selection/composer surfaces remain available.
+ * Production adapter: parent SSE/detail fetches replace its snapshot while
+ * request-loss retry keys survive ordinary renders. Quiz grading and review
+ * conversations are daemon-backed; Done remains owned by the lifecycle phase.
  */
 export class LiveReviewAdapter implements ReviewAdapter {
   private state: ReviewPresentation;
@@ -324,6 +333,8 @@ export class LiveReviewAdapter implements ReviewAdapter {
   constructor(
     initial: ReviewPresentation,
     private readonly submitLiveQuiz?: (quizId: string, answer: string, idempotencyKey: string) => Promise<QuizDefinition[]>,
+    private readonly createLiveThread?: (draft: ThreadDraft, idempotencyKey: string) => Promise<ReviewThread>,
+    private readonly conductLiveCodeChange?: (thread: ReviewThread) => Promise<ReviewThread>,
   ) {
     this.state = initial;
   }
@@ -381,12 +392,29 @@ export class LiveReviewAdapter implements ReviewAdapter {
     this.updateSnapshot({ ...this.state, quizzes });
   }
 
-  async createThread(): Promise<void> {
-    throw new Error("review thread persistence is not available yet");
+  async createThread(draft: ThreadDraft): Promise<void> {
+    if (this.createLiveThread === undefined) throw new Error("review thread persistence is not available yet");
+    const retryId = JSON.stringify(draft);
+    const prior = this.retryKeys.get(`thread:${retryId}`);
+    const idempotencyKey = prior?.key ?? crypto.randomUUID();
+    this.retryKeys.set(`thread:${retryId}`, { answer: retryId, key: idempotencyKey });
+    const thread = await this.createLiveThread(draft, idempotencyKey);
+    this.retryKeys.delete(`thread:${retryId}`);
+    this.updateSnapshot({
+      ...this.state,
+      threads: [...this.state.threads.filter((item) => item.id !== thread.id), thread],
+    });
   }
 
-  async conductCodeChange(): Promise<void> {
-    throw new Error("code-change execution is not available yet");
+  async conductCodeChange(threadId: string): Promise<void> {
+    if (this.conductLiveCodeChange === undefined) throw new Error("code-change execution is not available yet");
+    const current = this.state.threads.find((thread) => thread.id === threadId);
+    if (current === undefined || current.intent !== "comment") return;
+    const thread = await this.conductLiveCodeChange(current);
+    this.updateSnapshot({
+      ...this.state,
+      threads: this.state.threads.map((item) => item.id === thread.id ? thread : item),
+    });
   }
 
   close(): void {
