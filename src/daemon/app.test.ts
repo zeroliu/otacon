@@ -14,6 +14,7 @@ import {
   repoConfigPath,
   repoLocalConfigPath,
   reviewEventSeqPath,
+  reviewRevisionDir,
   reviewRevisionQuizStatePath,
   reviewRevisionQuizPath,
   reviewRevisionReportPath,
@@ -927,9 +928,32 @@ describe("review session identity and lifecycle", () => {
     expect(detailBody.report.snapshot.user.markdown).toContain("# User knowledge");
     expect(detailBody.report.snapshot.project.markdown).toContain("# Project knowledge");
 
-    const next = await postJson(`/api/reviews/${id}/revisions`, {});
+    const missingSource = await postJson(`/api/reviews/${id}/revisions`, {});
+    expect(missingSource.status).toBe(400);
+    expect((await missingSource.json()) as object).toMatchObject({
+      error: { code: "E_REVIEW_REVISION_INPUT" },
+    });
+    expect(existsSync(reviewRevisionDir(id, 2))).toBe(false);
+
+    const stale = await postJson(`/api/reviews/${id}/revisions`, {
+      source: { reportRevision: 2, headRevision: 1, headSha: "a".repeat(40) },
+    });
+    expect(stale.status).toBe(409);
+    expect((await stale.json()) as object).toMatchObject({
+      error: { code: "E_REVIEW_REVISION_STALE" },
+    });
+    expect(existsSync(reviewRevisionDir(id, 2))).toBe(false);
+
+    const next = await postJson(`/api/reviews/${id}/revisions`, {
+      source: { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) },
+    });
     const nextBody = (await next.json()) as { preparation: { revision: { revision: number }; snapshot: { hash: string } } };
     expect(nextBody.preparation.revision.revision).toBe(2);
+    const duplicatePreparation = await postJson(`/api/reviews/${id}/revisions`, {
+      source: { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) },
+    });
+    expect(duplicatePreparation.status).toBe(409);
+    expect(existsSync(reviewRevisionDir(id, 3))).toBe(false);
     const second = await postJson(`/api/reviews/${id}/submit`, {
       report: validReviewReport(id, 2, nextBody.preparation.snapshot.hash).replace("old input", "prior input"),
       quiz: validReviewQuiz(id, 2),
@@ -1389,7 +1413,7 @@ describe("review session identity and lifecycle", () => {
     expect((await postJson(`/api/reviews/${id}/threads/t1/respond`, {
       source, body: "changed", responseReportRevision: 2,
     })).status).toBe(409);
-    const next = await postJson(`/api/reviews/${id}/revisions`, {});
+    const next = await postJson(`/api/reviews/${id}/revisions`, { source });
     const preparation = (await next.json()) as { preparation: { snapshot: { hash: string } } };
     expect((await postJson(`/api/reviews/${id}/submit`, {
       report: validReviewReport(id, 2, preparation.preparation.snapshot.hash).replace("old input", "prior input"),
@@ -1441,7 +1465,7 @@ describe("review session identity and lifecycle", () => {
       idempotencyKey: "respond-then-change",
     })).status).toBe(201);
     await app.request(`/api/sessions/${id}/events?wait=0`);
-    const next = await postJson(`/api/reviews/${id}/revisions`, {});
+    const next = await postJson(`/api/reviews/${id}/revisions`, { source });
     const preparation = (await next.json()) as { preparation: { snapshot: { hash: string } } };
     expect((await postJson(`/api/reviews/${id}/submit`, {
       report: validReviewReport(id, 2, preparation.preparation.snapshot.hash),

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { CliError } from "../output.js";
+import { ensureNamedSkill } from "../install/wrapper.js";
 import { installCommand } from "./install.js";
 
 // These tests exercise only --project, which roots every write under the cwd's git
@@ -53,6 +54,7 @@ afterEach(() => {
 
 const lastJson = () => JSON.parse(stdout.trim().split("\n").at(-1) as string);
 const REL = join("skills", "otacon", "SKILL.md");
+const REVIEW_REL = join("skills", "otacon-review", "SKILL.md");
 
 function gitInit(dir: string): void {
   execFileSync("git", ["init", "-q"], { cwd: dir, stdio: "ignore" });
@@ -65,10 +67,13 @@ describe("install --project", () => {
     expect(code).toBe(0);
 
     expect(existsSync(join(cwd, ".claude", REL))).toBe(true);
+    expect(existsSync(join(cwd, ".claude", REVIEW_REL))).toBe(true);
     // Project scope roots codex/opencode under the repo, ignoring $CODEX_HOME /
     // $XDG_CONFIG_HOME (both pinned to /should/be/ignored in beforeEach).
     expect(existsSync(join(cwd, ".codex", REL))).toBe(true);
+    expect(existsSync(join(cwd, ".codex", REVIEW_REL))).toBe(true);
     expect(existsSync(join(cwd, ".opencode", REL))).toBe(true);
+    expect(existsSync(join(cwd, ".opencode", REVIEW_REL))).toBe(true);
     // The project claude install writes ONLY the skill wrapper — no Stop hook script.
     expect(existsSync(join(cwd, ".claude", "hooks", "otacon-stop.sh"))).toBe(false);
 
@@ -78,7 +83,14 @@ describe("install --project", () => {
     // The hooks report is user-only; a project install must neither offer nor report it.
     expect(out.hooks).toBeUndefined();
     const claude = out.installed.find((i: { agent: string }) => i.agent === "claude");
-    expect(claude.files).toEqual([join(cwd, ".claude", REL)]);
+    expect(claude.files).toEqual([
+      join(cwd, ".claude", REL),
+      join(cwd, ".claude", REVIEW_REL),
+    ]);
+    expect(claude.skills.map((skill: { name: string }) => skill.name)).toEqual([
+      "otacon",
+      "otacon-review",
+    ]);
     // Project-scope wrappers are always copied (a committed file cannot symlink to a
     // machine-local global path), so every reported mode is "copy".
     for (const entry of out.installed as { mode: string }[]) {
@@ -86,11 +98,59 @@ describe("install --project", () => {
     }
   });
 
-  test("--project --agent claude writes only the project skill wrapper", async () => {
+  test("--project --agent claude writes only the two project skill wrappers", async () => {
     gitInit(cwd);
     await installCommand(["--agent", "claude", "--project"]);
     expect(readFileSync(join(cwd, ".claude", REL), "utf8")).toContain("otacon start --title");
+    expect(readFileSync(join(cwd, ".claude", REVIEW_REL), "utf8")).toContain(
+      "otacon review start --pr",
+    );
     expect(existsSync(join(cwd, ".claude", "hooks", "otacon-stop.sh"))).toBe(false);
+  });
+
+  test("reinstall is idempotent and keeps the two skill protocols isolated", async () => {
+    gitInit(cwd);
+    await installCommand(["--agent", "codex", "--project"]);
+    const firstPlan = readFileSync(join(cwd, ".codex", REL), "utf8");
+    const firstReview = readFileSync(join(cwd, ".codex", REVIEW_REL), "utf8");
+    stdout = "";
+    await installCommand(["--agent", "codex", "--project"]);
+    expect(readFileSync(join(cwd, ".codex", REL), "utf8")).toBe(firstPlan);
+    expect(readFileSync(join(cwd, ".codex", REVIEW_REL), "utf8")).toBe(firstReview);
+    expect(firstPlan).not.toContain("review start --pr");
+    expect(firstReview).not.toContain("start --title <kebab-title>");
+    expect(lastJson().installed[0].skills).toHaveLength(2);
+  });
+
+  test("one skill failure is isolated, remaining skills are attempted, and every result is reported", async () => {
+    gitInit(cwd);
+    const attempted: string[] = [];
+    const code = await installCommand(["--all", "--project"], {
+      ensureNamedSkill: (skill, path, scope, pkgPath, symlink) => {
+        attempted.push(path);
+        if (path.includes(join(".claude", "skills", "otacon-review"))) {
+          throw new Error("review destination is read-only");
+        }
+        return ensureNamedSkill(skill, path, scope, pkgPath, symlink);
+      },
+    });
+    expect(code).toBe(1);
+    expect(attempted).toHaveLength(6);
+    expect(existsSync(join(cwd, ".claude", REL))).toBe(true);
+    expect(existsSync(join(cwd, ".claude", REVIEW_REL))).toBe(false);
+    expect(existsSync(join(cwd, ".codex", REVIEW_REL))).toBe(true);
+    expect(existsSync(join(cwd, ".opencode", REVIEW_REL))).toBe(true);
+
+    const out = lastJson();
+    expect(out.ok).toBe(false);
+    expect(out.failures).toEqual([expect.objectContaining({
+      agent: "claude",
+      name: "otacon-review",
+      path: join(cwd, ".claude", REVIEW_REL),
+      error: "review destination is read-only",
+    })]);
+    expect(out.installed.find((entry: { agent: string }) => entry.agent === "claude").skills)
+      .toContainEqual(expect.objectContaining({ name: "otacon", mode: "copy" }));
   });
 
   test("outside a git repo exits 2 with a clear message", async () => {

@@ -244,6 +244,24 @@ describe("review start", () => {
     expect(printed.knowledge).toBeUndefined();
   });
 
+  test("reopens an active submitted review without asking the agent to overwrite it", async () => {
+    const session = reviewSession();
+    const preparation = frozenPreparation("a".repeat(40), 4);
+    preparation.revision.headRevision = session.review.revision;
+    preparation.snapshot.headRevision = session.review.revision;
+    (preparation.revision as { status: string }).status = "submitted";
+    (preparation.revision as { submittedAt?: string }).submittedAt = "2026-07-15T00:01:00.000Z";
+    const printed = await capture(["start", "--pr", "42"], deps({
+      api: async () => ({
+        status: 200,
+        body: { action: "reused", session, preparation },
+      }),
+    }));
+    expect(printed).toMatchObject({ action: "reused", authoring: false });
+    expect(printed.report).toBeUndefined();
+    expect(printed.quiz).toBeUndefined();
+  });
+
   test("repo mismatch fails before daemon contact or API creation", async () => {
     let ensured = 0;
     let apiCalls = 0;
@@ -643,6 +661,93 @@ describe("review refresh-head", () => {
     }
     expect(error?.code).toBe("E_USAGE");
     expect(ensured).toBe(0);
+  });
+});
+
+describe("review revise", () => {
+  const submitted = (revision: number, headRevision = 3, head = "a".repeat(40)) => ({
+    revision: {
+      version: 1,
+      session: "otc_review1",
+      revision,
+      headRevision,
+      headSha: head,
+      snapshotHash: "f".repeat(64),
+      createdAt: "2026-07-15T00:00:00.000Z",
+      submittedAt: "2026-07-15T00:01:00.000Z",
+      status: "submitted",
+    },
+    snapshot: {
+      version: 1,
+      session: "otc_review1",
+      revision,
+      headRevision,
+      headSha: head,
+      capturedAt: "2026-07-15T00:00:00.000Z",
+      hash: "f".repeat(64),
+      user: { hash: "a".repeat(64), markdown: "user" },
+      project: { repo: "acme/app", hash: "b".repeat(64), markdown: "project" },
+    },
+    warnings: [],
+  });
+
+  test("preflights the current submitted head and prints a new frozen preparation", async () => {
+    const calls: string[] = [];
+    const current = submitted(4);
+    const next = submitted(5);
+    next.revision.status = "prepared";
+    delete (next.revision as { submittedAt?: string }).submittedAt;
+    next.snapshot.hash = "e".repeat(64);
+    next.revision.snapshotHash = next.snapshot.hash;
+    const printed = await capture(["revise", "--session", "otc_review1"], deps({
+      api: async (method, path, body) => {
+        calls.push(`${method} ${path}`);
+        if (path === "/api/sessions/otc_review1") return { status: 200, body: reviewSession() as unknown as Record<string, unknown> };
+        if (method === "GET") return { status: 200, body: { session: reviewSession(), report: current, preparation: current } };
+        expect(body).toEqual({
+          source: {
+            reportRevision: 4,
+            headRevision: 3,
+            headSha: "a".repeat(40),
+          },
+        });
+        return { status: 201, body: { preparation: next } };
+      },
+    }));
+    expect(calls).toEqual([
+      "GET /api/sessions/otc_review1",
+      "GET /api/reviews/otc_review1",
+      "POST /api/reviews/otc_review1/revisions",
+    ]);
+    expect(printed).toMatchObject({
+      ok: true,
+      session: "otc_review1",
+      revision: 5,
+      headRevision: 3,
+      head: "a".repeat(40),
+      report: expect.stringContaining("/sessions/otc_review1/review.md"),
+      quiz: expect.stringContaining("/sessions/otc_review1/quiz.json"),
+      knowledge: { snapshot: { hash: "e".repeat(64) } },
+    });
+  });
+
+  test("refuses a stale submitted report before creating a revision", async () => {
+    let posts = 0;
+    let error: CliError | undefined;
+    try {
+      await reviewCommand(["revise", "--session", "otc_review1"], deps({
+        api: async (method, path) => {
+          if (method === "POST") posts += 1;
+          if (path === "/api/sessions/otc_review1") return { status: 200, body: reviewSession() as unknown as Record<string, unknown> };
+          const stale = submitted(4, 2, "b".repeat(40));
+          return { status: 200, body: { session: reviewSession(), report: stale, preparation: stale } };
+        },
+      }));
+    } catch (caught) {
+      error = caught as CliError;
+    }
+    expect(error?.code).toBe("E_REVIEW_REVISION_STALE");
+    expect(posts).toBe(0);
   });
 });
 

@@ -379,7 +379,7 @@ the model is suspended — no inference, no token spend.
 | Command                                                                     | Effect                                                                        |
 | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | `otacon start --title <t> [--prompt <t>] [--quick] [--socratic]`            | Mint session, register it, print review URL (`--socratic` overrides the `socratic.default` config; `--prompt` records the user's verbatim request, trimmed and uncapped, on the session record) |
-| `otacon review start --pr <URL\|number> [--force]`                           | Resolve the PR against the current repo's GitHub origin; create, reuse, or head-revise its canonical review session. An unchanged completed review reports `reused-complete` and stays read-only; a changed completed head reports `reopened-changed` and returns fresh authoring paths. `--force` alone creates a separate session |
+| `otacon review start --pr <URL\|number> [--force]`                           | Resolve the PR against the current repo's GitHub origin; create, reuse, or head-revise its canonical review session. An unchanged completed review reports `reused-complete` and stays read-only; an unchanged active submitted report returns `authoring:false` so the skill waits without overwriting it; a changed completed head reports `reopened-changed` and returns fresh authoring paths. `--force` alone creates a separate session |
 | `otacon review submit --report <report.md> --quiz <quiz.json>`                | Derive the session from fixed report frontmatter; strict-lint and immutably publish the report/quiz pair. A rejection prints bounded line-aware issues |
 | `otacon review grade <question-id> --file <grade.json>`                       | Complete one pending open-answer attempt with a schema-validated pass/retry verdict, specific feedback, report/head identity, and current knowledge CAS hash. Duplicate grades are idempotent; conflicts leave the attempt pending |
 | `otacon submit [plan.md] [--resolutions res.json]`                          | Lint → reject with errors, or store revision N, notify UI                     |
@@ -396,7 +396,8 @@ the model is suspended — no inference, no token spend.
 | `otacon review respond <thread> --file <response.json>`                     | Agent-only: land an Ask answer or Comment report response against the event's immutable report/head identity; may acknowledge exactly the requested User/Project memory scope |
 | `otacon review code-status <thread> --file <status.json>`                   | Agent-only: move an explicitly-authorized Comment code action through `working`, `completed`, or `failed`; never commits or pushes |
 | `otacon review checkout --session <id>`                                     | Resolve fresh PR permission/head metadata, reuse an exact clean PR-branch worktree or safely create one under `worktree.dir`; returns path/branch plus explicit push remote/ref, but never commits or pushes |
-| `otacon review refresh-head --session <id>`                                 | Re-resolve the same canonical PR after an authorized push, refresh mutable metadata/head generation, and return fresh report/quiz/snapshot authoring paths; never force-creates a session |
+| `otacon review refresh-head --session <id>`                                 | Re-resolve the same canonical PR after an authorized push, refresh mutable metadata/head generation, and return fresh report/quiz/snapshot paths only for a prepared revision (`authoring:false` for an unchanged submitted report); never force-creates a session |
+| `otacon review revise --session <id>`                                       | Preflight that the latest submitted report belongs to the current session/head, prepare one immutable same-head report revision with a new frozen knowledge snapshot, and return its report/quiz authoring paths. Used by Comment feedback; never changes code or PR identity |
 | `otacon knowledge get --scope user\|project [--repo <root>]`                 | Read the local Markdown profile through the daemon and print its path, text, and CAS hash as one JSON line. Project scope resolves the clone's GitHub origin to canonical `owner/repo` |
 | `otacon knowledge put --scope user\|project --file <md> --base-hash <hash> [--repo <root>]` | Replace the Markdown summary only if `base-hash` is current; a conflict returns `E_KNOWLEDGE_CONFLICT` plus the current disk document |
 | `otacon clean [--all]`                                                      | Permanently remove ended sessions' home folders (`~/.otacon/sessions/<id>/`) and prune the registry; no archive (§12) |
@@ -525,8 +526,11 @@ POST /api/reviews/:id/head                  refresh metadata/head for the same c
                                             reopens the review to working
 GET  /api/reviews/:id[?revision=N]          latest (or exact requested) submitted report detail
                                             plus current prepared revision and frozen knowledge provenance
-POST /api/reviews/:id/revisions             explicitly prepare another report revision on
-                                            the current head (snapshot both knowledge scopes)
+POST /api/reviews/:id/revisions             with exact current submitted
+                                            {source:{reportRevision,headRevision,headSha}},
+                                            atomically refuse stale/already-prepared state
+                                            or prepare another same-head report revision
+                                            (snapshot both knowledge scopes)
 GET  /api/reviews/:id/revisions/:n          one immutable report/quiz/snapshot revision
 POST /api/reviews/:id/submit                strict-lint and publish a prepared report/quiz pair;
                                             422 includes line-aware report issues
@@ -1659,10 +1663,25 @@ non-mutating outcomes. For writable same-repository PRs it parses `git worktree 
 --porcelain -z`, reuses only an exact clean ref/SHA worktree (including a live locked one),
 refuses dirty/stale/prunable/colliding state without reset, or fetches and creates under the
 configured worktree directory after remote-ref verification. It returns the checkout and
-push destination for the skill. The future skill owns its one implementation subagent; the
-main agent verifies, commits, pushes, calls `refresh-head`, and authors the replacement
-report. A same-SHA refresh updates mutable title/state/ref/permission metadata without
-advancing the head generation.
+push destination for the skill. The `otacon-review` skill owns its one implementation
+subagent; the main agent never implements the Comment itself. It marks the action working,
+delegates only inside the returned checkout, reviews the diff, runs verification, commits
+and pushes only to the returned remote/ref, calls `refresh-head`, authors the personalized
+replacement report/quiz, and records the terminal code status. Failure preserves the
+worktree and becomes visible advice; the protocol forbids reset and force-push. A same-SHA
+refresh updates mutable title/state/ref/permission metadata without advancing the head
+generation.
+
+The PR-review skill is a long-lived orchestrator, not a report generator that exits after
+submit. It starts only inside the canonical PR repository, opens/reuses the one review
+session, reads the exact frozen User + Project snapshot before every report revision, and
+authors Background → Intuition → Code → Quiz in causal reading order. It keeps private quiz
+rubrics outside the browser, grades open answers through `review grade`, distinguishes Ask
+(answer only) from Comment (new report via `review revise`), and acknowledges Remember only
+after a scope-matching knowledge CAS succeeds. After each event it parks on the same session
+queue again. Only `review-done`, `deleted`, or an already persisted read-only completion is
+terminal; timeout is never completion. `--force` is the sole way to create a separate
+session for an already-known PR.
 
 **Done** is deliberate rather than destructive. A conversation is unresolved until it has
 an agent response; requested, working, or failed code work also remains unresolved, and a
@@ -2077,7 +2096,7 @@ not CI or review status.
 
 | Failure                                                                 | Mitigation                                                                                                                                                                                                                                                                                                           |
 | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Agent lazily ends its turn mid-review or mid-build                      | Skill instruction ("never end your turn while the session is open") + **Claude Code Stop hook** (plain shell script): if a non-terminal session exists, block the stop with "plan session still active — run `otacon wait`". An `implementing` session blocks too (the build is live; only `approved`/`implemented`/`implement_failed` let the agent stop). Codex/OpenCode start instruction-only; both have notify/plugin equivalents for later hardening |
+| Agent lazily ends its turn mid-review or mid-build                      | Skill instruction ("never end your turn while the session is open") + **Claude Code Stop hook** (plain shell script): if a non-terminal session exists, inspect its `kind` and block with plan approval guidance or PR-review `review-done`/`deleted` guidance. Plan `implementing` still blocks; plan `approved`/`implemented`/`implement_failed` and review `done` are terminal. Codex/OpenCode start instruction-only; both have notify/plugin equivalents for later hardening |
 | Agent bypasses the remote channel with native AskUserQuestion           | Skill forbids it; v1.5: PreToolUse hook blocks AskUserQuestion (and optionally Edit/Write outside `.otacon/`) while a plan session is active                                                                                                                                                                         |
 | Session dies (crash, closed laptop, context compaction)                 | Agent is stateless; events queue on the daemon. Any new session: `otacon status` → open session, current revision, undelivered events → resume the loop                                                                                                                                                              |
 | Detail-tier smuggling (load-bearing content hidden in collapsed blocks) | Normative/informative contract + lint L4 heuristics + size badges + diff gutter markers on detail changes                                                                                                                                                                                                            |
@@ -2124,33 +2143,37 @@ not CI or review status.
 ```sh
 npm install -g otacon        # one package: CLI + daemon (Node ≥ 20); the `latest` dist-tag
                              # (or `npm install -g otacon@staging` to opt into preview builds)
-otacon install --all         # write agent skill wrappers; or --agent claude|codex|opencode
+otacon install --all         # write both agent skills; or --agent claude|codex|opencode
                              # --hooks also registers the Claude Code Stop hook
 otacon doctor                # verify: node ≥ 20, daemon boots + port free-or-ours,
-                             # wrappers present, Tailscale status (hard failures exit 1;
+                             # both protocol skills present, Tailscale status (hard failures exit 1;
                              # optional pieces are warnings). The Stop hook is optional —
                              # confirmed when present, never flagged when absent. Run
-                             # inside a repo, each wrapper check also accepts a project
-                             # wrapper (otacon install --project), reporting the scope it
-                             # found; a miss names the otacon protocol skill, not "wrapper"
+                             # inside a repo, each skill check also accepts a project
+                             # install (otacon install --project), reporting its scope
 otacon expose                # optional, phone access: checks the tailscale CLI exists
                              # and is logged in, runs `tailscale serve` against the
                              # daemon port, verifies the tailnet URL actually serves
                              # (needs HTTPS certs enabled), prints the URL to bookmark
 ```
 
-`otacon install` writes the thin protocol wrapper — one protocol card teaching the
-full loop (§6), grill discipline (§8), and the never-end-your-turn rule (§13) — into
-each agent's skill location: Claude Code `~/.claude/skills/otacon/SKILL.md` plus the
-Stop hook script `~/.claude/hooks/otacon-stop.sh`; Codex
-`$CODEX_HOME/skills/otacon/SKILL.md` (default `~/.codex/`); OpenCode
-`$XDG_CONFIG_HOME/opencode/skills/otacon/SKILL.md`. All three consume the same skill
-folder. Otacon manages the complete `skills/otacon/` directory (reinstall replaces it).
+`otacon install` writes two separate protocol skills into every selected agent:
+`skills/otacon/` owns plan review and `skills/otacon-review/` owns PR explanation. Each
+has its own generated card and trigger metadata; they share the same CLI, daemon, session
+registry, queue, and browser, but neither card teaches the other kind's commands/events.
+Claude Code receives both under `~/.claude/skills/` plus the optional Stop hook script
+`~/.claude/hooks/otacon-stop.sh`; Codex receives both under
+`$CODEX_HOME/skills/` (default `~/.codex/`); OpenCode receives both under
+`$XDG_CONFIG_HOME/opencode/skills/`. Otacon manages each complete skill directory and a
+reinstall replaces both. The JSON install result retains the per-agent file/mode summary
+and includes a per-skill name/path/mode result. Each skill destination is attempted
+independently; a failure is reported beside that agent/skill, does not skip the remaining
+destinations, and makes the command exit 1 after all selected destinations are attempted.
 
-A **user-scope** skill directory is a **symlink** to the complete skill directory
-shipped inside the package (`dist/skills/otacon/`, whose `SKILL.md` is generated from
-the one protocol source at build time), so a binary upgrade refreshes every packaged
-skill asset for free without a reinstall. Claude Code, Codex, and OpenCode all discover
+A **user-scope** skill directory is a **symlink** to its complete generated directory
+shipped inside the package (`dist/skills/otacon/` or `dist/skills/otacon-review/`), so a
+binary upgrade refreshes an already-installed packaged skill without rewriting it. Claude
+Code, Codex, and OpenCode all discover
 this directory-level layout; Codex does not discover a link whose leaf is `SKILL.md`.
 Two cases fall back to **copying** the current text instead: when symlinks are
 unsupported on the filesystem (e.g. Windows without the privilege, or a cross-device
@@ -2163,19 +2186,23 @@ already-current copy is left untouched, and a scope or availability change self-
 (a stale symlink becomes a copy, and the reverse, on the next install). The per-agent
 JSON reports each wrapper's resulting `mode` (`"symlink"` or `"copy"`).
 
-`otacon start` **self-heals already-installed wrappers** on every run, as the
+`otacon start` **self-heals already-installed skill directories** on every run, as the
 fallback/migration path for installs that predate the symlink era or could never
 symlink at all. It re-asserts each wrapper that is already present to its desired
 state: a user-scope copy or legacy file-level symlink is promoted to the common
 directory-level symlink, a dangling or wrong-target user symlink is repaired, and a
 committed/legacy project-scope copy whose text drifted is rewritten to the current
-protocol. It **never creates a wrapper that does not
-already exist** (it heals what is there, it does not install), it leaves a hand-written
+matching generated protocol. Presence is checked independently per skill. It **never
+creates a skill directory that does not already exist** (it heals what is there, it does
+not install), it leaves a hand-written
 foreign `SKILL.md` untouched (only files carrying the managed marker, or a symlink at
 one of our own locations, are ours to re-assert), and it is a no-op for a correct
 symlink, so for the common symlink install it costs nothing. It is **skipped entirely
 on a source run** so this repo's committed `otacon-dev` dogfood wrapper is never
-rewritten, and it is best-effort and fail-open: a refresh never blocks `start`. Each
+rewritten, and it is best-effort and fail-open: a refresh never blocks `start`. Therefore
+an existing user who updates from a plan-only version keeps exactly that plan skill; the
+new `otacon-review` discovery directory appears only after an explicit `otacon install`.
+Each
 heal that actually changes a file prints a one-line stderr notice (stdout stays the
 single JSON line). Agents with startup-only skill discovery, including Codex, need to
 be relaunched after an update changes the link target's contents. The Stop hook registration in
@@ -2184,32 +2211,34 @@ idempotent merge that preserves every existing key and backs the file up before 
 first change (unparseable settings are refused, never clobbered). The hook is a
 belt-and-suspenders guard on top of the skill's never-end-your-turn rule (§13), not a
 required piece — so without `--hooks` install neither registers nor nags about it, and
-`otacon doctor` confirms it when present but never flags its absence. `otacond` is never
+`otacon doctor` confirms it when present but never flags its absence. Doctor checks all
+six agent × skill candidates independently, accepts user or current-project scope, and a
+missing one/both points to `otacon install --agent <agent>` because reinstall binds the
+pair. `otacond` is never
 installed or started by hand — any `otacon` command auto-spawns it if it isn't
 running, and the CLI restarts a stale daemon on version mismatch (version handshake
 on every call).
 
-**Single source for the protocol card.** The card text is built once, parametrized
-only by command prefix (`protocolCard(cmd)` in `src/cli/install/assets.ts`): the
-installed wrappers use `otacon`, while this repo's own committed dogfood wrapper
-(`.claude/skills/otacon-dev/SKILL.md`) uses the run-from-source `./bin/otacon` prefix and
-prepends a repo preamble. The dogfood wrapper is named `otacon-dev`, not `otacon`, so it
-never collides with the installed product skill when developing otacon itself: in this
-repo `/otacon` stays the real product and `/otacon-dev` is the source-mode wrapper. The
-dogfood file is **generated** from `dogfoodSkillMd()`,
-not hand-edited, and a test (`assets.test.ts`) asserts the committed file equals that
-output — so a protocol change can never silently drift between what `otacon install`
-writes elsewhere and what this repo runs.
+**One source per protocol card.** `protocolCard(cmd)` owns plan review and
+`reviewProtocolCard(cmd)` owns PR review in `src/cli/install/assets.ts`. Each is
+parametrized only by command prefix: installed skills use `otacon`; this repo's committed
+dogfood skills use `./bin/otacon` plus the same source-mode preamble. Their names are
+`otacon-dev` and `otacon-review-dev`, so neither collides with the installed product
+commands. Both committed files are generated, never hand-edited, and exact-parity tests
+guard them. Skill frontmatter deliberately contains only `name` and `description`; this
+repo's deterministic cross-agent install architecture does not emit `agents/openai.yaml`
+for one agent while Claude/OpenCode consume the same directory contract.
 
-The build also **materializes** `skillMd()` into `dist/skills/otacon/SKILL.md`
+The build **materializes** `skillMd()` into `dist/skills/otacon/SKILL.md` and
+`reviewSkillMd()` into `dist/skills/otacon-review/SKILL.md`
 (`scripts/gen-skill-asset.ts`, run after `tsc` in the `build` chain; `files: ["dist"]`
-ships it), so the package carries the wrapper text as a real on-disk file. From the
-installed package `packagedSkillPath()` (`src/cli/install/wrapper.ts`) resolves that
-file's absolute path; it returns `undefined` when no stable packaged copy exists:
-running from source (the path lands at `src/skills/otacon/SKILL.md`, which never exists)
+ships them), so the package carries both cards as real on-disk files. From the installed
+package `packagedSkillPath(name)` (`src/cli/install/wrapper.ts`) resolves that
+skill's absolute path; it returns `undefined` when no stable packaged copy exists:
+running from source (the path lands under `src/skills/`, which never exists)
 or from an ephemeral npx cache (an `_npx` path segment, which a later invocation may
-prune). A test asserts the shipped file byte-equals `skillMd()`, the same generated-file
-discipline as the dogfood wrapper and the version mirror.
+prune). Tests assert both shipped files byte-equal their generators, the same
+generated-file discipline as both dogfood skills and the version mirror.
 
 **Single source for the version.** `package.json`'s `version` is authoritative;
 `src/shared/version.ts` (the `VERSION` the version handshake compares, §13) is
@@ -2255,21 +2284,21 @@ the **web Settings screen** (`/settings`, reached via `otacon config` or the mas
 read-only merged lookup — the agent's Implement loop reads `worktree.dir`
 through it (`otacon config get worktree.dir`) instead of hardcoding the path (§12).
 
-**Optional: committed wrappers.** `otacon install --project` writes the same skill
-wrappers into the **current git repo** instead of the user home, so they can be
-committed and shared with the team: `<root>/.claude/skills/otacon/SKILL.md`,
-`<root>/.codex/skills/otacon/SKILL.md`, `<root>/.opencode/skills/otacon/SKILL.md`
+**Optional: committed skills.** `otacon install --project` writes both skill
+directories into the **current git repo** instead of the user home, so they can be
+committed and shared with the team: each agent root (`.claude`, `.codex`, `.opencode`)
+gets both `skills/otacon/SKILL.md` and `skills/otacon-review/SKILL.md`
 (`--agent`/`--all` select agents exactly as at user scope). The base resolves to the
 git repo root via `findRepoRoot(cwd)`; run outside any git repo it exits with a usage
 error (exit 2). `--hooks` is user-only — it registers a Claude Code Stop hook in the
 user's `~/.claude/settings.json`, so `--hooks --project` is rejected; a project install
-ships only the inert skill wrappers (no hook script), and reports neither offers nor
-checks the user Stop hook. When `otacon doctor` runs inside a repo, each per-agent
-wrapper check accepts the wrapper at **either** the user path or the project path and
+ships only the inert skills (no hook script), and reports neither offers nor
+checks the user Stop hook. When `otacon doctor` runs inside a repo, each per-agent and
+per-skill check accepts its directory at **either** the user path or the project path and
 reports the scope that satisfied it (`<path> (project)` / `<path> (user)`) — so a
 committed project install never reads as "not installed". A miss names the missing
-piece as the otacon protocol skill (not the opaque word "wrapper"), lists the paths it
-looked in, and — when in a repo — mentions `--project` as an install option.
+piece by protocol skill name, lists the paths it looked in, and points at reinstalling
+the pair (with `--project` also offered inside a repo).
 
 ### Daily flow
 

@@ -104,6 +104,16 @@ describe("scope-aware skill paths", () => {
     expect(codexSkillPath(scope)).toBe(join(root, ".codex", REL));
     expect(opencodeSkillPath(scope)).toBe(join(root, ".opencode", REL));
   });
+
+  test("each agent resolves a distinct review skill at user and project scope", () => {
+    const reviewRel = join("skills", "otacon-review", "SKILL.md");
+    const project = { kind: "project", root: "/repo" } as const;
+    expect(claudeSkillPath({ kind: "user" }, "otacon-review")).toBe(
+      join(homedir(), ".claude", reviewRel),
+    );
+    expect(codexSkillPath(project, "otacon-review")).toBe(join("/repo", ".codex", reviewRel));
+    expect(opencodeSkillPath(project, "otacon-review")).toBe(join("/repo", ".opencode", reviewRel));
+  });
 });
 
 describe("wrapper assets", () => {
@@ -136,8 +146,9 @@ describe("wrapper assets", () => {
     expect(STOP_HOOK_SCRIPT).toContain("exit 0");
     // It drops ALL terminal statuses so a finished build no longer traps the
     // agent, while an in-flight `implementing` session still blocks the stop.
-    expect(STOP_HOOK_SCRIPT).toContain(
-      `grep -vE '"status":"(approved|implemented|implement_failed)"'`,
-    );
+    expect(STOP_HOOK_SCRIPT).toContain("approved|implemented|implement_failed|done");
+    expect(STOP_HOOK_SCRIPT).toContain('[ "$kind" = "review" ]');
+    expect(STOP_HOOK_SCRIPT).toContain("until review-done or deleted");
+    expect(STOP_HOOK_SCRIPT).toContain("until the plan is approved");
   });
 });

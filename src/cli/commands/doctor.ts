@@ -1,5 +1,5 @@
 // otacon doctor — verify the machine setup: Node version, daemon boots and the
-// port is free-or-ours (ensureDaemon does both), wrapper presence per agent,
+// port is free-or-ours (ensureDaemon does both), both wrappers per agent,
 // Stop hook registration, Tailscale state. Hard checks
 // (node, daemon) fail the run with exit 1; everything optional — wrappers for
 // agents the user may not use, phone access — is a warning, never a failure.
@@ -14,6 +14,7 @@ import {
   claudeSkillPath,
   codexSkillPath,
   type InstallScope,
+  type OtaconSkillName,
   opencodeSkillPath,
   settingsRegisterStopHook,
 } from "../install/locations.js";
@@ -42,9 +43,20 @@ function wrapperPresent(path: string, marker: string): boolean {
 // wrapper at EITHER the user path or the project path so a `--project` install doesn't
 // trip a spurious "not installed" warning — report whichever scope satisfied it.
 export function wrapperCheck(name: string, candidates: WrapperCandidate[], marker: string): Check {
+  const agent = name.replace("wrapper-", "");
+  return protocolSkillCheck(agent, "otacon", candidates, marker, name);
+}
+
+/** Check one independently-discoverable skill and point every miss at reinstall. */
+export function protocolSkillCheck(
+  agent: string,
+  skill: OtaconSkillName,
+  candidates: WrapperCandidate[],
+  marker: string,
+  name = `skill-${agent}-${skill}`,
+): Check {
   const hit = candidates.find((c) => wrapperPresent(c.path, marker));
   if (hit) return { name, status: "ok", detail: `${hit.path} (${hit.scope})` };
-  const agent = name.replace("wrapper-", "");
   const looked = candidates.map((c) => c.path).join(" and ");
   const projectHint = candidates.some((c) => c.scope === "project")
     ? " or add --project to install it into this repo"
@@ -52,7 +64,7 @@ export function wrapperCheck(name: string, candidates: WrapperCandidate[], marke
   return {
     name,
     status: "warn",
-    detail: `otacon protocol skill not found for ${agent} (looked in ${looked}); run \`otacon install --agent ${agent}\`${projectHint}`,
+    detail: `${skill} protocol skill not found for ${agent} (looked in ${looked}); run \`otacon install --agent ${agent}\` to install both Otacon skills${projectHint}`,
   };
 }
 
@@ -117,14 +129,21 @@ export async function doctorCommand(argv: string[]): Promise<number> {
   const project: InstallScope | undefined =
     projectRoot === undefined ? undefined : { kind: "project", root: projectRoot };
   const candidates = (
-    skillPath: (scope?: InstallScope) => string,
+    skillPath: (scope?: InstallScope, skill?: OtaconSkillName) => string,
+    skill: OtaconSkillName,
   ): WrapperCandidate[] => [
-    { path: skillPath(), scope: "user" },
-    ...(project ? [{ path: skillPath(project), scope: "project" as const }] : []),
+    { path: skillPath(undefined, skill), scope: "user" },
+    ...(project ? [{ path: skillPath(project, skill), scope: "project" as const }] : []),
   ];
-  checks.push(wrapperCheck("wrapper-claude", candidates(claudeSkillPath), MANAGED_MARKER));
-  checks.push(wrapperCheck("wrapper-codex", candidates(codexSkillPath), MANAGED_MARKER));
-  checks.push(wrapperCheck("wrapper-opencode", candidates(opencodeSkillPath), MANAGED_MARKER));
+  for (const [agent, skillPath] of [
+    ["claude", claudeSkillPath],
+    ["codex", codexSkillPath],
+    ["opencode", opencodeSkillPath],
+  ] as const) {
+    for (const skill of ["otacon", "otacon-review"] as const) {
+      checks.push(protocolSkillCheck(agent, skill, candidates(skillPath, skill), MANAGED_MARKER));
+    }
+  }
   const stopHook = stopHookCheck();
   if (stopHook) checks.push(stopHook);
   checks.push(tailscaleCheck());

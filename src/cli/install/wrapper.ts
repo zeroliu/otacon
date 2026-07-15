@@ -1,4 +1,4 @@
-// Resolves the in-package SKILL.md asset whose containing skill directory user
+// Resolves each in-package SKILL.md asset whose containing skill directory user
 // installs link to (project/fallback installs copy the file instead).
 // A symlink target must be a STABLE on-disk path, so only the packaged directory qualifies;
 // when there is no such file (running from source, or an ephemeral npx cache that a
@@ -19,12 +19,19 @@ import { fileURLToPath } from "node:url";
 import { isSourceRun } from "../client.js";
 import { notice } from "../output.js";
 import { findRepoRoot } from "../session.js";
-import { MANAGED_MARKER, skillMd } from "./assets.js";
+import { MANAGED_MARKER, reviewSkillMd, skillMd } from "./assets.js";
 import {
   claudeSkillPath,
   codexSkillPath,
+  type OtaconSkillName,
   opencodeSkillPath,
 } from "./locations.js";
+
+export const OTACON_SKILLS: readonly OtaconSkillName[] = ["otacon", "otacon-review"];
+
+function skillContent(skill: OtaconSkillName): string {
+  return skill === "otacon" ? skillMd() : reviewSkillMd();
+}
 
 /**
  * The absolute path of the packaged `SKILL.md` asset, or `undefined` when no stable
@@ -40,10 +47,10 @@ import {
  *   transient, so a symlink into it would dangle once npx prunes it; copy instead.
  * Never throws: any error resolves to `undefined`, the copy-fallback signal.
  */
-export function packagedSkillPath(): string | undefined {
+export function packagedSkillPath(skill: OtaconSkillName = "otacon"): string | undefined {
   try {
     const path = fileURLToPath(
-      new URL("../../skills/otacon/SKILL.md", import.meta.url),
+      new URL(`../../skills/${skill}/SKILL.md`, import.meta.url),
     );
     if (!existsSync(path)) return undefined;
     if (/[/\\]_npx[/\\]/.test(path)) return undefined;
@@ -89,6 +96,18 @@ export function ensureSkill(
   symlink: (target: string, linkPath: string) => void = (target, linkPath) =>
     symlinkSync(target, linkPath, process.platform === "win32" ? "junction" : "dir"),
 ): { mode: WrapperMode; changed: boolean } {
+  return ensureNamedSkill("otacon", path, scope, pkgPath, symlink);
+}
+
+/** Converge one named skill without coupling the plan and review protocols. */
+export function ensureNamedSkill(
+  skill: OtaconSkillName,
+  path: string,
+  scope: "user" | "project",
+  pkgPath: string | undefined = packagedSkillPath(skill),
+  symlink: (target: string, linkPath: string) => void = (target, linkPath) =>
+    symlinkSync(target, linkPath, process.platform === "win32" ? "junction" : "dir"),
+): { mode: WrapperMode; changed: boolean } {
   const linkPath = dirname(path);
   const target = pkgPath === undefined ? undefined : dirname(pkgPath);
 
@@ -116,7 +135,7 @@ export function ensureSkill(
   }
 
   // Copy branch: project scope, no packaged path, or the symlink above threw.
-  const content = skillMd();
+  const content = skillContent(skill);
   const info = lstatSync(path, { throwIfNoEntry: false });
   const skillDirInfo = lstatSync(dirname(path), { throwIfNoEntry: false });
   if (
@@ -139,6 +158,8 @@ export interface RefreshDeps {
   sourceRun?: () => boolean;
   /** The packaged `SKILL.md` path a user symlink points at; default `packagedSkillPath()`. */
   pkgPath?: string | undefined;
+  /** Optional packaged paths per skill; absent entries use normal resolution. */
+  pkgPaths?: Partial<Record<OtaconSkillName, string | undefined>>;
   /** Where to look for a project-scope repo root; default `process.cwd()`. */
   cwd?: string;
 }
@@ -180,33 +201,42 @@ export function refreshInstalledWrappers(
     // Never touch a source checkout's committed dogfood wrapper.
     if (sourceRun()) return [];
 
-    const pkgPath = "pkgPath" in deps ? deps.pkgPath : packagedSkillPath();
     const cwd = deps.cwd ?? process.cwd();
 
     // The candidate locations to heal: the three user-scope wrappers always, plus the
     // three project-scope wrappers when cwd sits inside a git repo. Presence is decided
     // per-candidate below, so listing one here never implies it exists on disk.
-    const candidates: { path: string; scope: "user" | "project" }[] = [
-      { path: claudeSkillPath(), scope: "user" },
-      { path: codexSkillPath(), scope: "user" },
-      { path: opencodeSkillPath(), scope: "user" },
-    ];
+    const candidates: { skill: OtaconSkillName; path: string; scope: "user" | "project" }[] = [];
+    for (const skill of OTACON_SKILLS) {
+      candidates.push(
+        { skill, path: claudeSkillPath(undefined, skill), scope: "user" },
+        { skill, path: codexSkillPath(undefined, skill), scope: "user" },
+        { skill, path: opencodeSkillPath(undefined, skill), scope: "user" },
+      );
+    }
     const root = findRepoRoot(cwd);
     if (root !== undefined) {
       const project = { kind: "project", root } as const;
-      candidates.push(
-        { path: claudeSkillPath(project), scope: "project" },
-        { path: codexSkillPath(project), scope: "project" },
-        { path: opencodeSkillPath(project), scope: "project" },
-      );
+      for (const skill of OTACON_SKILLS) {
+        candidates.push(
+          { skill, path: claudeSkillPath(project, skill), scope: "project" },
+          { skill, path: codexSkillPath(project, skill), scope: "project" },
+          { skill, path: opencodeSkillPath(project, skill), scope: "project" },
+        );
+      }
     }
 
-    for (const { path, scope } of candidates) {
+    for (const { skill, path, scope } of candidates) {
       if (!isManagedWrapper(path)) continue; // only heal what is already installed
       try {
-        const result = ensureSkill(path, scope, pkgPath);
+        const injected = deps.pkgPaths !== undefined && skill in deps.pkgPaths
+          ? deps.pkgPaths[skill]
+          : skill === "otacon" && "pkgPath" in deps
+            ? deps.pkgPath
+            : packagedSkillPath(skill);
+        const result = ensureNamedSkill(skill, path, scope, injected);
         if (result.changed) {
-          notice(`refreshed otacon skill at ${path} (${result.mode})`);
+          notice(`refreshed ${skill} skill at ${path} (${result.mode})`);
           refreshed.push({ path, mode: result.mode });
         }
       } catch {

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { MANAGED_MARKER } from "../install/assets.js";
-import { type WrapperCandidate, wrapperCheck } from "./doctor.js";
+import { protocolSkillCheck, type WrapperCandidate, wrapperCheck } from "./doctor.js";
 
 // wrapperCheck is the load-bearing new logic: it accepts the otacon protocol skill at
 // EITHER the user or the project path (when in a repo) and names the scope that
@@ -14,6 +14,43 @@ let dir: string;
 
 beforeEach(() => {
   dir = realpathSync(mkdtempSync(join(tmpdir(), "otacon-doctor-")));
+});
+
+describe("dual-skill diagnosis", () => {
+  const candidatesFor = (skill: "otacon" | "otacon-review"): WrapperCandidate[] => [
+    { path: join(dir, "user", ".codex", "skills", skill, "SKILL.md"), scope: "user" },
+    { path: join(dir, "repo", ".codex", "skills", skill, "SKILL.md"), scope: "project" },
+  ];
+
+  test("reports the plan skill healthy and the missing review skill with reinstall guidance", () => {
+    writeWrapper(candidatesFor("otacon")[0]!.path);
+    const plan = protocolSkillCheck("codex", "otacon", candidatesFor("otacon"), MANAGED_MARKER);
+    const review = protocolSkillCheck("codex", "otacon-review", candidatesFor("otacon-review"), MANAGED_MARKER);
+    expect(plan.status).toBe("ok");
+    expect(review.status).toBe("warn");
+    expect(review.detail).toContain("otacon-review protocol skill not found for codex");
+    expect(review.detail).toContain("otacon install --agent codex");
+    expect(review.detail).toContain("install both Otacon skills");
+  });
+
+  test("reports both missing skills independently with the same actionable reinstall", () => {
+    const checks = (["otacon", "otacon-review"] as const).map((skill) =>
+      protocolSkillCheck("codex", skill, candidatesFor(skill), MANAGED_MARKER));
+    expect(checks.map((check) => check.status)).toEqual(["warn", "warn"]);
+    expect(checks[0]!.detail).toContain("otacon protocol skill not found for codex");
+    expect(checks[1]!.detail).toContain("otacon-review protocol skill not found for codex");
+    for (const check of checks) expect(check.detail).toContain("otacon install --agent codex");
+  });
+
+  test("accepts both skills independently from project scope", () => {
+    writeWrapper(candidatesFor("otacon")[1]!.path);
+    writeWrapper(candidatesFor("otacon-review")[1]!.path);
+    for (const skill of ["otacon", "otacon-review"] as const) {
+      const check = protocolSkillCheck("codex", skill, candidatesFor(skill), MANAGED_MARKER);
+      expect(check.status).toBe("ok");
+      expect(check.detail).toContain("(project)");
+    }
+  });
 });
 
 afterEach(() => {

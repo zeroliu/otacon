@@ -14,9 +14,15 @@ import { join } from "node:path";
  */
 export type InstallScope = { kind: "user" } | { kind: "project"; root: string };
 
-export function claudeSkillPath(scope: InstallScope = { kind: "user" }): string {
+/** The two independently-discoverable skills shipped by one Otacon install. */
+export type OtaconSkillName = "otacon" | "otacon-review";
+
+export function claudeSkillPath(
+  scope: InstallScope = { kind: "user" },
+  skill: OtaconSkillName = "otacon",
+): string {
   const base = scope.kind === "project" ? scope.root : homedir();
-  return join(base, ".claude", "skills", "otacon", "SKILL.md");
+  return join(base, ".claude", "skills", skill, "SKILL.md");
 }
 
 /** The Stop hook script install writes; settings.json references it by this path. */
@@ -29,21 +35,27 @@ export function claudeSettingsPath(): string {
 }
 
 /** Codex's skills dir — user: $CODEX_HOME (default ~/.codex); project: <root>/.codex. */
-export function codexSkillPath(scope: InstallScope = { kind: "user" }): string {
+export function codexSkillPath(
+  scope: InstallScope = { kind: "user" },
+  skill: OtaconSkillName = "otacon",
+): string {
   const base =
     scope.kind === "project"
       ? join(scope.root, ".codex")
       : (process.env.CODEX_HOME ?? join(homedir(), ".codex"));
-  return join(base, "skills", "otacon", "SKILL.md");
+  return join(base, "skills", skill, "SKILL.md");
 }
 
 /** OpenCode's skills dir — user: $XDG_CONFIG_HOME/opencode (default ~/.config); project: <root>/.opencode. */
-export function opencodeSkillPath(scope: InstallScope = { kind: "user" }): string {
+export function opencodeSkillPath(
+  scope: InstallScope = { kind: "user" },
+  skill: OtaconSkillName = "otacon",
+): string {
   const base =
     scope.kind === "project"
       ? join(scope.root, ".opencode")
       : join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "opencode");
-  return join(base, "skills", "otacon", "SKILL.md");
+  return join(base, "skills", skill, "SKILL.md");
 }
 
 /**

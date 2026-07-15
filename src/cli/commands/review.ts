@@ -65,9 +65,10 @@ export async function reviewCommand(
   if (argv[0] === "grade") return gradeReview(argv.slice(1), deps);
   if (argv[0] === "checkout") return checkoutReview(argv.slice(1), deps);
   if (argv[0] === "refresh-head") return refreshReviewHead(argv.slice(1), deps);
+  if (argv[0] === "revise") return reviseReview(argv.slice(1), deps);
   if (argv[0] === "respond") return respondReviewThread(argv.slice(1), deps);
   if (argv[0] === "code-status") return updateReviewCodeStatus(argv.slice(1), deps);
-  usageError("usage: otacon review start --pr <URL|number> [--force] | submit --report <report.md> --quiz <quiz.json> | grade <question-id> --file <grade.json> | respond <thread-id> --file <response.json> | code-status <thread-id> --file <status.json> | checkout --session <id> | refresh-head --session <id>");
+  usageError("usage: otacon review start --pr <URL|number> [--force] | submit --report <report.md> --quiz <quiz.json> | grade <question-id> --file <grade.json> | respond <thread-id> --file <response.json> | code-status <thread-id> --file <status.json> | checkout --session <id> | refresh-head --session <id> | revise --session <id>");
 }
 
 function exactKeys(raw: Record<string, unknown>, keys: string[]): boolean {
@@ -170,7 +171,7 @@ async function updateReviewCodeStatus(argv: string[], deps: ReviewCommandDeps | 
 
 async function requireReviewSession(
   argv: string[],
-  command: "checkout" | "refresh-head",
+  command: "checkout" | "refresh-head" | "revise",
   deps: ReviewCommandDeps | undefined,
 ): Promise<{ session: ReviewRegistrySession; deps: ReviewCommandDeps }> {
   const { values } = parseArgs({
@@ -194,6 +195,84 @@ async function requireReviewSession(
     fail("E_INTERNAL", `review ${command} received inconsistent session identity`, undefined, 2);
   }
   return { session: response.body as unknown as ReviewRegistrySession, deps: commandDeps };
+}
+
+/**
+ * Prepare a new report revision for Comment feedback on the current PR head.
+ * The preflight refuses missing/stale report state before the mutation; the
+ * returned preparation is checked again so a racing head change cannot be
+ * mistaken for a same-head revision the agent may safely author.
+ */
+async function reviseReview(argv: string[], deps: ReviewCommandDeps | undefined): Promise<number> {
+  const resolved = await requireReviewSession(argv, "revise", deps);
+  if (resolved.session.status === "done") {
+    fail("E_SESSION_OVER", `review session ${resolved.session.id} is already done`);
+  }
+  const detail = await resolved.deps.api("GET", `/api/reviews/${resolved.session.id}`);
+  if (detail.status !== 200) {
+    const error = detail.body.error as { code?: string; message?: string } | undefined;
+    fail(error?.code ?? "E_REVIEW_REVISION", error?.message ?? "could not read the current review report");
+  }
+  const report = detail.body.report as ReviewReportRevisionPayload | null | undefined;
+  const preparation = detail.body.preparation as ReviewReportRevisionPayload | null | undefined;
+  if (report === null || report === undefined || report.revision.status !== "submitted" ||
+    report.revision.headRevision !== resolved.session.review.revision ||
+    report.revision.headSha !== resolved.session.review.head.sha ||
+    preparation === null || preparation === undefined ||
+    preparation.revision.revision !== report.revision.revision ||
+    preparation.revision.status !== "submitted") {
+    fail(
+      "E_REVIEW_REVISION_STALE",
+      `review ${resolved.session.id} has no current submitted report for head ${resolved.session.review.head.sha}`,
+    );
+  }
+  const response = await resolved.deps.api("POST", `/api/reviews/${resolved.session.id}/revisions`, {
+    source: {
+      reportRevision: report.revision.revision,
+      headRevision: report.revision.headRevision,
+      headSha: report.revision.headSha,
+    },
+  });
+  if (response.status === 400 || response.status === 404 || response.status === 409) {
+    const error = response.body.error as { code?: string; message?: string } | undefined;
+    fail(error?.code ?? "E_REVIEW_REVISION", error?.message ?? "review revision could not be prepared", response.body);
+  }
+  if (response.status !== 201) {
+    fail("E_INTERNAL", `review revise failed: ${JSON.stringify(response.body)}`, undefined, 2);
+  }
+  const next = response.body.preparation as ReviewReportRevisionPayload | undefined;
+  if (next === undefined || next.revision.status !== "prepared" ||
+    next.revision.session !== resolved.session.id ||
+    next.revision.revision <= report.revision.revision ||
+    next.revision.headRevision !== resolved.session.review.revision ||
+    next.revision.headSha !== resolved.session.review.head.sha ||
+    next.snapshot.hash !== next.revision.snapshotHash) {
+    fail("E_INTERNAL", "review revise returned an inconsistent preparation", undefined, 2);
+  }
+  printJson({
+    ok: true,
+    session: resolved.session.id,
+    revision: next.revision.revision,
+    headRevision: next.revision.headRevision,
+    head: next.revision.headSha,
+    report: reviewDraftPath(resolved.session.id),
+    quiz: reviewQuizDraftPath(resolved.session.id),
+    knowledge: {
+      snapshot: {
+        hash: next.snapshot.hash,
+        user: {
+          hash: next.snapshot.user.hash,
+          path: reviewRevisionUserKnowledgePath(resolved.session.id, next.revision.revision),
+        },
+        project: {
+          hash: next.snapshot.project.hash,
+          path: reviewRevisionProjectKnowledgePath(resolved.session.id, next.revision.revision),
+        },
+      },
+    },
+    url: `${baseUrl()}/s/${resolved.session.id}`,
+  });
+  return 0;
 }
 
 async function checkoutReview(argv: string[], deps: ReviewCommandDeps | undefined): Promise<number> {
@@ -253,6 +332,7 @@ async function refreshReviewHead(argv: string[], deps: ReviewCommandDeps | undef
   }
   const action = response.body.action;
   const readOnly = action === "reused-complete";
+  const authoring = preparation.revision.status === "prepared";
   printJson({
     ok: true,
     action,
@@ -263,7 +343,8 @@ async function refreshReviewHead(argv: string[], deps: ReviewCommandDeps | undef
     ...(readOnly ? {
       readOnly: true,
       completion: session.review.completions?.at(-1),
-    } : {
+    } : authoring ? {
+      authoring: true,
       report: reviewDraftPath(session.id),
       quiz: reviewQuizDraftPath(session.id),
       knowledge: {
@@ -279,6 +360,8 @@ async function refreshReviewHead(argv: string[], deps: ReviewCommandDeps | undef
           },
         },
       },
+    } : {
+      authoring: false,
     }),
     url: `${baseUrl()}/s/${session.id}`,
   });
@@ -386,6 +469,7 @@ async function startReview(
   }
   const action = response.body.action;
   const readOnly = action === "reused-complete";
+  const authoring = preparation.revision.status === "prepared";
   printJson({
     ok: true,
     action,
@@ -400,7 +484,8 @@ async function startReview(
     ...(readOnly ? {
       readOnly: true,
       completion: session.review.completions?.at(-1),
-    } : {
+    } : authoring ? {
+      authoring: true,
       report: reviewDraftPath(session.id),
       quiz: reviewQuizDraftPath(session.id),
       knowledge: {
@@ -420,6 +505,8 @@ async function startReview(
           },
         },
       },
+    } : {
+      authoring: false,
     }),
   });
   return 0;

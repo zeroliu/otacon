@@ -1104,13 +1104,48 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   });
 
   /** Explicit same-head report revision, used by later report-feedback refreshes. */
-  app.post("/api/reviews/:id/revisions", (c) => {
-    const session = store.getSession(c.req.param("id"));
-    if (session === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
-    if (session.kind !== "review") {
-      return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a review`);
+  app.post("/api/reviews/:id/revisions", async (c) => {
+    const before = store.getSession(c.req.param("id"));
+    if (before === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (before.kind !== "review") {
+      return codedBadRequest(c, "E_SESSION_KIND", `session ${before.id} is not a review`);
     }
+    const body = (await readJsonBody(c)) ?? {};
+    if (!hasExactKeys(body, ["source"])) {
+      return codedBadRequest(c, "E_REVIEW_REVISION_INPUT", "review revision requires exactly one source identity");
+    }
+    const source = parseReviewSource(body.source);
+    if (source === undefined) {
+      return codedBadRequest(c, "E_REVIEW_REVISION_INPUT", "review revision source identity is invalid");
+    }
+    // Re-read after the async body boundary, then keep validation + preparation
+    // synchronous. A changed head/report or an already-prepared revision refuses
+    // before beginRevision writes a new immutable directory.
+    const session = store.getSession(before.id);
+    if (session?.kind !== "review") return notFound(c, `unknown review: ${before.id}`);
     if (session.status === "done") return sessionOver(c, session.id);
+    let current: ReviewReportRevisionPayload | undefined;
+    try {
+      current = reviews.latestForHead(session);
+    } catch (error) {
+      if (error instanceof ReviewRevisionCorruptError) {
+        return reviewRevisionUnavailable(c, "the current review revision is missing or corrupt");
+      }
+      throw error;
+    }
+    if (current === undefined || current.revision.status !== "submitted" ||
+      current.revision.revision !== source.reportRevision ||
+      current.revision.headRevision !== source.headRevision ||
+      current.revision.headSha !== source.headSha ||
+      source.headRevision !== session.review.revision ||
+      source.headSha !== session.review.head.sha) {
+      return c.json({
+        error: {
+          code: "E_REVIEW_REVISION_STALE",
+          message: "review revision source is no longer the current submitted report and PR head",
+        },
+      }, 409);
+    }
     const preparation = reviews.beginRevision(session);
     const updated = store.updateSession(session.id, { status: "working" });
     publishSession(updated);

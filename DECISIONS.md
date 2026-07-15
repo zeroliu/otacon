@@ -4687,3 +4687,49 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   the browser cannot resolve itself.
 - **Revisit when:** Knowledge summaries are generated entirely from evidence, multiple daemon
   processes write concurrently, or a transactional database replaces Markdown plus JSONL.
+
+## Plan review and PR review are separate generated skills on one daemon (2026-07-15)
+
+- **Decision:** `otacon install` binds two complete discovery directories per selected agent:
+  `otacon` and `otacon-review`. Each has an independent generated protocol card and source
+  dogfood variant, while both use the same CLI/daemon/session registry/browser. Refresh is
+  presence-gated per directory and never creates the other skill; therefore package update
+  alone does not silently add `/otacon-review` to an existing plan-only install. Doctor
+  checks both names independently and points any miss at reinstalling the pair. User scope
+  keeps whole-directory symlinks; project/fallback scope keeps copies. The shared cross-agent
+  directory format remains only `SKILL.md` with name + description frontmatter; no
+  Codex-only `agents/openai.yaml` is emitted. Explicit install attempts and reports every
+  selected agent/skill destination independently; any failure produces exit 1 only after the
+  remaining destinations have had a chance to converge.
+- **Why:** A single card would leak two unrelated triggers, commands, terminal events, and
+  safety gates into every invocation. Separate discovery is predictable, but creating a new
+  command during self-heal would surprise users immediately after an npm update. Explicit
+  reinstall makes that capability change deliberate. Keeping the directory byte-compatible
+  across Claude, Codex, and OpenCode preserves the installer/generator architecture instead
+  of adding metadata consumed by only one agent.
+- **Revisit when:** Every supported agent adopts a shared richer skill manifest, skills can be
+  discovered dynamically without process restart, or product policy allows an update to add
+  new agent-visible capabilities without explicit install.
+
+## The PR-review card is the orchestrator; Comment revision and code work stay distinct (2026-07-15)
+
+- **Decision:** `/otacon-review` reads the frozen User + Project snapshot before every
+  Background → Intuition → Code → Quiz revision, then owns the long-poll event loop until
+  `review-done`/`deleted`. Ask is answer-only. Comment feedback calls the supported
+  `otacon review revise --session` verb, which preflights current submitted report/head
+  identity before preparing a same-head revision. Only a later Comment-only `code-change`
+  event authorizes edits: the main agent delegates implementation to one native subagent in
+  the conservative checkout, then itself reviews, verifies, commits, pushes to the returned
+  destination, refreshes the PR head, authors the replacement report, and records status.
+  The revise CLI sends the exact submitted report/head source identity to the daemon; the
+  daemon rechecks it synchronously with absence of an in-progress preparation before writing
+  the next immutable revision. A Comment Remember request is CAS-applied before this step so
+  the new frozen snapshot includes the acknowledged knowledge.
+- **Why:** Raw HTTP in a skill would recreate the manual setup the CLI exists to eliminate,
+  and using `refresh-head` for prose feedback cannot mint a same-SHA report revision.
+  Keeping report feedback separate from mutation preserves the user's two-step consent.
+  Delegating implementation retains the interactive agent as the auditable authority for
+  permission, verification, push, report revision, and knowledge acknowledgement.
+- **Revisit when:** Same-head revisions become automatic daemon jobs, code changes gain a
+  transactional hosted executor, or review threads can safely carry narrower capabilities
+  than the current explicit second-step event.

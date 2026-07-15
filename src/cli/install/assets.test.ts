@@ -1,7 +1,12 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { dogfoodSkillMd, skillMd } from "./assets.js";
+import {
+  dogfoodReviewSkillMd,
+  dogfoodSkillMd,
+  reviewSkillMd,
+  skillMd,
+} from "./assets.js";
 
 // The committed dogfood wrapper, regenerated from dogfoodSkillMd() (D7).
 const DOGFOOD_SKILL_PATH = join(
@@ -14,6 +19,16 @@ const DOGFOOD_SKILL_PATH = join(
   "otacon-dev",
   "SKILL.md",
 );
+const DOGFOOD_REVIEW_SKILL_PATH = join(
+  import.meta.dir,
+  "..",
+  "..",
+  "..",
+  ".claude",
+  "skills",
+  "otacon-review-dev",
+  "SKILL.md",
+);
 
 describe("single-source wrappers (D7)", () => {
   test("the committed dogfood SKILL.md is exactly dogfoodSkillMd()", () => {
@@ -21,6 +36,49 @@ describe("single-source wrappers (D7)", () => {
     // forgets to regenerate .claude/skills/otacon-dev/SKILL.md fails right here.
     const committed = readFileSync(DOGFOOD_SKILL_PATH, "utf8");
     expect(committed).toBe(dogfoodSkillMd());
+  });
+
+  test("the committed review dogfood SKILL.md is exactly its generator", () => {
+    expect(readFileSync(DOGFOOD_REVIEW_SKILL_PATH, "utf8")).toBe(dogfoodReviewSkillMd());
+  });
+
+  test("the review skills are concise and have only name + description frontmatter", () => {
+    for (const text of [reviewSkillMd(), dogfoodReviewSkillMd()]) {
+      expect(text.split("\n").length).toBeLessThan(500);
+      const close = text.indexOf("\n---\n", 4);
+      const keys = text.slice(4, close).split("\n").map((line) => line.split(":", 1)[0]);
+      expect(keys).toEqual(["name", "description"]);
+    }
+  });
+
+  test("review protocol owns PR review without leaking the plan protocol", () => {
+    for (const text of [reviewSkillMd(), dogfoodReviewSkillMd()]) {
+      expect(text).toContain("review start --pr <URL-or-number>");
+      expect(text).toContain("Background");
+      expect(text).toContain("Intuition");
+      expect(text).toContain("interface changes, integration path, then");
+      expect(text).toContain('`quiz-answer`');
+      expect(text).toContain('`work:\"question\"`');
+      expect(text).toContain('`work:\"report-feedback\"`');
+      expect(text).toContain('`work:\"code-change\"`');
+      expect(text).toContain("review revise --session");
+      expect(text).toContain("Spawn one native");
+      expect(text).toContain("main agent reviews its diff");
+      expect(text).toContain("frontmatter is\nexactly these scalar keys in order");
+      expect(text).toContain("### Interface changes —");
+      expect(text).toContain("knowledge CAS first");
+      expect(text.indexOf("knowledge CAS first")).toBeLessThan(
+        text.indexOf("review revise --session <id>"),
+      );
+      expect(text).toContain("local clone\nroot as `--repo <root>`");
+      expect(text).toContain("what the reviewer got right");
+      expect(text).toContain("until `review-done` or");
+      expect(text).not.toContain("start --title <kebab-title>");
+      expect(text).not.toContain('{"event":"approved"');
+      expect(text).not.toContain("plan.md");
+    }
+    expect(skillMd()).not.toContain("review start --pr");
+    expect(skillMd()).not.toContain("quiz-answer");
   });
 
   test("the dogfood wrapper runs from source (./bin/otacon); the global wrappers don't", () => {

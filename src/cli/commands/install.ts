@@ -1,5 +1,5 @@
 // otacon install --agent claude|codex|opencode [--agent …] | --all [--hooks] —
-// write the protocol wrapper into each agent's skill location (install/update).
+// write both protocol wrappers into each agent's skill location (install/update).
 // Pure file writes — no daemon needed. Wrappers are managed files: reinstall
 // overwrites them wholesale. --hooks additionally registers the Claude Code Stop
 // hook in ~/.claude/settings.json — merged additively and idempotently, with a
@@ -15,16 +15,33 @@ import {
   claudeSkillPath,
   codexSkillPath,
   type InstallScope,
+  type OtaconSkillName,
   mergeStopHook,
   opencodeSkillPath,
   settingsRegisterStopHook,
 } from "../install/locations.js";
-import { ensureSkill, type WrapperMode } from "../install/wrapper.js";
+import { ensureNamedSkill, OTACON_SKILLS, type WrapperMode } from "../install/wrapper.js";
 import { fail, notice, printJson, usageError } from "../output.js";
 import { findRepoRoot } from "../session.js";
 
 const AGENTS = ["claude", "codex", "opencode"] as const;
 type Agent = (typeof AGENTS)[number];
+
+export interface InstallCommandDeps {
+  ensureNamedSkill?: typeof ensureNamedSkill;
+}
+
+type InstalledSkill = {
+  name: OtaconSkillName;
+  path: string;
+  mode: WrapperMode;
+};
+
+type FailedSkill = {
+  name: OtaconSkillName;
+  path: string;
+  error: string;
+};
 
 function writeManaged(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
@@ -34,14 +51,38 @@ function writeManaged(path: string, content: string): void {
 function installAgent(
   agent: Agent,
   scope: InstallScope,
-): { agent: Agent; files: string[]; mode: WrapperMode } {
+  ensure: typeof ensureNamedSkill,
+): {
+  agent: Agent;
+  files: string[];
+  mode?: WrapperMode;
+  skills: (InstalledSkill | FailedSkill)[];
+} {
+  const pathFor = (skill: OtaconSkillName): string => {
+    switch (agent) {
+      case "claude": return claudeSkillPath(scope, skill);
+      case "codex": return codexSkillPath(scope, skill);
+      case "opencode": return opencodeSkillPath(scope, skill);
+    }
+  };
+  // One install action always binds both discoverable skills. Each complete
+  // directory converges independently so neither protocol can leak into the other.
+  const skills: (InstalledSkill | FailedSkill)[] = OTACON_SKILLS.map((name) => {
+    const path = pathFor(name);
+    try {
+      const { mode } = ensure(name, path, scope.kind);
+      return { name, path, mode };
+    } catch (error) {
+      // One blocked/corrupt destination must not prevent the other protocol or
+      // another selected agent from being attempted. The final JSON reports
+      // every failure and the command exits non-zero after convergence finishes.
+      return { name, path, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+  const successful = skills.filter((skill): skill is InstalledSkill => "mode" in skill);
+  const files = successful.map((skill) => skill.path);
   switch (agent) {
     case "claude": {
-      const skill = claudeSkillPath(scope);
-      // The skill wrapper is symlinked at user scope (auto-refreshes on binary
-      // upgrade) and copied at project scope (a committed file must be machine
-      // independent); ensureSkill decides and reports which.
-      const { mode } = ensureSkill(skill, scope.kind);
       // The Stop hook script lives in the user home only — it is never written at
       // project scope (DECISIONS.md "Stop hook deferred at project scope"), so a
       // committed `.claude/` ships an inert skill wrapper, never a hook pointing at
@@ -49,21 +90,23 @@ function installAgent(
       if (scope.kind === "user") {
         writeManaged(claudeHookScriptPath(), STOP_HOOK_SCRIPT);
         chmodSync(claudeHookScriptPath(), 0o755);
-        return { agent, files: [skill, claudeHookScriptPath()], mode };
+        files.push(claudeHookScriptPath());
       }
-      return { agent, files: [skill], mode };
+      break;
     }
-    case "codex": {
-      const skill = codexSkillPath(scope);
-      const { mode } = ensureSkill(skill, scope.kind);
-      return { agent, files: [skill], mode };
-    }
-    case "opencode": {
-      const skill = opencodeSkillPath(scope);
-      const { mode } = ensureSkill(skill, scope.kind);
-      return { agent, files: [skill], mode };
-    }
+    case "codex":
+    case "opencode":
+      break;
   }
+  // The legacy per-agent `mode` field described the plan skill. Do not fill it
+  // from a successful review install when the plan destination itself failed.
+  const compatibilityMode = successful.find((skill) => skill.name === "otacon")?.mode;
+  return {
+    agent,
+    files,
+    ...(compatibilityMode === undefined ? {} : { mode: compatibilityMode }),
+    skills,
+  };
 }
 
 interface HooksReport {
@@ -118,7 +161,10 @@ function offerStopHook(): HooksReport {
   };
 }
 
-export async function installCommand(argv: string[]): Promise<number> {
+export async function installCommand(
+  argv: string[],
+  deps: InstallCommandDeps = {},
+): Promise<number> {
   const { values } = parseArgs({
     args: argv,
     options: {
@@ -162,7 +208,8 @@ export async function installCommand(argv: string[]): Promise<number> {
     scope = { kind: "project", root };
   }
 
-  const installed = agents.map((agent) => installAgent(agent, scope));
+  const ensure = deps.ensureNamedSkill ?? ensureNamedSkill;
+  const installed = agents.map((agent) => installAgent(agent, scope, ensure));
   // The Stop hook report is user-only: at project scope --hooks is rejected, and
   // offerStopHook() would read the user ~/.claude/settings.json — misleading for a
   // project install — so the entire hooks branch is gated on user scope.
@@ -172,6 +219,10 @@ export async function installCommand(argv: string[]): Promise<number> {
         ? applyStopHook()
         : offerStopHook()
       : undefined;
-  printJson({ ok: true, scope: scope.kind, installed, ...(hooks ? { hooks } : {}) });
-  return 0;
+  const failures = installed.flatMap((entry) => entry.skills
+    .filter((skill): skill is FailedSkill => "error" in skill)
+    .map((skill) => ({ agent: entry.agent, ...skill })));
+  const ok = failures.length === 0;
+  printJson({ ok, scope: scope.kind, installed, ...(failures.length === 0 ? {} : { failures }), ...(hooks ? { hooks } : {}) });
+  return ok ? 0 : 1;
 }
