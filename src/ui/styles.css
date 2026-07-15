@@ -5450,6 +5450,38 @@ code {
   background: var(--bg);
 }
 
+.pr-review-app.is-embedded {
+  width: 100%;
+  min-height: 0;
+  background: transparent;
+}
+
+.pr-review-app.is-embedded .pr-review-page {
+  width: 100%;
+}
+
+.pr-report-revision-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-soft);
+  font: 600 var(--fs-meta)/1.3 var(--mono);
+}
+
+.pr-report-revision-banner strong { color: var(--accent); }
+.pr-report-revision-banner code { color: var(--ink); }
+.pr-stale-report { color: var(--diff-del); }
+.pr-report-capability-note { max-width: 1120px; margin: 12px auto 0; padding: 10px 12px; border: 1px solid var(--line); color: var(--ink-soft); font: var(--fs-meta)/1.4 var(--mono); }
+.pr-mobile-session-menu { display: none; }
+.pr-changed-behavior { margin: 16px 0 0; color: var(--ink-soft); line-height: 1.65; }
+.pr-changed-behavior strong { margin-right: 8px; color: var(--accent); font: 700 var(--fs-meta)/1.2 var(--mono); text-transform: uppercase; }
+.pr-report-recovery { margin-top: 24px; padding: 12px; border: 1px solid var(--diff-del); color: var(--diff-del); font: var(--fs-meta)/1.4 var(--mono); }
+
 .pr-sidebar-switch,
 .session-kind-switch {
   display: grid;
@@ -5487,6 +5519,8 @@ code {
 .pr-knowledge-link { width: 100%; min-height: 44px; margin: auto 0 0; padding: 8px 6px; border: 0; border-top: 1px solid var(--line); background: transparent; color: var(--ink); font: var(--fs-meta)/1 var(--mono); text-align: left; cursor: pointer; }
 .pr-knowledge-link span { float: right; color: var(--accent); }
 .pr-nav-scrim { display: none; }
+.pr-toc-layer { display: contents; }
+.pr-toc .pr-toc-group { padding-left: 20px; font-size: max(12px, 0.9em); }
 
 .pr-review-page {
   min-width: 0;
@@ -6133,6 +6167,9 @@ code {
 
 @media (max-width: 959px) {
   .pr-head { padding-top: 68px; }
+  .pr-review-app.is-embedded .pr-head { padding-top: 30px; }
+  .pr-review-app.is-embedded .pr-report-revision-banner { padding-top: 12px; }
+  .pr-mobile-session-menu { display: inline-flex; }
 
   .pr-review-app .app-expand {
     display: inline-flex;

@@ -69,6 +69,12 @@ import { startPrPolling } from "./pr-status.js";
 import { Presence } from "./presence.js";
 import type { ParkHandle } from "./queue.js";
 import { SessionQueue } from "./queue.js";
+import {
+  ReviewReportInvalidError,
+  ReviewRevisionCorruptError,
+  ReviewRevisionExistsError,
+  ReviewStore,
+} from "./review-store.js";
 import type { Store } from "./store.js";
 import { writeFileAtomic } from "./store.js";
 import {
@@ -93,6 +99,8 @@ export interface AppOptions {
   store: Store;
   /** Test seam for the local user/project knowledge store. */
   knowledge?: KnowledgeStore;
+  /** Test seam for immutable review reports and their frozen knowledge snapshots. */
+  reviews?: ReviewStore;
   /** Invoked once POST /api/shutdown's response is out; main.ts exits in it. */
   onShutdown?: () => void;
   /** Test override: where the built SPA lives (null = no UI). Default: resolved next to the module. */
@@ -127,6 +135,8 @@ const codedBadRequest = (c: AppContext, code: string, message: string) =>
   c.json({ error: { code, message } }, 400);
 const notFound = (c: AppContext, message: string) =>
   c.json({ error: { code: "E_NOT_FOUND", message } }, 404);
+const reviewRevisionUnavailable = (c: AppContext, message: string) =>
+  c.json({ error: { code: "E_REVIEW_REVISION_UNAVAILABLE", message } }, 409);
 const timeoutEvent = (c: AppContext) => c.json({ event: "timeout" });
 // A session in a terminal state is over according to the status machine:
 // every state-mutating verb refuses — the CLI's pointer rules guard its side,
@@ -237,6 +247,7 @@ function sameOrigin(origin: string, host: string | undefined): boolean {
 export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }> {
   const { store } = options;
   const knowledge = options.knowledge ?? new KnowledgeStore();
+  const reviews = options.reviews ?? new ReviewStore(knowledge);
 
   // One queue instance per session for the daemon's lifetime — every request
   // must park on / enqueue into the same in-memory waiter list, and the
@@ -283,7 +294,9 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     if (session.kind === "review") {
       return {
         ...session,
-        revision: session.review.revision,
+        // Report history owns its own revision axis. `session.review.revision`
+        // remains the PR-head generation and may advance before a report lands.
+        revision: reviews.latestSubmittedRevision(session.id),
         lastReviewedRevision: 0,
         pendingEvents: queueFor(session.id).size,
         openQuestions: 0,
@@ -824,8 +837,9 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       pullRequest,
       force: force === true,
     });
+    const preparation = reviews.prepareForSession(result.session);
     publishSession(result.session);
-    return c.json(result, result.action === "created" ? 201 : 200);
+    return c.json({ ...result, preparation }, result.action === "created" ? 201 : 200);
   });
 
   /** Refresh one known review from freshly-resolved metadata. */
@@ -845,8 +859,147 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     }
     const unchanged = pullRequest.headSha === session.review.head.sha;
     const updated = store.refreshReviewHead(session.id, pullRequest);
+    const preparation = reviews.prepareForSession(updated);
     if (!unchanged) publishSession(updated);
-    return c.json({ action: unchanged ? "reused" : "revised", session: summarize(updated) });
+    return c.json({ action: unchanged ? "reused" : "revised", session: summarize(updated), preparation });
+  });
+
+  /** Explicit same-head report revision, used by later report-feedback refreshes. */
+  app.post("/api/reviews/:id/revisions", (c) => {
+    const session = store.getSession(c.req.param("id"));
+    if (session === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.kind !== "review") {
+      return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a review`);
+    }
+    if (session.status === "done") return sessionOver(c, session.id);
+    const preparation = reviews.beginRevision(session);
+    const updated = store.updateSession(session.id, { status: "working" });
+    publishSession(updated);
+    return c.json({ preparation }, 201);
+  });
+
+  /** Agent submission: strict lint + ownership checks precede an immutable commit. */
+  app.post("/api/reviews/:id/submit", async (c) => {
+    const sessionBefore = store.getSession(c.req.param("id"));
+    if (sessionBefore === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (sessionBefore.kind !== "review") {
+      return codedBadRequest(c, "E_SESSION_KIND", `session ${sessionBefore.id} is not a review`);
+    }
+    const body = (await readJsonBody(c)) ?? {};
+    if (typeof body.report !== "string" || typeof body.quiz !== "string") {
+      return badRequest(c, "report and quiz must be strings");
+    }
+    const current = store.getSession(sessionBefore.id);
+    if (current?.kind !== "review") return notFound(c, `unknown review: ${sessionBefore.id}`);
+    if (current.status === "done") return sessionOver(c, current.id);
+    try {
+      const revision = reviews.submit(current, { report: body.report, quiz: body.quiz });
+      const updated = store.updateSession(current.id, { status: "reviewing" });
+      publishSession(updated);
+      notifier.publish({
+        type: "revision",
+        session: current.id,
+        data: { session: current.id, revision: revision.revision.revision, changelog: null },
+      });
+      maybeNotify(updated, { kind: "revision", revision: revision.revision.revision });
+      return c.json({ revision }, 201);
+    } catch (error) {
+      if (error instanceof ReviewReportInvalidError) {
+        return c.json({
+          error: { code: "E_REVIEW_REPORT_INVALID", message: error.message },
+          issues: error.issues,
+        }, 422);
+      }
+      if (error instanceof ReviewRevisionExistsError) {
+        return c.json({ error: { code: "E_REVIEW_REVISION_EXISTS", message: error.message } }, 409);
+      }
+      if (error instanceof ReviewRevisionCorruptError) {
+        return c.json({
+          error: {
+            code: "E_REVIEW_REVISION_UNAVAILABLE",
+            message: "the report names a revision that is missing or unreadable; prepare a new report revision",
+          },
+        }, 409);
+      }
+      throw error;
+    }
+  });
+
+  /** Latest submitted report plus revision-scoped PR metadata and snapshot. */
+  app.get("/api/reviews/:id", (c) => {
+    const session = store.getSession(c.req.param("id"));
+    if (session === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.kind !== "review") {
+      return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a review`);
+    }
+    const latest = reviews.latestSubmittedRevision(session.id);
+    const requested = c.req.query("revision");
+    const revision = requested === undefined ? latest : Number(requested);
+    if (!Number.isInteger(revision) || revision < 1 || revision > latest) {
+      if (requested !== undefined || latest > 0) {
+        return badRequest(c, `revision must name a submitted report between 1 and ${latest}`);
+      }
+    }
+    try {
+      const report = revision === 0 ? null : reviews.readRevision(session.id, revision);
+      if (report !== null && report.revision.status !== "submitted") {
+        return notFound(c, `session ${session.id} has no submitted review revision ${revision}`);
+      }
+      return c.json({
+        session: summarize(session),
+        report,
+        preparation: reviews.latestForHead(session) ?? null,
+      });
+    } catch (error) {
+      if (error instanceof ReviewRevisionCorruptError) {
+        return reviewRevisionUnavailable(c, `review revision ${revision} is missing or corrupt`);
+      }
+      throw error;
+    }
+  });
+
+  app.get("/api/reviews/:id/revisions/:n", (c) => {
+    const session = store.getSession(c.req.param("id"));
+    if (session === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.kind !== "review") {
+      return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a review`);
+    }
+    const revision = Number(c.req.param("n"));
+    if (!Number.isInteger(revision) || revision < 1) return badRequest(c, "revision must be a positive integer");
+    try {
+      return c.json({ revision: reviews.readRevision(session.id, revision) });
+    } catch (error) {
+      if (error instanceof ReviewRevisionCorruptError) {
+        return reviewRevisionUnavailable(c, `review revision ${revision} is missing or corrupt`);
+      }
+      throw error;
+    }
+  });
+
+  app.get("/api/reviews/:id/diff", (c) => {
+    const session = store.getSession(c.req.param("id"));
+    if (session === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.kind !== "review") {
+      return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a review`);
+    }
+    const latest = reviews.latestSubmittedRevision(session.id);
+    const from = Number(c.req.query("from") ?? Math.max(0, latest - 1));
+    const to = Number(c.req.query("to") ?? latest);
+    if (!Number.isInteger(to) || to < 1 || to > latest || !Number.isInteger(from) || from < 0 || from >= to) {
+      return badRequest(c, `diff requires 0 <= from < to <= ${latest}`);
+    }
+    try {
+      const before = from === 0 ? "" : reviews.readRevision(session.id, from).report;
+      const after = reviews.readRevision(session.id, to).report;
+      if (before === undefined || after === undefined) return notFound(c, "diff requires submitted report revisions");
+      const payload: DiffPayload = { session: session.id, from, to, sections: diffPlans(before, after) };
+      return c.json(payload);
+    } catch (error) {
+      if (error instanceof ReviewRevisionCorruptError) {
+        return reviewRevisionUnavailable(c, "one of the requested review revisions is missing or corrupt");
+      }
+      throw error;
+    }
   });
 
   app.get("/api/sessions/:id", (c) => {

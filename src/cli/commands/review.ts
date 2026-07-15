@@ -1,4 +1,5 @@
 // otacon review start --pr <URL|number> [--force]
+// otacon review submit --report <report.md> --quiz <quiz.json>
 //
 // Resolve GitHub metadata while still entirely client-side, reject a different
 // base repository before touching the daemon, then cross the one atomic start
@@ -6,12 +7,17 @@
 // report persistence phase.
 
 import { parseArgs } from "node:util";
+import { readFileSync } from "node:fs";
 import {
   projectKnowledgePath,
   reviewDraftPath,
   reviewQuizDraftPath,
+  reviewRevisionProjectKnowledgePath,
+  reviewRevisionUserKnowledgePath,
   userKnowledgePath,
 } from "../../shared/paths.js";
+import { parseReviewReport } from "../../shared/review-report.js";
+import type { ReviewReportRevisionPayload } from "../../shared/review-report.js";
 import type { ReviewRegistrySession } from "../../shared/types.js";
 import { api, baseUrl, ensureDaemon } from "../client.js";
 import type { ApiResponse } from "../client.js";
@@ -29,6 +35,7 @@ export interface ReviewCommandDeps {
   ensureDaemon(): Promise<unknown>;
   api(method: string, path: string, body?: unknown): Promise<ApiResponse>;
   github?: GitHubDeps;
+  readFile?(path: string): string;
 }
 
 const DEFAULT_DEPS: ReviewCommandDeps = {
@@ -45,11 +52,17 @@ export async function reviewCommand(
   argv: string[],
   deps: ReviewCommandDeps | undefined = undefined,
 ): Promise<number> {
-  if (argv[0] !== "start") {
-    usageError("usage: otacon review start --pr <URL|number> [--force]");
-  }
+  if (argv[0] === "start") return startReview(argv.slice(1), deps);
+  if (argv[0] === "submit") return submitReview(argv.slice(1), deps);
+  usageError("usage: otacon review start --pr <URL|number> [--force] | otacon review submit --report <report.md> --quiz <quiz.json>");
+}
+
+async function startReview(
+  argv: string[],
+  deps: ReviewCommandDeps | undefined,
+): Promise<number> {
   const { values } = parseArgs({
-    args: argv.slice(1),
+    args: argv,
     options: {
       pr: { type: "string" },
       force: { type: "boolean", default: false },
@@ -99,6 +112,10 @@ export async function reviewCommand(
     fail("E_INTERNAL", `review start failed: ${JSON.stringify(response.body)}`, undefined, 2);
   }
   const session = response.body.session as unknown as ReviewRegistrySession;
+  const preparation = response.body.preparation as unknown as ReviewReportRevisionPayload | undefined;
+  if (preparation === undefined) {
+    fail("E_INTERNAL", "review start did not return a frozen report preparation", undefined, 2);
+  }
   const action = response.body.action;
   printJson({
     ok: true,
@@ -108,14 +125,89 @@ export async function reviewCommand(
     repo,
     branch: session.branch,
     pr: session.review.pullRequest,
-    revision: session.review.revision,
+    revision: preparation.revision.revision,
+    headRevision: session.review.revision,
     url: `${baseUrl()}/s/${session.id}`,
     report: reviewDraftPath(session.id),
     quiz: reviewQuizDraftPath(session.id),
     knowledge: {
-      user: userKnowledgePath(),
-      project: projectKnowledgePath(repository),
+      current: {
+        user: userKnowledgePath(),
+        project: projectKnowledgePath(repository),
+      },
+      snapshot: {
+        hash: preparation.snapshot.hash,
+        user: {
+          hash: preparation.snapshot.user.hash,
+          path: reviewRevisionUserKnowledgePath(session.id, preparation.revision.revision),
+        },
+        project: {
+          hash: preparation.snapshot.project.hash,
+          path: reviewRevisionProjectKnowledgePath(session.id, preparation.revision.revision),
+        },
+      },
     },
+  });
+  return 0;
+}
+
+async function submitReview(
+  argv: string[],
+  deps: ReviewCommandDeps | undefined,
+): Promise<number> {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      report: { type: "string" },
+      quiz: { type: "string" },
+    },
+  });
+  if (values.report === undefined || values.quiz === undefined) {
+    usageError("otacon review submit requires --report <report.md> and --quiz <quiz.json>");
+  }
+  const readFile = deps?.readFile ?? ((path: string) => readFileSync(path, "utf8"));
+  let report: string;
+  let quiz: string;
+  try {
+    report = readFile(values.report);
+    quiz = readFile(values.quiz);
+  } catch (error) {
+    fail("E_REVIEW_INPUT", `could not read review input: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const parsed = parseReviewReport(report);
+  const session = parsed.frontmatter?.session;
+  if (session === undefined) {
+    fail("E_REVIEW_REPORT_INVALID", "report frontmatter must identify its otacon session", { issues: parsed.errors });
+  }
+  const commandDeps = deps ?? DEFAULT_DEPS;
+  await commandDeps.ensureDaemon();
+  const response = await commandDeps.api("POST", `/api/reviews/${session}/submit`, { report, quiz });
+  if (response.status === 422) {
+    const issues = Array.isArray(response.body.issues) ? response.body.issues : [];
+    const summary = issues.slice(0, 8).map((issue) => {
+      const item = issue as { line?: number; code?: string; message?: string };
+      return `${item.line === undefined ? "" : `line ${item.line}: `}${item.code ?? "E_REPORT"} ${item.message ?? ""}`.trim();
+    }).join("; ");
+    fail("E_REVIEW_REPORT_INVALID", `review report rejected${summary === "" ? "" : `: ${summary}`}`, { issues });
+  }
+  if (response.status === 400 || response.status === 404 || response.status === 409) {
+    const fallback = response.status === 400 ? "E_BAD_REQUEST" : response.status === 404 ? "E_NOT_FOUND" : "E_REVIEW_CONFLICT";
+    const code = (response.body.error as { code?: string } | undefined)?.code ?? fallback;
+    fail(code, responseMessage(response));
+  }
+  if (response.status !== 201) {
+    fail("E_INTERNAL", `review submit failed: ${JSON.stringify(response.body)}`, undefined, 2);
+  }
+  const submitted = response.body.revision as unknown as ReviewReportRevisionPayload;
+  printJson({
+    ok: true,
+    session,
+    revision: submitted.revision.revision,
+    headRevision: submitted.revision.headRevision,
+    head: submitted.revision.headSha,
+    snapshot: submitted.snapshot.hash,
+    warnings: submitted.warnings,
+    url: `${baseUrl()}/s/${session}`,
   });
   return 0;
 }

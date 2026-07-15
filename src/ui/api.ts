@@ -8,6 +8,7 @@ import { createContext, createElement, useContext, useEffect, useMemo, useState 
 import { maybeSelfHeal } from "./self-heal";
 import type { ConfigField, ScopeFieldError, ScopeValues } from "../shared/config";
 import type { KnowledgeDocument, KnowledgeScope } from "../shared/knowledge";
+import type { ReviewReportRevisionPayload } from "../shared/review-report";
 import type {
   ActivityNote,
   Anchor,
@@ -65,6 +66,12 @@ const STREAM_VIEW_CAP = 500;
 export type LiveSession = SessionSummary & { changedAt?: number };
 export type PlanLiveSession = Extract<LiveSession, { kind: "plan" }>;
 export type ReviewLiveSession = Extract<LiveSession, { kind: "review" }>;
+
+export interface ReviewDetailPayload {
+  session: ReviewLiveSession;
+  report: ReviewReportRevisionPayload | null;
+  preparation: ReviewReportRevisionPayload | null;
+}
 
 type SessionMap = ReadonlyMap<string, LiveSession>;
 
@@ -662,6 +669,24 @@ export function useDiff(id: string, from: number, to: number): DiffPayload | und
  */
 export function useRevision(id: string, n: number): RevisionPayload | undefined {
   return usePolledJson<RevisionPayload>(n < 1 ? null : `/api/sessions/${id}/revisions/${n}`);
+}
+
+/** Latest immutable PR-review report; `revision` changes the URL after its SSE frame. */
+export function useReviewDetail(id: string, revision: number): ReviewDetailPayload | undefined {
+  return usePolledJson<ReviewDetailPayload>(`/api/reviews/${id}?revision=${revision}`);
+}
+
+export function useReviewRevision(id: string, revision: number): ReviewReportRevisionPayload | undefined {
+  const payload = usePolledJson<{ revision: ReviewReportRevisionPayload }>(
+    revision < 1 ? null : `/api/reviews/${id}/revisions/${revision}`,
+  );
+  return payload?.revision;
+}
+
+export function useReviewDiff(id: string, from: number, to: number): DiffPayload | undefined {
+  return usePolledJson<DiffPayload>(
+    to < 1 || from >= to ? null : `/api/reviews/${id}/diff?from=${from}&to=${to}`,
+  );
 }
 
 /** One scope's target file path and its sparse, currently-set overrides. */

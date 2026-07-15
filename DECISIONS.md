@@ -4495,3 +4495,43 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** GitHub exposes a direct pull-request `viewerCanUpdate` field through
   `gh pr view`, fork pushes become an explicitly supported V1 path, or code-change execution
   adopts a narrower per-branch capability check.
+
+## PR-head generations and report revisions are separate axes (2026-07-14)
+
+- **Decision:** `session.review.revision` counts canonical PR-head generations, while the
+  dedicated review store assigns its own monotonic report revision. A review summary's
+  top-level `revision` is the latest submitted report. An explicit prepare route may create
+  another report revision without changing the head.
+- **Why:** Questions and later code changes can require a refreshed explanation on the same
+  SHA, while a head may advance before its new explanation is ready. Overloading one number
+  would either forbid same-head revisions or announce an unpersisted report to the renderer.
+- **Revisit when:** Report history becomes a DAG, or every authoring trigger gains a durable
+  identity that should replace the sequential local report number.
+
+## Each report revision freezes both knowledge scopes (2026-07-14)
+
+- **Decision:** Preparing a report atomically stores exact User and Project Markdown, their
+  individual hashes, canonical project identity, head provenance, and a composite manifest
+  hash. Submission is a second exclusive directory rename and refuses mismatched ownership
+  or a prepared revision whose PR head is now stale. Its own manifest hashes the exact report,
+  quiz, warnings, and timestamp bytes so later reads detect incomplete or corrupt history.
+  Committed revisions are never overwritten.
+- **Why:** Quiz evidence is supposed to improve future explanations. If current knowledge were
+  read at render time, grading the open report could change the prerequisites or detail level
+  underneath the reader. Exact copies keep the input auditable; the composite hash makes the
+  frontmatter ownership check compact without hiding either scope's provenance.
+- **Revisit when:** Cross-device synchronization needs content-addressed object deduplication,
+  or a database can offer the same inspectability with transactional multi-record commits.
+
+## Review Markdown is strict at submit and tolerant at display (2026-07-14)
+
+- **Decision:** Durable reports use fixed ordered frontmatter and H2 sections. Typed H3 Code
+  groups carry Purpose, Changed behavior, and `file#symbol` Surfaces in causal layer order.
+  Strict lint blocks publication; the renderer recovers safe sections/groups from damaged
+  stored or manually edited input and visibly marks that recovery. Group anchors derive from
+  typed layer plus authored title, with source ranges retained by the parser.
+- **Why:** Agents need a narrow contract to produce the same information architecture for every
+  PR, while a local user's old report must remain readable even after corruption or manual edits.
+  Stable semantic anchors survive line movement better than diff order or line-number ids.
+- **Revisit when:** The report needs richer typed blocks that Markdown labels cannot express, or
+  anchor migration requires persisted UUIDs rather than authored semantic identity.

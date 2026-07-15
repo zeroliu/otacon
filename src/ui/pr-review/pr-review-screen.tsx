@@ -1,6 +1,6 @@
 import { CheckCheck, Eye, LoaderCircle } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { CSSProperties, RefObject } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import type { CSSProperties, ReactNode, RefObject } from "react";
 import wordmarkUrl from "../otacon.svg";
 import { CodeFence } from "../plan/code";
 import type { CapturedSelection } from "../review/anchor";
@@ -16,10 +16,17 @@ import type {
   ReviewAdapter,
   ReviewNavigationItem,
   ReviewPresentation,
+  QuizDefinition,
 } from "./model";
-import { incompleteQuizCount, unresolvedThreadCount } from "./model";
+import { incompleteQuizCount, LiveReviewAdapter, unresolvedThreadCount } from "./model";
 import { QuizCard } from "./quiz-card";
 import { ThreadRail } from "./thread-rail";
+import { parseReviewReport } from "../../shared/review-report";
+import type { ReviewReportRevisionPayload } from "../../shared/review-report";
+import type { ReviewLiveSession } from "../api";
+import { SessionMenuButton } from "../session-sheet";
+
+const ReportView = lazy(() => import("./report-view").then((module) => ({ default: module.ReportView })));
 
 const NAV_STATE = {
   active: { icon: Eye, className: "review", label: "current" },
@@ -207,16 +214,41 @@ function InterfaceChangeExcerpts({ item }: { item: InterfaceChange }) {
   );
 }
 
-function TableOfContents() {
+interface ReportTocGroup {
+  id: string;
+  title: string;
+  kind?: "interface" | "integration" | "implementation";
+}
+
+const TOC_LAYERS = [
+  { kind: "interface", id: "code-interfaces", label: "Interface changes" },
+  { kind: "integration", id: "code-integration", label: "Integration path" },
+  { kind: "implementation", id: "code-walkthrough", label: "Implementation walkthrough" },
+] as const;
+
+function TableOfContents({ groups }: { groups?: ReportTocGroup[] }) {
   return (
     <nav className="pr-toc" aria-label="report contents">
       <span>Read path</span>
       <a href="#background">01 Background</a>
       <a href="#intuition">02 Intuition</a>
       <a href="#code">03 Code</a>
-      <a className="nested" href="#code-interfaces">Interface changes</a>
-      <a className="nested" href="#code-integration">Integration path</a>
-      <a className="nested" href="#code-walkthrough">Implementation walkthrough</a>
+      {TOC_LAYERS.map((layer) => (
+        <span className="pr-toc-layer" key={layer.kind}>
+          <a className="nested" href={`#${layer.id}`}>{layer.label}</a>
+          {groups?.filter((group) => group.kind === layer.kind).map((group) => (
+            <a className="nested pr-toc-group" href={`#${group.id}`} key={group.id}>{group.title}</a>
+          ))}
+        </span>
+      ))}
+      {groups?.some((group) => group.kind === undefined) && (
+        <span className="pr-toc-layer">
+          <a className="nested" href="#code-recovered">Recovered groups</a>
+          {groups.filter((group) => group.kind === undefined).map((group) => (
+            <a className="nested pr-toc-group" href={`#${group.id}`} key={group.id}>{group.title}</a>
+          ))}
+        </span>
+      )}
       <a href="#quiz">04 Quiz</a>
     </nav>
   );
@@ -235,9 +267,9 @@ function ReviewHeader({ state }: { state: ReviewPresentation }) {
       <div className="pr-head-meta">
         <span><b>{pr.base}</b> ← <b>{pr.head}</b></span>
         <span>HEAD <code>{pr.headSha}</code></span>
-        <span>{pr.filesChanged} files</span>
-        <span className="pr-add">+{pr.additions}</span>
-        <span className="pr-del">−{pr.deletions}</span>
+        {pr.filesChanged !== undefined && <span>{pr.filesChanged} files</span>}
+        {pr.additions !== undefined && <span className="pr-add">+{pr.additions}</span>}
+        {pr.deletions !== undefined && <span className="pr-del">−{pr.deletions}</span>}
       </div>
       <div className="pr-personalization">
         <strong>Personalized read</strong>
@@ -251,14 +283,12 @@ function ReviewHeader({ state }: { state: ReviewPresentation }) {
 function Report({
   state,
   adapter,
-  reportRef,
 }: {
   state: ReviewPresentation;
   adapter: ReviewAdapter;
-  reportRef: RefObject<HTMLDivElement | null>;
 }) {
   return (
-    <div className="pr-report" ref={reportRef}>
+    <>
       <section id="background" className="pr-report-section">
         <span className="pr-section-number">01</span><h2>Background</h2>
         {state.report.background.lead !== undefined && <p className="pr-section-lead">{state.report.background.lead}</p>}
@@ -353,7 +383,7 @@ function Report({
           ))}
         </div>
       </section>
-    </div>
+    </>
   );
 }
 
@@ -391,11 +421,25 @@ export function PrReviewScreen({
   adapter,
   onOpenKnowledge,
   selectionOverride,
+  embedded = false,
+  renderReport,
+  revisionBanner,
+  tocGroups,
+  interactionsEnabled = true,
+  interactionNotice,
 }: {
   adapter: ReviewAdapter;
   onOpenKnowledge?: () => void;
   /** Deterministic Storybook/test seam; production captures the browser selection. */
   selectionOverride?: CapturedSelection;
+  /** Production already lives inside AppShell; Storybook keeps the full shell. */
+  embedded?: boolean;
+  renderReport?: (state: ReviewPresentation, adapter: ReviewAdapter) => ReactNode;
+  revisionBanner?: ReactNode;
+  tocGroups?: ReportTocGroup[];
+  /** Phase-gated production capabilities; Storybook remains fully interactive. */
+  interactionsEnabled?: boolean;
+  interactionNotice?: ReactNode;
 }) {
   const state = useSyncExternalStore(adapter.subscribe, adapter.getSnapshot, adapter.getSnapshot);
   const [doneOpen, setDoneOpen] = useState(false);
@@ -410,13 +454,14 @@ export function PrReviewScreen({
   const mobileNavWasOpenRef = useRef(false);
   const capturedSelection = useSelection(
     reportRef,
-    !state.closed && composer === null && selectionOverride === undefined,
+    interactionsEnabled && !state.closed && composer === null && selectionOverride === undefined,
   );
   const selection = selectionOverride ?? capturedSelection;
   const looseEnds = unresolvedThreadCount(state) + incompleteQuizCount(state);
   const shellClass = [
     "pr-review-app",
-    "app-shell",
+    !embedded && "app-shell",
+    embedded && "is-embedded",
     state.closed && "is-closed",
     navCollapsed && "collapsed",
     mobileNavOpen && "is-mobile-nav-open",
@@ -487,9 +532,10 @@ export function PrReviewScreen({
     }
   };
 
+  const Page = embedded ? "div" : "main";
   return (
     <div className={shellClass}>
-      <ReviewSidebar
+      {!embedded && <ReviewSidebar
         state={state}
         onOpenKnowledge={onOpenKnowledge}
         collapseRef={collapseRef}
@@ -498,8 +544,8 @@ export function PrReviewScreen({
           setNavCollapsed(true);
           setMobileNavOpen(false);
         }}
-      />
-      {mobileNavOpen && (
+      />}
+      {!embedded && mobileNavOpen && (
         <button
           type="button"
           className="pr-nav-scrim"
@@ -509,8 +555,8 @@ export function PrReviewScreen({
           }}
         />
       )}
-      <main className="app-content pr-review-page">
-        <button
+      <Page className={embedded ? "pr-review-page" : "app-content pr-review-page"}>
+        {!embedded && <button
           ref={expandRef}
           type="button"
           className="app-expand"
@@ -524,12 +570,16 @@ export function PrReviewScreen({
           }}
         >
           »
-        </button>
+        </button>}
         {state.closed && <div className="pr-closed-banner">Review closed · report preserved as read-only</div>}
+        {revisionBanner}
+        {interactionNotice}
         <ReviewHeader state={state} />
         <div className="pr-review-grid">
-          <TableOfContents />
-          <Report state={state} adapter={adapter} reportRef={reportRef} />
+          <TableOfContents groups={tocGroups} />
+          <div className="pr-report" ref={reportRef}>
+            {renderReport === undefined ? <Report state={state} adapter={adapter} /> : renderReport(state, adapter)}
+          </div>
           <ThreadRail
             threads={state.threads}
             disabled={state.closed}
@@ -537,13 +587,23 @@ export function PrReviewScreen({
           />
         </div>
         <footer className="pr-review-finish">
-          <div><strong>Reached the end.</strong><span>{looseEnds === 0 ? "Everything is resolved." : `${looseEnds} items still need attention.`}</span></div>
-          <button type="button" className="btn btn-primary" disabled={state.closed} onClick={() => {
+          <div>
+            <strong>Reached the end.</strong>
+            <span>{!interactionsEnabled
+              ? "Interactive review actions are not enabled yet."
+              : looseEnds === 0 ? "Everything is resolved." : `${looseEnds} items still need attention.`}</span>
+          </div>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={state.closed || !interactionsEnabled}
+            title={interactionsEnabled ? undefined : "Done is enabled by the review lifecycle phase"}
+            onClick={() => {
             if (looseEnds === 0) adapter.close(false); else setDoneOpen(true);
           }}>Done</button>
         </footer>
-      </main>
-      {selection !== null && selection !== undefined && composer === null && !state.closed && (
+      </Page>
+      {interactionsEnabled && selection !== null && selection !== undefined && composer === null && !state.closed && (
         <SelectionBar
           selection={selection}
           placement="contextual"
@@ -590,5 +650,134 @@ export function PrReviewScreen({
       )}
       {doneOpen && <DoneDialog state={state} onCancel={() => setDoneOpen(false)} onClose={() => { adapter.close(true); setDoneOpen(false); }} />}
     </div>
+  );
+}
+
+function quizDefinitions(raw: unknown): QuizDefinition[] {
+  const questions = (raw as { questions?: unknown })?.questions;
+  if (!Array.isArray(questions)) return [];
+  return questions.flatMap((rawQuestion, index) => {
+    if (typeof rawQuestion !== "object" || rawQuestion === null) return [];
+    const question = rawQuestion as Record<string, unknown>;
+    if (typeof question.prompt !== "string" || question.prompt.trim() === "") return [];
+    const kind = question.kind === "choice" ? "choice" : "open";
+    const options = Array.isArray(question.options)
+      ? question.options.filter((item): item is string => typeof item === "string")
+      : undefined;
+    return [{
+      id: typeof question.id === "string" ? question.id : `q${index + 1}`,
+      concept: typeof question.concept === "string" ? question.concept : "important change",
+      prompt: question.prompt,
+      kind,
+      ...(kind === "choice" && options !== undefined ? { options } : {}),
+      expected: [],
+      retryFeedback: "Quiz grading is enabled in the next review phase.",
+      status: "unanswered" as const,
+    }];
+  });
+}
+
+export function productionPresentation(
+  session: ReviewLiveSession,
+  payload: ReviewReportRevisionPayload,
+): ReviewPresentation {
+  const [owner = "", repo = ""] = session.review.pullRequest.identity.repository.split("/");
+  const frontmatter = payload.report === undefined ? undefined : parseReviewReport(payload.report).frontmatter;
+  const quizzes = quizDefinitions(payload.quiz);
+  return {
+    id: session.id,
+    pr: {
+      owner,
+      repo,
+      number: session.review.pullRequest.identity.number,
+      title: session.review.pullRequest.title,
+      author: session.review.pullRequest.author,
+      base: session.review.pullRequest.baseRef,
+      head: session.review.pullRequest.headRef,
+      headSha: payload.revision.headSha,
+    },
+    navigation: { plans: [], reviews: [] },
+    report: {
+      altitude: frontmatter?.altitude ?? "balanced",
+      revision: payload.revision.revision,
+      knowledgeSummary: `${frontmatter?.altitude === "expert" ? "Expert" : "Balanced"} read authored from frozen User and ${payload.snapshot.project.repo} knowledge. Snapshot ${payload.snapshot.hash.slice(0, 12)} remains attached to this revision.`,
+      background: { blocks: [] },
+      intuition: { goal: "", blocks: [] },
+      code: {
+        lead: "",
+        interfaces: { lead: "", items: [] },
+        integration: { lead: "", steps: [], trace: { lead: "", excerpt: { language: "", label: "", code: "" } } },
+        walkthrough: { lead: "", groups: [] },
+      },
+    },
+    quizzes,
+    threads: [],
+    closed: session.status === "done",
+  };
+}
+
+/** Real daemon-backed report composition; the outer AppShell remains the only sidebar. */
+export function ProductionPrReviewScreen({
+  session,
+  payload,
+}: {
+  session: ReviewLiveSession;
+  payload: ReviewReportRevisionPayload;
+}) {
+  const presentation = useMemo(() => productionPresentation(session, payload), [session, payload]);
+  // Build the read-only adapter from the exact session/report pair in this
+  // render. Replacing it atomically avoids one painted frame with an rN report
+  // under rN-1 header state while an SSE-driven fetch swaps revisions.
+  const adapter = useMemo(() => new LiveReviewAdapter(presentation), [presentation]);
+  const parsed = useMemo(() => parseReviewReport(payload.report ?? ""), [payload.report]);
+  const staleHead = payload.revision.headRevision !== session.review.revision ||
+    payload.revision.headSha !== session.review.head.sha;
+  const olderReport = payload.revision.revision !== session.revision;
+  return (
+    <PrReviewScreen
+      adapter={adapter}
+      embedded
+      interactionsEnabled={false}
+      tocGroups={parsed.codeGroups.map(({ id, title, kind }) => ({ id, title, kind }))}
+      revisionBanner={(
+        <div className="pr-report-revision-banner">
+          <SessionMenuButton className="pr-mobile-session-menu" />
+          <strong>Report revision {payload.revision.revision}</strong>
+          {olderReport && <span className="pr-stale-report">Loading current report revision {session.revision}</span>}
+          <span>report head generation {payload.revision.headRevision} · <code>{payload.revision.headSha.slice(0, 12)}</code></span>
+          {staleHead && (
+            <span className="pr-stale-report">
+              Archived report · current head generation {session.review.revision} · <code>{session.review.head.sha.slice(0, 12)}</code>
+            </span>
+          )}
+          <span>snapshot <code>{payload.snapshot.hash.slice(0, 12)}</code></span>
+        </div>
+      )}
+      interactionNotice={(
+        <div className="pr-report-capability-note" role="note">
+          Reading mode · comments, quiz grading, code changes, and Done are enabled in later review phases.
+        </div>
+      )}
+      renderReport={(state, liveAdapter) => (
+        <Suspense fallback={<p className="loading">loading report renderer…</p>}>
+          <ReportView
+            markdown={payload.report ?? ""}
+            quiz={state.quizzes.length === 0 ? undefined : (
+              <div className="pr-quiz-list" aria-label="quiz preview">
+                {state.quizzes.map((quiz, index) => (
+                  <QuizCard
+                    key={quiz.id}
+                    quiz={quiz}
+                    number={index + 1}
+                    disabled
+                    onSubmit={(answer) => liveAdapter.submitQuiz(quiz.id, answer)}
+                  />
+                ))}
+              </div>
+            )}
+          />
+        </Suspense>
+      )}
+    />
   );
 }

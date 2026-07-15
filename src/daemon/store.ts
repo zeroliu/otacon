@@ -382,9 +382,8 @@ export class Store {
         revision: 1,
       },
     };
-    // Review report/state files arrive in Phase 4. The queue file is the only
-    // per-session artifact Phase 3 needs; plan session.json is intentionally
-    // not created or repurposed for reviews.
+    // The dedicated review store owns report/state files. Session creation only
+    // creates its queue here; plan session.json is never created or repurposed.
     writeFileAtomic(paths.eventsPath(id), stringify({ version: 1, events: [] }));
     this.registry.sessions[id] = session;
     this.flushRegistry();

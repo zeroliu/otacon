@@ -18,9 +18,10 @@ export interface PullRequestMeta {
   base: string;
   head: string;
   headSha: string;
-  filesChanged: number;
-  additions: number;
-  deletions: number;
+  /** Absent when the current GitHub metadata query did not request diff stats. */
+  filesChanged?: number;
+  additions?: number;
+  deletions?: number;
 }
 
 export interface CodeSurface {
@@ -304,6 +305,48 @@ export class MemoryReviewAdapter implements ReviewAdapter {
   private update(state: ReviewPresentation): void {
     this.state = state;
     this.listeners.forEach((listener) => listener());
+  }
+}
+
+/**
+ * Production Phase-4 adapter: SSE/detail fetches replace its snapshot, while
+ * quiz grading, thread persistence, code execution, and Done remain owned by
+ * later phases. Those methods reject/no-op instead of inventing local server
+ * state, but the shared selection/composer surfaces remain available.
+ */
+export class LiveReviewAdapter implements ReviewAdapter {
+  private state: ReviewPresentation;
+  private readonly listeners = new Set<() => void>();
+
+  constructor(initial: ReviewPresentation) {
+    this.state = initial;
+  }
+
+  getSnapshot = (): ReviewPresentation => this.state;
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
+
+  replaceSnapshot(next: ReviewPresentation): void {
+    this.state = next;
+    this.listeners.forEach((listener) => listener());
+  }
+
+  async submitQuiz(): Promise<void> {
+    throw new Error("quiz grading is not available yet");
+  }
+
+  async createThread(): Promise<void> {
+    throw new Error("review thread persistence is not available yet");
+  }
+
+  async conductCodeChange(): Promise<void> {
+    throw new Error("code-change execution is not available yet");
+  }
+
+  close(): void {
+    // Phase 7 owns the durable Done transition.
   }
 }
 

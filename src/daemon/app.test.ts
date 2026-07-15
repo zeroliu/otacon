@@ -13,6 +13,7 @@ import {
   otaconPort,
   repoConfigPath,
   repoLocalConfigPath,
+  reviewRevisionReportPath,
   revisionPath,
   sessionDir,
   sessionStatePath,
@@ -138,6 +139,51 @@ function validPlanFor(id: string): string {
     "utf8",
   );
   return fixture.replace("otc_test01", id);
+}
+
+function validReviewReport(id: string, revision: number, snapshot: string, head = "a".repeat(40)): string {
+  const group = (layer: string, title: string) => `### ${layer} — ${title}
+
+**Purpose:** Explain why this boundary belongs in the reader's causal path.
+**Changed behavior:** Calls now preserve the frozen value instead of mutable state.
+**Surfaces:** \`src/example.ts#${title.replaceAll(" ", "")}\`
+
+This paragraph explains the handoff.`;
+  return `---
+type: otacon-pr-review
+version: 1
+session: ${id}
+revision: ${revision}
+pr: github.com/acme/app#42
+head: ${head}
+knowledge-snapshot: ${snapshot}
+altitude: balanced
+---
+
+## Background
+
+The old input could move while the report was open.
+That made the explanation impossible to reproduce.
+
+## Intuition
+
+The snapshot is a labeled photograph of reader knowledge.
+A later report can take another photograph.
+
+## Code
+
+Read the contract before runtime wiring.
+
+${group("Interface changes", "Snapshot contract")}
+
+${group("Integration path", "Capture handoff")}
+
+${group("Implementation walkthrough", "Atomic commit")}
+
+## Quiz
+
+Structured cards render at this stable insertion point.
+`;
 }
 
 type FakeOutgoing = Omit<ServerResponse, "writableFinished"> & {
@@ -431,17 +477,20 @@ describe("review session identity and lifecycle", () => {
     const body = (await created.json()) as {
       action: string;
       session: { id: string; kind: string; review: { revision: number } };
+      preparation: { revision: { revision: number }; snapshot: { hash: string } };
     };
     expect(body.action).toBe("created");
     expect(body.session.kind).toBe("review");
     expect(body.session.review.revision).toBe(1);
+    expect(body.preparation.revision.revision).toBe(1);
+    expect(body.preparation.snapshot.hash).toHaveLength(64);
     expect(existsSync(join(sessionDir(body.session.id), "session.json"))).toBe(false);
 
     const lookup = await app.request("/api/reviews?repo=ACME%2FAPP&number=42");
     expect(lookup.status).toBe(200);
     const found = (await lookup.json()) as { session: { id: string; revision: number } };
     expect(found.session.id).toBe(body.session.id);
-    expect(found.session.revision).toBe(1);
+    expect(found.session.revision).toBe(0);
   });
 
   test("unchanged head reuses; changed head revises and reopens the same session", async () => {
@@ -525,7 +574,7 @@ describe("review session identity and lifecycle", () => {
     const snapshot = await reader.next();
     expect(snapshot.event).toBe("snapshot");
     expect(snapshot.data).toMatchObject({
-      session: { id, kind: "review", revision: 1, status: "working" },
+      session: { id, kind: "review", revision: 0, status: "working" },
       threads: [],
       transcript: [],
       activity: [],
@@ -533,6 +582,102 @@ describe("review session identity and lifecycle", () => {
     });
     await reader.cancel();
     expect(existsSync(sessionStatePath(id))).toBe(false);
+  });
+
+  test("submits immutable report revisions and exposes detail, revision, and diff endpoints", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { revision: { revision: number }; snapshot: { hash: string } };
+    };
+    const id = first.session.id;
+    const submitted = await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 1, first.preparation.snapshot.hash),
+      quiz: JSON.stringify({ version: 1, questions: [] }),
+    });
+    expect(submitted.status).toBe(201);
+    expect(((await submitted.json()) as { revision: { revision: { status: string } } }).revision.revision.status).toBe("submitted");
+
+    const detail = await app.request(`/api/reviews/${id}`);
+    const detailBody = (await detail.json()) as {
+      session: { revision: number; review: { revision: number } };
+      report: { report: string; snapshot: { user: { markdown: string }; project: { markdown: string } } };
+    };
+    expect(detailBody.session.revision).toBe(1);
+    expect(detailBody.session.review.revision).toBe(1);
+    expect(detailBody.report.report).toContain("## Background");
+    expect(detailBody.report.snapshot.user.markdown).toContain("# User knowledge");
+    expect(detailBody.report.snapshot.project.markdown).toContain("# Project knowledge");
+
+    const next = await postJson(`/api/reviews/${id}/revisions`, {});
+    const nextBody = (await next.json()) as { preparation: { revision: { revision: number }; snapshot: { hash: string } } };
+    expect(nextBody.preparation.revision.revision).toBe(2);
+    const second = await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 2, nextBody.preparation.snapshot.hash).replace("old input", "prior input"),
+      quiz: "{}",
+    });
+    expect(second.status).toBe(201);
+    expect((await app.request(`/api/reviews/${id}/revisions/1`)).status).toBe(200);
+    const exactFirst = await app.request(`/api/reviews/${id}?revision=1`);
+    expect(exactFirst.status).toBe(200);
+    expect(((await exactFirst.json()) as { report: { revision: { revision: number } } }).report.revision.revision).toBe(1);
+    const exactSecond = await app.request(`/api/reviews/${id}?revision=2`);
+    expect(((await exactSecond.json()) as { report: { revision: { revision: number } } }).report.revision.revision).toBe(2);
+    const diff = await app.request(`/api/reviews/${id}/diff?from=1&to=2`);
+    expect(diff.status).toBe(200);
+    expect(((await diff.json()) as { from: number; to: number }).from).toBe(1);
+  });
+
+  test("returns useful lint issues without publishing an invalid report", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const invalid = await postJson(`/api/reviews/${first.session.id}/submit`, {
+      report: validReviewReport(first.session.id, 1, first.preparation.snapshot.hash)
+        .replace("## Background", "## Intuition"),
+      quiz: "{}",
+    });
+    expect(invalid.status).toBe(422);
+    const body = (await invalid.json()) as { issues: Array<{ code: string }> };
+    expect(body.issues.map((issue) => issue.code)).toContain("E_REPORT_SECTION_ORDER");
+    expect((await app.request(`/api/reviews/${first.session.id}`)).status).toBe(200);
+  });
+
+  test("reports an unavailable prepared revision as a conflict instead of an internal error", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const unavailable = await postJson(`/api/reviews/${first.session.id}/submit`, {
+      report: validReviewReport(first.session.id, 99, first.preparation.snapshot.hash),
+      quiz: "{}",
+    });
+    expect(unavailable.status).toBe(409);
+    expect((await unavailable.json()) as object).toMatchObject({
+      error: { code: "E_REVIEW_REVISION_UNAVAILABLE" },
+    });
+  });
+
+  test("returns a typed conflict when immutable report bytes are corrupt", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const id = first.session.id;
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 1, first.preparation.snapshot.hash),
+      quiz: "{}",
+    })).status).toBe(201);
+    writeFileSync(reviewRevisionReportPath(id, 1), "corrupt\n");
+    const corrupted = await app.request(`/api/reviews/${id}?revision=1`);
+    expect(corrupted.status).toBe(409);
+    expect((await corrupted.json()) as object).toMatchObject({
+      error: { code: "E_REVIEW_REVISION_UNAVAILABLE" },
+    });
   });
 });
 

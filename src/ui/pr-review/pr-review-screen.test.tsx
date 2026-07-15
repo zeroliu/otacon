@@ -5,7 +5,7 @@ import { Window } from "happy-dom";
 import type { CapturedSelection } from "../review/anchor.js";
 import { balancedFixture } from "./fixtures.js";
 import { MemoryReviewAdapter } from "./model.js";
-import { PrReviewScreen } from "./pr-review-screen.js";
+import { PrReviewScreen, ProductionPrReviewScreen, productionPresentation } from "./pr-review-screen.js";
 
 interface Mounted {
   win: Window;
@@ -122,7 +122,165 @@ async function selectText(
   });
 }
 
+const liveReport = `---
+type: otacon-pr-review
+version: 1
+session: otc_prod1
+revision: 1
+pr: github.com/acme/app#42
+head: abc
+knowledge-snapshot: ${"a".repeat(64)}
+altitude: balanced
+---
+
+## Background
+
+Background context.
+
+## Intuition
+
+The core change.
+
+## Code
+
+Read in causal order.
+
+### Interface changes — Frozen contract
+
+**Purpose:** Make the report's frozen input explicit to every caller.
+**Changed behavior:** The report owns a snapshot instead of reading mutable knowledge.
+**Surfaces:** \`src/shared/review.ts#ReviewSnapshot\`
+
+### Integration path — Submit handoff
+
+**Purpose:** Follow the snapshot through the daemon publication boundary.
+**Changed behavior:** Submit verifies ownership before publishing the report.
+**Surfaces:** \`src/daemon/app.ts#submitReview\`
+
+### Implementation walkthrough — Atomic storage
+
+**Purpose:** Inspect the crash-safe publication boundary in the report store.
+**Changed behavior:** Report and quiz appear together after one directory rename.
+**Surfaces:** \`src/daemon/review-store.ts#submit\`
+
+## Quiz
+
+Quiz cards appear here.
+`;
+
+function productionSession() {
+  return {
+    kind: "review", id: "otc_prod1", title: "#42 Frozen report", repo: "/tmp/app", branch: "main",
+    quick: false, socratic: false, status: "working", createdAt: "2026-07-14T00:00:00.000Z",
+    updatedAt: "2026-07-14T00:02:00.000Z", revision: 1, lastReviewedRevision: 0,
+    pendingEvents: 0, openQuestions: 0, parked: false,
+    review: {
+      revision: 2,
+      head: { sha: "def", ref: "feature", repository: "acme/app", capturedAt: "2026-07-14T00:02:00.000Z" },
+      pullRequest: {
+        identity: { host: "github.com", repository: "acme/app", number: 42, key: "github.com/acme/app#42" },
+        url: "https://github.com/acme/app/pull/42", title: "Frozen report", author: "octo",
+        baseRef: "main", headRef: "feature", headRepository: "acme/app", headSha: "def", state: "open",
+        isCrossRepository: false,
+        permissions: { maintainerCanModify: true, viewerPermission: "write", readOnly: false },
+      },
+    },
+  } as never;
+}
+
+function productionPayload() {
+  return {
+    revision: {
+      version: 1, session: "otc_prod1", revision: 1, headRevision: 1, headSha: "abc",
+      snapshotHash: "a".repeat(64), createdAt: "2026-07-14T00:00:00.000Z", status: "submitted",
+    },
+    snapshot: {
+      version: 1, session: "otc_prod1", revision: 1, headRevision: 1, headSha: "abc",
+      capturedAt: "2026-07-14T00:00:00.000Z", hash: "a".repeat(64),
+      user: { hash: "b".repeat(64), markdown: "user" },
+      project: { repo: "acme/app", hash: "c".repeat(64), markdown: "project" },
+    },
+    report: liveReport, quiz: {}, warnings: [],
+  } as never;
+}
+
 describe("PrReviewScreen", () => {
+  test("production metadata leaves unknown diff stats absent instead of claiming zero changes", () => {
+    const presentation = productionPresentation({
+      kind: "review",
+      id: "otc_prod1",
+      title: "#42 Frozen report",
+      repo: "/tmp/app",
+      branch: "main",
+      quick: false,
+      socratic: false,
+      status: "reviewing",
+      createdAt: "2026-07-14T00:00:00.000Z",
+      updatedAt: "2026-07-14T00:00:00.000Z",
+      revision: 1,
+      lastReviewedRevision: 0,
+      pendingEvents: 0,
+      openQuestions: 0,
+      parked: false,
+      review: {
+        revision: 1,
+        head: { sha: "abc", ref: "feature", repository: "acme/app", capturedAt: "2026-07-14T00:00:00.000Z" },
+        pullRequest: {
+          identity: { host: "github.com", repository: "acme/app", number: 42, key: "github.com/acme/app#42" },
+          url: "https://github.com/acme/app/pull/42",
+          title: "Frozen report",
+          author: "octo",
+          baseRef: "main",
+          headRef: "feature",
+          headRepository: "acme/app",
+          headSha: "abc",
+          state: "open",
+          isCrossRepository: false,
+          permissions: { maintainerCanModify: true, viewerPermission: "write", readOnly: false },
+        },
+      },
+    } as never, {
+      revision: {
+        version: 1, session: "otc_prod1", revision: 1, headRevision: 1, headSha: "abc",
+        snapshotHash: "a".repeat(64), createdAt: "2026-07-14T00:00:00.000Z", status: "submitted",
+      },
+      snapshot: {
+        version: 1, session: "otc_prod1", revision: 1, headRevision: 1, headSha: "abc",
+        capturedAt: "2026-07-14T00:00:00.000Z", hash: "a".repeat(64),
+        user: { hash: "b".repeat(64), markdown: "user" },
+        project: { repo: "acme/app", hash: "c".repeat(64), markdown: "project" },
+      },
+      report: "",
+      quiz: {},
+      warnings: [],
+    } as never);
+    expect(presentation.pr.filesChanged).toBeUndefined();
+    expect(presentation.pr.additions).toBeUndefined();
+    expect(presentation.pr.deletions).toBeUndefined();
+  });
+
+  test("embeds one content landmark, shows exact stale-head provenance, and disables deferred actions", async () => {
+    const active = await mountReview();
+    await act(async () => active.root.render(
+      <ProductionPrReviewScreen session={productionSession()} payload={productionPayload()} />,
+    ));
+    await wait(10);
+    expect(active.host.querySelector("main")).toBeNull();
+    expect(active.host.querySelector(".pr-review-page")?.tagName).toBe("DIV");
+    expect(active.host.querySelector(".pr-stale-report")?.textContent).toContain("current head generation 2");
+    expect(active.host.querySelector(".pr-report-revision-banner")?.textContent).toContain("report head generation 1");
+    expect(active.host.querySelector(".pr-report-capability-note")?.textContent).toContain("Reading mode");
+    expect(button(active.host, "Done").disabled).toBe(true);
+    expect([...active.host.querySelectorAll(".pr-toc-group")].map((link) => [
+      link.textContent,
+      link.getAttribute("href"),
+    ])).toEqual([
+      ["Frozen contract", "#code-interface-frozen-contract"],
+      ["Submit handoff", "#code-integration-submit-handoff"],
+      ["Atomic storage", "#code-implementation-atomic-storage"],
+    ]);
+  });
+
   test("keeps Plans and Reviews inside the existing collapsible app sidebar hierarchy", async () => {
     const { host, win } = await mountReview();
     const sidebar = host.querySelector("aside.app-sidebar") as HTMLElement | null;

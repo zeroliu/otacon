@@ -80,6 +80,51 @@ export function reviewQuizDraftPath(id: string): string {
   return join(sessionDir(id), "quiz.json");
 }
 
+/** Immutable PR-review report history; separate from plan r<n>.md snapshots. */
+export function reviewRevisionsDir(id: string): string {
+  return join(sessionDir(id), "review", "revisions");
+}
+
+export function reviewRevisionDir(id: string, revision: number): string {
+  return join(reviewRevisionsDir(id), `r${revision}`);
+}
+
+export function reviewRevisionMetadataPath(id: string, revision: number): string {
+  return join(reviewRevisionDir(id, revision), "revision.json");
+}
+
+export function reviewRevisionSnapshotPath(id: string, revision: number): string {
+  return join(reviewRevisionDir(id, revision), "knowledge-snapshot.json");
+}
+
+export function reviewRevisionUserKnowledgePath(id: string, revision: number): string {
+  return join(reviewRevisionDir(id, revision), "user.md");
+}
+
+export function reviewRevisionProjectKnowledgePath(id: string, revision: number): string {
+  return join(reviewRevisionDir(id, revision), "project.md");
+}
+
+export function reviewRevisionSubmissionDir(id: string, revision: number): string {
+  return join(reviewRevisionDir(id, revision), "submission");
+}
+
+export function reviewRevisionReportPath(id: string, revision: number): string {
+  return join(reviewRevisionSubmissionDir(id, revision), "report.md");
+}
+
+export function reviewRevisionSubmissionMetadataPath(id: string, revision: number): string {
+  return join(reviewRevisionSubmissionDir(id, revision), "submission.json");
+}
+
+export function reviewRevisionQuizPath(id: string, revision: number): string {
+  return join(reviewRevisionSubmissionDir(id, revision), "quiz.json");
+}
+
+export function reviewRevisionWarningsPath(id: string, revision: number): string {
+  return join(reviewRevisionSubmissionDir(id, revision), "warnings.json");
+}
+
 /**
  * One session's home dir (`<OTACON_HOME>/sessions/<id>`). The session id is a
  * globally-unique hash, so this never collides across repos. It is the

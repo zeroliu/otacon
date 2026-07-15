@@ -15,7 +15,7 @@
 import type { MouseEvent, ReactNode, RefObject } from "react";
 import { Component, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { accentStyle } from "./accent";
-import type { Anchor, CommentDraft, PlanLiveSession, StreamEvent, Thread, TranscriptEntry } from "./api";
+import type { Anchor, CommentDraft, PlanLiveSession, ReviewLiveSession, StreamEvent, Thread, TranscriptEntry } from "./api";
 import {
   postCommentFollowup,
   postComments,
@@ -25,9 +25,11 @@ import {
   postReviewed,
   useDiff,
   usePresence,
+  useReviewDetail,
   useRevision,
   useSession,
 } from "./api";
+import { ProductionPrReviewScreen } from "./pr-review/pr-review-screen";
 import {
   captureSelection,
   clearThreadHighlights,
@@ -115,13 +117,13 @@ class RendererBoundary extends Component<{ children: ReactNode }, { failed: bool
   render() {
     if (!this.state.failed) return this.props.children;
     return (
-      <main className="review-wait">
+      <div className="review-wait">
         <p className="wait-line">// renderer unavailable</p>
         <p>
           The plan renderer failed to load — the daemon may have restarted with a new build, or
           the network dropped. <a href="">Reload</a> to fetch the current one.
         </p>
-      </main>
+      </div>
     );
   }
 }
@@ -135,6 +137,25 @@ const COMPOSER_GUESS_HEIGHT = 240;
 // together; a tablet-band gap where the visual face is the phone's but a tap
 // opened a desktop popover anchored off-thumb would otherwise sit at 560–639px.
 const SHEET_VIEWPORT = 640;
+
+function PrReviewLoop({ session }: { session: ReviewLiveSession }) {
+  const detail = useReviewDetail(session.id, session.revision);
+  if (session.revision < 1) {
+    return (
+      <main className="review-wait">
+        <p className="wait-line">// report authoring in progress</p>
+        <p>
+          The frozen knowledge snapshot for PR head generation {session.review.revision} is ready.
+          This screen will replace itself when the first report revision passes validation.
+        </p>
+      </main>
+    );
+  }
+  if (detail?.report === undefined || detail.report === null) {
+    return <p className="loading">loading review r{session.revision}…</p>;
+  }
+  return <ProductionPrReviewScreen session={session} payload={detail.report} />;
+}
 
 /** The review loop: plan + rail + grill + interview + now-playing/console + approve + composer + drawer. */
 function ReviewLoop({
@@ -987,18 +1008,7 @@ export function SessionScreen({ id }: { id: string }) {
   }
 
   if (session.kind === "review") {
-    return (
-      <div className="page">
-        <main className="empty">
-          <p className="empty-title">{session.title}</p>
-          <p className="empty-body">
-            Review revision {session.review.revision} is being prepared for head{" "}
-            <code>{session.review.head.sha.slice(0, 12)}</code>. The report renderer will attach
-            when this session receives its first persisted review revision.
-          </p>
-        </main>
-      </div>
-    );
+    return <PrReviewLoop session={session} />;
   }
 
   return (
