@@ -4407,3 +4407,51 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** Contract reviews need richer comparisons than before/after code (for
   example generated schema diffs), or runtime integration becomes a branching graph that
   an ordered handoff path cannot explain without loss.
+
+## Knowledge uses one implicit local user profile (2026-07-14)
+
+- **Decision:** V1 has exactly one profile for the current OS user. User and project
+  knowledge live under `~/.otacon/knowledge/`; no account selector or project-local
+  knowledge file is introduced.
+- **Why:** Otacon is a local, single-user tool today. An identity/account system would add
+  migration and selection states without improving the common path, while home storage
+  keeps personal understanding out of git and available to every local project.
+- **Revisit when:** Otacon supports shared machines, synced profiles, multiple personas,
+  or team-owned knowledge with separate authorization and retention rules.
+
+## Project knowledge is keyed by canonical GitHub owner/repo (2026-07-14)
+
+- **Decision:** Project knowledge paths use lowercase `github.com/<owner>/<repo>`, derived
+  from validated GitHub HTTPS/SSH/`owner/repo` forms. Local clone paths are never keys.
+- **Why:** Clone locations and worktrees are incidental and multiply over time. GitHub
+  repository identity lets all clones converge on one model and rejects traversal or an
+  unrelated host before it can influence a home-store path.
+- **Revisit when:** Reviews support another forge, repositories can migrate while retaining
+  identity, or GitHub exposes a stable immutable repository id worth storing alongside the
+  human-readable key.
+
+## Editable summaries and append-only evidence are separate (2026-07-14)
+
+- **Decision:** Markdown summaries are the compact current knowledge agents read; JSONL
+  evidence is an append-only audit trail. Exposure and demonstrated understanding use
+  distinct verdicts, and raw answers remain in their source review session.
+- **Why:** Markdown is understandable and directly editable, but editing a summary must not
+  erase retries or make a claimed understanding indistinguishable from quiz evidence.
+  JSONL keeps the high-volume history cheap while summaries stay small and useful in prompts.
+- **Revisit when:** Evidence volume needs indexed queries, automatic summary rebuilding, or
+  cross-device merge semantics that a local append-only file cannot provide.
+
+## Knowledge summaries use hash compare-and-swap (2026-07-14)
+
+- **Decision:** Every knowledge GET returns a SHA-256 hash; PUT must supply it as `baseHash`.
+  The daemon validates the standard Markdown sections, compares without yielding, and writes
+  via atomic rename. A stale writer receives 409 plus the current document. Malformed summary
+  or evidence files are quarantined beside the original before recovery.
+- **Why:** The web editor and an agent can race. Last-write-wins would silently discard
+  somebody's understanding; a small local CAS contract preserves both the unsaved draft and
+  disk state for daemon/API writers without introducing a database or lock service. A direct
+  filesystem editor does not honor that protocol and is only detected if its write lands
+  before the daemon comparison, so simultaneous direct edits remain an explicit limitation.
+  Quarantine keeps the daemon usable while retaining damaged bytes for inspection.
+- **Revisit when:** Multiple daemon processes or remote writers require an OS-level lock,
+  summaries need field-level merges, or a database owns transactional summary/evidence updates.

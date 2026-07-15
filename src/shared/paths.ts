@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { CanonicalGitHubRepo } from "./knowledge.js";
 
 // OTACON_HOME and OTACON_PORT exist for hermetic tests and as a port-conflict
 // escape hatch (DECISIONS.md "Env overrides"). Read at call time, not import
@@ -43,6 +44,31 @@ export function updateCachePath(): string {
  */
 export function homeSessionsDir(): string {
   return join(otaconHome(), "sessions");
+}
+
+/** Local, implicit-profile knowledge root. No knowledge file is written in a repo. */
+export function knowledgeDir(): string {
+  return join(otaconHome(), "knowledge");
+}
+
+export function userKnowledgePath(): string {
+  return join(knowledgeDir(), "user.md");
+}
+
+export function userKnowledgeEvidencePath(): string {
+  return join(knowledgeDir(), "user.evidence.jsonl");
+}
+
+export function projectKnowledgeDir(repo: CanonicalGitHubRepo): string {
+  return join(knowledgeDir(), "projects", "github.com", ...repo.split("/"));
+}
+
+export function projectKnowledgePath(repo: CanonicalGitHubRepo): string {
+  return join(projectKnowledgeDir(repo), "knowledge.md");
+}
+
+export function projectKnowledgeEvidencePath(repo: CanonicalGitHubRepo): string {
+  return join(projectKnowledgeDir(repo), "evidence.jsonl");
 }
 
 /**

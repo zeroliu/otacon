@@ -9,12 +9,14 @@ import {
   eventsPath,
   globalConfigPath,
   homeSessionDir,
+  projectKnowledgePath,
   otaconPort,
   repoConfigPath,
   repoLocalConfigPath,
   revisionPath,
   sessionDir,
 } from "../shared/paths.js";
+import { canonicalizeGitHubRepo, defaultKnowledgeMarkdown } from "../shared/knowledge.js";
 import type { RegistrySession } from "../shared/types.js";
 import { VERSION } from "../shared/version.js";
 import type { NodeBindings } from "./app.js";
@@ -163,6 +165,89 @@ describe("health and shutdown", () => {
     expect(res.status).toBe(404);
     const body = (await res.json()) as { error: { code: string } };
     expect(body.error.code).toBe("E_NOT_FOUND");
+  });
+});
+
+describe("knowledge API", () => {
+  const projectRepo = canonicalizeGitHubRepo("acme/app");
+  if (projectRepo === undefined) throw new Error("fixture repository should canonicalize");
+
+  async function putKnowledge(body: unknown): Promise<Response> {
+    return app.request("/api/knowledge", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  test("GET returns a no-history baseline without writing a personal file", async () => {
+    const res = await app.request("/api/knowledge?scope=project&repo=ACME%2FApp");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { document: { repo: string; markdown: string; hash: string } };
+    expect(body.document.repo).toBe("acme/app");
+    expect(body.document.markdown).toBe(defaultKnowledgeMarkdown({ scope: "project", repo: projectRepo }));
+    expect(body.document.hash).toMatch(/^[a-f0-9]{64}$/);
+    expect(existsSync(projectKnowledgePath(projectRepo))).toBe(false);
+    expect(existsSync(join(repo, ".otacon"))).toBe(false);
+  });
+
+  test("canonical clone spellings address the same project document", async () => {
+    const first = await app.request(
+      "/api/knowledge?scope=project&repo=https%3A%2F%2Fgithub.com%2FAcme%2FApp.git",
+    );
+    const second = await app.request(
+      "/api/knowledge?scope=project&repo=git%40github.com%3Aacme%2Fapp.git",
+    );
+    const a = (await first.json()) as { document: { path: string; hash: string } };
+    const b = (await second.json()) as { document: { path: string; hash: string } };
+    expect(a.document).toEqual(b.document);
+  });
+
+  test("a stale PUT returns current disk text and does not overwrite it", async () => {
+    const loaded = await app.request("/api/knowledge?scope=project&repo=acme%2Fapp");
+    const baseline = (await loaded.json()) as { document: { markdown: string; hash: string } };
+    const firstText = baseline.document.markdown.replace("- None yet.", "- Understands CAS.");
+    const first = await putKnowledge({
+      scope: "project",
+      repo: "acme/app",
+      markdown: firstText,
+      baseHash: baseline.document.hash,
+    });
+    expect(first.status).toBe(200);
+
+    const staleText = baseline.document.markdown.replace("- None yet.", "- My unsaved draft.");
+    const stale = await putKnowledge({
+      scope: "project",
+      repo: "acme/app",
+      markdown: staleText,
+      baseHash: baseline.document.hash,
+    });
+    expect(stale.status).toBe(409);
+    const conflict = (await stale.json()) as {
+      error: { code: string };
+      document: { markdown: string };
+    };
+    expect(conflict.error.code).toBe("E_KNOWLEDGE_CONFLICT");
+    expect(conflict.document.markdown).toContain("Understands CAS");
+    expect(conflict.document.markdown).not.toContain("My unsaved draft");
+  });
+
+  test("invalid scope, repository, hash, and Markdown write nothing", async () => {
+    expect((await app.request("/api/knowledge?scope=project&repo=gitlab.com%2Facme%2Fapp")).status).toBe(400);
+    expect((await app.request("/api/knowledge?scope=nope")).status).toBe(400);
+    expect((await putKnowledge({ scope: "project", repo: "acme/app", markdown: "# Bad\n", baseHash: "nope" })).status).toBe(400);
+
+    const loaded = await app.request("/api/knowledge?scope=project&repo=acme%2Fapp");
+    const { document } = (await loaded.json()) as { document: { hash: string } };
+    const invalid = await putKnowledge({
+      scope: "project",
+      repo: "acme/app",
+      markdown: "# Missing standard sections\n",
+      baseHash: document.hash,
+    });
+    expect(invalid.status).toBe(422);
+    expect(((await invalid.json()) as { error: { code: string } }).error.code).toBe("E_INVALID_KNOWLEDGE");
+    expect(existsSync(projectKnowledgePath(projectRepo))).toBe(false);
   });
 });
 
@@ -1006,9 +1091,9 @@ describe("revisions", () => {
 });
 
 describe("SPA shell and static assets", () => {
-  test("GET / and GET /s/:id serve the shell — including unknown session ids", async () => {
+  test("GET /, settings, knowledge, and /s/:id serve the same persistent shell", async () => {
     const session = mintSession();
-    for (const path of ["/", `/s/${session.id}`, "/s/otc_zzzzzz"]) {
+    for (const path of ["/", "/settings", "/knowledge", `/s/${session.id}`, "/s/otc_zzzzzz"]) {
       const res = await app.request(path);
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type")).toContain("text/html");
@@ -1035,6 +1120,7 @@ describe("SPA shell and static assets", () => {
     const bare = createApp({ store, uiDir: null, notify: () => {} });
     expect((await bare.request("/")).status).toBe(503);
     expect((await bare.request("/s/otc_zzzzzz")).status).toBe(503);
+    expect((await bare.request("/knowledge")).status).toBe(503);
     expect((await bare.request("/assets/app-abc123.js")).status).toBe(404);
   });
 });

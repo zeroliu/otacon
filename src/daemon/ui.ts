@@ -202,6 +202,9 @@ export function registerUiRoutes(app: Hono<{ Bindings: NodeBindings }>, deps: Ui
   // The Settings screen is a client route on the
   // same SPA shell — served identically to /s/:id.
   app.get("/settings", shell);
+  // Knowledge is another persistent-shell client route, backed by
+  // /api/knowledge but served by the same built SPA entry point.
+  app.get("/knowledge", shell);
 
   app.get("/assets/*", (c) => {
     const name = c.req.path.slice("/assets/".length);

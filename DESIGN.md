@@ -390,6 +390,8 @@ the model is suspended — no inference, no token spend.
 | `otacon open [--session <id>]`                                              | Open the review URL in the browser, or the index URL when no session resolves; skips the launch when an otacon tab from this daemon is already open (health `viewers >= 1`), dedup only, no focus (open-tab reuse, below); `OTACON_NO_BROWSER` prints it instead of launching (with `reused: true`/`false`) |
 | `otacon config [open]`                                                      | Open the Settings web UI in the browser: `/settings?repo=<cwd repo root>` inside a repo (Project scope), bare `/settings` outside one (User scope); `OTACON_NO_BROWSER` prints the URL instead |
 | `otacon config get <key>`                                                   | Read-only: print the merged effective value of one dotted key (`worktree.dir`, `budgets.summaryLines`, …) from the config files; no daemon. Unknown key → exit 1 |
+| `otacon knowledge get --scope user\|project [--repo <root>]`                 | Read the local Markdown profile through the daemon and print its path, text, and CAS hash as one JSON line. Project scope resolves the clone's GitHub origin to canonical `owner/repo` |
+| `otacon knowledge put --scope user\|project --file <md> --base-hash <hash> [--repo <root>]` | Replace the Markdown summary only if `base-hash` is current; a conflict returns `E_KNOWLEDGE_CONFLICT` plus the current disk document |
 | `otacon clean [--all]`                                                      | Permanently remove ended sessions' home folders (`~/.otacon/sessions/<id>/`) and prune the registry; no archive (§12) |
 | `otacon update [--check]`                                                   | Update the global install to the latest published version now, bypassing the start-time throttle and `update.auto` (§16); `--check` reports current/latest/outdated without installing |
 
@@ -493,6 +495,17 @@ POST /api/config                            {scope:"user"|"project"|
                                             ~/.otacon/config.json, project →
                                             <repo>/.otacon/config.json, project.local
                                             → <repo>/.otacon/config.local.json
+GET  /api/knowledge?scope=user|project      current local knowledge document:
+     &repo=<github-owner/repo>              {document:{scope,repo?,path,markdown,hash}}.
+                                            Project scope requires a valid GitHub
+                                            identity and canonicalizes common URL /
+                                            SSH spellings; a missing file returns the
+                                            neutral baseline without writing it
+PUT  /api/knowledge                         {scope,repo?,markdown,baseHash}; atomically
+                                            replaces the summary when baseHash still
+                                            matches. 409 E_KNOWLEDGE_CONFLICT includes
+                                            the current document; malformed standard
+                                            Markdown returns 422 and writes nothing
 GET  /api/sessions                          index (registry)
 POST /api/sessions                          mint + register a session (otacon start)
 GET  /api/sessions/:id                      session detail (+ revision, pending events)
@@ -1034,7 +1047,8 @@ A persistent **app shell** wraps every route: a left sidebar (the OTACON wordmar
 linking home, the settings gear, and the live session list) beside a content track.
 `/` is a **welcome pane** in the track (the sidebar holds the index now); `/s/:id` is
 the open session; `/settings` is the config screen (User / Project / Project · local
-scopes; reached from the sidebar gear or `otacon config`).
+scopes; reached from the sidebar gear or `otacon config`); `/knowledge` is the local
+User / Project Markdown profile editor, reached from the adjacent Knowledge entry.
 On desktop (≥960px) the sidebar is a column (240px by default) that is **drag-resizable**
 (a separator on its right edge; the width persists across reloads) and **collapsible** to
 a one-column content view (the choice persists too; a `»` handle reopens it). Below
@@ -1478,6 +1492,42 @@ editor with explicit User/Project targets and saved, dirty, and concurrent-chang
 On conflict it preserves the local draft, exposes the newer disk value, and makes the
 reviewer choose which version survives.
 
+#### Local knowledge profile
+
+Otacon has one implicit profile for the current OS user. It has no account picker and
+never writes personal knowledge into a project checkout. The user summary lives at
+`~/.otacon/knowledge/user.md`; project summaries use the canonical, lowercase GitHub
+identity at `~/.otacon/knowledge/projects/github.com/<owner>/<repo>/knowledge.md`.
+Common HTTPS, SSH, and `owner/repo` spellings canonicalize before path construction, so
+two clones of the same GitHub repository share knowledge while an unvalidated host or
+path never becomes a storage key.
+
+Every summary is editable Markdown with one level-one title and these required, ordered
+sections: `Preferences`, `Demonstrated concepts`, `Needs reinforcement`, and
+`Code exposure`. Missing history reads as a neutral balanced baseline but does not create
+a file. Agents read the Markdown as the current compact model; report authoring later
+freezes the exact user/project text and hashes it into a revision snapshot.
+
+Evidence is a distinct append-only audit trail:
+`user.evidence.jsonl` for the user and `evidence.jsonl` beside each project summary.
+Each line retains its scope/repository, source session and optional PR/head, concept id,
+verdict (`retry`, `pass`, `exposed`, or `remembered`), compact rationale, and timestamp.
+A retry followed by a pass therefore remains two facts even when the Markdown summary is
+edited to describe only the superseding demonstrated state. Raw quiz transcripts remain
+in the review session rather than bloating the knowledge ledger.
+
+Summary editing uses optimistic concurrency. GET returns SHA-256 over the exact Markdown;
+PUT carries that value as `baseHash`, validates the full standard shape, then performs a
+no-yield compare-and-swap followed by temp-file + rename. A stale save returns the current
+disk document with 409, leaving the browser draft untouched. Evidence is validated before
+one `O_APPEND` JSON line is written. A malformed summary or ledger is renamed beside the
+original as `.corrupt-<timestamp>-<serial>` and the store continues from a neutral/empty
+view, preserving the damaged bytes for recovery rather than silently overwriting them.
+The CAS serializes browser and CLI/agent writers that use the daemon. A direct filesystem
+edit already present when PUT reads is detected by its changed hash, but an external editor
+that writes in the narrow read-to-rename window does not participate in the protocol and is
+not transactionally protected; avoid saving through both paths at exactly the same time.
+
 The same production React components and `styles.css` render in the application and in a
 permanent dev-only Storybook. Storybook provides full-page balanced/expert desktop and
 phone fixtures plus hard-to-reach quiz, thread, Done, and Knowledge editor states. It is
@@ -1642,6 +1692,8 @@ Operational requirement: the Mac stays awake while a plan is in review
 | `~/.otacon/worktrees/<slug>/`                     | Implement build's git worktree on branch `otacon/impl-<slug>` (base dir is `worktree.dir`, default `~/.otacon/worktrees` — outside the repo)                    | n/a (global, outside the repo)             |
 | `<repo>/<plans.dir>/YYYY-MM-DD-<slug>.md`         | Save-time project copy (default `.otacon/plans`; set `plans.dir=docs/plans` to group with tracked plans)       | yours to commit (or not)                   |
 | `~/.otacon/registry.json`                         | Session registry: ID → repo, branch, title, status, the optional `prompt` (the user's verbatim request from `--prompt`, trimmed and uncapped), `prUrl`, `prState` (the latest PR's GitHub state, refreshed by a `gh` poller; see below), and `impl` (the build's worktree + branch, recorded at Implement-approve; see below)                                                             | n/a (global)                               |
+| `~/.otacon/knowledge/user.md` + `user.evidence.jsonl` | Implicit OS-user Markdown summary plus append-only learning evidence                                                                 | n/a (global)                               |
+| `~/.otacon/knowledge/projects/github.com/<owner>/<repo>/` | Canonical GitHub project `knowledge.md` plus `evidence.jsonl`; shared by every local clone and never written into the checkout       | n/a (global)                               |
 
 Every session's working state (and its approved plan) lives in the home store keyed
 by its session id (`~/.otacon/sessions/<id>/`), repo-independent. On **Save** it

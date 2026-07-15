@@ -133,8 +133,19 @@ export function AppShell({ children }: { children: ReactNode }) {
           <div className="app-sidebar-tools">
             <a
               className="settings-link"
+              href="/knowledge"
+              aria-label="knowledge"
+              aria-current={path === "/knowledge" ? "page" : undefined}
+              title="knowledge"
+              onClick={linkClick("/knowledge")}
+            >
+              ▤
+            </a>
+            <a
+              className="settings-link"
               href="/settings"
               aria-label="settings"
+              aria-current={path === "/settings" ? "page" : undefined}
               title="settings"
               onClick={linkClick("/settings")}
             >
@@ -201,15 +212,28 @@ export function AppShell({ children }: { children: ReactNode }) {
                 style={{ "--wordmark": `url(${wordmarkUrl})` } as CSSProperties}
               />
             </a>
-            <a
-              className="settings-link"
-              href="/settings"
-              aria-label="settings"
-              title="settings"
-              onClick={linkClick("/settings")}
-            >
-              ⚙
-            </a>
+            <div className="app-topbar-tools">
+              <a
+                className="settings-link"
+                href="/knowledge"
+                aria-label="knowledge"
+                aria-current={path === "/knowledge" ? "page" : undefined}
+                title="knowledge"
+                onClick={linkClick("/knowledge")}
+              >
+                ▤
+              </a>
+              <a
+                className="settings-link"
+                href="/settings"
+                aria-label="settings"
+                aria-current={path === "/settings" ? "page" : undefined}
+                title="settings"
+                onClick={linkClick("/settings")}
+              >
+                ⚙
+              </a>
+            </div>
           </div>
         )}
         {children}

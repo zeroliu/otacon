@@ -5368,6 +5368,12 @@ code {
   outline-offset: 3px;
 }
 
+.app-topbar-tools {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
 @media (min-width: 960px) {
   /* The sidebar is the list at the desktop width: every <960px session affordance
    * folds away (the in-header ☰ folds via the shell media query above). */
@@ -6074,6 +6080,17 @@ code {
 .pr-knowledge-tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
 .pr-knowledge-target { display: grid; gap: 4px; padding: 13px 0; color: var(--ink); font-size: var(--fs-meta); }
 .pr-knowledge-target code { color: var(--ink); overflow-wrap: anywhere; }
+.pr-knowledge-repo { display: flex; align-items: center; gap: 8px; padding: 13px 0; }
+.pr-knowledge-repo label { color: var(--ink-soft); font: 700 var(--fs-meta)/1 var(--mono); text-transform: uppercase; }
+.pr-knowledge-repo input { min-width: 0; flex: 1; padding: 8px 10px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font: var(--fs-meta)/1.2 var(--mono); }
+.pr-knowledge-repo input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.pr-knowledge-inert,
+.pr-knowledge-load-error,
+.pr-knowledge-save-error { padding: 14px; border: 1px dashed var(--line-strong); color: var(--ink-soft); }
+.pr-knowledge-load-error,
+.pr-knowledge-save-error { color: var(--chip-failed-ink); border-color: color-mix(in srgb, var(--chip-failed-ink) 40%, var(--line-strong)); }
+.pr-knowledge-load-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.pr-knowledge-load-error p { margin: 0; }
 .pr-markdown-editor { display: grid; gap: 8px; }
 .pr-markdown-editor > span { display: flex; justify-content: space-between; color: var(--ink); font-size: var(--fs-meta); font-weight: 700; text-transform: uppercase; }
 .pr-markdown-editor small { color: var(--ink-soft); font: inherit; font-weight: 400; text-transform: none; }

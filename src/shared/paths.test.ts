@@ -7,7 +7,11 @@ import {
   expandTilde,
   homeSessionDir,
   homeSessionsDir,
+  knowledgeDir,
   planPath,
+  projectKnowledgeDir,
+  projectKnowledgeEvidencePath,
+  projectKnowledgePath,
   revisionChangelogPath,
   revisionPath,
   revisionWarningsPath,
@@ -17,7 +21,10 @@ import {
   threadsPath,
   transcriptPath,
   updateCachePath,
+  userKnowledgeEvidencePath,
+  userKnowledgePath,
 } from "./paths.js";
+import { canonicalizeGitHubRepo } from "./knowledge.js";
 
 let savedHome: string | undefined;
 
@@ -46,6 +53,25 @@ describe("home plan archive paths", () => {
     process.env.OTACON_HOME = "/tmp/otacon-other";
     expect(homeSessionsDir()).toBe(join("/tmp/otacon-other", "sessions"));
     expect(homeSessionDir("otc_zzz")).toBe(join("/tmp/otacon-other", "sessions", "otc_zzz"));
+  });
+});
+
+describe("implicit-profile knowledge paths", () => {
+  const repo = canonicalizeGitHubRepo("Acme/App");
+  if (repo === undefined) throw new Error("fixture repo should canonicalize");
+
+  test("user knowledge stays directly under the home knowledge root", () => {
+    expect(knowledgeDir()).toBe(join("/tmp/otacon-home-test", "knowledge"));
+    expect(userKnowledgePath()).toBe(join(knowledgeDir(), "user.md"));
+    expect(userKnowledgeEvidencePath()).toBe(join(knowledgeDir(), "user.evidence.jsonl"));
+  });
+
+  test("project knowledge is keyed by canonical GitHub owner/repo", () => {
+    expect(projectKnowledgeDir(repo)).toBe(
+      join(knowledgeDir(), "projects", "github.com", "acme", "app"),
+    );
+    expect(projectKnowledgePath(repo)).toBe(join(projectKnowledgeDir(repo), "knowledge.md"));
+    expect(projectKnowledgeEvidencePath(repo)).toBe(join(projectKnowledgeDir(repo), "evidence.jsonl"));
   });
 });
 

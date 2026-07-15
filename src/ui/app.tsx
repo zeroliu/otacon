@@ -2,7 +2,8 @@ import { SessionScreen } from "./session-screen";
 import { SettingsScreen } from "./settings-screen";
 import { AppShell } from "./shell";
 import { Welcome } from "./welcome";
-import { usePath } from "./router";
+import { navigate, usePath } from "./router";
+import { KnowledgeScreen } from "./pr-review/knowledge-screen";
 
 export function App() {
   const path = usePath();
@@ -14,6 +15,8 @@ export function App() {
     <SessionScreen id={match[1] ?? ""} />
   ) : path === "/settings" ? (
     <SettingsScreen />
+  ) : path === "/knowledge" ? (
+    <KnowledgeScreen onBack={() => navigate("/")} backLabel="← sessions" />
   ) : (
     <Welcome />
   );

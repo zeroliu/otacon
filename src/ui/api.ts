@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 import { createContext, createElement, useContext, useEffect, useMemo, useState } from "react";
 import { maybeSelfHeal } from "./self-heal";
 import type { ConfigField, ScopeFieldError, ScopeValues } from "../shared/config";
+import type { KnowledgeDocument, KnowledgeScope } from "../shared/knowledge";
 import type {
   ActivityNote,
   Anchor,
@@ -24,7 +25,7 @@ import type {
   TranscriptEntry,
 } from "../shared/types";
 
-export type { ConfigField, ScopeFieldError, ScopeValues };
+export type { ConfigField, KnowledgeDocument, KnowledgeScope, ScopeFieldError, ScopeValues };
 
 export type {
   ActivityNote,
@@ -795,5 +796,129 @@ export async function saveConfig(
     };
   } catch {
     return { ok: false, status: 0, error: { code: "E_UNREACHABLE", message: "couldn't reach otacond" } };
+  }
+}
+
+interface KnowledgePayload {
+  document: KnowledgeDocument;
+}
+
+export interface KnowledgeState {
+  document?: KnowledgeDocument;
+  loading: boolean;
+  error?: string;
+  reload: () => void;
+}
+
+function knowledgeUrl(scope: KnowledgeScope, repo?: string): string | null {
+  if (scope === "project" && !repo) return null;
+  const query = new URLSearchParams({ scope });
+  if (scope === "project" && repo) query.set("repo", repo);
+  return `/api/knowledge?${query.toString()}`;
+}
+
+/**
+ * Load one knowledge document. Knowledge is a flat CAS-managed file rather than
+ * a live stream, so a scope/repo change or an explicit reload performs one GET.
+ * Project loading stays inert until a canonical repo is supplied.
+ */
+export function useKnowledge(scope: KnowledgeScope, repo?: string): KnowledgeState {
+  const [document, setDocument] = useState<KnowledgeDocument>();
+  const [loading, setLoading] = useState(scope === "user" || Boolean(repo));
+  const [error, setError] = useState<string>();
+  const [nonce, setNonce] = useState(0);
+  const reload = () => setNonce((value) => value + 1);
+
+  useEffect(() => {
+    const url = knowledgeUrl(scope, repo);
+    if (url === null) {
+      setDocument(undefined);
+      setLoading(false);
+      setError(undefined);
+      return;
+    }
+
+    let live = true;
+    setDocument(undefined);
+    setLoading(true);
+    setError(undefined);
+    fetch(url, { headers: { accept: "application/json" } })
+      .then(async (response) => {
+        const body = (await response.json().catch(() => ({}))) as Partial<KnowledgePayload> & {
+          error?: { message?: string };
+        };
+        if (!response.ok || body.document === undefined) {
+          throw new Error(body.error?.message ?? `knowledge fetch failed: ${response.status}`);
+        }
+        return body.document;
+      })
+      .then((next) => {
+        if (!live) return;
+        setDocument(next);
+        setLoading(false);
+      })
+      .catch((cause: unknown) => {
+        if (!live) return;
+        setError(cause instanceof Error ? cause.message : "couldn't load knowledge");
+        setLoading(false);
+      });
+
+    return () => {
+      live = false;
+    };
+  }, [scope, repo, nonce]);
+
+  return { document, loading, error, reload };
+}
+
+/** PUT /api/knowledge outcome, including the current disk document on CAS conflict. */
+export type SaveKnowledgeResult =
+  | { ok: true; document: KnowledgeDocument }
+  | {
+      ok: false;
+      status: number;
+      error: { code: string; message: string };
+      /** Present for E_KNOWLEDGE_CONFLICT so the editor can preserve and compare its draft. */
+      document?: KnowledgeDocument;
+    };
+
+/**
+ * Replace one knowledge Markdown file iff `baseHash` still matches the disk.
+ * A 409 is deliberately data-bearing: the caller keeps the local draft and
+ * presents `document.markdown` as the newer disk version.
+ */
+export async function saveKnowledge(
+  scope: KnowledgeScope,
+  repo: string | undefined,
+  markdown: string,
+  baseHash: string,
+): Promise<SaveKnowledgeResult> {
+  try {
+    const response = await fetch("/api/knowledge", {
+      method: "PUT",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify(scope === "user"
+        ? { scope, markdown, baseHash }
+        : { scope, repo, markdown, baseHash }),
+    });
+    const body = (await response.json().catch(() => ({}))) as Partial<KnowledgePayload> & {
+      error?: { code?: string; message?: string };
+    };
+    if (response.ok && body.document !== undefined) return { ok: true, document: body.document };
+    return {
+      ok: false,
+      status: response.status,
+      error: {
+        code: body.error?.code ?? "E_INTERNAL",
+        message: body.error?.message ?? "knowledge save failed",
+      },
+      document: body.document,
+    };
+  } catch {
+    return {
+      ok: false,
+      status: 0,
+      error: { code: "E_UNREACHABLE", message: "couldn't reach otacond" },
+    };
   }
 }

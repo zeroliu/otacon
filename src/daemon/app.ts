@@ -21,6 +21,8 @@ import {
   validateScopeInput,
 } from "../shared/config.js";
 import type { ScopeValues } from "../shared/config.js";
+import { canonicalizeGitHubRepo, parseKnowledgeHash } from "../shared/knowledge.js";
+import type { KnowledgeTarget } from "../shared/knowledge.js";
 import {
   expandTilde,
   globalConfigPath,
@@ -60,6 +62,7 @@ import { validateDiagrams } from "./diagrams.js";
 import { diffPlans } from "./diff.js";
 import { lint } from "./linter/index.js";
 import { slugify } from "./linter/parse.js";
+import { InvalidKnowledgeMarkdownError, KnowledgeStore } from "./knowledge-store.js";
 import { Notifier } from "./notify.js";
 import { startPrPolling } from "./pr-status.js";
 import { Presence } from "./presence.js";
@@ -87,6 +90,8 @@ export interface NodeBindings {
 
 export interface AppOptions {
   store: Store;
+  /** Test seam for the local user/project knowledge store. */
+  knowledge?: KnowledgeStore;
   /** Invoked once POST /api/shutdown's response is out; main.ts exits in it. */
   onShutdown?: () => void;
   /** Test override: where the built SPA lives (null = no UI). Default: resolved next to the module. */
@@ -230,6 +235,7 @@ function sameOrigin(origin: string, host: string | undefined): boolean {
 
 export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }> {
   const { store } = options;
+  const knowledge = options.knowledge ?? new KnowledgeStore();
 
   // One queue instance per session for the daemon's lifetime — every request
   // must park on / enqueue into the same in-memory waiter list, and the
@@ -554,6 +560,76 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.get("/api/health", (c) =>
     c.json({ app: "otacond", version: VERSION, pid: process.pid, viewers: viewers.count() }),
   );
+
+  const knowledgeTarget = (scope: unknown, repo: unknown): KnowledgeTarget | undefined => {
+    if (scope === "user") return { scope: "user" };
+    if (scope !== "project" || typeof repo !== "string") return undefined;
+    const canonical = canonicalizeGitHubRepo(repo);
+    return canonical === undefined ? undefined : { scope: "project", repo: canonical };
+  };
+
+  // Local profile documents. GET never creates a file: a no-history reader
+  // receives the neutral baseline and its CAS hash. Project identity is a
+  // canonical GitHub owner/repo rather than a clone path, so clones converge.
+  app.get("/api/knowledge", (c) => {
+    const scope = c.req.query("scope");
+    const repo = c.req.query("repo");
+    const target = knowledgeTarget(scope, repo);
+    if (target === undefined) {
+      return badRequest(
+        c,
+        scope === "project"
+          ? "project knowledge requires a valid GitHub owner/repo"
+          : 'scope must be "user" or "project"',
+      );
+    }
+    return c.json({ document: knowledge.read(target) });
+  });
+
+  // CAS summary replacement. A stale editor receives the current document in
+  // the 409 response, allowing it to preserve its draft and show the newer
+  // disk value. Validate everything before replace so a bad request writes no
+  // file. Evidence appends are intentionally separate store operations.
+  app.put("/api/knowledge", async (c) => {
+    const body = (await readJsonBody(c)) ?? {};
+    const target = knowledgeTarget(body.scope, body.repo);
+    if (target === undefined) {
+      return badRequest(
+        c,
+        body.scope === "project"
+          ? "project knowledge requires a valid GitHub owner/repo"
+          : 'scope must be "user" or "project"',
+      );
+    }
+    if (typeof body.markdown !== "string") return badRequest(c, "markdown must be a string");
+    if (typeof body.baseHash !== "string") return badRequest(c, "baseHash must be a SHA-256 string");
+    const baseHash = parseKnowledgeHash(body.baseHash);
+    if (baseHash === undefined) return badRequest(c, "baseHash must be a lowercase SHA-256 string");
+    try {
+      const result = knowledge.replace(target, body.markdown, baseHash);
+      if (!result.ok) {
+        return c.json(
+          {
+            error: {
+              code: "E_KNOWLEDGE_CONFLICT",
+              message: "knowledge changed after this editor loaded it",
+            },
+            document: result.current,
+          },
+          409,
+        );
+      }
+      return c.json({ document: result.document });
+    } catch (error) {
+      if (error instanceof InvalidKnowledgeMarkdownError) {
+        return c.json(
+          { error: { code: "E_INVALID_KNOWLEDGE", message: error.message } },
+          422,
+        );
+      }
+      throw error;
+    }
+  });
 
   // The Settings UI's config surface (review loop and daemon API). GET returns the full
   // schema plus each scope's current sparse, coerced values. The `user` scope
