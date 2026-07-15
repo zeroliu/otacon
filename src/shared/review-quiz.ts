@@ -142,6 +142,36 @@ function nonEmptyLine(value: unknown, maximum: number): value is string {
   return nonEmpty(value, maximum) && !/[\r\n]/.test(value);
 }
 
+/** Strict durable/private wire guard used before queue recovery trusts quiz work. */
+export function isReviewQuizAnswerEvent(value: unknown): value is ReviewQuizAnswerEvent {
+  const item = record(value);
+  if (item === undefined || !exactKeys(item, [
+    "event", "session", "revision", "headRevision", "headSha", "question", "attempt",
+    "answer", "concept", "rubric", "knowledge",
+  ])) return false;
+  const concept = record(item.concept);
+  const rubric = record(item.rubric);
+  const knowledge = record(item.knowledge);
+  return item.event === "quiz-answer" &&
+    typeof item.session === "string" && SESSION.test(item.session) &&
+    Number.isSafeInteger(item.revision) && (item.revision as number) >= 1 &&
+    Number.isSafeInteger(item.headRevision) && (item.headRevision as number) >= 1 &&
+    typeof item.headSha === "string" && SHA.test(item.headSha) &&
+    typeof item.question === "string" && ID.test(item.question) &&
+    typeof item.attempt === "string" && /^qa[1-9]\d*$/.test(item.attempt) &&
+    nonEmpty(item.answer, 20_000) &&
+    concept !== undefined && exactKeys(concept, ["id", "label", "scope"]) &&
+    typeof concept.id === "string" && ID.test(concept.id) &&
+    nonEmptyLine(concept.label, 160) &&
+    (concept.scope === "user" || concept.scope === "project") &&
+    rubric !== undefined && exactKeys(rubric, ["criteria"]) &&
+    Array.isArray(rubric.criteria) && rubric.criteria.length >= 1 && rubric.criteria.length <= 10 &&
+    rubric.criteria.every((criterion) => nonEmpty(criterion, 500)) &&
+    knowledge !== undefined && exactKeys(knowledge, ["scope", "baseHash"]) &&
+    knowledge.scope === concept.scope &&
+    typeof knowledge.baseHash === "string" && parseKnowledgeHash(knowledge.baseHash) !== undefined;
+}
+
 function parseConcept(value: unknown, path: string, errors: string[]): ReviewQuizConcept | undefined {
   const item = record(value);
   if (item === undefined || !exactKeys(item, ["id", "label", "scope"])) {

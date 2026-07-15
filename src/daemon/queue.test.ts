@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { hashKnowledge } from "../shared/knowledge.js";
+import type { ReviewQuizAnswerEvent } from "../shared/review-quiz.js";
 import type { EventPayload, QueuedEvent } from "../shared/types.js";
 import { SessionQueue } from "./queue.js";
 
@@ -24,6 +26,22 @@ function payload(n: number): EventPayload {
     id: `q${n}`,
     anchor: null,
     body: `question ${n}`,
+  };
+}
+
+function quizPayload(): ReviewQuizAnswerEvent {
+  return {
+    event: "quiz-answer",
+    session: "otc_abc123",
+    revision: 1,
+    headRevision: 1,
+    headSha: "a".repeat(40),
+    question: "q1",
+    attempt: "qa1",
+    answer: "Because the queue is synchronous.",
+    concept: { id: "c1", label: "Queue", scope: "project" },
+    rubric: { criteria: ["Names the invariant"] },
+    knowledge: { scope: "project", baseHash: hashKnowledge("queue state") },
   };
 }
 
@@ -372,6 +390,23 @@ describe("SessionQueue persistence", () => {
     expect(new SessionQueue(file).size).toBe(0);
   });
 
+  test("quiz-answer work is accepted only with its complete strict envelope", () => {
+    const event = quizPayload();
+    const q = new SessionQueue(file);
+    q.enqueue(event, 1);
+    expect(new SessionQueue(file).take()?.payload).toEqual(event);
+
+    const { answer: _answer, concept: _concept, rubric: _rubric, knowledge: _knowledge, ...identityOnly } = event;
+    writeFileSync(file, JSON.stringify({
+      version: 1,
+      events: [{ seq: 1, queuedAt: "2026-07-14T00:00:00.000Z", payload: identityOnly }],
+    }));
+    const recovered = new SessionQueue(file);
+    expect(recovered.size).toBe(0);
+    expect(recovered.hasPayload(() => true)).toBe(false);
+    expect(readdirSync(dir).filter((name) => name.startsWith("events.json.corrupt-"))).toHaveLength(1);
+  });
+
   test("a head change drops quiz and thread work for the previous head only", () => {
     const q = new SessionQueue(file);
     const thread: EventPayload = {
@@ -385,19 +420,7 @@ describe("SessionQueue persistence", () => {
       anchor: { section: "code", exact: "selected text" },
       body: "Change this.",
     };
-    const quiz: EventPayload = {
-      event: "quiz-answer",
-      session: "otc_abc123",
-      revision: 1,
-      headRevision: 1,
-      headSha: "a".repeat(40),
-      question: "q1",
-      attempt: "qa1",
-      answer: "Because the queue is synchronous.",
-      concept: { id: "c1", label: "Queue", scope: "project" },
-      rubric: { criteria: ["Names the invariant"] },
-      knowledge: { scope: "project", baseHash: "b".repeat(64) },
-    } as EventPayload;
+    const quiz = quizPayload();
     q.enqueue(thread, 1);
     q.enqueue(quiz, 2);
     q.enqueue({ ...thread, thread: "t2", headRevision: 2, headSha: "c".repeat(40) }, 3);

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1391,7 +1391,26 @@ describe("review session identity and lifecycle", () => {
       revision: 1, question: "q-choice", answer: "open", idempotencyKey: "crash-choice",
     })).toThrow(ReviewQuizConflictError);
 
+    const pendingIdentity = pendingOpen.event!;
+    writeFileSync(eventsPath(id), JSON.stringify({
+      version: 1,
+      events: [{
+        seq: 1,
+        queuedAt: "2026-07-14T00:00:00.000Z",
+        payload: {
+          event: pendingIdentity.event,
+          session: pendingIdentity.session,
+          revision: pendingIdentity.revision,
+          headRevision: pendingIdentity.headRevision,
+          headSha: pendingIdentity.headSha,
+          question: pendingIdentity.question,
+          attempt: pendingIdentity.attempt,
+        },
+      }],
+    }));
+
     const conflictedApp = createApp({ store, knowledge, reviews, quizzes, uiDir, notify: () => {} });
+    expect(readdirSync(homeSessionDir(id)).some((name) => name.startsWith("events.json.corrupt-"))).toBe(true);
     const conflict = await conflictedApp.request(`/api/reviews/${id}/quiz/q-choice/answer`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -1426,7 +1445,14 @@ describe("review session identity and lifecycle", () => {
     expect(readFileSync(reviewEventSeqPath(id), "utf8").trim()).toBe("1");
     const delivered = await restartedAgain.request(`/api/sessions/${id}/events?wait=0`);
     expect(delivered.status).toBe(200);
-    expect((await delivered.json()) as object).toMatchObject({ event: "quiz-answer", question: "q-open" });
+    expect((await delivered.json()) as object).toMatchObject({
+      event: "quiz-answer",
+      question: "q-open",
+      answer: "daemon to browser",
+      concept: { id: "handoff", label: "Handoff", scope: "project" },
+      rubric: { criteria: ["Names both sides"] },
+      knowledge: { scope: "project" },
+    });
     expect(((await (await restartedAgain.request(`/api/sessions/${id}/events?wait=0`)).json()) as { event: string }).event).toBe("timeout");
   });
 

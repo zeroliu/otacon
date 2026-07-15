@@ -13,6 +13,7 @@
 // "eventSeq") so seqs survive queue drains.
 
 import { existsSync, readFileSync } from "node:fs";
+import { isReviewQuizAnswerEvent } from "../shared/review-quiz.js";
 import type { ReviewDoneEvent } from "../shared/review.js";
 import type { EventPayload, EventsFile, QueuedEvent, ReviewThreadEvent } from "../shared/types.js";
 import { quarantineCorruptFile, stringify, writeFileAtomic } from "./store.js";
@@ -122,6 +123,7 @@ function validQueuedEvent(value: unknown): value is QueuedEvent {
     EVENT_KINDS.has((payload as Record<string, unknown>).event as string) &&
     typeof (payload as Record<string, unknown>).session === "string" &&
     ((payload as Record<string, unknown>).session as string) !== "" &&
+    ((payload as Record<string, unknown>).event !== "quiz-answer" || isReviewQuizAnswerEvent(payload)) &&
     validReviewThreadPayload(payload as Record<string, unknown>) &&
     validReviewDonePayload(payload as Record<string, unknown>);
   if (!valid) return false;
