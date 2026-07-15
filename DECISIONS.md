@@ -2785,7 +2785,8 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 
 - **Decision:** Each per-agent wrapper check in `otacon doctor` now passes against a
   list of candidate paths and is `ok` if the managed `SKILL.md` (file present AND
-  containing `MANAGED_MARKER`) exists at any of them. The candidates are the user path
+  containing `MANAGED_MARKER`) exists at any of them and declares the expected skill name
+  plus its protocol command (`otacon start` or `otacon review start`). The candidates are the
   always, plus — when `findRepoRoot(process.cwd())` resolves — the project path
   (`<root>/.claude/...`, `<root>/.codex/skills/...`, `<root>/.opencode/...`). The
   satisfying scope is named in `detail` (`<path> (project)` / `<path> (user)`); the user
@@ -2804,6 +2805,8 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   (the otacon protocol skill, the `SKILL.md` that `otacon install` writes), shows the
   exact paths it probed, and surfaces `--project` as the in-repo fix. Keeping the miss a
   warning preserves today's contract that wrappers for unused agents never fail the run.
+  Identity validation also prevents two valid managed cards from being swapped while Doctor
+  incorrectly reports both protocols as installed.
 - **Revisit when:** Agents gain more wrapper search locations doctor should accept, or a
   per-agent "expected scope" makes listing every candidate path too noisy.
 
@@ -4677,8 +4680,8 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   attempt. A summary conflict leaves the attempt pending and appends nothing; crash replay may
   recognize only its exact marker and byte-identical evidence id/content. Because a bounded
   choice's verdict is daemon-known, replaying that same pending idempotency key may rebase its
-  managed patch to the latest profile hash; open-answer grades still require the agent to
-  resubmit the explicit current hash.
+  managed patch to the latest profile hash; open-answer grades remain bound to the durable
+  answer-time hash and conflict if the caller substitutes a newer profile hash.
 - **Why:** Replacing whole knowledge documents would clobber manual edits, while marking pass
   before knowledge commits would claim understanding the profile never received. Managed
   items preserve user prose, revision-aware ids avoid cross-report collisions, and the ordered
@@ -4749,3 +4752,41 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** GitHub offers an official local PR emulator, visual-regression snapshots
   become stable across supported browsers, or the authoring format gains a fixture generator
   that can replace the committed human-readable examples.
+
+## Review mutations revalidate durable ownership across every asynchronous boundary (2026-07-15)
+
+- **Decision:** Head refresh, quiz answer, and quiz grade capture session status, head
+  generation, and head SHA before awaiting the request body, then re-read and compare all
+  three before any durable write. Report submission owns both head SHA and generation, quiz
+  grades own the persisted attempt's answer-time knowledge hash, terminal queue envelopes own
+  the completion event sequence, and thread creation cannot provide server-owned lifecycle fields. Thread
+  transitions validate the complete candidate before replacement, and the browser coalesces
+  duplicate Conduct requests per thread while one is in flight.
+- **Why:** SHA-only checks miss A-B-A head changes; trusting caller-supplied current hashes,
+  lifecycle fields, or completion sequences lets stale or forged data cross ownership
+  boundaries. Revalidation makes each persisted transition correspond to the exact state the
+  caller observed even when body parsing or another request yields control.
+- **Revisit when:** Review state and its queues move into one transactional database or a
+  serialized per-session actor makes these compare-before-write guards redundant.
+
+## Locked review worktrees are exclusive handoff leases (2026-07-15)
+
+- **Decision:** `review checkout` never reuses a worktree reported as locked, even when its
+  ref, SHA, and cleanliness otherwise match. It returns the existing stale-worktree error and
+  leaves the checkout untouched.
+- **Why:** Git's lock is an ownership signal that another process may be using the worktree;
+  treating it as reusable would allow an implementation agent to edit another workflow's
+  checkout concurrently.
+- **Revisit when:** Checkout ownership has explicit lease metadata that can prove a lock
+  belongs to this exact review session and agent handoff.
+
+## Review modals contain and restore focus (2026-07-15)
+
+- **Decision:** The mobile review sheet and Done dialog make the background inert while open,
+  trap forward and backward Tab navigation inside the modal, support Escape dismissal, and
+  restore focus to the trigger on close.
+- **Why:** `aria-modal` describes a boundary but does not enforce one. Without inertness and
+  focus containment, keyboard and assistive-technology users can interact with obscured review
+  controls or lose their place after dismissal.
+- **Revisit when:** The surfaces move to a native dialog/popover primitive that provides the
+  same containment and focus restoration across supported browsers.

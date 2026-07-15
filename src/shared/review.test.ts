@@ -56,4 +56,15 @@ describe("pull request metadata wire decoder", () => {
       permissions: { maintainerCanModify: true, viewerPermission: "read", readOnly: false },
     })).toBeUndefined();
   });
+
+  test("rejects null nested objects without throwing", () => {
+    expect(parsePullRequestMetadata({ ...metadata, identity: null })).toBeUndefined();
+    expect(parsePullRequestMetadata({ ...metadata, permissions: null })).toBeUndefined();
+  });
+
+  test("rejects a head SHA that is not exactly 40 hexadecimal characters", () => {
+    for (const headSha of ["invalid", "a".repeat(39), "a".repeat(41), "g".repeat(40)]) {
+      expect(parsePullRequestMetadata({ ...metadata, headSha })).toBeUndefined();
+    }
+  });
 });

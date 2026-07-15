@@ -79,4 +79,16 @@ describe("gh pr view adapter", () => {
     expect(() => resolvePullRequest("42", "/repo", repo, { run: () => "not-json" })).toThrow(/malformed JSON/);
     expect(() => resolvePullRequest("42", "/repo", repo, { run: () => payload({ number: 41 }) })).toThrow(/inconsistent/);
   });
+
+  test("rejects a foreign PR URL before querying local repository permissions", () => {
+    const calls: string[][] = [];
+    expect(() => resolvePullRequest("https://github.com/other/repo/pull/42", "/repo", repo, {
+      run: (_command, args) => {
+        calls.push(args);
+        return payload({ url: "https://github.com/other/repo/pull/42" });
+      },
+    })).toThrow(/belongs to other\/repo/);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.slice(0, 2)).toEqual(["pr", "view"]);
+  });
 });

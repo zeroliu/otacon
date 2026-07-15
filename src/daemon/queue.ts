@@ -90,7 +90,7 @@ function validQueuedEvent(value: unknown): value is QueuedEvent {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const event = value as Record<string, unknown>;
   const payload = event.payload;
-  return Number.isSafeInteger(event.seq) && (event.seq as number) >= 0 &&
+  const valid = Number.isSafeInteger(event.seq) && (event.seq as number) >= 0 &&
     exactIso(event.queuedAt) &&
     typeof payload === "object" && payload !== null && !Array.isArray(payload) &&
     typeof (payload as Record<string, unknown>).event === "string" &&
@@ -99,6 +99,13 @@ function validQueuedEvent(value: unknown): value is QueuedEvent {
     ((payload as Record<string, unknown>).session as string) !== "" &&
     validReviewThreadPayload(payload as Record<string, unknown>) &&
     validReviewDonePayload(payload as Record<string, unknown>);
+  if (!valid) return false;
+  const rawPayload = payload as Record<string, unknown>;
+  if (rawPayload.event === "review-done") {
+    const completion = rawPayload.completion as Record<string, unknown>;
+    return completion.eventSeq === event.seq;
+  }
+  return true;
 }
 
 export class SessionQueue {

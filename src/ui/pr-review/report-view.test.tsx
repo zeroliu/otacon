@@ -61,6 +61,15 @@ async function render(markdown = report): Promise<HTMLElement> {
   const oldDocument = (globalThis as { document?: unknown }).document;
   const oldWindow = (globalThis as { window?: unknown }).window;
   const oldElement = (globalThis as { Element?: unknown }).Element;
+  const oldActEnvironment =
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT;
+  restore = () => {
+    (globalThis as { document?: unknown }).document = oldDocument;
+    (globalThis as { window?: unknown }).window = oldWindow;
+    (globalThis as { Element?: unknown }).Element = oldElement;
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
+      oldActEnvironment;
+  };
   (globalThis as { document?: unknown }).document = win.document;
   (globalThis as { window?: unknown }).window = win;
   (globalThis as { Element?: unknown }).Element = win.Element;
@@ -70,11 +79,6 @@ async function render(markdown = report): Promise<HTMLElement> {
   root = createRoot(host);
   const { ReportView } = await import("./report-view.js");
   await act(async () => root?.render(<ReportView markdown={markdown} quiz={<p data-quiz-card>quiz card</p>} />));
-  restore = () => {
-    (globalThis as { document?: unknown }).document = oldDocument;
-    (globalThis as { window?: unknown }).window = oldWindow;
-    (globalThis as { Element?: unknown }).Element = oldElement;
-  };
   return host;
 }
 
@@ -98,6 +102,9 @@ describe("ReportView", () => {
     expect(group.id).toBe("code-interface-snapshot-contract");
     expect(group.dataset.sourceLines).toMatch(/^\d+-\d+$/);
     expect(group.textContent).toContain("The revision now owns a snapshot");
+    expect(group.querySelector(".pr-changed-behavior")?.textContent).toContain(
+      "Changed behavior: The revision now owns a snapshot",
+    );
     expect(group.querySelector(".fence code")?.textContent).toContain("type ReviewSnapshot");
     expect(host.querySelector("[data-quiz-card]")?.textContent).toBe("quiz card");
   });

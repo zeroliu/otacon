@@ -488,7 +488,21 @@ export class ReviewQuizStore {
       attempt.gradeStartedAt = this.deps.now();
       this.writeState(state);
     }
-    const receipt = this.applyKnowledge(session, question, companion.revision, attempt, input.verdict, input.feedback, input.knowledgeBaseHash);
+    if (attempt.knowledgeBaseHash !== input.knowledgeBaseHash) {
+      throw new ReviewQuizConflictError(
+        "E_KNOWLEDGE_CONFLICT",
+        "grade knowledge hash does not match the submitted answer",
+      );
+    }
+    const receipt = this.applyKnowledge(
+      session,
+      question,
+      companion.revision,
+      attempt,
+      input.verdict,
+      input.feedback,
+      attempt.knowledgeBaseHash,
+    );
     Object.assign(attempt, {
       status: input.verdict,
       feedback: input.feedback,

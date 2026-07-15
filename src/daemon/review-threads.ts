@@ -148,16 +148,30 @@ export function publicReviewThreads(path: string, expectedSession?: string): Pub
 
 function sameCreate(
   existing: ReviewThread,
-  input: Omit<ReviewThread, "id" | "createdAt">,
+  input: Omit<ReviewThreadCreate, "id" | "createdAt">,
 ): boolean {
   const { id: _id, createdAt: _createdAt, response: _response, saved: _saved, codeAction: _codeAction, ...comparable } = existing;
   return JSON.stringify(comparable) === JSON.stringify(input);
 }
 
+export type ReviewThreadCreate = Omit<ReviewThread, "response" | "saved" | "codeAction"> & {
+  response?: never;
+  saved?: never;
+  codeAction?: never;
+};
+
 export function createReviewThread(
   path: string,
-  input: ReviewThread,
+  input: ReviewThreadCreate,
 ): { thread: ReviewThread; repeated: boolean } {
+  if (
+    Object.prototype.hasOwnProperty.call(input, "response") ||
+    Object.prototype.hasOwnProperty.call(input, "saved") ||
+    Object.prototype.hasOwnProperty.call(input, "codeAction") ||
+    !isReviewThread(input)
+  ) {
+    throw new ReviewThreadConflictError("E_REVIEW_THREAD_INVALID", "review thread creation is invalid");
+  }
   const threads = readReviewThreads(path, input.identity.session);
   const existing = threads.find((thread) => thread.idempotencyKey === input.idempotencyKey);
   if (existing !== undefined) {
@@ -167,9 +181,15 @@ export function createReviewThread(
     }
     return { thread: existing, repeated: true };
   }
-  if (!isReviewThread(input)) throw new ReviewThreadConflictError("E_REVIEW_THREAD_INVALID", "review thread is invalid");
   writeReviewThreads(path, [...threads, input]);
   return { thread: input, repeated: false };
+}
+
+function validatedMutation(candidate: ReviewThread): ReviewThread {
+  if (!isReviewThread(candidate)) {
+    throw new ReviewThreadConflictError("E_REVIEW_THREAD_INVALID", "review thread mutation is invalid");
+  }
+  return candidate;
 }
 
 export interface ReviewThreadResponseInput {
@@ -210,10 +230,13 @@ export function respondToReviewThread(
     if (!same) throw new ReviewThreadConflictError("E_REVIEW_THREAD_DUPLICATE_RESPONSE", "review thread already has a different response");
     return { thread, repeated: true };
   }
-  thread.response = response;
-  if (saved !== undefined) thread.saved = saved;
-  writeReviewThreads(path, threads);
-  return { thread, repeated: false };
+  const updated = validatedMutation({
+    ...thread,
+    response,
+    ...(saved === undefined ? {} : { saved }),
+  });
+  writeReviewThreads(path, threads.map((candidate) => candidate.id === id ? updated : candidate));
+  return { thread: updated, repeated: false };
 }
 
 export function requestReviewCodeAction(
@@ -227,9 +250,12 @@ export function requestReviewCodeAction(
   if (thread === undefined) throw new ReviewThreadConflictError("E_REVIEW_THREAD_UNKNOWN", `unknown review thread: ${id}`);
   if (thread.intent !== "comment") throw new ReviewThreadConflictError("E_REVIEW_CODE_ACTION_KIND", "only a persisted Comment can conduct a code change");
   if (thread.codeAction !== undefined) return { thread, repeated: true };
-  thread.codeAction = { status: "requested", requestedAt: now, updatedAt: now };
-  writeReviewThreads(path, threads);
-  return { thread, repeated: false };
+  const updated = validatedMutation({
+    ...thread,
+    codeAction: { status: "requested", requestedAt: now, updatedAt: now },
+  });
+  writeReviewThreads(path, threads.map((candidate) => candidate.id === id ? updated : candidate));
+  return { thread: updated, repeated: false };
 }
 
 export function updateReviewCodeAction(
@@ -251,7 +277,15 @@ export function updateReviewCodeAction(
   if (thread.codeAction.status === "completed" || thread.codeAction.status === "failed") {
     throw new ReviewThreadConflictError("E_REVIEW_CODE_ACTION_TERMINAL", "code action already reached a terminal state");
   }
-  thread.codeAction = { ...thread.codeAction, status: input.status, updatedAt: now, ...(input.message === undefined ? {} : { message: input.message }) };
-  writeReviewThreads(path, threads);
-  return { thread, repeated: false };
+  const updated = validatedMutation({
+    ...thread,
+    codeAction: {
+      ...thread.codeAction,
+      status: input.status,
+      updatedAt: now,
+      ...(input.message === undefined ? {} : { message: input.message }),
+    },
+  });
+  writeReviewThreads(path, threads.map((candidate) => candidate.id === id ? updated : candidate));
+  return { thread: updated, repeated: false };
 }

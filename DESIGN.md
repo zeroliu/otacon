@@ -586,6 +586,10 @@ POST /api/reviews/:id/threads/:tid/code-action
                                             explicit reviewer authorization for code work on a persisted Comment only
 POST /api/reviews/:id/threads/:tid/code-action/status
                                             agent code-action lifecycle acknowledgement
+                                            Head refresh, quiz answer, and quiz grade capture
+                                            status/head generation/SHA before their awaited
+                                            body parse, then reject a changed boundary before
+                                            any durable write.
 POST /api/sessions/:id/ask                  agent grill question (otacon ask):
                                             {question, options?, recommend?, multi?}
                                             → 201 {id: "q<n>"}, or a batch
@@ -911,7 +915,9 @@ revision; `session.review.revision` remains the PR-head generation.
 `otacon review start` is repository-bound. It refuses a non-git directory or a clone
 without a GitHub origin. The CLI resolves a URL or positive number with `gh pr view`,
 then compares the PR URL's canonical base `owner/repo` with the current clone before it
-contacts the create API. Canonical repo + PR number is the durable identity: an unchanged
+queries repository permission or contacts the create API. Resolved metadata requires an
+exact 40-hex head SHA and self-consistent non-null identity/permission objects. Canonical
+repo + PR number is the durable identity: an unchanged
 active head returns the existing session, and an unchanged completed head returns that same
 read-only session as `reused-complete`. A changed head updates metadata, increments the same
 session's review revision, reopens it to `working` as `reopened-changed` when necessary, and
@@ -965,8 +971,9 @@ the status pill, the agent-presence dot, the "updated Xm ago" timestamp, the del
 the clean⇄diff toggle, and Approve; scrolling down it compacts (tighter padding + title
 size, not a collapsing row) and re-expands at the top (§10). The header carries the ☰ button at <960px
 (where the sidebar is hidden); at ≥960px it folds away, since the sidebar is already the
-list. `[`/`]` walk the active sessions in activity order (wrapping at both ends), so a
-reviewer can sweep the queue from the keyboard; the shortcut mounts on the **app shell**
+list. `[`/`]` walk sessions of the current kind in activity order (wrapping at both
+ends): plan routes keep the active-plan queue, while review routes include the current
+review session. The shortcut mounts on the **app shell**
 (the one element present on every route), so it works from the welcome and settings panes
 too, not just the review screen. `●N` on a row counts the revisions this device hasn't
 opened (unread state is device-local, §10); the row you are reading never wears one. Each
@@ -1587,8 +1594,9 @@ Preparing report revision N snapshots exact User and Project Markdown before aut
 manifest records each scope hash/content provenance, canonical project key, PR head SHA,
 head generation, capture time, and a composite SHA-256 over both scope hashes plus project
 identity. The revision directory is published by atomic rename. Submission verifies the
-report's session, PR, head, report revision, and composite snapshot ownership, and also
-refuses a prepared revision whose head became stale while the agent authored it. Report,
+report's session, PR, head SHA and generation, report revision, and composite snapshot
+ownership, and also refuses a prepared revision whose head became stale while the agent
+authored it, including an A-B-A head change that returns to the same SHA. Report,
 quiz, warnings, submit timestamp, and a manifest hashing each of those exact files then
 become visible together through a second atomic directory rename. Reads verify both
 manifests; missing or corrupt immutable bytes return a typed conflict rather than being
@@ -1605,7 +1613,9 @@ explanation is sound. One question has at most one pending attempt, so an old ve
 race a newer explanation. Choice answers are graded deterministically inside the daemon and
 never wake the agent. An open answer is atomically persisted before its private `quiz-answer`
 event is queued; the event carries the answer, rubric, attempt/report/head identity, concept,
-scope, and answer-time knowledge hash. Repeating the same idempotency key requests delivery
+scope, and answer-time knowledge hash. A grade is bound to that durable attempt hash; a
+caller cannot substitute the latest profile hash after the answer was submitted. Repeating
+the same idempotency key requests delivery
 of the same ungraded work without creating another attempt: queued or in-flight work is not
 duplicated and consumes no new event sequence, while acknowledged work may be enqueued again
 if the attempt is still pending. The agent returns pass/retry
@@ -1636,12 +1646,16 @@ selection. The shared anchored composer can optionally remember either exchange 
 as conversation cards in a desktop rail and a phone drawer, including the selected quote,
 an agent response when applicable, and the exact knowledge destination when one was
 selected. A Comment card alone offers **Conduct code change**; choosing it is the explicit
-second step that moves the thread into worktree/subagent handoff state. An Ask thread can
-never trigger that path. This separates review discussion from authorization to alter the
-PR branch.
+second step that moves the thread into worktree/subagent handoff state. While that request
+is in flight, repeated Conduct actions for the same thread coalesce into the original
+request. An Ask thread can never trigger that path. This separates review discussion from
+authorization to alter the PR branch.
 
 Review conversations persist in the session's `threads.json` with a strict version-2
-envelope, disjoint from the byte-compatible version-1 plan-thread schema. Each entry owns
+envelope, disjoint from the byte-compatible version-1 plan-thread schema. Creation accepts
+only intent, anchor, immutable report/head identity, optional memory scope, and idempotency
+key; response, saved receipt, and code-action lifecycle fields are server-owned and rejected
+when supplied by a browser. Each entry owns
 the complete W3C-style anchor, immutable source report revision and PR head generation/SHA,
 the visible Ask/Comment intent, optional requested memory scope, agent response, exact saved
 receipt, and Comment-only code-action lifecycle. The browser projection omits its create
@@ -1649,8 +1663,11 @@ idempotency key. Agent work is a private `review-thread` event whose `work` is `
 `report-feedback`, or `code-change`; the durable thread/action is written before enqueue,
 and daemon startup reconstructs a missing wake by full immutable identity without minting a
 duplicate event sequence. A browser retry likewise reconstructs only still-pending work; it
-never resurrects a responded conversation or a working/terminal code action. Existing plan routes reject review sessions before parsing the
-version-2 file, so a plan helper can never quarantine or rewrite review threads.
+never resurrects a responded conversation or a working/terminal code action. Every response
+and code-action transition validates the complete candidate thread before its atomic write,
+so invalid persisted or derived state cannot be committed. Existing plan routes reject
+review sessions before parsing the version-2 file, so a plan helper can never quarantine or
+rewrite review threads.
 
 Remember is a request, not a receipt. Creation may request User or Project scope (Project is
 the UI default), and the private event carries that request. Only an agent response that
@@ -1660,8 +1677,8 @@ unacknowledged or mismatched scope never claims knowledge was changed.
 Code mutation stays outside the daemon. `review checkout` first re-resolves GitHub metadata;
 forks, insufficient permission, terminal sessions, and closed/merged PRs yield typed
 non-mutating outcomes. For writable same-repository PRs it parses `git worktree list
---porcelain -z`, reuses only an exact clean ref/SHA worktree (including a live locked one),
-refuses dirty/stale/prunable/colliding state without reset, or fetches and creates under the
+--porcelain -z`, reuses only an exact clean, unlocked ref/SHA worktree, refuses locked,
+dirty, stale, prunable, or colliding state without reset, or fetches and creates under the
 configured worktree directory after remote-ref verification. It returns the checkout and
 push destination for the skill. The `otacon-review` skill owns its one implementation
 subagent; the main agent never implements the Comment itself. It marks the action working,
@@ -1692,10 +1709,14 @@ The clean case finishes immediately. Otherwise the dialog names both counts and 
 Continue or Close anyway. The daemon derives those counts from the same public durable
 quiz/thread projection the browser renders; without `force:true` it returns 409 and writes
 nothing. Completion appends a baseline before replacing ordinary review work with one durable
-`review-done` wake. Its pending/queued marker is repaired at startup before routes open, so a
-retry or restart cannot enqueue a second terminal event. Force close preserves every report,
+`review-done` wake. The completion record's event sequence must equal its persisted queue
+envelope sequence; its pending/queued marker is repaired at startup before routes open, so a
+retry or restart cannot enqueue a second terminal event. Once terminal, the published queue
+count is always zero even before the agent acknowledges the wake. Force close preserves every report,
 quiz attempt, and thread byte; the finished screen stays readable but all mutation controls
-are disabled. The Knowledge screen is a Markdown
+are disabled. The review mobile sheet and Done dialog own focus while open: the rest of the
+page is inert, Tab and Shift+Tab stay inside the modal, and dismissal restores focus to its
+trigger. The Knowledge screen is a Markdown
 editor with explicit User/Project targets and saved, dirty, and concurrent-change states.
 On conflict it preserves the local draft, exposes the newer disk value, and makes the
 reviewer choose which version survives.
@@ -1727,8 +1748,9 @@ concept, and attempt, and crash replay recognizes it only as an exact managed li
 as arbitrary matching prose. Retry adds/replaces a marked `Needs reinforcement`
 item without touching `Demonstrated concepts`; pass removes that concept's managed gap and
 adds a marked demonstrated item. All surrounding user prose survives unchanged. The grade
-supplies the current scope hash; a mismatch writes neither evidence nor terminal attempt and
-returns the current hash for a safe retry. Summary CAS lands first, deterministic evidence id
+supplies the attempt's answer-time scope hash; a mismatch with either the persisted attempt
+or current profile writes neither evidence nor terminal attempt and returns the current hash
+while leaving the grade pending. Summary CAS lands first, deterministic evidence id
 is append-once second, and the terminal attempt state is atomic last. A transaction timestamp
 is persisted before mutation, so replay after a crash produces byte-identical evidence and
 recognizes only its own concept+attempt marker. Raw quiz transcripts remain in the review
@@ -1935,7 +1957,8 @@ plans.dir copies; otacon manages no `.gitignore`, so whether those are tracked o
 is the user's call. `otacon clean`
 permanently removes ended sessions' home folders: for every **terminal** session (approved, plus
 implemented / implement_failed once a build finishes) in the current repo (`--all`:
-everywhere), it calls `DELETE /api/sessions/:id`; the daemon drops the registry entry and
+everywhere), it re-reads the session detail immediately before deletion and skips anything
+that has reopened or become non-terminal, then calls `DELETE /api/sessions/:id`; the daemon drops the registry entry and
 `rmSync`s the session's home folder `~/.otacon/sessions/<id>/` outright. No archive: the
 durable copies are the Save copy under `plans.dir` and (for Implement plans) the PR.
 Events still queued on an ended session are removed with the folder rather
@@ -2110,7 +2133,7 @@ not CI or review status.
 
 | Failure                                                                 | Mitigation                                                                                                                                                                                                                                                                                                           |
 | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Agent lazily ends its turn mid-review or mid-build                      | Skill instruction ("never end your turn while the session is open") + **Claude Code Stop hook** (plain shell script): if a non-terminal session exists, inspect its `kind` and block with plan approval guidance or PR-review `review-done`/`deleted` guidance. Plan `implementing` still blocks; plan `approved`/`implemented`/`implement_failed` and review `done` are terminal. Codex/OpenCode start instruction-only; both have notify/plugin equivalents for later hardening |
+| Agent lazily ends its turn mid-review or mid-build                      | Skill instruction ("never end your turn while the session is open") + **Claude Code Stop hook** (plain shell script): if a non-terminal session exists, inspect its `kind` and block with session-scoped plan approval guidance or PR-review `review-done`/`deleted` guidance. Plan `implementing` still blocks; plan `approved`/`implemented`/`implement_failed` and review `done` are terminal. Codex/OpenCode remain instruction-only |
 | Agent bypasses the remote channel with native AskUserQuestion           | Skill forbids it; v1.5: PreToolUse hook blocks AskUserQuestion (and optionally Edit/Write outside `.otacon/`) while a plan session is active                                                                                                                                                                         |
 | Session dies (crash, closed laptop, context compaction)                 | Agent is stateless; events queue on the daemon. Any new session: `otacon status` → open session, current revision, undelivered events → resume the loop                                                                                                                                                              |
 | Detail-tier smuggling (load-bearing content hidden in collapsed blocks) | Normative/informative contract + lint L4 heuristics + size badges + diff gutter markers on detail changes                                                                                                                                                                                                            |
@@ -2226,9 +2249,11 @@ first change (unparseable settings are refused, never clobbered). The hook is a
 belt-and-suspenders guard on top of the skill's never-end-your-turn rule (§13), not a
 required piece — so without `--hooks` install neither registers nor nags about it, and
 `otacon doctor` confirms it when present but never flags its absence. Doctor checks all
-six agent × skill candidates independently, accepts user or current-project scope, and a
-missing one/both points to `otacon install --agent <agent>` because reinstall binds the
-pair. `otacond` is never
+six agent × skill candidates independently, accepts user or current-project scope, and
+requires each managed card to declare its expected skill name and command (`otacon start`
+or `otacon review start`), so swapping the two managed cards is reported as a mismatch. A
+missing or mismatched one/both points to `otacon install --agent <agent>` because reinstall
+binds the pair. `otacond` is never
 installed or started by hand — any `otacon` command auto-spawns it if it isn't
 running, and the CLI restarts a stale daemon on version mismatch (version handshake
 on every call).

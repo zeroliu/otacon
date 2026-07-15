@@ -27,7 +27,10 @@ const PR_FIELDS = [
 ].join(",");
 
 export class GitHubResolutionError extends Error {
-  constructor(readonly code: "E_PR" | "E_GITHUB_REPO" | "E_GH", message: string) {
+  constructor(
+    readonly code: "E_PR" | "E_GITHUB_REPO" | "E_REPO_MISMATCH" | "E_GH",
+    message: string,
+  ) {
     super(message);
   }
 }
@@ -162,6 +165,12 @@ export function resolvePullRequest(
   const identity = pullRequestIdentityFromUrl(url);
   if (identity === undefined || raw.number !== identity.number) {
     throw new GitHubResolutionError("E_GH", "gh pr view returned inconsistent PR identity");
+  }
+  if (identity.repository !== repository) {
+    throw new GitHubResolutionError(
+      "E_REPO_MISMATCH",
+      `PR ${url} belongs to ${identity.repository}, but the current repository is ${repository}`,
+    );
   }
   const isCrossRepository = boolField(raw, "isCrossRepository");
   const maintainerCanModify = boolField(raw, "maintainerCanModify");

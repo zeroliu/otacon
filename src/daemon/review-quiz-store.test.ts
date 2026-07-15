@@ -233,6 +233,33 @@ describe("ReviewQuizStore", () => {
     expect(knowledge.readEvidence({ scope: "project", repo })).toEqual([]);
   });
 
+  test("rejects a caller-substituted current hash instead of rebinding an older answer", () => {
+    const { knowledge, quizzes } = setup();
+    const answer = quizzes.answer(session(), {
+      revision: 1,
+      question: "q-open",
+      answer: "owner then consumer",
+      idempotencyKey: "substituted-hash",
+    });
+    const original = knowledge.read({ scope: "project", repo });
+    const edited = original.markdown.replace("No preferences", "Concise preferences");
+    expect(knowledge.replace({ scope: "project", repo }, edited, original.hash).ok).toBe(true);
+    const current = knowledge.read({ scope: "project", repo });
+    expect(() => quizzes.grade(session(), {
+      version: 1,
+      session: session().id,
+      revision: 1,
+      headRevision: 1,
+      headSha: "a".repeat(40),
+      question: "q-open",
+      attempt: answer.attempt.id,
+      verdict: "pass",
+      feedback: "Clear.",
+      knowledgeBaseHash: current.hash,
+    })).toThrow(/submitted answer/);
+    expect(knowledge.readEvidence({ scope: "project", repo })).toEqual([]);
+  });
+
   test("does not treat a marker-shaped user prose mention as this grade's committed patch", () => {
     const { knowledge, quizzes } = setup();
     const answer = quizzes.answer(session(), { revision: 1, question: "q-open", answer: "owner then consumer", idempotencyKey: "marker-spoof" });

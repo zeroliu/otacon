@@ -72,7 +72,7 @@ When the plan is ready, choose how it ships:
 **Understand a pull request.** From the target repository, pass a GitHub PR to the second
 skill:
 
-```
+```text
 /otacon-review https://github.com/acme/app/pull/42
 ```
 

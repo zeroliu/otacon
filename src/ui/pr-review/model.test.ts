@@ -75,6 +75,24 @@ describe("LiveReviewAdapter quiz transport", () => {
       feedback: "Understood.",
     });
   });
+
+  test("a late transport success cannot replace a newer authoritative quiz SSE state", async () => {
+    let resolveRequest: ((quizzes: QuizDefinition[]) => void) | undefined;
+    const response = new Promise<QuizDefinition[]>((resolve) => { resolveRequest = resolve; });
+    const adapter = new LiveReviewAdapter(structuredClone(balancedFixture), async () => response);
+    const request = adapter.submitQuiz("q1", "server accepted answer");
+    const authoritative = passed(adapter.getSnapshot().quizzes, "q1").map((quiz) => quiz.id === "q1"
+      ? { ...quiz, answer: "server accepted answer", feedback: "Newer SSE verdict." }
+      : quiz);
+    adapter.replaceSnapshot({ ...adapter.getSnapshot(), quizzes: authoritative });
+    resolveRequest?.(balancedFixture.quizzes);
+    await request;
+    expect(adapter.getSnapshot().quizzes[0]).toMatchObject({
+      status: "passed",
+      answer: "server accepted answer",
+      feedback: "Newer SSE verdict.",
+    });
+  });
 });
 
 describe("LiveReviewAdapter conversation transport", () => {
@@ -120,6 +138,34 @@ describe("LiveReviewAdapter conversation transport", () => {
     }));
     await adapter.conductCodeChange("t1");
     expect(adapter.getSnapshot().threads[0]).toMatchObject({ status: "change-requested", codeActionStatus: "requested" });
+  });
+
+  test("coalesces concurrent code-change requests per persisted Comment", async () => {
+    const fixture = structuredClone(balancedFixture);
+    fixture.threads = [{
+      id: "t1",
+      intent: "comment",
+      anchor: "quote",
+      body: "change",
+      status: "answered",
+      identity: { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) },
+    }];
+    let calls = 0;
+    let release: (() => void) | undefined;
+    const adapter = new LiveReviewAdapter(fixture, undefined, undefined, async (thread) => {
+      calls += 1;
+      await new Promise<void>((resolve) => { release = resolve; });
+      return { ...thread, status: "change-requested", codeActionStatus: "requested" };
+    });
+    const first = adapter.conductCodeChange("t1");
+    const second = adapter.conductCodeChange("t1");
+    expect(calls).toBe(1);
+    release?.();
+    await Promise.all([first, second]);
+    expect(adapter.getSnapshot().threads[0]).toMatchObject({
+      status: "change-requested",
+      codeActionStatus: "requested",
+    });
   });
 
   test("marks the report closed only after durable Done succeeds", async () => {

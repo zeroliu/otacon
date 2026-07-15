@@ -212,6 +212,24 @@ describe("ReviewStore", () => {
     expect(existsSync(reviewRevisionReportPath(session().id, 1))).toBe(false);
   });
 
+  test("refuses a prepared report after the head generation cycles back to the same SHA", () => {
+    const store = new ReviewStore();
+    const prepared = store.beginRevision(session("abc123", 1));
+    store.beginRevision(session("def456", 2));
+    let thrown: ReviewReportInvalidError | undefined;
+    try {
+      store.submit(session("abc123", 3), {
+        report: report(1, prepared.snapshot.hash),
+        quiz: quiz(1),
+      });
+    } catch (error) {
+      thrown = error as ReviewReportInvalidError;
+    }
+    expect(thrown).toBeInstanceOf(ReviewReportInvalidError);
+    expect(thrown?.issues.map((issue) => issue.code)).toContain("E_REPORT_HEAD_STALE");
+    expect(existsSync(reviewRevisionReportPath(session().id, 1))).toBe(false);
+  });
+
   test("cleans abandoned staging directories but refuses corrupt committed revisions", () => {
     const store = new ReviewStore();
     mkdirSync(join(reviewRevisionsDir(session().id), ".tmp-r1-crash"), { recursive: true });

@@ -538,7 +538,9 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   const publishQueue = (id: string, pending: number): void => {
     const session = store.getSession(id);
     const effective = session?.kind === "review"
-      ? safePendingQuizCount(session) + safePendingReviewWork(session)
+      ? isTerminalSession(session)
+        ? 0
+        : safePendingQuizCount(session) + safePendingReviewWork(session)
       : pending;
     notifier.publish({ type: "queue", session: id, data: { session: id, pending: effective } });
   };
@@ -1076,14 +1078,28 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
 
   /** Refresh one known review from freshly-resolved metadata. */
   app.post("/api/reviews/:id/head", async (c) => {
-    const session = store.getSession(c.req.param("id"));
-    if (session === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
-    if (session.kind !== "review") {
-      return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a review`);
+    const before = store.getSession(c.req.param("id"));
+    if (before === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (before.kind !== "review") {
+      return codedBadRequest(c, "E_SESSION_KIND", `session ${before.id} is not a review`);
     }
     const body = (await readJsonBody(c)) ?? {};
     const pullRequest = parsePullRequestMetadata(body.pullRequest);
     if (pullRequest === undefined) return badRequest(c, "pullRequest metadata is invalid");
+    const session = store.getSession(before.id);
+    if (session?.kind !== "review") return notFound(c, `unknown review: ${before.id}`);
+    if (
+      session.review.revision !== before.review.revision ||
+      session.review.head.sha !== before.review.head.sha ||
+      session.status !== before.status
+    ) {
+      return c.json({
+        error: {
+          code: "E_REVIEW_HEAD_STALE",
+          message: "review state changed while processing the head refresh",
+        },
+      }, 409);
+    }
     if (pullRequest.identity.key !== session.review.pullRequest.identity.key) {
       return c.json({
         error: { code: "E_REVIEW_IDENTITY", message: "head refresh cannot change PR identity" },
@@ -1636,13 +1652,28 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
 
   /** User answer: choices grade inline; open answers durably wake the review agent. */
   app.post("/api/reviews/:id/quiz/:question/answer", async (c) => {
-    const session = store.getSession(c.req.param("id"));
-    if (session === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
-    if (session.kind !== "review") return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a review`);
-    if (session.status === "done") return sessionOver(c, session.id);
+    const before = store.getSession(c.req.param("id"));
+    if (before === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (before.kind !== "review") return codedBadRequest(c, "E_SESSION_KIND", `session ${before.id} is not a review`);
+    if (before.status === "done") return sessionOver(c, before.id);
     const body = (await readJsonBody(c)) ?? {};
     if (!Number.isInteger(body.revision) || typeof body.answer !== "string" || typeof body.idempotencyKey !== "string") {
       return badRequest(c, "revision, answer, and idempotencyKey are required");
+    }
+    const session = store.getSession(before.id);
+    if (session?.kind !== "review") return notFound(c, `unknown review: ${before.id}`);
+    if (session.status === "done") return sessionOver(c, session.id);
+    if (
+      session.review.revision !== before.review.revision ||
+      session.review.head.sha !== before.review.head.sha ||
+      session.status !== before.status
+    ) {
+      return c.json({
+        error: {
+          code: "E_REVIEW_HEAD_STALE",
+          message: "review state changed while processing the quiz answer",
+        },
+      }, 409);
     }
     try {
       const result = quizzes.answer(session, {
@@ -1679,12 +1710,27 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
 
   /** Agent-private grade endpoint. The browser never receives its input schema. */
   app.post("/api/reviews/:id/quiz/:question/grade", async (c) => {
-    const session = store.getSession(c.req.param("id"));
-    if (session === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
-    if (session.kind !== "review") return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a review`);
-    if (session.status === "done") return sessionOver(c, session.id);
+    const before = store.getSession(c.req.param("id"));
+    if (before === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (before.kind !== "review") return codedBadRequest(c, "E_SESSION_KIND", `session ${before.id} is not a review`);
+    if (before.status === "done") return sessionOver(c, before.id);
     const parsed = parseReviewQuizGrade((await readJsonBody(c)) ?? {});
     if (parsed.value === undefined) return c.json({ error: { code: "E_QUIZ_GRADE", message: parsed.errors.join("; ") } }, 422);
+    const session = store.getSession(before.id);
+    if (session?.kind !== "review") return notFound(c, `unknown review: ${before.id}`);
+    if (session.status === "done") return sessionOver(c, session.id);
+    if (
+      session.review.revision !== before.review.revision ||
+      session.review.head.sha !== before.review.head.sha ||
+      session.status !== before.status
+    ) {
+      return c.json({
+        error: {
+          code: "E_REVIEW_HEAD_STALE",
+          message: "review state changed while processing the quiz grade",
+        },
+      }, 409);
+    }
     if (parsed.value.question !== c.req.param("question") || parsed.value.session !== session.id) {
       return c.json({ error: { code: "E_QUIZ_STALE_GRADE", message: "grade route and file identity do not match" } }, 409);
     }

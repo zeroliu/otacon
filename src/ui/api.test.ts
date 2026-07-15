@@ -1,11 +1,49 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { saveKnowledge } from "./api.js";
+import { createElement } from "react";
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { Window } from "happy-dom";
+import { saveKnowledge, useReviewDetail } from "./api.js";
 
 const originalFetch = globalThis.fetch;
+let root: Root | undefined;
+let restoreDom: (() => void) | undefined;
 
-afterEach(() => {
+afterEach(async () => {
+  if (root !== undefined) await act(async () => root?.unmount());
+  restoreDom?.();
+  root = undefined;
+  restoreDom = undefined;
   globalThis.fetch = originalFetch;
 });
+
+function DetailProbe({ revision }: { revision: number }) {
+  const detail = useReviewDetail("otc_review1", revision);
+  return createElement("span", null, detail === undefined ? "waiting" : "loaded");
+}
+
+async function mountDetail(revision: number): Promise<void> {
+  const win = new Window({ url: "http://localhost/" });
+  const previousDocument = globalThis.document;
+  const previousWindow = globalThis.window;
+  const previousElement = globalThis.Element;
+  const previousAct =
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT;
+  Object.assign(globalThis, { document: win.document, window: win, Element: win.Element });
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  restoreDom = () => {
+    Object.assign(globalThis, {
+      document: previousDocument,
+      window: previousWindow,
+      Element: previousElement,
+    });
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = previousAct;
+  };
+  const host = win.document.createElement("div");
+  win.document.body.appendChild(host);
+  root = createRoot(host as unknown as HTMLElement);
+  await act(async () => root?.render(createElement(DetailProbe, { revision })));
+}
 
 describe("knowledge API client", () => {
   test("PUTs the complete project CAS contract and returns the persisted document", async () => {
@@ -71,5 +109,19 @@ describe("knowledge API client", () => {
       status: 0,
       error: { code: "E_UNREACHABLE", message: "couldn't reach otacond" },
     });
+  });
+});
+
+describe("review detail polling", () => {
+  test("does not request revision zero and starts polling once revision one exists", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return Response.json({});
+    }) as typeof fetch;
+    await mountDetail(0);
+    expect(calls).toEqual([]);
+    await act(async () => root?.render(createElement(DetailProbe, { revision: 1 })));
+    expect(calls).toEqual(["/api/reviews/otc_review1?revision=1"]);
   });
 });

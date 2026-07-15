@@ -30,12 +30,16 @@ function session(fields: {
 
 describe("navState", () => {
   test("review sessions use their own working, reviewing, and done language", () => {
-    const review = (status: "working" | "reviewing" | "done") => ({
+    const review = (status: "working" | "reviewing" | "done", parked = false) => ({
       kind: "review",
       status,
+      parked,
     }) as LiveSession;
-    expect(navState(review("working"), NOW)).toEqual({
+    expect(navState(review("working", true), NOW)).toEqual({
       icon: "working", word: "building review", attention: false,
+    });
+    expect(navState(review("working"), NOW)).toEqual({
+      icon: "stalled", word: "stalled", attention: false,
     });
     expect(navState(review("reviewing"), NOW)).toEqual({
       icon: "review", word: "reviewing", attention: true,

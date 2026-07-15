@@ -237,20 +237,12 @@ describe("checkoutReviewWorktree", () => {
     expect(mutating(calls)).toEqual([]);
   });
 
-  test("a locked exact clean worktree is reusable and preserves its reason", () => {
+  test("a locked exact clean worktree is refused before inspection or mutation", () => {
     const locked = `worktree ${EXISTING}\0HEAD ${SHA}\0branch refs/heads/feature\0locked owned by another agent\0\0`;
-    const { deps, calls } = fake({
-      ...writablePreamble(locked),
-      [`${EXISTING} :: symbolic-ref --quiet --short HEAD`]: "feature\n",
-      [`${EXISTING} :: rev-parse --verify HEAD^{commit}`]: `${SHA}\n`,
-      [`${EXISTING} :: status --porcelain=v1 -z --untracked-files=all`]: "",
-    });
-    expect(checkoutReviewWorktree(session(), deps)).toMatchObject({
-      mode: "writable",
-      action: "reused",
-      worktree: EXISTING,
-      lock: { reason: "owned by another agent" },
-    });
+    const { deps, calls } = fake(writablePreamble(locked));
+    expect(() => checkoutReviewWorktree(session(), deps)).toThrow(expect.objectContaining({
+      code: "E_REVIEW_WORKTREE_STALE",
+    }));
     expect(mutating(calls)).toEqual([]);
   });
 

@@ -88,8 +88,14 @@ export function SessionListContents({
     currentKind ?? (plans.length > 0 ? "plan" : "review"),
   );
   useEffect(() => {
-    if (currentKind !== undefined) setMode(currentKind);
-  }, [currentKind]);
+    if (currentKind !== undefined) {
+      setMode(currentKind);
+    } else if (mode === "plan" && plans.length === 0 && reviews.length > 0) {
+      setMode("review");
+    } else if (mode === "review" && reviews.length === 0 && plans.length > 0) {
+      setMode("plan");
+    }
+  }, [currentKind, mode, plans.length, reviews.length]);
   const { active, prReview, done } = partitionSessions(plans);
   const { active: activeReviews, done: doneReviews } = partitionReviewSessions(reviews);
   return (

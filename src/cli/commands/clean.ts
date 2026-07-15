@@ -7,10 +7,19 @@
 // permanently removes the home session folder; no archive").
 
 import { parseArgs } from "node:util";
-import { isTerminalSession } from "../../shared/types.js";
+import { isTerminalSession, PLAN_TERMINAL_STATUSES } from "../../shared/types.js";
 import { api, ensureDaemon } from "../client.js";
 import { notice, printJson } from "../output.js";
 import { findRepoRoot, listSessions, realpathOr } from "../session.js";
+
+function terminalSessionResponse(body: Record<string, unknown>): boolean {
+  if (body.kind === "review") {
+    return body.status === "done" && isTerminalSession({ kind: "review", status: "done" });
+  }
+  if (body.kind !== "plan") return false;
+  const status = PLAN_TERMINAL_STATUSES.find((candidate) => candidate === body.status);
+  return status !== undefined && isTerminalSession({ kind: "plan", status });
+}
 
 export async function cleanCommand(argv: string[]): Promise<number> {
   const { values } = parseArgs({
@@ -21,15 +30,20 @@ export async function cleanCommand(argv: string[]): Promise<number> {
   const cwd = realpathOr(process.cwd());
   const root = findRepoRoot(cwd) ?? cwd;
   // Only terminal (ended) sessions qualify — approved, plus implemented /
-  // implement_failed once a build finishes (approval and archive lifecycle). A terminal session
-  // stays terminal, so clean only ever sweeps finished sessions: a racing
-  // status change cannot sweep a live (including `implementing`) session.
+  // implement_failed once a build finishes (approval and archive lifecycle).
+  // The initial snapshot only selects candidates; each candidate is re-read
+  // immediately before DELETE because an explicit reopen can make it live again.
   const targets = (await listSessions()).filter(
     (s) => isTerminalSession(s) && (values.all || realpathOr(s.repo) === root),
   );
 
   const cleaned: { session: string; title: string; repo: string }[] = [];
   for (const session of targets) {
+    const current = await api("GET", `/api/sessions/${session.id}`);
+    if (current.status !== 200 || !terminalSessionResponse(current.body)) {
+      notice(`skipping ${session.id}: session is no longer ended`);
+      continue;
+    }
     const response = await api("DELETE", `/api/sessions/${session.id}`);
     if (response.status !== 200) {
       notice(`skipping ${session.id}: ${JSON.stringify(response.body)}`);

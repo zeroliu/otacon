@@ -42,7 +42,10 @@ export function navState(session: LiveSession, now: number): NavState {
   if (session.kind === "review") {
     switch (session.status) {
       case "working":
-        return { icon: "working", word: "building review", attention: false };
+        if (agentLive(session.parked, session.lastContactAt, now)) {
+          return { icon: "working", word: "building review", attention: false };
+        }
+        return { icon: "stalled", word: "stalled", attention: false };
       case "reviewing":
         return { icon: "review", word: "reviewing", attention: true };
       case "done":

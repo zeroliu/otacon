@@ -635,9 +635,9 @@ sid=$(printf '%s' "$open" | sed -n 's/.*"id":"\\([^"]*\\)".*/\\1/p')
 [ -n "$sid" ] || exit 0
 kind=$(printf '%s' "$open" | sed -n 's/.*"kind":"\\([^"]*\\)".*/\\1/p')
 if [ "$kind" = "review" ]; then
-  printf '{"decision":"block","reason":"otacon PR review session %s is still open — run otacon wait --timeout 540 (Bash timeout 600000 ms) and handle quiz/thread events until review-done or deleted; run otacon status to re-orient."}\\n' "$sid"
+  printf '{"decision":"block","reason":"otacon PR review session %s is still open — run otacon wait --session %s --timeout 540 (Bash timeout 600000 ms) and handle quiz/thread events until review-done or deleted; run otacon status to re-orient."}\\n' "$sid" "$sid"
 else
-  printf '{"decision":"block","reason":"otacon plan session %s is still open — run otacon wait --timeout 540 (Bash timeout 600000 ms) and keep handling events until the plan is approved; run otacon status to re-orient."}\\n' "$sid"
+  printf '{"decision":"block","reason":"otacon plan session %s is still open — run otacon wait --session %s --timeout 540 (Bash timeout 600000 ms) and keep handling events until the plan is approved; run otacon status to re-orient."}\\n' "$sid" "$sid"
 fi
 exit 0
 `;

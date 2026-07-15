@@ -1059,7 +1059,9 @@ describe("review session identity and lifecycle", () => {
       quiz: privateQuiz,
     });
     expect(submitted.status).toBe(201);
-    expect(JSON.stringify(await submitted.json())).not.toContain("SECRET_RUBRIC_SENTINEL");
+    const submissionWire = JSON.stringify(await submitted.json());
+    expect(submissionWire).not.toContain("SECRET_RUBRIC_SENTINEL");
+    expect(submissionWire).not.toContain("answerKey");
     const detailWire = JSON.stringify(await (await app.request(`/api/reviews/${id}`)).json());
     const revisionWire = JSON.stringify(await (await app.request(`/api/reviews/${id}/revisions/1`)).json());
     for (const wire of [detailWire, revisionWire]) {
@@ -1133,6 +1135,7 @@ describe("review session identity and lifecycle", () => {
     const snapshot = await stream.next();
     const snapshotWire = JSON.stringify(snapshot.data);
     expect(snapshotWire).not.toContain("SECRET_RUBRIC_SENTINEL");
+    expect(snapshotWire).not.toContain("answerKey");
     expect(snapshotWire).not.toContain("knowledgeBaseHash");
     expect(snapshotWire).not.toContain("idempotencyKey");
     expect(snapshotWire).not.toContain("gradeStartedAt");
@@ -1155,6 +1158,7 @@ describe("review session identity and lifecycle", () => {
     expect(quizFrame.event).toBe("quiz");
     const quizWire = JSON.stringify(quizFrame.data);
     expect(quizWire).not.toContain("SECRET_RUBRIC_SENTINEL");
+    expect(quizWire).not.toContain("answerKey");
     expect(quizWire).not.toContain("knowledgeBaseHash");
     expect(quizWire).not.toContain("idempotencyKey");
     expect(quizWire).not.toContain("gradeStartedAt");

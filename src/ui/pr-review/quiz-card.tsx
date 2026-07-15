@@ -48,9 +48,11 @@ export function QuizCard({
       {quiz.status === "passed" ? (
         <div className="pr-quiz-verdict is-passed">
           <strong>Correct.</strong> {quiz.feedback}
-          <span className="pr-memory-receipt">
-            ✓ added to {quiz.knowledgeScope === "user" ? "User" : "Project"} knowledge
-          </span>
+          {quiz.knowledgeScope !== undefined && (
+            <span className="pr-memory-receipt">
+              ✓ added to {quiz.knowledgeScope === "user" ? "User" : "Project"} knowledge
+            </span>
+          )}
         </div>
       ) : quiz.status === "grading" ? (
         <div className="pr-grading" role="status">

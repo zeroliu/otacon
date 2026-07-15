@@ -684,7 +684,9 @@ export function useRevision(id: string, n: number): RevisionPayload | undefined 
 
 /** Latest immutable PR-review report; `revision` changes the URL after its SSE frame. */
 export function useReviewDetail(id: string, revision: number): ReviewDetailPayload | undefined {
-  return usePolledJson<ReviewDetailPayload>(`/api/reviews/${id}?revision=${revision}`);
+  return usePolledJson<ReviewDetailPayload>(
+    revision < 1 ? null : `/api/reviews/${id}?revision=${revision}`,
+  );
 }
 
 export function useReviewRevision(id: string, revision: number): ReviewReportRevisionPayload | undefined {

@@ -33,7 +33,9 @@ function CodeGroup({ group, index }: { group: ReviewCodeGroup; index: number }) 
         </div>
       </header>
       {group.changedBehavior !== undefined && (
-        <p className="pr-changed-behavior"><strong>Changed behavior</strong>{group.changedBehavior}</p>
+        <p className="pr-changed-behavior">
+          <strong>Changed behavior:</strong> {group.changedBehavior}
+        </p>
       )}
       <Blocks source={stripReviewCodeGroupMetadata(group.markdown)} />
       <div className="pr-surfaces" aria-label={`${group.title} code surfaces`}>

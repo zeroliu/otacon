@@ -58,11 +58,13 @@ export const TERMINAL_STATUSES: readonly AnySessionStatus[] = [
 
 /** Kind-aware terminal check for registry/session operations. */
 export function isTerminalSession(
-  session: Pick<RegistrySession, "kind" | "status">,
+  session:
+    | Pick<PlanRegistrySession, "kind" | "status">
+    | Pick<ReviewRegistrySession, "kind" | "status">,
 ): boolean {
   return session.kind === "review"
     ? session.status === "done"
-    : PLAN_TERMINAL_STATUSES.includes(session.status as SessionStatus);
+    : PLAN_TERMINAL_STATUSES.includes(session.status);
 }
 
 /** One entry in ~/.otacon/registry.json. */

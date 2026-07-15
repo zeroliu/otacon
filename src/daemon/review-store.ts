@@ -233,8 +233,14 @@ export class ReviewStore {
     const contractError = (code: string, message: string): void => {
       contractIssues.push({ code, severity: "error", message });
     };
-    if (current.revision.headSha !== session.review.head.sha) {
-      contractError("E_REPORT_HEAD_STALE", "prepared report revision belongs to an older PR head; begin a new revision");
+    if (
+      current.revision.headSha !== session.review.head.sha ||
+      current.revision.headRevision !== session.review.revision
+    ) {
+      contractError(
+        "E_REPORT_HEAD_STALE",
+        "prepared report revision belongs to an older PR head generation; begin a new revision",
+      );
     }
     if (parsed.frontmatter?.session !== session.id) contractError("E_REPORT_SESSION", "report session does not match the target session");
     if (parsed.frontmatter?.pr !== expectedPr) contractError("E_REPORT_PR", "report PR identity does not match the review session");

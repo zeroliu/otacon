@@ -292,6 +292,22 @@ describe("PrReviewScreen", () => {
     expect(presentation.threads[0]).toMatchObject({ body: "Change this boundary.", canConductCodeChange: false });
   });
 
+  test("a current writable Question never offers the Comment-only code-change handoff", () => {
+    const presentation = productionPresentation(productionSession(), productionPayload(), [{
+      id: "q1",
+      surface: "review",
+      intent: "question",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Why is this boundary here?",
+      createdAt: "2026-07-14T00:03:00.000Z",
+      identity: { session: "otc_prod1", reportRevision: 1, headRevision: 2, headSha: "def" },
+    }] as never);
+    expect(presentation.threads[0]).toMatchObject({
+      intent: "question",
+      canConductCodeChange: false,
+    });
+  });
+
   test("maps live review threads without claiming memory before agent acknowledgement", () => {
     const base = {
       id: "t1",
@@ -420,7 +436,16 @@ describe("PrReviewScreen", () => {
     expect(host.querySelector(".pr-review-app")?.classList.contains("is-mobile-nav-open")).toBe(true);
     expect(sidebar?.getAttribute("role")).toBe("dialog");
     expect(sidebar?.getAttribute("aria-modal")).toBe("true");
+    expect(host.querySelector(".pr-review-page")?.hasAttribute("inert")).toBe(true);
     expect(host.ownerDocument.activeElement?.getAttribute("aria-label")).toBe("collapse sidebar");
+    const mobileFocusable = [...sidebar!.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    )];
+    mobileFocusable.at(-1)?.focus();
+    await act(async () => host.ownerDocument.dispatchEvent(
+      new win.KeyboardEvent("keydown", { key: "Tab" }) as unknown as Event,
+    ));
+    expect(host.ownerDocument.activeElement).toBe(mobileFocusable[0]!);
 
     Object.defineProperty(win, "innerWidth", { value: 960, configurable: true });
     await act(async () => {
@@ -443,6 +468,7 @@ describe("PrReviewScreen", () => {
     await wait(1);
     expect(host.querySelector(".pr-review-app")?.classList.contains("is-mobile-nav-open")).toBe(false);
     expect(sidebar?.getAttribute("role")).toBeNull();
+    expect(host.querySelector(".pr-review-page")?.hasAttribute("inert")).toBe(false);
     expect(host.ownerDocument.activeElement?.getAttribute("aria-label")).toBe("show sessions");
   });
 
@@ -453,6 +479,7 @@ describe("PrReviewScreen", () => {
       "Integration path",
       "Implementation walkthrough",
     ]);
+    expect(host.querySelector(".pr-integration-path p")?.textContent).toContain("Handoff: ");
     expect([...host.querySelectorAll(".pr-toc a.nested")].map((link) => [
       link.textContent,
       link.getAttribute("href"),
@@ -630,6 +657,42 @@ describe("PrReviewScreen", () => {
       scope: "project",
     }));
     expect(adapter.getSnapshot()).toBe(before);
+  });
+
+  test("traps Done-dialog focus, makes the background inert, and restores the trigger", async () => {
+    const { host, win } = await mountReview();
+    const trigger = button(host, "Done");
+    await click(trigger);
+    const dialog = host.querySelector(".pr-done-dialog") as HTMLElement;
+    expect(dialog).not.toBeNull();
+    expect(host.querySelector(".pr-review-page")?.hasAttribute("inert")).toBe(true);
+    const focusable = [...dialog.querySelectorAll<HTMLButtonElement>("button:not([disabled])")];
+    focusable.at(-1)?.focus();
+    await act(async () => host.ownerDocument.dispatchEvent(
+      new win.KeyboardEvent("keydown", { key: "Tab" }) as unknown as Event,
+    ));
+    expect(host.ownerDocument.activeElement).toBe(focusable[0]!);
+    await act(async () => host.ownerDocument.dispatchEvent(
+      new win.KeyboardEvent("keydown", { key: "Escape" }) as unknown as Event,
+    ));
+    await wait(1);
+    expect(host.querySelector(".pr-done-dialog")).toBeNull();
+    expect(host.querySelector(".pr-review-page")?.hasAttribute("inert")).toBe(false);
+    expect(host.ownerDocument.activeElement).toBe(trigger);
+  });
+
+  test("does not claim a knowledge promotion when a passed quiz has no confirmed scope", async () => {
+    const fixture = structuredClone(balancedFixture);
+    fixture.quizzes = [{
+      ...fixture.quizzes[0]!,
+      status: "passed",
+      feedback: "Correct.",
+      knowledgeScope: undefined,
+    }];
+    fixture.threads = [];
+    const { host } = await mountReview(1, undefined, fixture);
+    expect(host.querySelector(".pr-quiz-verdict")?.textContent).toContain("Correct.");
+    expect(host.querySelector(".pr-memory-receipt")).toBeNull();
   });
 
   test("finishes a clean review immediately and keeps the report read-only", async () => {

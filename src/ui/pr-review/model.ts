@@ -327,6 +327,7 @@ export class LiveReviewAdapter implements ReviewAdapter {
   private state: ReviewPresentation;
   private readonly listeners = new Set<() => void>();
   private readonly inFlight = new Map<string, Promise<void>>();
+  private readonly codeChangeInFlight = new Map<string, Promise<void>>();
   private readonly retryKeys = new Map<string, { answer: string; key: string }>();
   private closeInFlight?: Promise<void>;
   private externalSnapshotGeneration = 0;
@@ -371,7 +372,9 @@ export class LiveReviewAdapter implements ReviewAdapter {
     const request = this.submitLiveQuiz(quizId, answer, idempotencyKey)
       .then((quizzes) => {
         this.retryKeys.delete(quizId);
-        this.replaceQuizzes(quizzes);
+        if (this.externalSnapshotGeneration === externalAtStart) {
+          this.replaceQuizzes(quizzes);
+        }
       })
       .catch((error: unknown) => {
         const latest = this.state.quizzes.find((quiz) => quiz.id === quizId);
@@ -412,13 +415,20 @@ export class LiveReviewAdapter implements ReviewAdapter {
 
   async conductCodeChange(threadId: string): Promise<void> {
     if (this.conductLiveCodeChange === undefined) throw new Error("code-change execution is not available yet");
+    const active = this.codeChangeInFlight.get(threadId);
+    if (active !== undefined) return active;
     const current = this.state.threads.find((thread) => thread.id === threadId);
     if (current === undefined || current.intent !== "comment") return;
-    const thread = await this.conductLiveCodeChange(current);
-    this.updateSnapshot({
-      ...this.state,
-      threads: this.state.threads.map((item) => item.id === thread.id ? thread : item),
-    });
+    const request = this.conductLiveCodeChange(current)
+      .then((thread) => {
+        this.updateSnapshot({
+          ...this.state,
+          threads: this.state.threads.map((item) => item.id === thread.id ? thread : item),
+        });
+      })
+      .finally(() => this.codeChangeInFlight.delete(threadId));
+    this.codeChangeInFlight.set(threadId, request);
+    return request;
   }
 
   async close(force: boolean): Promise<void> {

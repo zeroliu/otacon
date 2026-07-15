@@ -73,7 +73,14 @@ afterEach(async () => {
   restore = undefined;
 });
 
-async function mount(): Promise<HTMLElement> {
+const initialSessions = (): LiveSession[] => [
+  plan("active", "Active plan", "draft"),
+  plan("open-pr", "Implemented plan", "implemented", true),
+  review(),
+  review("done-review", "done"),
+];
+
+async function mount(sessions = initialSessions()): Promise<HTMLElement> {
   const win = new Window({ url: "http://localhost/" });
   const previousDocument = globalThis.document;
   const previousWindow = globalThis.window;
@@ -91,12 +98,7 @@ async function mount(): Promise<HTMLElement> {
   root = createRoot(host);
   await act(async () => root?.render(
     <SessionListContents
-      sessions={[
-        plan("active", "Active plan", "draft"),
-        plan("open-pr", "Implemented plan", "implemented", true),
-        review(),
-        review("done-review", "done"),
-      ]}
+      sessions={sessions}
       now={Date.now()}
     />,
   ));
@@ -132,5 +134,15 @@ describe("production Plans / Reviews sidebar switch", () => {
     await act(async () => (remove as HTMLButtonElement).click());
     expect(document.body.textContent).toContain("report, quiz history, threads, and local session");
     expect(document.body.textContent).not.toContain("approved plan still survives");
+  });
+
+  test("switches to the populated kind when live registry updates empty the current mode", async () => {
+    const host = await mount([plan("active", "Active plan", "draft")]);
+    expect(host.textContent).toContain("Active plan");
+    await act(async () => root?.render(
+      <SessionListContents sessions={[review()]} now={Date.now()} />,
+    ));
+    expect(host.textContent).toContain("#42 Typed sessions");
+    expect(host.textContent).not.toContain("Active plan");
   });
 });

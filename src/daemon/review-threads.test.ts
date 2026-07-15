@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ReviewThread } from "../shared/types.js";
 import {
   createReviewThread,
   publicReviewThreads,
@@ -12,11 +11,12 @@ import {
   ReviewThreadConflictError,
   updateReviewCodeAction,
 } from "./review-threads.js";
+import type { ReviewThreadCreate } from "./review-threads.js";
 
 let dir = "";
 let path = "";
 
-const question = (overrides: Partial<ReviewThread> = {}): ReviewThread => ({
+const question = (overrides: Partial<ReviewThreadCreate> = {}): ReviewThreadCreate => ({
   id: "q1",
   surface: "review",
   intent: "question",
@@ -28,7 +28,7 @@ const question = (overrides: Partial<ReviewThread> = {}): ReviewThread => ({
   ...overrides,
 });
 
-const comment = (overrides: Partial<ReviewThread> = {}): ReviewThread => ({
+const comment = (overrides: Partial<ReviewThreadCreate> = {}): ReviewThreadCreate => ({
   ...question(),
   id: "t1",
   intent: "comment",
@@ -58,6 +58,19 @@ describe("review thread persistence", () => {
     expect(createReviewThread(path, question({ createdAt: "2026-07-15T10:00:01.000Z", id: "q9" })).repeated).toBe(true);
     expect(() => createReviewThread(path, question({ body: "different" }))).toThrow(ReviewThreadConflictError);
     expect(readReviewThreads(path)).toHaveLength(1);
+  });
+
+  test("rejects lifecycle fields supplied through the creation boundary", () => {
+    const injected = {
+      ...comment(),
+      response: {
+        body: "Already answered.",
+        respondedAt: "2026-07-15T10:01:00.000Z",
+        reportRevision: 3,
+      },
+    } as unknown as ReviewThreadCreate;
+    expect(() => createReviewThread(path, injected)).toThrow(/creation is invalid/);
+    expect(readReviewThreads(path)).toEqual([]);
   });
 
   test("quarantines malformed entries instead of leaking them into the SSE", () => {
@@ -138,5 +151,29 @@ describe("review thread persistence", () => {
     createReviewThread(path, comment());
     expect(() => respondToReviewThread(path, "q1", { body: "answer", reportRevision: 3 }, "2026-07-15T10:00:00.000Z")).toThrow(/cannot claim/);
     expect(() => respondToReviewThread(path, "t1", { body: "response" }, "2026-07-15T10:00:00.000Z")).toThrow(/must identify/);
+  });
+
+  test("validates complete mutation candidates before replacing durable bytes", () => {
+    createReviewThread(path, comment());
+    const before = readFileSync(path, "utf8");
+    expect(() => respondToReviewThread(path, "t1", {
+      body: "Clarified.",
+      reportRevision: 3,
+    }, "not-a-date")).toThrow(/mutation is invalid/);
+    expect(readFileSync(path, "utf8")).toBe(before);
+
+    expect(() => requestReviewCodeAction(path, "t1", "2026-07-15T09:00:00.000Z"))
+      .toThrow(/mutation is invalid/);
+    expect(readFileSync(path, "utf8")).toBe(before);
+
+    requestReviewCodeAction(path, "t1", "2026-07-15T10:20:00.000Z");
+    const requested = readFileSync(path, "utf8");
+    expect(() => updateReviewCodeAction(
+      path,
+      "t1",
+      { status: "working", message: "" },
+      "2026-07-15T10:21:00.000Z",
+    )).toThrow(/mutation is invalid/);
+    expect(readFileSync(path, "utf8")).toBe(requested);
   });
 });

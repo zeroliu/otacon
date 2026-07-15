@@ -41,22 +41,24 @@ export function isOver(status: AnySessionStatus): boolean {
 
 /** Only plan sessions use the live active -> terminal redirect to the index. */
 export function shouldRedirectAfterTerminalTransition(
-  session: { kind: "plan" | "review"; status: AnySessionStatus },
+  session:
+    | Pick<PlanRegistrySession, "kind" | "status">
+    | Pick<ReviewRegistrySession, "kind" | "status">,
   sawActive: boolean,
 ): boolean {
   return session.kind === "plan" && sawActive && isOver(session.status);
 }
 
-export function partitionSessionKinds<T extends { kind: "plan" | "review" }>(sessions: T[]): {
-  plans: Array<T & PlanRegistrySession>;
-  reviews: Array<T & ReviewRegistrySession>;
+export function partitionSessionKinds<T extends PlanRegistrySession | ReviewRegistrySession>(sessions: T[]): {
+  plans: Array<Extract<T, { kind: "plan" }>>;
+  reviews: Array<Extract<T, { kind: "review" }>>;
 } {
-  const plans: Array<T & PlanRegistrySession> = [];
-  const reviews: Array<T & ReviewRegistrySession> = [];
-  for (const session of sessions) {
-    if (session.kind === "review") reviews.push(session as T & ReviewRegistrySession);
-    else plans.push(session as T & PlanRegistrySession);
-  }
+  const plans = sessions.filter(
+    (session): session is Extract<T, { kind: "plan" }> => session.kind === "plan",
+  );
+  const reviews = sessions.filter(
+    (session): session is Extract<T, { kind: "review" }> => session.kind === "review",
+  );
   return { plans, reviews };
 }
 

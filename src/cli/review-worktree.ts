@@ -318,7 +318,7 @@ export function checkoutReviewWorktree(
   }
   if (matching.length === 1) {
     const entry = matching[0]!;
-    if (entry.prunable || entry.head !== sha) {
+    if (entry.prunable || entry.locked || entry.head !== sha) {
       fail(
         "E_REVIEW_WORKTREE_STALE",
         `${entry.path} is not an exact usable checkout of ${ref} at ${sha}; no worktree was changed`,
@@ -332,7 +332,6 @@ export function checkoutReviewWorktree(
       branch: ref,
       head: sha,
       push: { remote: "origin", ref },
-      ...(entry.locked ? { lock: { ...(entry.lockedReason === undefined ? {} : { reason: entry.lockedReason }) } } : {}),
     };
   }
 

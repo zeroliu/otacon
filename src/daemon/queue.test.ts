@@ -404,6 +404,19 @@ describe("SessionQueue review terminal replacement", () => {
     },
   };
 
+  test("quarantines a persisted terminal wake whose completion does not own its envelope sequence", () => {
+    writeFileSync(file, JSON.stringify({
+      version: 1,
+      events: [{
+        seq: 8,
+        queuedAt: "2026-07-15T12:00:00.000Z",
+        payload: done,
+      }],
+    }));
+    expect(new SessionQueue(file).size).toBe(0);
+    expect(readdirSync(dir).some((name) => name.startsWith("events.json.corrupt-"))).toBe(true);
+  });
+
   test("defers the terminal wake until its owner marks it queued and drops older review work", () => {
     const q = new SessionQueue(file);
     const got: EventPayload[] = [];

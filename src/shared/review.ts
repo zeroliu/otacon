@@ -154,6 +154,7 @@ export function parsePullRequestMetadata(raw: unknown): PullRequestMetadata | un
   if (
     identity === undefined ||
     typeof sentIdentity !== "object" ||
+    sentIdentity === null ||
     sentIdentity.repository !== identity.repository ||
     sentIdentity.number !== identity.number ||
     sentIdentity.key !== identity.key ||
@@ -171,10 +172,12 @@ export function parsePullRequestMetadata(raw: unknown): PullRequestMetadata | un
   if (
     text("title") === undefined || text("author") === undefined ||
     text("baseRef") === undefined || text("headRef") === undefined ||
-    text("headSha") === undefined || headRepository === undefined ||
+    text("headSha") === undefined || !/^[0-9a-f]{40}$/i.test(text("headSha")!) ||
+    headRepository === undefined ||
     (state !== "open" && state !== "closed" && state !== "merged") ||
     typeof value.isCrossRepository !== "boolean" ||
     typeof permissions !== "object" ||
+    permissions === null ||
     typeof permissions.maintainerCanModify !== "boolean" ||
     (permissions.viewerPermission !== "admin" && permissions.viewerPermission !== "maintain" &&
       permissions.viewerPermission !== "write" && permissions.viewerPermission !== "triage" &&

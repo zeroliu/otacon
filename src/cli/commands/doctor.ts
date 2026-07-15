@@ -34,8 +34,18 @@ export interface WrapperCandidate {
   scope: "user" | "project";
 }
 
-function wrapperPresent(path: string, marker: string): boolean {
-  return existsSync(path) && readFileSync(path, "utf8").includes(marker);
+export interface ProtocolSkillIdentity {
+  managedMarker: string;
+  frontmatterName: string;
+  commandMarker: string;
+}
+
+function wrapperPresent(path: string, identity: ProtocolSkillIdentity): boolean {
+  if (!existsSync(path)) return false;
+  const contents = readFileSync(path, "utf8");
+  return contents.includes(identity.managedMarker) &&
+    contents.startsWith(`---\nname: ${identity.frontmatterName}\n`) &&
+    contents.includes(identity.commandMarker);
 }
 
 // A wrapper is the otacon protocol skill (the SKILL.md `otacon install` writes); it's
@@ -44,7 +54,11 @@ function wrapperPresent(path: string, marker: string): boolean {
 // trip a spurious "not installed" warning — report whichever scope satisfied it.
 export function wrapperCheck(name: string, candidates: WrapperCandidate[], marker: string): Check {
   const agent = name.replace("wrapper-", "");
-  return protocolSkillCheck(agent, "otacon", candidates, marker, name);
+  return protocolSkillCheck(agent, "otacon", candidates, {
+    managedMarker: marker,
+    frontmatterName: "otacon",
+    commandMarker: "otacon start --title",
+  }, name);
 }
 
 /** Check one independently-discoverable skill and point every miss at reinstall. */
@@ -52,10 +66,10 @@ export function protocolSkillCheck(
   agent: string,
   skill: OtaconSkillName,
   candidates: WrapperCandidate[],
-  marker: string,
+  identity: ProtocolSkillIdentity,
   name = `skill-${agent}-${skill}`,
 ): Check {
-  const hit = candidates.find((c) => wrapperPresent(c.path, marker));
+  const hit = candidates.find((c) => wrapperPresent(c.path, identity));
   if (hit) return { name, status: "ok", detail: `${hit.path} (${hit.scope})` };
   const looked = candidates.map((c) => c.path).join(" and ");
   const projectHint = candidates.some((c) => c.scope === "project")
@@ -141,7 +155,11 @@ export async function doctorCommand(argv: string[]): Promise<number> {
     ["opencode", opencodeSkillPath],
   ] as const) {
     for (const skill of ["otacon", "otacon-review"] as const) {
-      checks.push(protocolSkillCheck(agent, skill, candidates(skillPath, skill), MANAGED_MARKER));
+      checks.push(protocolSkillCheck(agent, skill, candidates(skillPath, skill), {
+        managedMarker: MANAGED_MARKER,
+        frontmatterName: skill,
+        commandMarker: skill === "otacon" ? "otacon start --title" : "otacon review start --pr",
+      }));
     }
   }
   const stopHook = stopHookCheck();

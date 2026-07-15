@@ -53,9 +53,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   // every route, not just the review screen. partitionSessions is the shared
   // split (session-filter), never reimplemented; only `active` matters here, and
   // its meaning (the non-terminal set) is unchanged by the three-way split.
-  const { plans } = partitionSessionKinds(sessions);
+  const { plans, reviews } = partitionSessionKinds(sessions);
   const { active } = partitionSessions(plans);
-  useSessionNav(active.map((s) => s.id), currentId ?? "");
+  const currentKind = sessions.find((session) => session.id === currentId)?.kind;
+  const navigable = currentKind === "review" ? reviews : active;
+  useSessionNav(navigable.map((session) => session.id), currentId ?? "");
 
   const [collapsed, toggleCollapsed] = useSidebarCollapsed();
   // The dragged column width (≥960px only), seeded once from localStorage so the

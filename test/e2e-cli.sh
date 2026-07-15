@@ -79,10 +79,8 @@ ok "start minted $SID, left .gitignore untouched, registered it"
 # --- 3. failing submit, then passing submit ----------------------------------
 mkdir -p "$(dirname "$PLAN")"
 printf '# not a plan\n' > "$PLAN"
-set +e
-otacon submit > "$TMP/lint.json" 2> /dev/null
-CODE=$?
-set -e
+CODE=0
+otacon submit > "$TMP/lint.json" 2> /dev/null || CODE=$?
 [ "$CODE" = "1" ] || fail "failing submit exited $CODE, expected 1"
 [ "$(json_field ok "$TMP/lint.json")" = "false" ] || fail "lint reject did not say ok:false"
 grep -q '"rule":"L1"' "$TMP/lint.json" || fail "lint reject carried no machine-readable issues"

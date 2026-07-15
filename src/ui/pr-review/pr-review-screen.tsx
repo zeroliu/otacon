@@ -38,6 +38,35 @@ const NAV_STATE = {
   done: { icon: CheckCheck, className: "implemented", label: "done" },
 } as const;
 
+const MODAL_FOCUSABLE = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  '[tabindex]:not([tabindex="-1"])',
+].join(",");
+
+function trapModalTab(event: KeyboardEvent, container: HTMLElement | null): void {
+  if (event.key !== "Tab" || container === null) return;
+  const focusable = [...container.querySelectorAll<HTMLElement>(MODAL_FOCUSABLE)];
+  if (focusable.length === 0) {
+    event.preventDefault();
+    container.focus();
+    return;
+  }
+  const first = focusable[0]!;
+  const last = focusable.at(-1)!;
+  const active = container.ownerDocument.activeElement;
+  if (event.shiftKey && (active === first || !container.contains(active))) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && (active === last || !container.contains(active))) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
 function ReviewNavigationRow({ item }: { item: ReviewNavigationItem }) {
   const nav = NAV_STATE[item.state];
   const Icon = nav.icon;
@@ -373,7 +402,7 @@ function Report({
                 <div>
                   <span className="pr-integration-role">{step.role}</span>
                   <h4><code>{step.module}<b>#{step.symbol}</b></code></h4>
-                  <p><strong>Handoff</strong>{step.handoff}</p>
+                  <p><strong>Handoff:</strong> {step.handoff}</p>
                 </div>
               </li>
             ))}
@@ -418,29 +447,51 @@ function DoneDialog({
   initialError,
   onCancel,
   onClose,
+  returnFocusRef,
 }: {
   state: ReviewPresentation;
   counts?: ReviewUnresolvedCounts;
   initialError?: string;
   onCancel: () => void;
   onClose: (force: boolean) => Promise<void>;
+  returnFocusRef: RefObject<HTMLButtonElement | null>;
 }) {
   const threads = counts?.conversations ?? unresolvedThreadCount(state);
   const quizzes = counts?.quizzes ?? incompleteQuizCount(state);
   const unresolved = threads > 0 || quizzes > 0;
   const continueRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const submittingRef = useRef(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | undefined>(initialError);
 
   useEffect(() => {
     continueRef.current?.focus();
+    const backdrop = dialogRef.current?.parentElement;
+    const background = backdrop === null || backdrop === undefined
+      ? []
+      : [...backdrop.parentElement!.children].filter((element) => element !== backdrop);
+    const previouslyInert = background.map((element) => element.hasAttribute("inert"));
+    background.forEach((element) => element.setAttribute("inert", ""));
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") onCancel();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCancel();
+      } else {
+        trapModalTab(event, dialogRef.current);
+      }
     };
     document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onCancel]);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      background.forEach((element, index) => {
+        if (!previouslyInert[index]) element.removeAttribute("inert");
+      });
+      returnFocusRef.current?.ownerDocument.defaultView?.requestAnimationFrame(() => {
+        returnFocusRef.current?.focus();
+      });
+    };
+  }, [onCancel, returnFocusRef]);
 
   const finish = async (): Promise<void> => {
     if (submittingRef.current) return;
@@ -458,7 +509,15 @@ function DoneDialog({
 
   return (
     <div className="pr-modal-backdrop">
-      <div className="pr-done-dialog" role="dialog" aria-modal="true" aria-labelledby="done-title" aria-describedby="done-description">
+      <div
+        ref={dialogRef}
+        className="pr-done-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="done-title"
+        aria-describedby="done-description"
+        tabIndex={-1}
+      >
         <span className="pr-done-glyph" aria-hidden="true">{unresolved ? "!" : "✓"}</span>
         <h2 id="done-title">{unresolved ? "This review still has loose ends" : "Finish this review?"}</h2>
         {unresolved && <div className="pr-done-counts">
@@ -516,6 +575,7 @@ export function PrReviewScreen({
   const [doneError, setDoneError] = useState<string>();
   const [doneSubmitting, setDoneSubmitting] = useState(false);
   const doneSubmittingRef = useRef(false);
+  const doneButtonRef = useRef<HTMLButtonElement | null>(null);
   const [navCollapsed, setNavCollapsed] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [composer, setComposer] = useState<ComposerState | null>(null);
@@ -553,14 +613,17 @@ export function PrReviewScreen({
 
   useEffect(() => {
     if (!mobileNavOpen) return;
-    const closeOnEscape = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      setMobileNavOpen(false);
+    const handleModalKey = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setMobileNavOpen(false);
+      } else {
+        trapModalTab(event, collapseRef.current?.closest("aside") ?? null);
+      }
     };
-    document.addEventListener("keydown", closeOnEscape);
-    return () => document.removeEventListener("keydown", closeOnEscape);
+    document.addEventListener("keydown", handleModalKey);
+    return () => document.removeEventListener("keydown", handleModalKey);
   }, [mobileNavOpen]);
 
   useEffect(() => {
@@ -648,7 +711,10 @@ export function PrReviewScreen({
           }}
         />
       )}
-      <Page className={embedded ? "pr-review-page" : "app-content pr-review-page"}>
+      <Page
+        className={embedded ? "pr-review-page" : "app-content pr-review-page"}
+        inert={mobileNavOpen || undefined}
+      >
         {!embedded && <button
           ref={expandRef}
           type="button"
@@ -687,6 +753,7 @@ export function PrReviewScreen({
               : looseEnds === 0 ? "Everything is resolved." : `${looseEnds} items still need attention.`}</span>
           </div>
           <button
+            ref={doneButtonRef}
             type="button"
             className="btn btn-primary"
             disabled={state.closed || !doneEnabled || doneSubmitting}
@@ -748,6 +815,7 @@ export function PrReviewScreen({
         state={state}
         counts={doneCounts}
         initialError={doneError}
+        returnFocusRef={doneButtonRef}
         onCancel={() => {
           setDoneOpen(false);
           setDoneCounts(undefined);
@@ -862,7 +930,8 @@ export function productionPresentation(
         headRevision: thread.identity.headRevision,
         headSha: thread.identity.headSha,
       },
-      canConductCodeChange: session.review.pullRequest.state === "open" &&
+      canConductCodeChange: thread.intent === "comment" &&
+        session.review.pullRequest.state === "open" &&
         !session.review.pullRequest.permissions.readOnly &&
         ["write", "maintain", "admin"].includes(session.review.pullRequest.permissions.viewerPermission) &&
         !session.review.pullRequest.isCrossRepository &&
