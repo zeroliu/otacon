@@ -1,17 +1,20 @@
 // The selection instruments (review UI): a docked Comment/Ask bar that
-// appears when plan text is selected — Comment stacks into the drawer, Ask
-// fires instantly — and the anchored composer both actions open. The bar is
-// pinned to a fixed bottom edge (thumb range on phone, a slim strip on
-// desktop), not floating over the selection, so it never lands in the zone
-// where the OS draws its own un-suppressable selection/dictionary popover
-// (DECISIONS.md: coexist by placement). It keeps the inverted paper-on-ink
-// treatment — the UI's one inverted surface — so it still reads as the codec
-// cursor, an instrument over the document rather than part of it. The composer
-// pins where it opened — its anchor is already captured, so the live selection
-// no longer matters once it is open.
+// appears when review text is selected, plus the anchored composer both actions
+// open. Plan review docks the bar at a fixed bottom edge so it never competes
+// with the OS selection/dictionary popover; PR review reuses the instrument in
+// a contextual placement next to selected prose or code. Comment delivery is
+// likewise configurable: the plan can stack a draft into its drawer, while a
+// PR creates a conversation thread immediately. The composer pins where it
+// opened — its anchor is already captured, so the live selection no longer
+// matters once it is open.
 
-import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, RefObject } from "react";
-import { useEffect, useRef, useState } from "react";
+import type {
+  CSSProperties,
+  KeyboardEvent as ReactKeyboardEvent,
+  ReactNode,
+  RefObject,
+} from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Anchor } from "../api";
 import type { CapturedSelection } from "./anchor";
 import { anchorLabel, captureSelection } from "./anchor";
@@ -57,17 +60,42 @@ export function SelectionBar({
   selection,
   onComment,
   onAsk,
+  placement = "docked",
 }: {
   selection: CapturedSelection;
   onComment: () => void;
   onAsk: () => void;
+  /** Plan review stays docked; PR review places the same actions beside prose/code selection. */
+  placement?: "docked" | "contextual";
 }) {
-  // Docked, so the live rect no longer drives placement — only the anchor's
-  // section slug is shown; CSS pins the bar to the bottom edge (styles.css).
-  const { anchor } = selection;
+  const { anchor, rect } = selection;
+  const viewportWidth = typeof window === "undefined" ? 1024 : window.innerWidth;
+  const viewportHeight = typeof window === "undefined" ? 768 : window.innerHeight;
+  const contextual = placement === "contextual";
+  const above = contextual && rect.bottom + 52 > viewportHeight;
+  // The full slug + two actions measure about 280px; keep half plus a 12px
+  // gutter inside the viewport, while still degrading safely below 304px.
+  const contextualEdge = Math.min(152, viewportWidth / 2);
+  const x = Math.max(
+    contextualEdge,
+    Math.min(viewportWidth - contextualEdge, rect.left + rect.width / 2),
+  );
+  // A drag that auto-scrolls can leave the selection spanning past the
+  // viewport (rect.top negative, rect.bottom beyond the fold); clamp the bar
+  // fully on screen in both directions — 52 keeps its ~36px height plus a
+  // gutter visible when flipped above.
+  const y = Math.max(52, Math.min(viewportHeight - 8, above ? rect.top - 8 : rect.bottom + 8));
+  const style = contextual
+    ? ({ "--sx": `${x}px`, "--sy": `${y}px` } as CSSProperties)
+    : undefined;
   return (
     <div
-      className="sel-bar"
+      className={[
+        "sel-bar",
+        contextual && "sel-bar-contextual",
+        above && "is-above",
+      ].filter(Boolean).join(" ")}
+      style={style}
       role="toolbar"
       aria-label="selection actions"
       // preventDefault keeps the text selection alive through the click
@@ -99,6 +127,8 @@ export function Composer({
   onStack,
   onSendNow,
   onAsk,
+  commentDelivery = "batch",
+  options,
 }: {
   state: ComposerState;
   onClose: () => void;
@@ -108,12 +138,38 @@ export function Composer({
   onSendNow: (body: string) => Promise<boolean>;
   /** Question fires instantly; resolves false on failure (stay open). */
   onAsk: (body: string) => Promise<boolean>;
+  /** PR review creates the Comment thread immediately; plan review keeps drawer batching. */
+  commentDelivery?: "batch" | "immediate";
+  /** Product-specific controls that belong between the draft and its send action. */
+  options?: ReactNode;
 }) {
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   useEffect(() => inputRef.current?.focus(), []);
+
+  // The pinned card's height is content-driven (the quote block grows with
+  // the selection), so no caller-side estimate can keep it on screen. Measure
+  // the rendered card and clamp the pin inside the viewport; `nudge` is the
+  // correction applied on top of the caller's point.
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const [nudge, setNudge] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const pinX = state.at?.x;
+  const pinY = state.at?.y;
+  useLayoutEffect(() => {
+    setNudge({ x: 0, y: 0 });
+    if (pinX === undefined || pinY === undefined) return;
+    const card = cardRef.current;
+    const win = card?.ownerDocument.defaultView;
+    if (!card || !win) return;
+    const rect = card.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return; // non-layout test DOM
+    const halfWidth = rect.width / 2;
+    const x = Math.max(halfWidth + 12, Math.min(win.innerWidth - halfWidth - 12, pinX));
+    const y = Math.max(12, Math.min(win.innerHeight - rect.height - 12, pinY));
+    if (x !== pinX || y !== pinY) setNudge({ x: x - pinX, y: y - pinY });
+  }, [pinX, pinY]);
 
   const ready = body.trim() !== "" && !busy;
   const fire = (action: (body: string) => Promise<boolean>) => {
@@ -128,7 +184,8 @@ export function Composer({
   };
   const primary = () => {
     if (!ready) return;
-    if (state.mode === "comment") onStack(body);
+    if (state.mode === "comment" && commentDelivery === "batch") onStack(body);
+    else if (state.mode === "comment") fire(onSendNow);
     else fire(onAsk);
   };
   const onKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
@@ -142,9 +199,13 @@ export function Composer({
   const sheet = state.at === null;
   const style = sheet
     ? undefined
-    : ({ "--cx": `${state.at?.x}px`, "--cy": `${state.at?.y}px` } as CSSProperties);
+    : ({
+        "--cx": `${(state.at?.x ?? 0) + nudge.x}px`,
+        "--cy": `${(state.at?.y ?? 0) + nudge.y}px`,
+      } as CSSProperties);
   return (
     <div
+      ref={cardRef}
       className={sheet ? "composer composer-sheet" : "composer"}
       style={style}
       role="dialog"
@@ -165,28 +226,35 @@ export function Composer({
         className="composer-input"
         placeholder={state.mode === "comment" ? "what should change…" : "what do you want to know…"}
         value={body}
-        onChange={(event) => setBody(event.target.value)}
+        onInput={(event) => setBody(event.currentTarget.value)}
         onKeyDown={onKeyDown}
       />
+      {options}
       <div className="composer-foot">
         <span className={failed ? "composer-hint composer-failed" : "composer-hint"}>
           {failed ? "send failed — is otacond up?" : "⌘⏎ send"}
         </span>
         <div className="composer-actions">
           {state.mode === "comment" ? (
-            <>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                disabled={!ready}
-                onClick={() => fire(onSendNow)}
-              >
-                {busy ? "sending…" : "send now"}
-              </button>
+            commentDelivery === "immediate" ? (
               <button type="button" className="btn btn-primary" disabled={!ready} onClick={primary}>
-                add to drawer
+                {busy ? "Sending…" : "Comment"}
               </button>
-            </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  disabled={!ready}
+                  onClick={() => fire(onSendNow)}
+                >
+                  {busy ? "sending…" : "send now"}
+                </button>
+                <button type="button" className="btn btn-primary" disabled={!ready} onClick={primary}>
+                  add to drawer
+                </button>
+              </>
+            )
           ) : (
             <button type="button" className="btn btn-primary" disabled={!ready} onClick={primary}>
               {busy ? "asking…" : "ask now"}

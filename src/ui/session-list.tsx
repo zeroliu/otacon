@@ -3,7 +3,8 @@
 // stream. Rendered in two places off the same component: the persistent desktop
 // sidebar (≥960px) and the mobile session sheet the ☰ overflow menu opens
 // (<960px). The list splits three ways (session-filter `partitionSessions`):
-// active sessions lead in delivered activity order, then a "PR review" group
+// Plans / Reviews switch below the existing sidebar header. Plan sessions keep
+// their active order, followed by an "Open PRs" group
 // (terminal sessions whose latest PR is still open), EXPANDED by default and
 // counted, so work waiting on review stays visible, then a "Done" group
 // (finished work: Save-only approvals, merged/closed PRs, failed builds),
@@ -22,7 +23,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import type { CSSProperties, MouseEvent } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { accentStyle } from "./accent";
 import type { LiveSession } from "./api";
 import { useSessions } from "./api";
@@ -31,7 +32,8 @@ import { repoName } from "./format";
 import { DeleteDialog } from "./review/delete";
 import { navigate } from "./router";
 import { unreadCount } from "./seen";
-import { isOver, partitionSessions } from "./session-filter";
+import { partitionReviewSessions, partitionSessionKinds, partitionSessions } from "./session-filter";
+import { isTerminalSession } from "../shared/types";
 import type { NavIcon } from "./session-status";
 import { navState } from "./session-status";
 import { useNow } from "./tick";
@@ -61,14 +63,48 @@ export function SessionList({
   // One ticking clock for the whole list, like the index: keeps every row's
   // agent-presence dot honest while the sidebar idles between SSE frames.
   const now = useNow(30_000);
+  return <SessionListContents sessions={sessions} current={current} now={now} onNavigate={onNavigate} />;
+}
+
+/** Pure-data entry used by the sidebar contract tests and the live wrapper above. */
+export function SessionListContents({
+  sessions,
+  current,
+  now,
+  onNavigate,
+}: {
+  sessions: LiveSession[];
+  current?: string;
+  now: number;
+  onNavigate?: () => void;
+}) {
   // The shared three-way split (session-filter): active sessions stay in the main
-  // list, then a counted/expanded "PR review" group, then a collapsed/uncounted
+  // list, then a counted/expanded "Open PRs" group, then a collapsed/uncounted
   // "Done" group: the same partition every session surface reads, so no surface
   // disagrees.
-  const { active, prReview, done } = partitionSessions(sessions);
+  const { plans, reviews } = partitionSessionKinds(sessions);
+  const currentKind = sessions.find((session) => session.id === current)?.kind;
+  const [mode, setMode] = useState<"plan" | "review">(
+    currentKind ?? (plans.length > 0 ? "plan" : "review"),
+  );
+  useEffect(() => {
+    if (currentKind !== undefined) {
+      setMode(currentKind);
+    } else if (mode === "plan" && plans.length === 0 && reviews.length > 0) {
+      setMode("review");
+    } else if (mode === "review" && reviews.length === 0 && plans.length > 0) {
+      setMode("plan");
+    }
+  }, [currentKind, mode, plans.length, reviews.length]);
+  const { active, prReview, done } = partitionSessions(plans);
+  const { active: activeReviews, done: doneReviews } = partitionReviewSessions(reviews);
   return (
     <nav className="session-list" aria-label="sessions">
-      {active.map((session) => (
+      <div className="session-kind-switch" role="group" aria-label="session kind">
+        <button type="button" aria-pressed={mode === "plan"} onClick={() => setMode("plan")}>Plans</button>
+        <button type="button" aria-pressed={mode === "review"} onClick={() => setMode("review")}>Reviews</button>
+      </div>
+      {mode === "plan" && active.map((session) => (
         <SessionRow
           key={session.id}
           session={session}
@@ -77,10 +113,10 @@ export function SessionList({
           onNavigate={onNavigate}
         />
       ))}
-      {prReview.length > 0 && (
+      {mode === "plan" && prReview.length > 0 && (
         <SessionGroup
           key="pr-review"
-          label="PR review"
+          label="Open PRs"
           sessions={prReview}
           defaultOpen={true}
           showCount={true}
@@ -89,11 +125,35 @@ export function SessionList({
           onNavigate={onNavigate}
         />
       )}
-      {done.length > 0 && (
+      {mode === "plan" && done.length > 0 && (
         <SessionGroup
           key="done"
           label="Done"
           sessions={done}
+          defaultOpen={false}
+          showCount={false}
+          current={current}
+          now={now}
+          onNavigate={onNavigate}
+        />
+      )}
+      {mode === "review" && activeReviews.length > 0 && (
+        <SessionGroup
+          key="active-reviews"
+          label="Active"
+          sessions={activeReviews}
+          defaultOpen={true}
+          showCount={true}
+          current={current}
+          now={now}
+          onNavigate={onNavigate}
+        />
+      )}
+      {mode === "review" && doneReviews.length > 0 && (
+        <SessionGroup
+          key="done-reviews"
+          label="Done"
+          sessions={doneReviews}
           defaultOpen={false}
           showCount={false}
           current={current}
@@ -108,7 +168,7 @@ export function SessionList({
 /**
  * One collapsible group of terminal sessions: the same button + aria-expanded +
  * caret + useState disclosure idiom, holding the condensed rows. Drives both
- * sidebar groups: "PR review" (defaultOpen + showCount, so work waiting on review
+ * sidebar groups: "Open PRs" (defaultOpen + showCount, so work waiting on review
  * leads and carries a count) and "Done" (collapsed, no count). When `showCount`
  * is false the count span is omitted entirely (no hidden zero), and the
  * aria-label folds the count in only when shown.
@@ -184,7 +244,13 @@ function SessionRow({
   // home folder (`~/.otacon/sessions/<id>/`). `over` only drives the confirm
   // copy: for a terminal session the durable copy survives elsewhere (the Save
   // copy under plans.dir, or the PR for Implement plans).
-  const over = isOver(session.status);
+  const over = isTerminalSession(session);
+  const location = session.kind === "review"
+    ? session.review.pullRequest.identity.repository
+    : repoName(session.repo);
+  const branch = session.kind === "review"
+    ? `${session.review.pullRequest.headRepository}:${session.review.pullRequest.headRef}`
+    : session.branch;
   const [deleting, setDeleting] = useState(false);
   // Plain left-click navigates in-app (and lets a host close its drawer);
   // modifier/middle clicks fall through to the real href for a new tab/window.
@@ -211,12 +277,12 @@ function SessionRow({
         </span>
         <span className="sl-text">
           <span className="sl-title">{session.title}</span>
-          <span className="sl-where" title={session.repo}>
-            {repoName(session.repo)}
-            {session.branch !== "" && <span className="sl-branch"> · {session.branch}</span>}
+          <span className="sl-where" title={session.kind === "review" ? session.prUrl : session.repo}>
+            {location}
+            {branch !== "" && <span className="sl-branch"> · {branch}</span>}
           </span>
         </span>
-        {session.socratic && (
+        {session.kind === "plan" && session.socratic && (
           <span
             className="session-badge sl-socratic"
             data-mode="socratic"
@@ -233,13 +299,15 @@ function SessionRow({
         )}
         {/* Right-most flow element: on hover-capable devices the delete ✕ fades in
             over the dot's slot (see styles.css), so render it last in flow. */}
-        <AgentDot
-          status={session.status}
-          parked={session.parked}
-          lastContactAt={session.lastContactAt}
-          now={now}
-          label={false}
-        />
+        {session.kind === "plan" && (
+          <AgentDot
+            status={session.status}
+            parked={session.parked}
+            lastContactAt={session.lastContactAt}
+            now={now}
+            label={false}
+          />
+        )}
         <button
           type="button"
           className="sl-delete"
@@ -258,6 +326,7 @@ function SessionRow({
       {deleting && (
         <DeleteDialog
           sessionId={session.id}
+          sessionKind={session.kind}
           approved={over}
           onClose={() => setDeleting(false)}
           // The `removed` SSE frame drops the row; closing state is housekeeping.

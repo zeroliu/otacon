@@ -21,6 +21,23 @@ import {
   validateScopeInput,
 } from "../shared/config.js";
 import type { ScopeValues } from "../shared/config.js";
+import { canonicalizeGitHubRepo, parseKnowledgeHash } from "../shared/knowledge.js";
+import type { KnowledgeTarget } from "../shared/knowledge.js";
+import {
+  latestReviewCompletion,
+  parsePullRequestMetadata,
+  reviewDoneEvent,
+} from "../shared/review.js";
+import type { ReviewCompletionSummary, ReviewDoneEvent } from "../shared/review.js";
+import { parseReviewQuizGrade } from "../shared/review-quiz.js";
+import type { ReviewQuizAnswerEvent, ReviewQuizPublicState } from "../shared/review-quiz.js";
+import type { ReviewReportRevisionPayload } from "../shared/review-report.js";
+import {
+  releaseReviewWorktreeLeaseFile,
+  reviewWorktreeLeaseAction,
+  reviewWorktreeLeaseOwner,
+  reviewWorktreeLeasePathForPr,
+} from "../shared/review-worktree-lease.js";
 import {
   expandTilde,
   globalConfigPath,
@@ -29,7 +46,7 @@ import {
   repoLocalConfigPath,
 } from "../shared/paths.js";
 import { parseQuestionSpec } from "../shared/question-spec.js";
-import { TERMINAL_STATUSES } from "../shared/types.js";
+import { isTerminalSession } from "../shared/types.js";
 import type {
   Anchor,
   CommentItem,
@@ -45,6 +62,9 @@ import type {
   StreamEvent,
   Thread,
   TranscriptEntry,
+  PublicReviewThread,
+  ReviewThread,
+  ReviewThreadEvent,
 } from "../shared/types.js";
 import { VERSION } from "../shared/version.js";
 import { appendActivity, latestNote, readActivity } from "./activity.js";
@@ -60,11 +80,34 @@ import { validateDiagrams } from "./diagrams.js";
 import { diffPlans } from "./diff.js";
 import { lint } from "./linter/index.js";
 import { slugify } from "./linter/parse.js";
+import { InvalidKnowledgeMarkdownError, KnowledgeStore } from "./knowledge-store.js";
 import { Notifier } from "./notify.js";
 import { startPrPolling } from "./pr-status.js";
 import { Presence } from "./presence.js";
 import type { ParkHandle } from "./queue.js";
 import { SessionQueue } from "./queue.js";
+import { reportContainsAnchorQuote } from "./review-anchor.js";
+import {
+  ReviewReportInvalidError,
+  ReviewRevisionCorruptError,
+  ReviewRevisionExistsError,
+  ReviewStore,
+} from "./review-store.js";
+import {
+  ReviewQuizConflictError,
+  ReviewQuizCorruptError,
+  ReviewQuizStore,
+} from "./review-quiz-store.js";
+import {
+  createReviewThread,
+  publicReviewThread,
+  publicReviewThreads,
+  readReviewThreads,
+  requestReviewCodeAction,
+  respondToReviewThread,
+  ReviewThreadConflictError,
+  updateReviewCodeAction,
+} from "./review-threads.js";
 import type { Store } from "./store.js";
 import { writeFileAtomic } from "./store.js";
 import {
@@ -87,6 +130,18 @@ export interface NodeBindings {
 
 export interface AppOptions {
   store: Store;
+  /**
+   * Defer durable recovery and background workers until the caller has won
+   * daemon ownership. The socket entry point sets this false, binds first,
+   * then calls app.start(); in-process tests keep the historical eager start.
+   */
+  startOnCreate?: boolean;
+  /** Test seam for the local user/project knowledge store. */
+  knowledge?: KnowledgeStore;
+  /** Test seam for immutable review reports and their frozen knowledge snapshots. */
+  reviews?: ReviewStore;
+  /** Test seam for durable quiz attempts and cognition updates. */
+  quizzes?: ReviewQuizStore;
   /** Invoked once POST /api/shutdown's response is out; main.ts exits in it. */
   onShutdown?: () => void;
   /** Test override: where the built SPA lives (null = no UI). Default: resolved next to the module. */
@@ -109,6 +164,8 @@ export interface AppOptions {
 
 type AppContext = Context<{ Bindings: NodeBindings }>;
 
+export type DaemonApp = Hono<{ Bindings: NodeBindings }> & { start(): void };
+
 /** Hard ceiling on ?wait= (seconds); agents ask for 540 under their 600s Bash cap. */
 const MAX_WAIT_SECONDS = 600;
 
@@ -121,6 +178,8 @@ const codedBadRequest = (c: AppContext, code: string, message: string) =>
   c.json({ error: { code, message } }, 400);
 const notFound = (c: AppContext, message: string) =>
   c.json({ error: { code: "E_NOT_FOUND", message } }, 404);
+const reviewRevisionUnavailable = (c: AppContext, message: string) =>
+  c.json({ error: { code: "E_REVIEW_REVISION_UNAVAILABLE", message } }, 409);
 const timeoutEvent = (c: AppContext) => c.json({ event: "timeout" });
 // A session in a terminal state is over according to the status machine:
 // every state-mutating verb refuses — the CLI's pointer rules guard its side,
@@ -182,6 +241,40 @@ function parseAnchor(raw: unknown): Anchor | null | undefined {
   return anchor;
 }
 
+const hasExactKeys = (value: Record<string, unknown>, keys: string[]): boolean => {
+  const expected = [...keys].sort();
+  const actual = Object.keys(value).sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+};
+
+/** Review report selections always carry an exact quote and reject unknown wire keys. */
+function parseReviewAnchor(raw: unknown): Anchor | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const value = raw as Record<string, unknown>;
+  const keys = ["section", "exact", ...(value.prefix === undefined ? [] : ["prefix"]), ...(value.suffix === undefined ? [] : ["suffix"])];
+  if (!hasExactKeys(value, keys)) return undefined;
+  if (typeof value.section !== "string" || value.section.trim() === "" || value.section.length > 200 ||
+    typeof value.exact !== "string" || value.exact.trim() === "" || value.exact.length > 10_000 ||
+    (value.prefix !== undefined && (typeof value.prefix !== "string" || value.prefix.length > 1_000)) ||
+    (value.suffix !== undefined && (typeof value.suffix !== "string" || value.suffix.length > 1_000))) return undefined;
+  return {
+    section: value.section,
+    exact: value.exact,
+    ...(value.prefix === undefined ? {} : { prefix: value.prefix as string }),
+    ...(value.suffix === undefined ? {} : { suffix: value.suffix as string }),
+  };
+}
+
+function parseReviewSource(raw: unknown): { reportRevision: number; headRevision: number; headSha: string } | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const value = raw as Record<string, unknown>;
+  if (!hasExactKeys(value, ["reportRevision", "headRevision", "headSha"]) ||
+    !Number.isSafeInteger(value.reportRevision) || (value.reportRevision as number) < 1 ||
+    !Number.isSafeInteger(value.headRevision) || (value.headRevision as number) < 1 ||
+    typeof value.headSha !== "string" || !/^[0-9a-f]{40}$/i.test(value.headSha)) return undefined;
+  return value as unknown as { reportRevision: number; headRevision: number; headSha: string };
+}
+
 /**
  * Validate the submit body's `resolutions` (review loop and daemon API): an object with
  * only `changelog` (string) and `threads` (string → string). Strict — an
@@ -228,8 +321,11 @@ function sameOrigin(origin: string, host: string | undefined): boolean {
   }
 }
 
-export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }> {
+export function createApp(options: AppOptions): DaemonApp {
   const { store } = options;
+  const knowledge = options.knowledge ?? new KnowledgeStore();
+  const reviews = options.reviews ?? new ReviewStore(knowledge);
+  const quizzes = options.quizzes ?? new ReviewQuizStore(reviews, knowledge);
 
   // One queue instance per session for the daemon's lifetime — every request
   // must park on / enqueue into the same in-memory waiter list, and the
@@ -245,6 +341,157 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     return queue;
   };
 
+  const sameQuizWork = (payload: EventPayload, event: ReviewQuizAnswerEvent): boolean => {
+    if (typeof payload !== "object" || payload === null) return false;
+    const candidate = payload as Partial<ReviewQuizAnswerEvent>;
+    return candidate.event === "quiz-answer" &&
+      candidate.session === event.session && candidate.revision === event.revision &&
+      candidate.headRevision === event.headRevision && candidate.headSha === event.headSha &&
+      candidate.question === event.question && candidate.attempt === event.attempt;
+  };
+
+  const reviewThreadEvent = (
+    thread: ReviewThread,
+    work: ReviewThreadEvent["work"],
+    threads: ReviewThread[] = [thread],
+  ): ReviewThreadEvent => ({
+    event: "review-thread",
+    work,
+    session: thread.identity.session,
+    thread: thread.id,
+    reportRevision: thread.identity.reportRevision,
+    headRevision: thread.identity.headRevision,
+    headSha: thread.identity.headSha,
+    anchor: thread.anchor,
+    body: thread.body,
+    ...(thread.remember === undefined ? {} : { remember: thread.remember }),
+    conversation: (() => {
+      const root = thread.replyTo ?? thread.id;
+      const rootThread = threads.find((candidate) => candidate.id === root);
+      const authorized = work === "code-change" ? new Set(rootThread?.codeAction?.authorizedTurns ?? [root]) : undefined;
+      return {
+        root,
+        turns: threads
+          .filter((candidate) => (candidate.id === root || candidate.replyTo === root) &&
+            (authorized === undefined || authorized.has(candidate.id)))
+          .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+          .map((candidate) => ({
+            thread: candidate.id,
+            body: candidate.body,
+            ...(candidate.response === undefined ? {} : { response: candidate.response.body }),
+          })),
+      };
+    })(),
+  });
+
+  const sameReviewThreadWork = (payload: EventPayload, event: ReviewThreadEvent): boolean => {
+    if (typeof payload !== "object" || payload === null) return false;
+    const candidate = payload as Partial<ReviewThreadEvent>;
+    return candidate.event === "review-thread" && candidate.work === event.work &&
+      candidate.session === event.session && candidate.thread === event.thread &&
+      candidate.reportRevision === event.reportRevision && candidate.headRevision === event.headRevision &&
+      candidate.headSha === event.headSha;
+  };
+
+  const enqueueReviewThreadWork = (event: ReviewThreadEvent): number | undefined => {
+    const queue = queueFor(event.session);
+    if (queue.hasPayload((payload) => sameReviewThreadWork(payload, event))) return undefined;
+    const seq = store.bumpCounter(event.session, "eventSeq");
+    queue.enqueue(event, seq);
+    return seq;
+  };
+
+  const sameReviewDoneWork = (payload: EventPayload, event: ReviewDoneEvent): boolean =>
+    payload.event === "review-done" && payload.session === event.session &&
+    payload.completion.eventSeq === event.completion.eventSeq &&
+    payload.completion.completedAt === event.completion.completedAt;
+
+  /** Finish a crash-interrupted completion without ever dispatching twice. */
+  const ensureReviewDoneWake = (
+    session: Extract<RegistrySession, { kind: "review" }>,
+  ): Extract<RegistrySession, { kind: "review" }> => {
+    const completion = latestReviewCompletion(session.review);
+    if (completion === undefined) throw new Error(`done review ${session.id} has no completion`);
+    if (completion.wake === "queued") return session;
+    const event = reviewDoneEvent(completion);
+    const queue = queueFor(session.id);
+    if (!queue.hasPayload((payload) => sameReviewDoneWork(payload, event))) {
+      // Cancel older quiz/thread work. The terminal wake stays undispatched
+      // until the registry marker commits, closing the restart duplicate seam.
+      queue.replaceReviewWorkWithDone(event, completion.eventSeq, false);
+    }
+    const updated = store.markReviewCompletionQueued(session.id, completion.eventSeq);
+    queue.dispatchPending();
+    if (updated.kind !== "review") throw new Error(`session ${session.id} changed kind`);
+    return updated;
+  };
+
+  const recoverStartupState = (): void => {
+    // A crash may land after the attempt's atomic state write but before queue
+    // enqueue. Reconstruct from durable quiz state only after this process owns
+    // the daemon socket: a spawn-race loser must never flush its stale Store.
+    for (const session of store.listSessions()) {
+      if (session.kind !== "review") continue;
+      if (session.status === "done") {
+        try {
+          ensureReviewDoneWake(session);
+        } catch {
+          // The detail/Done route surfaces malformed completion state. A single
+          // damaged review must not prevent the daemon starting.
+        }
+        continue;
+      }
+      // A changed head reopens this same durable session. A terminal wake from
+      // its prior completion must not make the new review agent exit immediately,
+      // and work queued for the previous head (a crash can land between the head
+      // update and its queue cleanup) must not wake the agent into stale rejects.
+      queueFor(session.id).dropReviewDone();
+      queueFor(session.id).dropStaleReviewWork({
+        revision: session.review.revision,
+        sha: session.review.head.sha,
+      });
+      try {
+        const recovered = quizzes.recoverPending(session);
+        const queue = queueFor(session.id);
+        for (const event of recovered.events) {
+          if (queue.hasPayload((payload) => sameQuizWork(payload, event))) continue;
+          queue.enqueue(event, store.bumpCounter(session.id, "eventSeq"));
+        }
+      } catch {
+        // Detail routes surface corrupt/stale quiz state with typed errors. One
+        // damaged review must not prevent the daemon or other sessions starting.
+      }
+      try {
+        const threads = readReviewThreads(store.threadsPath(session.id), session.id);
+        const authorizedByRequestedAction = new Set(threads.flatMap((candidate) =>
+          candidate.codeAction?.status === "requested" ? (candidate.codeAction.authorizedTurns ?? [candidate.id]) : []
+        ));
+        for (const thread of threads) {
+          if (thread.identity.headRevision !== session.review.revision ||
+              thread.identity.headSha !== session.review.head.sha) continue;
+          // Once code work is explicitly requested it owns the eventual report
+          // refresh/response. Do not resurrect an already-acked older
+          // report-feedback wake after a restart and let it race the code result.
+          if (thread.response === undefined &&
+              (thread.codeAction === undefined || thread.codeAction.status === "failed") &&
+              !authorizedByRequestedAction.has(thread.id)) {
+            enqueueReviewThreadWork(reviewThreadEvent(
+              thread,
+              thread.intent === "question" ? "question" : "report-feedback",
+              threads,
+            ));
+          }
+          if (thread.codeAction?.status === "requested") {
+            enqueueReviewThreadWork(reviewThreadEvent(thread, "code-change", threads));
+          }
+        }
+      } catch {
+        // A corrupt review thread file is quarantined by its reader. Other
+        // sessions, quiz repair, and browser startup remain available.
+      }
+    }
+  };
+
   const sessionFor = (c: AppContext) => store.getSession(c.req.param("id") ?? "");
 
   // Mutating routes call this after their last await: reading the request
@@ -255,8 +502,8 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   // terminal set (TERMINAL_STATUSES), so an `implementing` session — which
   // re-opens the mutating verbs — sails through.
   const sessionEnded = (id: string): boolean => {
-    const status = store.getSession(id)?.status;
-    return status !== undefined && TERMINAL_STATUSES.includes(status);
+    const session = store.getSession(id);
+    return session !== undefined && isTerminalSession(session);
   };
 
   // Agent presence (review loop and daemon API): ephemeral, in-memory liveness only — the
@@ -272,7 +519,84 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   // UI pub/sub (DECISIONS.md "UI live updates"): every state mutation below
   // publishes, and the SSE routes in ui.ts fan the events out to browsers.
   const notifier = new Notifier();
+  const safePendingQuizCount = (session: Extract<RegistrySession, { kind: "review" }>): number => {
+    try {
+      return quizzes.pendingCount(session);
+    } catch {
+      // Corruption is surfaced by the typed review/detail routes. One bad
+      // local revision must not take down the daemon-wide session index.
+      return 0;
+    }
+  };
+  const safePublicQuiz = (session: Extract<RegistrySession, { kind: "review" }>): ReviewQuizPublicState | undefined => {
+    const revision = reviews.latestSubmittedRevision(session.id);
+    if (revision < 1) return undefined;
+    try {
+      return quizzes.publicState(session, revision);
+    } catch {
+      return undefined;
+    }
+  };
+  const unresolvedReviewConversations = (
+    threads: PublicReviewThread[],
+    session: Extract<RegistrySession, { kind: "review" }>,
+  ): number => {
+    const unresolved = new Set<string>();
+    for (const thread of threads) {
+      if (thread.identity.headRevision !== session.review.revision || thread.identity.headSha !== session.review.head.sha) continue;
+      const root = thread.replyTo ?? thread.id;
+      const unresolvedCodeAction = thread.codeAction !== undefined && thread.codeAction.status !== "completed";
+      if (thread.response === undefined || unresolvedCodeAction) unresolved.add(root);
+    }
+    return unresolved.size;
+  };
+  const reviewCodeActionThreads = (
+    session: Extract<RegistrySession, { kind: "review" }>,
+  ): ReviewThread[] => readReviewThreads(store.threadsPath(session.id), session.id)
+    .filter((thread) => thread.codeAction !== undefined);
+  const activeReviewCodeActions = (
+    session: Extract<RegistrySession, { kind: "review" }>,
+  ): ReviewThread[] => reviewCodeActionThreads(session).filter((thread) =>
+    thread.codeAction?.status === "requested" || thread.codeAction?.status === "working"
+  );
+  const releaseTerminalReviewWorktreeLeases = (
+    session: Extract<RegistrySession, { kind: "review" }>,
+  ): void => {
+    const path = reviewWorktreeLeasePathForPr(session.review.pullRequest.identity.key);
+    for (const thread of reviewCodeActionThreads(session)) {
+      if (thread.codeAction?.status !== "completed" && thread.codeAction?.status !== "failed") continue;
+      const action = reviewWorktreeLeaseAction(thread);
+      if (action !== undefined) {
+        // Mismatch means the PR lease belongs to another action generation.
+        // It is intentionally left untouched.
+        releaseReviewWorktreeLeaseFile(path, reviewWorktreeLeaseOwner(action));
+      }
+    }
+  };
+  const safePendingReviewWork = (session: Extract<RegistrySession, { kind: "review" }>): number => {
+    if (isTerminalSession(session)) return 0;
+    try {
+      return unresolvedReviewConversations(publicReviewThreads(store.threadsPath(session.id), session.id), session);
+    } catch {
+      return 0;
+    }
+  };
   const summarize = (session: RegistrySession): SessionSummary => {
+    if (session.kind === "review") {
+      return {
+        ...session,
+        // Report history owns its own revision axis. `session.review.revision`
+        // remains the PR-head generation and may advance before a report lands.
+        revision: reviews.latestSubmittedRevision(session.id),
+        lastReviewedRevision: 0,
+        pendingEvents: isTerminalSession(session)
+          ? 0
+          : safePendingQuizCount(session) + safePendingReviewWork(session),
+        openQuestions: 0,
+        lastContactAt: lastContact.get(session.id),
+        parked: queueFor(session.id).waiterCount > 0,
+      };
+    }
     const state = store.readState(session.id);
     return {
       ...session,
@@ -289,28 +613,45 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   };
   const publishSession = (session: RegistrySession): void =>
     notifier.publish({ type: "session", session: session.id, data: { session: summarize(session) } });
-  const publishQueue = (id: string, pending: number): void =>
-    notifier.publish({ type: "queue", session: id, data: { session: id, pending } });
-  const publishThread = (id: string, thread: Thread): void =>
+  const publishQueue = (id: string, pending: number): void => {
+    const session = store.getSession(id);
+    const effective = session?.kind === "review"
+      ? isTerminalSession(session)
+        ? 0
+        : safePendingQuizCount(session) + safePendingReviewWork(session)
+      : pending;
+    notifier.publish({ type: "queue", session: id, data: { session: id, pending: effective } });
+  };
+  const publishQuiz = (id: string, quiz: ReviewQuizPublicState): void =>
+    notifier.publish({ type: "quiz", session: id, data: { session: id, quiz } });
+  const publishThread = (id: string, thread: Thread | PublicReviewThread): void =>
     notifier.publish({ type: "thread", session: id, data: { session: id, thread } });
   const publishGrill = (id: string, entry: TranscriptEntry): void =>
     notifier.publish({ type: "grill", session: id, data: { session: id, entry } });
   const publishStream = (id: string, events: StreamEvent[]): void =>
     notifier.publish({ type: "stream", session: id, data: { session: id, events } });
 
+  /** Replace the private immutable companion with its browser-safe live projection. */
+  const publicReviewRevision = (
+    session: Extract<RegistrySession, { kind: "review" }>,
+    payload: ReviewReportRevisionPayload,
+  ): ReviewReportRevisionPayload => payload.revision.status === "submitted"
+    ? { ...payload, quiz: quizzes.publicState(session, payload.revision.revision) }
+    : payload;
+
   // The PR poller refreshes un-settled PRs (timer + on-demand) and publishes any
   // state change so the home UI re-sections an implemented plan when its PR
-  // merges or closes (see pr-status.ts). `pollNow` is kicked once at startup and
-  // again whenever the index stream connects (the onConnect hook below).
-  const prPoller = startPrPolling({
-    listSessions: () => store.listSessions(),
+  // merges or closes (see pr-status.ts). It is not constructed until start(),
+  // after the socket bind has made this process the single daemon owner.
+  const prPollingDeps = {
+    listSessions: () => store.listSessions().filter((session) => session.kind === "plan"),
     updateSession: (id, patch) => store.updateSession(id, patch),
     publish: (id) => {
       const session = store.getSession(id);
       if (session) publishSession(session);
     },
-  });
-  void prPoller.pollNow(); // fire-and-forget: never blocks server creation
+  } satisfies Parameters<typeof startPrPolling>[0];
+  let prPoller: ReturnType<typeof startPrPolling> | undefined;
 
   // Monotonic per-session seq source for the live-activity stream (the
   // automatic, cross-agent activity stream): one StreamSeq per session id,
@@ -343,11 +684,25 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   // downstream. A repo whose agent has no adapter attaches no tailer and runs on
   // the progress floor (the registry returns null). Tailers are injectable via
   // options.makeTailer so a test can drive `tick()` without a real fs poll.
-  const tailers = new Map<string, { start(): void; stop(): void }>();
+  const tailers = new Map<string, {
+    repoRoot: string;
+    tailer: { start(): void; stop(): void };
+  }>();
   const makeTailer = options.makeTailer ?? ((deps: TailerDeps) => new Tailer(deps));
   const startTailer = (session: RegistrySession): void => {
-    if (tailers.has(session.id)) return; // idempotent — already watching
-    if (TERMINAL_STATUSES.includes(session.status)) return; // over: nothing to tail
+    const existing = tailers.get(session.id);
+    if (isTerminalSession(session)) {
+      if (existing !== undefined) {
+        existing.tailer.stop();
+        tailers.delete(session.id);
+      }
+      return; // over: nothing to tail
+    }
+    if (existing?.repoRoot === session.repo) return; // idempotent — already watching this clone
+    if (existing !== undefined) {
+      existing.tailer.stop();
+      tailers.delete(session.id);
+    }
     const tailer = makeTailer({
       repoRoot: session.repo,
       nextSeq: () => nextStreamSeq(session.id),
@@ -355,20 +710,17 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       publish: (events) => publishStream(session.id, events),
       config: () => loadConfig(session.repo).stream,
     });
-    tailers.set(session.id, tailer);
+    tailers.set(session.id, { repoRoot: session.repo, tailer });
     tailer.start();
   };
   const stopTailer = (id: string): void => {
-    const tailer = tailers.get(id);
-    if (tailer === undefined) return;
-    tailer.stop();
+    const entry = tailers.get(id);
+    if (entry === undefined) return;
+    entry.tailer.stop();
     tailers.delete(id);
   };
-  // Re-attach tailers to sessions that were already active when the daemon
-  // started (a restart mid-build): the registry survives the restart, so the
-  // live transcript is still being written. New sessions wire their tailer at
-  // creation; terminal ones are skipped by startTailer's guard.
-  for (const session of store.listSessions()) startTailer(session);
+  // Existing active sessions are re-attached by start() only after this process
+  // wins daemon ownership. New sessions wire their tailer at creation.
 
   // Desktop attention banners (review loop and daemon API). Presence tracks which sessions
   // have a *visible* review open; the notify sink fires the native macOS banner
@@ -377,8 +729,9 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   const notify = options.notify ?? createDesktopNotifier();
 
   // Live browser tabs watching this daemon (any session or the index), tracked
-  // by an explicit SPA heartbeat with a TTL so `otacon open` can skip launching a
-  // duplicate tab (DECISIONS.md "reuse an existing open tab"). A heartbeat rather
+  // by an explicit SPA heartbeat with a TTL so `otacon open` can route one
+  // existing tab instead of launching a duplicate (DECISIONS.md "routes one
+  // existing tab"). A heartbeat rather
   // than an SSE-connection count because the dogfood daemon runs under Bun, whose
   // node:http does not detect a client disconnect, so a connection count leaks;
   // the TTL self-heals a closed/crashed tab under both Node and Bun. Ephemeral,
@@ -541,6 +894,23 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     await next();
   });
 
+  // Review sessions share the generic session envelope, event/presence
+  // plumbing, and progress telemetry. Keep every plan-state endpoint behind
+  // the discriminant before it can parse a body or create plan files such as
+  // session.json, threads.json, or transcript counters for a review id.
+  app.use("/api/sessions/:id/*", async (c, next) => {
+    const session = sessionFor(c);
+    if (session?.kind === "review") {
+      const base = `/api/sessions/${session.id}`;
+      const suffix = c.req.path.slice(base.length);
+      const reviewThreadRead = suffix === "/threads" && c.req.method === "GET";
+      if (suffix !== "" && suffix !== "/events" && suffix !== "/presence" && suffix !== "/progress" && suffix !== "/stream" && !reviewThreadRead) {
+        return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a plan`);
+      }
+    }
+    await next();
+  });
+
   app.onError((error, c) =>
     c.json({ error: { code: "E_INTERNAL", message: error.message } }, 500),
   );
@@ -554,6 +924,76 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.get("/api/health", (c) =>
     c.json({ app: "otacond", version: VERSION, pid: process.pid, viewers: viewers.count() }),
   );
+
+  const knowledgeTarget = (scope: unknown, repo: unknown): KnowledgeTarget | undefined => {
+    if (scope === "user") return { scope: "user" };
+    if (scope !== "project" || typeof repo !== "string") return undefined;
+    const canonical = canonicalizeGitHubRepo(repo);
+    return canonical === undefined ? undefined : { scope: "project", repo: canonical };
+  };
+
+  // Local profile documents. GET never creates a file: a no-history reader
+  // receives the neutral baseline and its CAS hash. Project identity is a
+  // canonical GitHub owner/repo rather than a clone path, so clones converge.
+  app.get("/api/knowledge", (c) => {
+    const scope = c.req.query("scope");
+    const repo = c.req.query("repo");
+    const target = knowledgeTarget(scope, repo);
+    if (target === undefined) {
+      return badRequest(
+        c,
+        scope === "project"
+          ? "project knowledge requires a valid GitHub owner/repo"
+          : 'scope must be "user" or "project"',
+      );
+    }
+    return c.json({ document: knowledge.read(target) });
+  });
+
+  // CAS summary replacement. A stale editor receives the current document in
+  // the 409 response, allowing it to preserve its draft and show the newer
+  // disk value. Validate everything before replace so a bad request writes no
+  // file. Evidence appends are intentionally separate store operations.
+  app.put("/api/knowledge", async (c) => {
+    const body = (await readJsonBody(c)) ?? {};
+    const target = knowledgeTarget(body.scope, body.repo);
+    if (target === undefined) {
+      return badRequest(
+        c,
+        body.scope === "project"
+          ? "project knowledge requires a valid GitHub owner/repo"
+          : 'scope must be "user" or "project"',
+      );
+    }
+    if (typeof body.markdown !== "string") return badRequest(c, "markdown must be a string");
+    if (typeof body.baseHash !== "string") return badRequest(c, "baseHash must be a SHA-256 string");
+    const baseHash = parseKnowledgeHash(body.baseHash);
+    if (baseHash === undefined) return badRequest(c, "baseHash must be a lowercase SHA-256 string");
+    try {
+      const result = knowledge.replace(target, body.markdown, baseHash);
+      if (!result.ok) {
+        return c.json(
+          {
+            error: {
+              code: "E_KNOWLEDGE_CONFLICT",
+              message: "knowledge changed after this editor loaded it",
+            },
+            document: result.current,
+          },
+          409,
+        );
+      }
+      return c.json({ document: result.document });
+    } catch (error) {
+      if (error instanceof InvalidKnowledgeMarkdownError) {
+        return c.json(
+          { error: { code: "E_INVALID_KNOWLEDGE", message: error.message } },
+          422,
+        );
+      }
+      throw error;
+    }
+  });
 
   // The Settings UI's config surface (review loop and daemon API). GET returns the full
   // schema plus each scope's current sparse, coerced values. The `user` scope
@@ -673,6 +1113,866 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     return c.json(session, 201);
   });
 
+  /** Canonical review lookup, independent of local clone paths. */
+  app.get("/api/reviews", (c) => {
+    const repository = canonicalizeGitHubRepo(`https://github.com/${c.req.query("repo") ?? ""}`);
+    const number = Number(c.req.query("number"));
+    if (repository === undefined || !Number.isInteger(number) || number < 1) {
+      return badRequest(c, "repo must be owner/repo and number must be a positive integer");
+    }
+    const session = store.findReviewSession(repository, number);
+    if (session === undefined) return notFound(c, `unknown review: ${repository}#${number}`);
+    return c.json({ session: summarize(session) });
+  });
+
+  /** Atomic create/reuse/revise path used by `otacon review start`. */
+  app.post("/api/reviews", async (c) => {
+    const body = (await readJsonBody(c)) ?? {};
+    const { repo, repository: rawRepository, branch, force } = body;
+    const repository = typeof rawRepository === "string"
+      ? canonicalizeGitHubRepo(`https://github.com/${rawRepository}`)
+      : undefined;
+    const pullRequest = parsePullRequestMetadata(body.pullRequest);
+    if (typeof repo !== "string" || !isAbsolute(repo)) {
+      return badRequest(c, "repo must be an absolute path");
+    }
+    if (repository === undefined) return badRequest(c, "repository must be owner/repo");
+    if (branch !== undefined && typeof branch !== "string") {
+      return badRequest(c, "branch must be a string");
+    }
+    if (force !== undefined && typeof force !== "boolean") {
+      return badRequest(c, "force must be a boolean");
+    }
+    if (pullRequest === undefined) return badRequest(c, "pullRequest metadata is invalid");
+    if (pullRequest.identity.repository !== repository) {
+      return c.json({
+        error: {
+          code: "E_REPO_MISMATCH",
+          message: `PR belongs to ${pullRequest.identity.repository}, not ${repository}`,
+        },
+      }, 409);
+    }
+    const result = store.startReviewSession({
+      repo,
+      branch,
+      pullRequest,
+      force: force === true,
+    });
+    if (result.action === "reopened-changed") queueFor(result.session.id).dropReviewDone();
+    if (result.action === "revised" || result.action === "reopened-changed") {
+      queueFor(result.session.id).dropStaleReviewWork({
+        revision: result.session.review.revision,
+        sha: result.session.review.head.sha,
+      });
+    }
+    const preparation = reviews.prepareForSession(result.session);
+    // Review authoring begins immediately after `review start`, before the
+    // agent reads its frozen knowledge or researches the PR. Reuse/reopen
+    // rebinds the canonical review to this invocation's clone; startTailer is
+    // idempotent for the same path and replaces the watcher when the path moved.
+    // Completed reviews remain untouched through the terminal guard.
+    startTailer(result.session);
+    publishSession(result.session);
+    return c.json({ ...result, preparation }, result.action === "created" ? 201 : 200);
+  });
+
+  /** Refresh one known review from freshly-resolved metadata. */
+  app.post("/api/reviews/:id/head", async (c) => {
+    const before = store.getSession(c.req.param("id"));
+    if (before === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (before.kind !== "review") {
+      return codedBadRequest(c, "E_SESSION_KIND", `session ${before.id} is not a review`);
+    }
+    const body = (await readJsonBody(c)) ?? {};
+    const pullRequest = parsePullRequestMetadata(body.pullRequest);
+    if (pullRequest === undefined) return badRequest(c, "pullRequest metadata is invalid");
+    const session = store.getSession(before.id);
+    if (session?.kind !== "review") return notFound(c, `unknown review: ${before.id}`);
+    if (
+      session.review.revision !== before.review.revision ||
+      session.review.head.sha !== before.review.head.sha ||
+      session.status !== before.status
+    ) {
+      return c.json({
+        error: {
+          code: "E_REVIEW_HEAD_STALE",
+          message: "review state changed while processing the head refresh",
+        },
+      }, 409);
+    }
+    if (pullRequest.identity.key !== session.review.pullRequest.identity.key) {
+      return c.json({
+        error: { code: "E_REVIEW_IDENTITY", message: "head refresh cannot change PR identity" },
+      }, 409);
+    }
+    const unchanged = pullRequest.headSha === session.review.head.sha;
+    const wasDone = session.status === "done";
+    const updated = store.refreshReviewHead(session.id, pullRequest);
+    if (!unchanged) {
+      queueFor(updated.id).dropReviewDone();
+      queueFor(updated.id).dropStaleReviewWork({
+        revision: updated.review.revision,
+        sha: updated.review.head.sha,
+      });
+    }
+    const preparation = reviews.prepareForSession(updated);
+    // Same-SHA refreshes still carry mutable title/state/ref/permissions and
+    // must reach the registry/UI; only the head generation stays unchanged.
+    publishSession(updated);
+    const action = unchanged
+      ? wasDone ? "reused-complete" : "reused"
+      : wasDone ? "reopened-changed" : "revised";
+    return c.json({ action, session: summarize(updated), preparation });
+  });
+
+  /** Explicit same-head report revision, used by later report-feedback refreshes. */
+  app.post("/api/reviews/:id/revisions", async (c) => {
+    const before = store.getSession(c.req.param("id"));
+    if (before === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (before.kind !== "review") {
+      return codedBadRequest(c, "E_SESSION_KIND", `session ${before.id} is not a review`);
+    }
+    const body = (await readJsonBody(c)) ?? {};
+    if (!hasExactKeys(body, ["source"])) {
+      return codedBadRequest(c, "E_REVIEW_REVISION_INPUT", "review revision requires exactly one source identity");
+    }
+    const source = parseReviewSource(body.source);
+    if (source === undefined) {
+      return codedBadRequest(c, "E_REVIEW_REVISION_INPUT", "review revision source identity is invalid");
+    }
+    // Re-read after the async body boundary, then keep validation + preparation
+    // synchronous. A changed head/report or an already-prepared revision refuses
+    // before beginRevision writes a new immutable directory.
+    const session = store.getSession(before.id);
+    if (session?.kind !== "review") return notFound(c, `unknown review: ${before.id}`);
+    if (session.status === "done") return sessionOver(c, session.id);
+    let current: ReviewReportRevisionPayload | undefined;
+    try {
+      current = reviews.latestForHead(session);
+    } catch (error) {
+      if (error instanceof ReviewRevisionCorruptError) {
+        return reviewRevisionUnavailable(c, "the current review revision is missing or corrupt");
+      }
+      throw error;
+    }
+    if (current === undefined || current.revision.status !== "submitted" ||
+      current.revision.revision !== source.reportRevision ||
+      current.revision.headRevision !== source.headRevision ||
+      current.revision.headSha !== source.headSha ||
+      source.headRevision !== session.review.revision ||
+      source.headSha !== session.review.head.sha) {
+      return c.json({
+        error: {
+          code: "E_REVIEW_REVISION_STALE",
+          message: "review revision source is no longer the current submitted report and PR head",
+        },
+      }, 409);
+    }
+    const preparation = reviews.beginRevision(session);
+    const updated = store.updateSession(session.id, { status: "working" });
+    publishSession(updated);
+    return c.json({ preparation }, 201);
+  });
+
+  /** Agent submission: strict lint + ownership checks precede an immutable commit. */
+  app.post("/api/reviews/:id/submit", async (c) => {
+    const sessionBefore = store.getSession(c.req.param("id"));
+    if (sessionBefore === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (sessionBefore.kind !== "review") {
+      return codedBadRequest(c, "E_SESSION_KIND", `session ${sessionBefore.id} is not a review`);
+    }
+    const body = (await readJsonBody(c)) ?? {};
+    if (typeof body.report !== "string" || typeof body.quiz !== "string") {
+      return badRequest(c, "report and quiz must be strings");
+    }
+    const current = store.getSession(sessionBefore.id);
+    if (current?.kind !== "review") return notFound(c, `unknown review: ${sessionBefore.id}`);
+    if (current.status === "done") return sessionOver(c, current.id);
+    try {
+      const revision = reviews.submit(current, { report: body.report, quiz: body.quiz });
+      const updated = store.updateSession(current.id, { status: "reviewing" });
+      publishSession(updated);
+      notifier.publish({
+        type: "revision",
+        session: current.id,
+        data: { session: current.id, revision: revision.revision.revision, changelog: null },
+      });
+      maybeNotify(updated, { kind: "revision", revision: revision.revision.revision });
+      return c.json({ revision: publicReviewRevision(current, revision) }, 201);
+    } catch (error) {
+      if (error instanceof ReviewReportInvalidError) {
+        return c.json({
+          error: { code: "E_REVIEW_REPORT_INVALID", message: error.message },
+          issues: error.issues,
+        }, 422);
+      }
+      if (error instanceof ReviewRevisionExistsError) {
+        return c.json({ error: { code: "E_REVIEW_REVISION_EXISTS", message: error.message } }, 409);
+      }
+      if (error instanceof ReviewRevisionCorruptError || error instanceof ReviewQuizCorruptError) {
+        return c.json({
+          error: {
+            code: "E_REVIEW_REVISION_UNAVAILABLE",
+            message: "the report names a revision that is missing or unreadable; prepare a new report revision",
+          },
+        }, 409);
+      }
+      throw error;
+    }
+  });
+
+  /** Latest submitted report plus revision-scoped PR metadata and snapshot. */
+  app.get("/api/reviews/:id", (c) => {
+    const session = store.getSession(c.req.param("id"));
+    if (session === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.kind !== "review") {
+      return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a review`);
+    }
+    const latest = reviews.latestSubmittedRevision(session.id);
+    const requested = c.req.query("revision");
+    const revision = requested === undefined ? latest : Number(requested);
+    if (!Number.isInteger(revision) || revision < 1 || revision > latest) {
+      if (requested !== undefined || latest > 0) {
+        return badRequest(c, `revision must name a submitted report between 1 and ${latest}`);
+      }
+    }
+    try {
+      const report = revision === 0 ? null : reviews.readRevision(session.id, revision);
+      if (report !== null && report.revision.status !== "submitted") {
+        return notFound(c, `session ${session.id} has no submitted review revision ${revision}`);
+      }
+      return c.json({
+        session: summarize(session),
+        report: report === null ? null : publicReviewRevision(session, report),
+        preparation: (() => {
+          const preparation = reviews.latestForHead(session);
+          return preparation === undefined ? null : publicReviewRevision(session, preparation);
+        })(),
+      });
+    } catch (error) {
+      if (error instanceof ReviewRevisionCorruptError || error instanceof ReviewQuizCorruptError) {
+        return reviewRevisionUnavailable(c, `review revision ${revision} is missing or corrupt`);
+      }
+      throw error;
+    }
+  });
+
+  app.get("/api/reviews/:id/revisions/:n", (c) => {
+    const session = store.getSession(c.req.param("id"));
+    if (session === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.kind !== "review") {
+      return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a review`);
+    }
+    const revision = Number(c.req.param("n"));
+    if (!Number.isInteger(revision) || revision < 1) return badRequest(c, "revision must be a positive integer");
+    try {
+      return c.json({ revision: publicReviewRevision(session, reviews.readRevision(session.id, revision)) });
+    } catch (error) {
+      if (error instanceof ReviewRevisionCorruptError || error instanceof ReviewQuizCorruptError) {
+        return reviewRevisionUnavailable(c, `review revision ${revision} is missing or corrupt`);
+      }
+      throw error;
+    }
+  });
+
+  app.get("/api/reviews/:id/diff", (c) => {
+    const session = store.getSession(c.req.param("id"));
+    if (session === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.kind !== "review") {
+      return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a review`);
+    }
+    const latest = reviews.latestSubmittedRevision(session.id);
+    const from = Number(c.req.query("from") ?? Math.max(0, latest - 1));
+    const to = Number(c.req.query("to") ?? latest);
+    if (!Number.isInteger(to) || to < 1 || to > latest || !Number.isInteger(from) || from < 0 || from >= to) {
+      return badRequest(c, `diff requires 0 <= from < to <= ${latest}`);
+    }
+    try {
+      const before = from === 0 ? "" : reviews.readRevision(session.id, from).report;
+      const after = reviews.readRevision(session.id, to).report;
+      if (before === undefined || after === undefined) return notFound(c, "diff requires submitted report revisions");
+      const payload: DiffPayload = { session: session.id, from, to, sections: diffPlans(before, after) };
+      return c.json(payload);
+    } catch (error) {
+      if (error instanceof ReviewRevisionCorruptError) {
+        return reviewRevisionUnavailable(c, "one of the requested review revisions is missing or corrupt");
+      }
+      throw error;
+    }
+  });
+
+  /** Deliberate terminal transition; unresolved work requires an explicit force. */
+  app.post("/api/reviews/:id/done", async (c) => {
+    const before = store.getSession(c.req.param("id"));
+    if (before === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (before.kind !== "review") {
+      return codedBadRequest(c, "E_SESSION_KIND", `session ${before.id} is not a review`);
+    }
+    const body = (await readJsonBody(c)) ?? {};
+    const keys = body.force === undefined ? [] : ["force"];
+    if (!hasExactKeys(body, keys) || (body.force !== undefined && typeof body.force !== "boolean")) {
+      return codedBadRequest(c, "E_REVIEW_DONE_INPUT", "Done accepts only an optional boolean force");
+    }
+    const current = store.getSession(before.id);
+    if (current?.kind !== "review") return notFound(c, `unknown review: ${before.id}`);
+    if (current.status === "done") {
+      try {
+        const repaired = ensureReviewDoneWake(current);
+        const completion = latestReviewCompletion(repaired.review)!;
+        publishSession(repaired);
+        return c.json({ session: summarize(repaired), completion, repeated: true });
+      } catch (error) {
+        return c.json({
+          error: {
+            code: "E_REVIEW_COMPLETION_UNAVAILABLE",
+            message: error instanceof Error ? error.message : "review completion is unavailable",
+          },
+        }, 409);
+      }
+    }
+    const activeCodeActions = activeReviewCodeActions(current);
+    if (activeCodeActions.length > 0) {
+      return c.json({
+        error: {
+          code: "E_REVIEW_CODE_ACTION_ACTIVE",
+          message: "finish or fail the active code action before closing this review",
+        },
+        active: activeCodeActions.map((thread) => thread.id),
+      }, 409);
+    }
+
+    const reportRevision = reviews.latestSubmittedRevision(current.id);
+    if (reportRevision < 1) {
+      return c.json({
+        error: { code: "E_REVIEW_NOT_READY", message: "submit a review report before marking it Done" },
+      }, 409);
+    }
+    try {
+      const report = reviews.readRevision(current.id, reportRevision);
+      if (report.revision.status !== "submitted" ||
+          report.revision.headRevision !== current.review.revision ||
+          report.revision.headSha !== current.review.head.sha) {
+        return c.json({
+          error: { code: "E_REVIEW_HEAD_STALE", message: "the latest report belongs to an older PR head" },
+        }, 409);
+      }
+      const quiz = quizzes.publicState(current, reportRevision);
+      if (quiz.stale) {
+        return c.json({
+          error: { code: "E_REVIEW_HEAD_STALE", message: "the latest quiz belongs to an older PR head" },
+        }, 409);
+      }
+      const unresolved = {
+        conversations: unresolvedReviewConversations(publicReviewThreads(store.threadsPath(current.id), current.id), current),
+        quizzes: quiz.questions.filter((question) => question.status !== "passed").length,
+      };
+      if ((unresolved.conversations > 0 || unresolved.quizzes > 0) && body.force !== true) {
+        return c.json({
+          error: {
+            code: "E_REVIEW_INCOMPLETE",
+            message: "this review still has unresolved conversations or quizzes",
+          },
+          warning: { unresolved, action: "send force:true to Close anyway" },
+        }, 409);
+      }
+
+      const completedAt = new Date().toISOString();
+      const eventSeq = store.bumpCounter(current.id, "eventSeq");
+      const completion: ReviewCompletionSummary = {
+        version: 1,
+        session: current.id,
+        completedAt,
+        reportRevision,
+        headRevision: current.review.revision,
+        headSha: current.review.head.sha,
+        forced: body.force === true,
+        unresolved,
+        eventSeq,
+        wake: "pending",
+      };
+      const completed = store.completeReviewSession(current.id, completion);
+      const queued = ensureReviewDoneWake(completed);
+      stopTailer(current.id);
+      publishQueue(current.id, queueFor(current.id).size);
+      publishSession(queued);
+      return c.json({
+        session: summarize(queued),
+        completion: latestReviewCompletion(queued.review),
+        repeated: false,
+      });
+    } catch (error) {
+      if (error instanceof ReviewRevisionCorruptError || error instanceof ReviewQuizCorruptError) {
+        return reviewRevisionUnavailable(c, "the current report or quiz is missing or corrupt");
+      }
+      throw error;
+    }
+  });
+
+  /** Browser creation of an anchored Ask or Comment on the exact current report. */
+  app.post("/api/reviews/:id/threads", async (c) => {
+    const before = store.getSession(c.req.param("id"));
+    if (before === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (before.kind !== "review") return codedBadRequest(c, "E_SESSION_KIND", `session ${before.id} is not a review`);
+    const body = (await readJsonBody(c)) ?? {};
+    const optional = body.rememberScope === undefined ? [] : ["rememberScope"];
+    if (!hasExactKeys(body, ["intent", "anchor", "body", "reportRevision", "headRevision", "headSha", "idempotencyKey", ...optional])) {
+      return codedBadRequest(c, "E_REVIEW_THREAD_INPUT", "review thread request has unknown or missing fields");
+    }
+    const current = store.getSession(before.id);
+    if (current?.kind !== "review") return notFound(c, `unknown review: ${before.id}`);
+    if (current.status === "done") return sessionOver(c, current.id);
+    const intent = body.intent;
+    const anchor = parseReviewAnchor(body.anchor);
+    const rememberScope = body.rememberScope;
+    if ((intent !== "question" && intent !== "comment") || anchor === undefined ||
+      typeof body.body !== "string" || body.body.trim() === "" || body.body.length > 20_000 ||
+      typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "" || body.idempotencyKey.length > 200 ||
+      !Number.isInteger(body.reportRevision) || !Number.isInteger(body.headRevision) ||
+      typeof body.headSha !== "string" || (rememberScope !== undefined && rememberScope !== "user" && rememberScope !== "project")) {
+      return codedBadRequest(c, "E_REVIEW_THREAD_INPUT", "review thread request is invalid");
+    }
+    const latest = reviews.latestSubmittedRevision(current.id);
+    if (body.reportRevision !== latest || body.headRevision !== current.review.revision || body.headSha !== current.review.head.sha) {
+      return c.json({ error: { code: "E_REVIEW_THREAD_STALE", message: "selection does not belong to the current report and PR head" } }, 409);
+    }
+    let report: ReviewReportRevisionPayload;
+    try {
+      report = reviews.readRevision(current.id, latest);
+    } catch {
+      return reviewRevisionUnavailable(c, `review revision ${latest} is missing or corrupt`);
+    }
+    if (report.revision.status !== "submitted" || report.revision.headRevision !== current.review.revision || report.revision.headSha !== current.review.head.sha) {
+      return c.json({ error: { code: "E_REVIEW_THREAD_STALE", message: "current report has not been submitted for the current PR head" } }, 409);
+    }
+    if (report.report === undefined || !reportContainsAnchorQuote(report.report, anchor.exact!)) {
+      return c.json({ error: { code: "E_REVIEW_ANCHOR", message: "selected quote is not present in the named report revision" } }, 409);
+    }
+    const path = store.threadsPath(current.id);
+    const existingThreads = readReviewThreads(path, current.id);
+    const existing = existingThreads.find((thread) => thread.idempotencyKey === body.idempotencyKey);
+    // Construct the durable queue before the first thread/counter write. A bad
+    // queue is quarantined now rather than after the browser believes the
+    // create succeeded; a crash after persistence is repaired at startup.
+    queueFor(current.id);
+    const createdAt = existing?.createdAt ?? new Date().toISOString();
+    const prefix = intent === "question" ? "q" : "t";
+    const nextOrdinal = existingThreads.reduce((max, thread) => {
+      if (!thread.id.startsWith(prefix)) return max;
+      return Math.max(max, Number(thread.id.slice(1)) || 0);
+    }, 0) + 1;
+    const id = existing?.id ?? `${prefix}${nextOrdinal}`;
+    try {
+      const result = createReviewThread(path, {
+        id,
+        surface: "review",
+        intent,
+        anchor,
+        body: body.body,
+        createdAt,
+        identity: {
+          session: current.id,
+          reportRevision: body.reportRevision as number,
+          headRevision: body.headRevision as number,
+          headSha: body.headSha,
+        },
+        idempotencyKey: body.idempotencyKey,
+        ...(rememberScope === undefined ? {} : { remember: { scope: rememberScope } }),
+      });
+      const event = reviewThreadEvent(
+        result.thread,
+        intent === "question" ? "question" : "report-feedback",
+        readReviewThreads(path, current.id),
+      );
+      // A request-loss retry may arrive after the agent already responded (or
+      // after a Comment advanced to code work). The persisted thread is the
+      // authority: only reconstruct work that startup recovery would also own.
+      const seq = result.thread.response === undefined && result.thread.codeAction === undefined
+        ? enqueueReviewThreadWork(event)
+        : undefined;
+      const publicThread = publicReviewThread(result.thread);
+      publishThread(current.id, publicThread);
+      publishQueue(current.id, queueFor(current.id).size);
+      publishSession(current);
+      return c.json({ thread: publicThread, repeated: result.repeated, ...(seq === undefined ? {} : { seq }) }, result.repeated ? 200 : 201);
+    } catch (error) {
+      if (error instanceof ReviewThreadConflictError) {
+        return c.json({ error: { code: error.code, message: error.message } }, 409);
+      }
+      throw error;
+    }
+  });
+
+  /** Browser follow-up on an existing same-head PR-review conversation. */
+  app.post("/api/reviews/:id/threads/:tid/followups", async (c) => {
+    const before = store.getSession(c.req.param("id"));
+    if (before === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (before.kind !== "review") return codedBadRequest(c, "E_SESSION_KIND", `session ${before.id} is not a review`);
+    const body = (await readJsonBody(c)) ?? {};
+    if (!hasExactKeys(body, ["body", "reportRevision", "headRevision", "headSha", "idempotencyKey"]) ||
+      typeof body.body !== "string" || body.body.trim() === "" || body.body.length > 20_000 ||
+      !Number.isInteger(body.reportRevision) || !Number.isInteger(body.headRevision) || typeof body.headSha !== "string" ||
+      typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "" || body.idempotencyKey.length > 200) {
+      return codedBadRequest(c, "E_REVIEW_THREAD_INPUT", "review follow-up request is invalid");
+    }
+    const current = store.getSession(before.id);
+    if (current?.kind !== "review") return notFound(c, `unknown review: ${before.id}`);
+    if (current.status === "done") return sessionOver(c, current.id);
+    const latest = reviews.latestSubmittedRevision(current.id);
+    if (body.reportRevision !== latest || body.headRevision !== current.review.revision || body.headSha !== current.review.head.sha) {
+      return c.json({ error: { code: "E_REVIEW_THREAD_STALE", message: "follow-up does not belong to the current report and PR head" } }, 409);
+    }
+    const path = store.threadsPath(current.id);
+    const threads = readReviewThreads(path, current.id);
+    const root = threads.find((candidate) => candidate.id === c.req.param("tid"));
+    if (root === undefined) return notFound(c, `unknown review thread: ${c.req.param("tid")}`);
+    if (root.replyTo !== undefined) {
+      return c.json({ error: { code: "E_REVIEW_THREAD_ROOT", message: "follow-ups must target the conversation root" } }, 409);
+    }
+    if (root.identity.headRevision !== current.review.revision || root.identity.headSha !== current.review.head.sha) {
+      return c.json({ error: { code: "E_REVIEW_THREAD_STALE", message: "conversation belongs to an older PR head" } }, 409);
+    }
+    const existing = threads.find((candidate) => candidate.idempotencyKey === body.idempotencyKey);
+    if (existing === undefined && (root.codeAction?.status === "requested" || root.codeAction?.status === "working")) {
+      return c.json({ error: { code: "E_REVIEW_CODE_ACTION_PENDING", message: "code work already owns this conversation snapshot" } }, 409);
+    }
+    try {
+      const report = reviews.readRevision(current.id, latest);
+      if (report.revision.status !== "submitted" || report.revision.headRevision !== current.review.revision || report.revision.headSha !== current.review.head.sha) {
+        return c.json({ error: { code: "E_REVIEW_THREAD_STALE", message: "current report has not been submitted for the current PR head" } }, 409);
+      }
+    } catch {
+      return reviewRevisionUnavailable(c, `review revision ${latest} is missing or corrupt`);
+    }
+    queueFor(current.id);
+    const prefix = root.intent === "question" ? "q" : "t";
+    const nextOrdinal = threads.reduce((max, candidate) => candidate.id.startsWith(prefix)
+      ? Math.max(max, Number(candidate.id.slice(1)) || 0)
+      : max, 0) + 1;
+    try {
+      const result = createReviewThread(path, {
+        id: existing?.id ?? `${prefix}${nextOrdinal}`,
+        surface: "review",
+        intent: root.intent,
+        anchor: root.anchor,
+        body: body.body,
+        createdAt: existing?.createdAt ?? new Date().toISOString(),
+        replyTo: root.id,
+        identity: {
+          session: current.id,
+          reportRevision: body.reportRevision as number,
+          headRevision: body.headRevision as number,
+          headSha: body.headSha,
+        },
+        idempotencyKey: body.idempotencyKey,
+      });
+      const allThreads = readReviewThreads(path, current.id);
+      const event = reviewThreadEvent(result.thread, root.intent === "question" ? "question" : "report-feedback", allThreads);
+      const seq = result.thread.response === undefined ? enqueueReviewThreadWork(event) : undefined;
+      const publicThread = publicReviewThread(result.thread);
+      publishThread(current.id, publicThread);
+      publishQueue(current.id, queueFor(current.id).size);
+      publishSession(current);
+      return c.json({ thread: publicThread, repeated: result.repeated, ...(seq === undefined ? {} : { seq }) }, result.repeated ? 200 : 201);
+    } catch (error) {
+      if (error instanceof ReviewThreadConflictError) return c.json({ error: { code: error.code, message: error.message } }, 409);
+      throw error;
+    }
+  });
+
+  /** Agent answer/report-feedback response, optionally acknowledging requested memory. */
+  app.post("/api/reviews/:id/threads/:tid/respond", async (c) => {
+    const before = store.getSession(c.req.param("id"));
+    if (before === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (before.kind !== "review") return codedBadRequest(c, "E_SESSION_KIND", `session ${before.id} is not a review`);
+    const body = (await readJsonBody(c)) ?? {};
+    const optional = ["responseReportRevision", "saved"].filter((key) => body[key] !== undefined);
+    if (!hasExactKeys(body, ["source", "body", ...optional])) {
+      return codedBadRequest(c, "E_REVIEW_THREAD_RESPONSE", "thread response has unknown or missing fields");
+    }
+    const source = parseReviewSource(body.source);
+    if (source === undefined) {
+      return codedBadRequest(c, "E_REVIEW_THREAD_RESPONSE", "thread source identity is invalid");
+    }
+    const current = store.getSession(before.id);
+    if (current?.kind !== "review") return notFound(c, `unknown review: ${before.id}`);
+    if (current.status === "done") return sessionOver(c, current.id);
+    const threads = readReviewThreads(store.threadsPath(current.id), current.id);
+    const thread = threads.find((candidate) => candidate.id === c.req.param("tid"));
+    if (thread === undefined) return notFound(c, `unknown review thread: ${c.req.param("tid")}`);
+    if (source.reportRevision !== thread.identity.reportRevision || source.headRevision !== thread.identity.headRevision || source.headSha !== thread.identity.headSha) {
+      return c.json({ error: { code: "E_REVIEW_THREAD_IDENTITY", message: "response source does not match the persisted thread" } }, 409);
+    }
+    if (thread.identity.headRevision !== current.review.revision || thread.identity.headSha !== current.review.head.sha) {
+      const rootId = thread.replyTo ?? thread.id;
+      const root = threads.find((candidate) => candidate.id === rootId);
+      const authorizedTurns = root?.codeAction?.authorizedTurns ?? (root === undefined ? [] : [root.id]);
+      const finishingAuthorizedCodeAction = thread.intent === "comment" &&
+        (root?.codeAction?.status === "requested" || root?.codeAction?.status === "working") &&
+        authorizedTurns.includes(thread.id);
+      if (!finishingAuthorizedCodeAction) {
+        return c.json({ error: { code: "E_REVIEW_THREAD_STALE", message: "response belongs to an older PR head" } }, 409);
+      }
+    }
+    if (typeof body.body !== "string" || body.body.trim() === "" || body.body.length > 20_000) {
+      return codedBadRequest(c, "E_REVIEW_THREAD_RESPONSE", "response body must be non-empty and bounded");
+    }
+    let saved: { scope: "user" | "project"; updated: true } | undefined;
+    if (body.saved !== undefined) {
+      if (typeof body.saved !== "object" || body.saved === null || Array.isArray(body.saved)) {
+        return codedBadRequest(c, "E_REVIEW_MEMORY_ACK", "saved acknowledgement is invalid");
+      }
+      const raw = body.saved as Record<string, unknown>;
+      if (!hasExactKeys(raw, ["scope", "updated"]) || (raw.scope !== "user" && raw.scope !== "project") || raw.updated !== true) {
+        return codedBadRequest(c, "E_REVIEW_MEMORY_ACK", "saved acknowledgement must name one requested scope and updated:true");
+      }
+      saved = { scope: raw.scope, updated: true };
+    }
+    const responseReportRevision = body.responseReportRevision;
+    if (thread.intent === "comment") {
+      const latest = reviews.latestSubmittedRevision(current.id);
+      if (!Number.isInteger(responseReportRevision) || (responseReportRevision as number) <= thread.identity.reportRevision || responseReportRevision !== latest) {
+        return c.json({ error: { code: "E_REVIEW_THREAD_RESPONSE_REVISION", message: "Comment response must name the latest submitted report revision newer than its source" } }, 409);
+      }
+      try {
+        const replacement = reviews.readRevision(current.id, responseReportRevision as number);
+        if (replacement.revision.status !== "submitted" || replacement.revision.headRevision !== current.review.revision || replacement.revision.headSha !== current.review.head.sha) {
+          return c.json({ error: { code: "E_REVIEW_THREAD_RESPONSE_REVISION", message: "replacement report is not current for this PR head" } }, 409);
+        }
+      } catch {
+        return reviewRevisionUnavailable(c, `review revision ${responseReportRevision as number} is missing or corrupt`);
+      }
+    } else if (responseReportRevision !== undefined) {
+      return codedBadRequest(c, "E_REVIEW_THREAD_RESPONSE", "Question answers do not create report revisions");
+    }
+    try {
+      const result = respondToReviewThread(store.threadsPath(current.id), thread.id, {
+        body: body.body,
+        ...(responseReportRevision === undefined ? {} : { reportRevision: responseReportRevision as number }),
+        ...(saved === undefined ? {} : { saved }),
+      }, new Date().toISOString(), current.id);
+      const publicThread = publicReviewThread(result.thread);
+      publishThread(current.id, publicThread);
+      publishQueue(current.id, queueFor(current.id).size);
+      publishSession(current);
+      return c.json({ thread: publicThread, repeated: result.repeated });
+    } catch (error) {
+      if (error instanceof ReviewThreadConflictError) return c.json({ error: { code: error.code, message: error.message } }, 409);
+      throw error;
+    }
+  });
+
+  /** Reviewer-only second step: explicitly authorize code work for one Comment. */
+  app.post("/api/reviews/:id/threads/:tid/code-action", async (c) => {
+    const before = store.getSession(c.req.param("id"));
+    if (before === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (before.kind !== "review") return codedBadRequest(c, "E_SESSION_KIND", `session ${before.id} is not a review`);
+    const body = (await readJsonBody(c)) ?? {};
+    if (!hasExactKeys(body, ["source"])) {
+      return codedBadRequest(c, "E_REVIEW_CODE_ACTION", "code-action source identity is required");
+    }
+    const source = parseReviewSource(body.source);
+    if (source === undefined) return codedBadRequest(c, "E_REVIEW_CODE_ACTION", "code-action source identity is invalid");
+    const current = store.getSession(before.id);
+    if (current?.kind !== "review") return notFound(c, `unknown review: ${before.id}`);
+    if (current.status === "done") return sessionOver(c, current.id);
+    if (current.review.pullRequest.state !== "open" || current.review.pullRequest.permissions.readOnly ||
+      !["write", "maintain", "admin"].includes(current.review.pullRequest.permissions.viewerPermission) ||
+      current.review.pullRequest.isCrossRepository ||
+      current.review.pullRequest.headRepository !== current.review.pullRequest.identity.repository) {
+      return c.json({ error: { code: "E_REVIEW_READ_ONLY", message: "this PR has no safe same-repository write path; discuss the Comment without conducting a code change" } }, 409);
+    }
+    const thread = readReviewThreads(store.threadsPath(current.id), current.id).find((candidate) => candidate.id === c.req.param("tid"));
+    if (thread === undefined) return notFound(c, `unknown review thread: ${c.req.param("tid")}`);
+    if (source.reportRevision !== thread.identity.reportRevision || source.headRevision !== thread.identity.headRevision || source.headSha !== thread.identity.headSha) {
+      return c.json({ error: { code: "E_REVIEW_THREAD_IDENTITY", message: "code action does not match the persisted Comment" } }, 409);
+    }
+    if (thread.identity.headRevision !== current.review.revision || thread.identity.headSha !== current.review.head.sha) {
+      return c.json({ error: { code: "E_REVIEW_THREAD_STALE", message: "Comment belongs to an older PR head; comment on the current report instead" } }, 409);
+    }
+    try {
+      const sourceReport = reviews.readRevision(current.id, thread.identity.reportRevision);
+      if (sourceReport.revision.status !== "submitted") throw new Error("not submitted");
+    } catch {
+      return reviewRevisionUnavailable(c, "the Comment source report is missing or corrupt");
+    }
+    try {
+      const result = requestReviewCodeAction(store.threadsPath(current.id), thread.id, new Date().toISOString(), current.id);
+      const allThreads = readReviewThreads(store.threadsPath(current.id), current.id);
+      const authorized = new Set(result.thread.codeAction?.authorizedTurns ?? [result.thread.id]);
+      queueFor(current.id).dropQueuedReviewThreadWork(authorized, "report-feedback");
+      const event = reviewThreadEvent(result.thread, "code-change", allThreads);
+      // Retry can repair a missing enqueue while requested, but must never
+      // resurrect work the agent already moved to working/terminal.
+      const seq = result.thread.codeAction?.status === "requested"
+        ? enqueueReviewThreadWork(event)
+        : undefined;
+      const publicThread = publicReviewThread(result.thread);
+      publishThread(current.id, publicThread);
+      publishQueue(current.id, queueFor(current.id).size);
+      publishSession(current);
+      return c.json({ thread: publicThread, repeated: result.repeated, ...(seq === undefined ? {} : { seq }) }, result.repeated ? 200 : 202);
+    } catch (error) {
+      if (error instanceof ReviewThreadConflictError) return c.json({ error: { code: error.code, message: error.message } }, 409);
+      throw error;
+    }
+  });
+
+  /** Agent lifecycle acknowledgement for already-authorized code work. */
+  app.post("/api/reviews/:id/threads/:tid/code-action/status", async (c) => {
+    const before = store.getSession(c.req.param("id"));
+    if (before === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (before.kind !== "review") return codedBadRequest(c, "E_SESSION_KIND", `session ${before.id} is not a review`);
+    const body = (await readJsonBody(c)) ?? {};
+    const optional = body.message === undefined ? [] : ["message"];
+    if (!hasExactKeys(body, ["source", "status", ...optional])) {
+      return codedBadRequest(c, "E_REVIEW_CODE_ACTION", "code-action status is invalid");
+    }
+    const source = parseReviewSource(body.source);
+    if (source === undefined ||
+      (body.status !== "working" && body.status !== "completed" && body.status !== "failed") ||
+      (body.message !== undefined && (typeof body.message !== "string" || body.message.trim() === "" || body.message.length > 20_000))) {
+      return codedBadRequest(c, "E_REVIEW_CODE_ACTION", "code-action status fields are invalid");
+    }
+    const current = store.getSession(before.id);
+    if (current?.kind !== "review") return notFound(c, `unknown review: ${before.id}`);
+    const thread = readReviewThreads(store.threadsPath(current.id), current.id).find((candidate) => candidate.id === c.req.param("tid"));
+    if (thread === undefined) return notFound(c, `unknown review thread: ${c.req.param("tid")}`);
+    if (source.reportRevision !== thread.identity.reportRevision || source.headRevision !== thread.identity.headRevision || source.headSha !== thread.identity.headSha) {
+      return c.json({ error: { code: "E_REVIEW_THREAD_IDENTITY", message: "code-action status does not match the persisted Comment" } }, 409);
+    }
+    if (current.status === "done") {
+      if (thread.codeAction?.status === body.status && thread.codeAction.message === body.message) {
+        return c.json({ thread: publicReviewThread(thread), repeated: true });
+      }
+      return sessionOver(c, current.id);
+    }
+    try {
+      const result = updateReviewCodeAction(store.threadsPath(current.id), thread.id, {
+        status: body.status,
+        ...(body.message === undefined ? {} : { message: body.message }),
+      }, new Date().toISOString(), current.id);
+      if (body.status === "failed") {
+        const allThreads = readReviewThreads(store.threadsPath(current.id), current.id);
+        const authorized = new Set(result.thread.codeAction?.authorizedTurns ?? [result.thread.id]);
+        for (const candidate of allThreads) {
+          if (!authorized.has(candidate.id) || candidate.response !== undefined ||
+              candidate.identity.headRevision !== current.review.revision ||
+              candidate.identity.headSha !== current.review.head.sha) continue;
+          enqueueReviewThreadWork(reviewThreadEvent(candidate, "report-feedback", allThreads));
+        }
+      }
+      const publicThread = publicReviewThread(result.thread);
+      publishThread(current.id, publicThread);
+      publishQueue(current.id, queueFor(current.id).size);
+      publishSession(current);
+      return c.json({ thread: publicThread, repeated: result.repeated });
+    } catch (error) {
+      if (error instanceof ReviewThreadConflictError) return c.json({ error: { code: error.code, message: error.message } }, 409);
+      throw error;
+    }
+  });
+
+  /** User answer: choices grade inline; open answers durably wake the review agent. */
+  app.post("/api/reviews/:id/quiz/:question/answer", async (c) => {
+    const before = store.getSession(c.req.param("id"));
+    if (before === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (before.kind !== "review") return codedBadRequest(c, "E_SESSION_KIND", `session ${before.id} is not a review`);
+    if (before.status === "done") return sessionOver(c, before.id);
+    const body = (await readJsonBody(c)) ?? {};
+    if (!Number.isInteger(body.revision) || typeof body.answer !== "string" || typeof body.idempotencyKey !== "string") {
+      return badRequest(c, "revision, answer, and idempotencyKey are required");
+    }
+    const session = store.getSession(before.id);
+    if (session?.kind !== "review") return notFound(c, `unknown review: ${before.id}`);
+    if (session.status === "done") return sessionOver(c, session.id);
+    if (
+      session.review.revision !== before.review.revision ||
+      session.review.head.sha !== before.review.head.sha ||
+      session.status !== before.status
+    ) {
+      return c.json({
+        error: {
+          code: "E_REVIEW_HEAD_STALE",
+          message: "review state changed while processing the quiz answer",
+        },
+      }, 409);
+    }
+    try {
+      const result = quizzes.answer(session, {
+        revision: body.revision as number,
+        question: c.req.param("question"),
+        answer: body.answer,
+        idempotencyKey: body.idempotencyKey,
+      });
+      // Re-emit a repeated still-pending open answer: this closes the crash
+      // window between durable attempt state and durable queue enqueue.
+      if (result.event !== undefined) {
+        const queue = queueFor(session.id);
+        if (!queue.hasPayload((payload) => sameQuizWork(payload, result.event!))) {
+          queue.enqueue(result.event, store.bumpCounter(session.id, "eventSeq"));
+        }
+      }
+      publishQuiz(session.id, result.quiz);
+      publishQueue(session.id, queueFor(session.id).size);
+      publishSession(session);
+      return c.json({ quiz: result.quiz, attempt: result.quiz.questions.find((item) => item.id === c.req.param("question"))?.latest, repeated: result.repeated }, result.repeated ? 200 : 201);
+    } catch (error) {
+      if (error instanceof ReviewQuizConflictError) {
+        // This route is browser-facing. A deterministic choice can be retried
+        // without revealing the private profile CAS hash; only the agent-only
+        // grade route below receives currentHash for an explicit re-grade.
+        return c.json({ error: { code: error.code, message: error.message } }, 409);
+      }
+      if (error instanceof ReviewQuizCorruptError || error instanceof ReviewRevisionCorruptError) {
+        return reviewRevisionUnavailable(c, error.message);
+      }
+      throw error;
+    }
+  });
+
+  /** Agent-private grade endpoint. The browser never receives its input schema. */
+  app.post("/api/reviews/:id/quiz/:question/grade", async (c) => {
+    const before = store.getSession(c.req.param("id"));
+    if (before === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (before.kind !== "review") return codedBadRequest(c, "E_SESSION_KIND", `session ${before.id} is not a review`);
+    if (before.status === "done") return sessionOver(c, before.id);
+    const parsed = parseReviewQuizGrade((await readJsonBody(c)) ?? {});
+    if (parsed.value === undefined) return c.json({ error: { code: "E_QUIZ_GRADE", message: parsed.errors.join("; ") } }, 422);
+    const session = store.getSession(before.id);
+    if (session?.kind !== "review") return notFound(c, `unknown review: ${before.id}`);
+    if (session.status === "done") return sessionOver(c, session.id);
+    if (
+      session.review.revision !== before.review.revision ||
+      session.review.head.sha !== before.review.head.sha ||
+      session.status !== before.status
+    ) {
+      return c.json({
+        error: {
+          code: "E_REVIEW_HEAD_STALE",
+          message: "review state changed while processing the quiz grade",
+        },
+      }, 409);
+    }
+    if (parsed.value.question !== c.req.param("question") || parsed.value.session !== session.id) {
+      return c.json({ error: { code: "E_QUIZ_STALE_GRADE", message: "grade route and file identity do not match" } }, 409);
+    }
+    try {
+      const result = quizzes.grade(session, parsed.value);
+      publishQuiz(session.id, result.quiz);
+      publishQueue(session.id, queueFor(session.id).size);
+      publishSession(session);
+      return c.json({ quiz: result.quiz, attempt: result.quiz.questions.find((item) => item.id === parsed.value!.question)?.latest, repeated: result.repeated });
+    } catch (error) {
+      if (error instanceof ReviewQuizConflictError) {
+        return c.json({ error: { code: error.code, message: error.message }, ...(error.currentHash ? { currentHash: error.currentHash } : {}) }, 409);
+      }
+      if (error instanceof ReviewQuizCorruptError || error instanceof ReviewRevisionCorruptError) {
+        return reviewRevisionUnavailable(c, error.message);
+      }
+      throw error;
+    }
+  });
+
   app.get("/api/sessions/:id", (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
@@ -691,10 +1991,43 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.delete("/api/sessions/:id", (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    const terminalOnly = c.req.query("terminalOnly");
+    if (terminalOnly !== undefined && terminalOnly !== "true") {
+      return badRequest(c, "terminalOnly must be true when present");
+    }
+    if (session.kind === "review") {
+      const activeCodeActions = activeReviewCodeActions(session);
+      if (activeCodeActions.length > 0) {
+        return c.json({
+          error: {
+            code: "E_REVIEW_CODE_ACTION_ACTIVE",
+            message: "finish or fail the active code action before deleting this review",
+          },
+          active: activeCodeActions.map((thread) => thread.id),
+        }, 409);
+      }
+      // A terminal code-status may have committed immediately before its CLI
+      // crashed. Delete removes the only durable action record, so repair its
+      // exact generation first; another action's PR lease is never touched.
+      releaseTerminalReviewWorktreeLeases(session);
+    }
+    // `otacon clean` selects from an earlier registry snapshot. Enforce its
+    // terminal-only contract here, in the same synchronous handler that
+    // performs removal, so a review reopened on a newer head cannot be deleted
+    // by the stale candidate. UI delete omits the condition and still supports
+    // deliberate deletion of any status after confirmation.
+    if (terminalOnly === "true" && !isTerminalSession(session)) {
+      return c.json({
+        error: {
+          code: "E_SESSION_NOT_TERMINAL",
+          message: `session ${session.id} is no longer ended`,
+        },
+      }, 409);
+    }
     const queue = queueFor(session.id);
     const pendingEvents = queue.size;
     stopTailer(session.id); // the session is going away — stop watching its transcript
-    if (TERMINAL_STATUSES.includes(session.status)) {
+    if (isTerminalSession(session)) {
       // Deregister first — it can throw (registry flush), and an early queue
       // eviction would orphan in-flight ack tracking for a session that is in
       // fact still registered. Close the evicted instance before the removal so
@@ -780,6 +2113,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/submit", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.kind !== "plan") return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a plan`);
     // Raw markdown body, or {"plan": "...", "resolutions": {...}} JSON — the
     // CLI sends resolutions.json's content along (review loop and daemon API). The raw path
     // carries no resolutions, so L5 still rejects it when threads are open.
@@ -960,10 +2294,13 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/reopen", (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.kind !== "plan") {
+      return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a plan`);
+    }
     // Agent-driven verb (a `/otacon` run): bump liveness like its siblings so the
     // reopened session reads live, not offline-until-next-call.
     bumpContact(session.id);
-    if (!TERMINAL_STATUSES.includes(session.status)) {
+    if (!isTerminalSession(session)) {
       return c.json(
         {
           error: {
@@ -1022,20 +2359,47 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     return c.json({ ok: true, session: session.id, visible: body.visible });
   });
 
-  // A browser tab reports its liveness here (open-tab reuse, DECISIONS.md "reuse
-  // an existing open tab"): one beat per tab on mount and a ~30s heartbeat, plus
-  // a `gone:true` beacon on tab close. Daemon-wide (NOT session-scoped): one tab,
-  // via the app-shell sidebar, reaches every session, so `otacon open` only needs
-  // to know whether ANY tab from this daemon is live. The 90s TTL self-expires a
-  // crashed/closed tab whose `gone` beacon never arrived.
+  // A browser tab reports its liveness and visibility here (exact-tab reuse,
+  // DECISIONS.md "routes one existing tab"): one beat per tab on mount and a
+  // ~30s heartbeat, plus a `gone:true` beacon on tab close. The daemon ranks
+  // these daemon-wide clients so `otacon open` can route one exact target. The
+  // 90s TTL self-expires a crashed/closed tab whose `gone` beacon never arrived.
   app.post("/api/viewers/heartbeat", async (c) => {
     const body = (await readJsonBody(c)) ?? {};
     if (typeof body.clientId !== "string" || body.clientId.length === 0) {
       return badRequest(c, "clientId must be a non-empty string");
     }
+    if (body.visible !== undefined && typeof body.visible !== "boolean") {
+      return badRequest(c, "visible must be a boolean");
+    }
     if (body.gone) viewers.drop(body.clientId);
-    else viewers.beat(body.clientId);
+    else viewers.beat(body.clientId, body.visible as boolean | undefined);
     return c.json({ ok: true });
+  });
+
+  // Route one existing Otacon tab to the exact page requested by `otacon
+  // open`. The daemon, not the CLI, chooses the tab from fresh heartbeat state:
+  // the newest visible viewer wins, then the newest live background viewer.
+  // A missing viewer is not an error — the CLI falls back to launching the URL.
+  app.post("/api/viewers/navigate", async (c) => {
+    const body = (await readJsonBody(c)) ?? {};
+    if (Object.keys(body).some((key) => key !== "session")) {
+      return badRequest(c, "navigate accepts only an optional session id");
+    }
+    let path = "/";
+    if (body.session !== undefined) {
+      if (typeof body.session !== "string" || body.session.length === 0) {
+        return badRequest(c, "session must be a non-empty string");
+      }
+      if (store.getSession(body.session) === undefined) {
+        return notFound(c, `unknown session: ${body.session}`);
+      }
+      path = `/s/${body.session}`;
+    }
+    const clientId = viewers.preferred();
+    if (clientId === undefined) return c.json({ ok: true, delivered: false, path });
+    notifier.publish({ type: "navigate", session: null, data: { clientId, path } });
+    return c.json({ ok: true, delivered: true, path });
   });
 
   // Structural diff between two stored revisions, defaulting to the last-reviewed baseline.
@@ -1076,6 +2440,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/comments", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.kind !== "plan") return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a plan`);
     const queue = queueFor(session.id); // before any state write: can throw on a corrupt file
     const body = (await readJsonBody(c)) ?? {};
     if (sessionEnded(session.id)) return sessionOver(c, session.id);
@@ -1196,6 +2561,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/questions", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.kind !== "plan") return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a plan`);
     const queue = queueFor(session.id); // before any state write: can throw on a corrupt file
     const body = (await readJsonBody(c)) ?? {};
     if (sessionEnded(session.id)) return sessionOver(c, session.id);
@@ -1282,6 +2648,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/questions/:qid/answer", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.kind !== "plan") return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a plan`);
     const body = (await readJsonBody(c)) ?? {};
     if (sessionEnded(session.id)) return sessionOver(c, session.id);
     bumpContact(session.id);
@@ -1319,6 +2686,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/threads/:tid/resolve", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.kind !== "plan") return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a plan`);
     const body = (await readJsonBody(c)) ?? {};
     if (sessionEnded(session.id)) return sessionOver(c, session.id);
     if (typeof body.resolved !== "boolean") {
@@ -1349,7 +2717,12 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.get("/api/sessions/:id/threads", (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
-    return c.json({ session: session.id, threads: readThreads(store.threadsPath(session.id)) });
+    return c.json({
+      session: session.id,
+      threads: session.kind === "review"
+        ? publicReviewThreads(store.threadsPath(session.id), session.id)
+        : readThreads(store.threadsPath(session.id)),
+    });
   });
 
   // The agent's grill question (`otacon ask`): persisted in
@@ -1607,6 +2980,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/approve", async (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.kind !== "plan") return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a plan`);
     const queue = queueFor(session.id); // before any state write: can throw on a corrupt file
     const body = (await readJsonBody(c)) ?? {};
     // Doubles as the double-approve guard: two concurrent approves both
@@ -1835,19 +3209,40 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       const session = store.getSession(id);
       return session ? summarize(session) : undefined;
     },
-    getThreads: (id) => readThreads(store.threadsPath(id)),
+    getThreads: (id) => {
+      const session = store.getSession(id);
+      return session?.kind === "review"
+        ? publicReviewThreads(store.threadsPath(id), id)
+        : readThreads(store.threadsPath(id));
+    },
     getTranscript: (id) => readTranscript(store.transcriptPath(id)),
     getActivity: (id) => readActivity(store.activityPath(id)),
     getStream: (id) => readStream(store.streamPath(id), loadStreamCap(id)),
+    getQuiz: (id) => {
+      const session = store.getSession(id);
+      return session?.kind === "review" ? safePublicQuiz(session) : undefined;
+    },
     // The index stream (onlySession === undefined) connecting means the home UI
     // is showing the section list: refresh un-settled PRs so a merge/close that
     // landed while no tab was open re-sections within a frame, not a poll cycle.
     onConnect: (onlySession) => {
-      if (onlySession === undefined) void prPoller.pollNow();
+      if (onlySession === undefined) void prPoller?.pollNow();
     },
     uiDir: options.uiDir,
     heartbeatMs: options.sseHeartbeatMs,
   });
 
-  return app;
+  let started = false;
+  const start = (): void => {
+    if (started) return;
+    started = true;
+    recoverStartupState();
+    prPoller = startPrPolling(prPollingDeps);
+    void prPoller.pollNow(); // fire-and-forget: never blocks socket readiness
+    for (const session of store.listSessions()) startTailer(session);
+  };
+  const daemonApp = app as DaemonApp;
+  daemonApp.start = start;
+  if (options.startOnCreate !== false) daemonApp.start();
+  return daemonApp;
 }

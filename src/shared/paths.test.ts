@@ -7,8 +7,14 @@ import {
   expandTilde,
   homeSessionDir,
   homeSessionsDir,
+  knowledgeDir,
   planPath,
+  projectKnowledgeDir,
+  projectKnowledgeEvidencePath,
+  projectKnowledgePath,
   revisionChangelogPath,
+  reviewDraftPath,
+  reviewQuizDraftPath,
   revisionPath,
   revisionWarningsPath,
   sessionDir,
@@ -17,7 +23,10 @@ import {
   threadsPath,
   transcriptPath,
   updateCachePath,
+  userKnowledgeEvidencePath,
+  userKnowledgePath,
 } from "./paths.js";
+import { canonicalizeGitHubRepo } from "./knowledge.js";
 
 let savedHome: string | undefined;
 
@@ -49,6 +58,25 @@ describe("home plan archive paths", () => {
   });
 });
 
+describe("implicit-profile knowledge paths", () => {
+  const repo = canonicalizeGitHubRepo("Acme/App");
+  if (repo === undefined) throw new Error("fixture repo should canonicalize");
+
+  test("user knowledge stays directly under the home knowledge root", () => {
+    expect(knowledgeDir()).toBe(join("/tmp/otacon-home-test", "knowledge"));
+    expect(userKnowledgePath()).toBe(join(knowledgeDir(), "user.md"));
+    expect(userKnowledgeEvidencePath()).toBe(join(knowledgeDir(), "user.evidence.jsonl"));
+  });
+
+  test("project knowledge is keyed by canonical GitHub owner/repo", () => {
+    expect(projectKnowledgeDir(repo)).toBe(
+      join(knowledgeDir(), "projects", "github.com", "acme", "app"),
+    );
+    expect(projectKnowledgePath(repo)).toBe(join(projectKnowledgeDir(repo), "knowledge.md"));
+    expect(projectKnowledgeEvidencePath(repo)).toBe(join(projectKnowledgeDir(repo), "evidence.jsonl"));
+  });
+});
+
 describe("per-session working state lives in the home store", () => {
   // After confine-otacon-dir-to-config-and-plans, the per-session helpers take
   // the session id only (no repo root) and resolve under
@@ -63,6 +91,8 @@ describe("per-session working state lives in the home store", () => {
 
   test("every per-session file nests under the home session dir", () => {
     expect(planPath(id)).toBe(join(dir, "plan.md"));
+    expect(reviewDraftPath(id)).toBe(join(dir, "review.md"));
+    expect(reviewQuizDraftPath(id)).toBe(join(dir, "quiz.json"));
     expect(sessionStatePath(id)).toBe(join(dir, "session.json"));
     expect(eventsPath(id)).toBe(join(dir, "events.json"));
     expect(threadsPath(id)).toBe(join(dir, "threads.json"));

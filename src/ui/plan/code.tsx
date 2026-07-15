@@ -5,7 +5,7 @@
 // first diagram. Both outputs are generated markup: hljs escapes its input,
 // and mermaid SVG additionally passes through DOMPurify's SVG profile.
 
-import DOMPurify from "dompurify";
+import createDOMPurify from "dompurify";
 import hljs from "highlight.js/lib/common";
 import { useEffect, useMemo, useState } from "react";
 import type { FenceBlock, PairBlock } from "./parse";
@@ -62,6 +62,13 @@ export function PairFences({ pair }: { pair: PairBlock }) {
 type MermaidApi = (typeof import("mermaid"))["default"];
 let mermaidLoad: Promise<MermaidApi> | undefined;
 
+function sanitizeSvg(source: string): string {
+  const purify = typeof (createDOMPurify as { sanitize?: unknown }).sanitize === "function"
+    ? createDOMPurify
+    : createDOMPurify(window);
+  return purify.sanitize(source, { USE_PROFILES: { svg: true, svgFilters: true } });
+}
+
 /** Lazy singleton: the ~MB mermaid chunk is fetched once, on the first diagram. */
 function loadMermaid(): Promise<MermaidApi> {
   mermaidLoad ??= import("mermaid").then(({ default: mermaid }) => {
@@ -112,7 +119,7 @@ export function MermaidFigure({ code }: { code: string }) {
       .then((mermaid) => mermaid.render(id, code))
       .then(({ svg: rendered }) => {
         if (live) {
-          setSvg(DOMPurify.sanitize(rendered, { USE_PROFILES: { svg: true, svgFilters: true } }));
+          setSvg(sanitizeSvg(rendered));
           setFailed(false);
         }
       })

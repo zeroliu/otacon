@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "session": "otc_test01",
+  "revision": 1,
+  "headRevision": 1,
+  "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "questions": [
+    {
+      "id": "q-open",
+      "concept": {
+        "id": "snapshot-boundary",
+        "label": "Snapshot boundary",
+        "scope": "project"
+      },
+      "prompt": "Why must the report keep the knowledge snapshot that shaped it?",
+      "mode": "open",
+      "rubric": {
+        "criteria": [
+          "Connects an immutable authoring input to a reproducible report revision"
+        ]
+      }
+    },
+    {
+      "id": "q-choice",
+      "concept": {
+        "id": "caller-contract",
+        "label": "Caller contract",
+        "scope": "user"
+      },
+      "prompt": "Which input keeps a report revision reproducible?",
+      "mode": "choice",
+      "rubric": {
+        "criteria": [
+          "Identifies the immutable snapshot rather than the mutable profile"
+        ]
+      },
+      "options": [
+        "Frozen snapshot",
+        "Mutable profile"
+      ],
+      "answerKey": "Frozen snapshot"
+    }
+  ]
+}

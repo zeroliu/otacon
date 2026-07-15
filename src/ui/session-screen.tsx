@@ -15,7 +15,8 @@
 import type { MouseEvent, ReactNode, RefObject } from "react";
 import { Component, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { accentStyle } from "./accent";
-import type { Anchor, CommentDraft, LiveSession, StreamEvent, Thread, TranscriptEntry } from "./api";
+import type { Anchor, CommentDraft, PlanLiveSession, ReviewLiveSession, StreamEvent, Thread, TranscriptEntry } from "./api";
+import type { PublicReviewThread } from "../shared/types";
 import {
   postCommentFollowup,
   postComments,
@@ -25,9 +26,12 @@ import {
   postReviewed,
   useDiff,
   usePresence,
+  useReviewDetail,
   useRevision,
   useSession,
 } from "./api";
+import { ProductionPrReviewScreen } from "./pr-review/pr-review-screen";
+import type { ReviewQuizPublicState } from "../shared/review-quiz";
 import {
   captureSelection,
   clearThreadHighlights,
@@ -51,16 +55,14 @@ import { InterviewPanel } from "./review/interview";
 import { useInterviewOpen } from "./review/interview-open";
 import { PromptCard } from "./review/prompt-card";
 import { useKeyboardInset, useScrollLock } from "./review/keyboard";
-import { isAgentActive } from "./review/console-model";
-import { LiveConsole } from "./review/live-console";
-import { NowPlaying } from "./review/now-playing";
+import { ActivityDock } from "./review/activity-dock";
 import { ThreadsRail } from "./review/rail";
 import type { SectionMenuState } from "./review/section-menu";
 import { SectionMenu } from "./review/section-menu";
 import { isTypingTarget } from "./review/session-nav";
 import { navigate } from "./router";
 import { markSeen } from "./seen";
-import { isOver } from "./session-filter";
+import { isOver, shouldRedirectAfterTerminalTransition } from "./session-filter";
 import { useNow } from "./tick";
 
 const PlanView = lazy(() => import("./plan/plan-view"));
@@ -115,13 +117,13 @@ class RendererBoundary extends Component<{ children: ReactNode }, { failed: bool
   render() {
     if (!this.state.failed) return this.props.children;
     return (
-      <main className="review-wait">
+      <div className="review-wait">
         <p className="wait-line">// renderer unavailable</p>
         <p>
           The plan renderer failed to load — the daemon may have restarted with a new build, or
           the network dropped. <a href="">Reload</a> to fetch the current one.
         </p>
-      </main>
+      </div>
     );
   }
 }
@@ -136,6 +138,60 @@ const COMPOSER_GUESS_HEIGHT = 240;
 // opened a desktop popover anchored off-thumb would otherwise sit at 560–639px.
 const SHEET_VIEWPORT = 640;
 
+function PrReviewLoop({
+  session,
+  quiz,
+  threads,
+  stream,
+  now,
+}: {
+  session: ReviewLiveSession;
+  quiz?: ReviewQuizPublicState;
+  threads: PublicReviewThread[];
+  stream: StreamEvent[];
+  now: number;
+}) {
+  const detail = useReviewDetail(session.id, session.revision);
+  const activityDock = (
+    <ActivityDock
+      stream={stream}
+      status={session.status}
+      now={now}
+      className="pr-activity-dock"
+      alwaysVisible
+    />
+  );
+  if (session.revision < 1) {
+    return (
+      <div className="pr-authoring-shell">
+        {activityDock}
+        <main className="review-wait">
+          <p className="wait-line">// report authoring in progress</p>
+          <p>
+            The frozen knowledge snapshot for PR head generation {session.review.revision} is ready.
+            This screen will replace itself when the first report revision passes validation.
+          </p>
+        </main>
+      </div>
+    );
+  }
+  if (detail?.report === undefined || detail.report === null) {
+    return (
+      <div className="pr-authoring-shell">
+        {activityDock}
+        <p className="loading">loading review r{session.revision}…</p>
+      </div>
+    );
+  }
+  return <ProductionPrReviewScreen
+    session={session}
+    payload={detail.report}
+    liveQuiz={quiz}
+    liveThreads={threads}
+    activityDock={activityDock}
+  />;
+}
+
 /** The review loop: plan + rail + grill + interview + now-playing/console + approve + composer + drawer. */
 function ReviewLoop({
   session,
@@ -144,7 +200,7 @@ function ReviewLoop({
   stream,
   now,
 }: {
-  session: LiveSession;
+  session: PlanLiveSession;
   threads: Thread[];
   transcript: TranscriptEntry[];
   /** The normalized live-activity stream (§10a) powering the bar + console. */
@@ -207,18 +263,6 @@ function ReviewLoop({
   // off the per-keystroke `litEntries` identity (updated in the paint effect).
   const litRef = useRef<LitThread[]>([]);
   const hasPlan = session.revision > 0;
-  // The now-playing bar is always present while the agent is active OR any
-  // stream event exists, including pre-plan research, exactly when the user is
-  // waiting and the old buried fold hid the work. Only a truly idle session with
-  // an empty stream (e.g. an over session that never captured anything) drops it.
-  const agentActive = isAgentActive(session.status);
-  const showNowPlaying = agentActive || stream.length > 0;
-  // The console starts collapsed and never auto-expands. The user opens it
-  // manually with the toggle, and the choice sticks (no status crossing
-  // overrides it). The always-on one-line now-playing bar still signals activity
-  // while the agent works, so the firehose is one click away without forcing the
-  // full console open on every draft or implementing phase.
-  const [consoleOpen, setConsoleOpen] = useState(false);
   // Over = the session reached a terminal state (approval and archive lifecycle: approved /
   // implemented / implement_failed): the whole screen goes read-only — no
   // selection anchoring, no composer, no drawer, no cards. `implementing` is NOT
@@ -681,17 +725,7 @@ function ReviewLoop({
       {/* The always-on now-playing bar + the console it expands (§10a), pinned
           directly under the header, shown during pre-plan research too (not
           gated on hasPlan), since that is exactly when the user is waiting. */}
-      {showNowPlaying && (
-        <div className={consoleOpen ? "now-playing-dock is-open" : "now-playing-dock"}>
-          <NowPlaying
-            stream={stream}
-            status={session.status}
-            open={consoleOpen}
-            onToggle={() => setConsoleOpen((value) => !value)}
-          />
-          {consoleOpen && <LiveConsole stream={stream} now={now} />}
-        </div>
-      )}
+      <ActivityDock stream={stream} status={session.status} now={now} />
       <div className="review-layout">
         <div className="review-main">
           {/* The reviewer's verbatim request, echoed at the top of the column:
@@ -831,6 +865,7 @@ function ReviewLoop({
       {deleteOpen && (
         <DeleteDialog
           sessionId={session.id}
+          sessionKind="plan"
           approved={over}
           onClose={() => setDeleteOpen(false)}
           // The session is gone — leave for the index rather than waiting for
@@ -897,7 +932,7 @@ function ReviewLoop({
 }
 
 export function SessionScreen({ id }: { id: string }) {
-  const { session, threads, transcript, stream, missing, cleaned } = useSession(id);
+  const { session, quiz, threads, transcript, stream, missing, cleaned } = useSession(id);
   // One ticking clock for the presence dot + activity/relative timestamps, so
   // they stay honest while the screen idles between SSE frames.
   const now = useNow(30_000);
@@ -932,9 +967,11 @@ export function SessionScreen({ id }: { id: string }) {
   }, [id]);
   useEffect(() => {
     if (!session) return;
-    if (isOver(session.status)) {
-      if (sawActive.current) navigate("/");
-    } else {
+    // Review reports remain readable after Done. Their terminal lifecycle is
+    // independent from the plan switcher's active -> archive redirect.
+    if (shouldRedirectAfterTerminalTransition(session, sawActive.current)) {
+      navigate("/");
+    } else if (session.kind === "plan" && !isOver(session.status)) {
       sawActive.current = true;
     }
   }, [session]);
@@ -983,6 +1020,16 @@ export function SessionScreen({ id }: { id: string }) {
     );
   }
 
+  if (session.kind === "review") {
+    return <PrReviewLoop
+      session={session}
+      quiz={quiz}
+      threads={threads.filter((thread): thread is PublicReviewThread => "surface" in thread && thread.surface === "review")}
+      stream={stream}
+      now={now}
+    />;
+  }
+
   return (
     <div className="page page-review" style={accentStyle(session.id)}>
       {/* ReviewHeader (rendered inside ReviewLoop) is the sticky masthead —
@@ -993,7 +1040,7 @@ export function SessionScreen({ id }: { id: string }) {
       <ReviewLoop
         key={session.id}
         session={session}
-        threads={threads}
+        threads={threads.filter((thread): thread is Thread => !("surface" in thread))}
         transcript={transcript}
         stream={stream}
         now={now}

@@ -12,8 +12,8 @@
 #   LOOP      the full agent/reviewer loop on the real auto-spawned daemon:
 #             start → grill (ask/answer) → draft (lint reject, then accept) →
 #             review (comment batch) → revise (L5 reject, then resolve) →
-#             approve (home archive + untracked project copy, otacon never
-#             commits) → post-approve refusal → clean (archive + registry prune).
+#             approve (home artifact + untracked project copy, otacon never
+#             commits) → post-approve refusal → clean (remove + registry prune).
 #   INVARIANT structural grep of dist/ for any model/LLM network call (zero model-network-call invariant).
 #
 # Hermetic: temp HOME, temp OTACON_HOME, temp OTACON_PORT, a fresh `git init`
@@ -94,15 +94,16 @@ const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
 const get = (n) => r.checks.find((c) => c.name === n);
 if (get("node").status !== "ok") process.exit(1);
 if (get("daemon").status !== "ok" || !get("daemon").detail.includes("otacond")) process.exit(2);
-if (get("wrapper-claude").status !== "ok" || get("stop-hook").status !== "ok") process.exit(3);
+if (get("skill-claude-otacon").status !== "ok" || get("skill-claude-otacon-review").status !== "ok") process.exit(3);
+if (get("stop-hook").status !== "ok") process.exit(4);
 if (get("tailscale").status !== "warn") process.exit(4); // absent → graceful warn, not fail
 if (r.checks.some((c) => c.status === "fail")) process.exit(5);
 ' "$TMP/doctor.json" || fail "doctor green report has wrong check statuses"
-ok "doctor green: node/daemon/wrapper/stop-hook ok; absent tailscale a warning (not a failure)"
+ok "doctor green: node/daemon/both Claude skills/stop-hook ok; absent tailscale a warning (not a failure)"
 
 echo "# ── ACT 2: THE FULL PLAN LOOP (agent + human) ─────────────────────────"
 
-# --- 3. start in the user's repo: .otacon dir, registry, URL, no .gitignore touch
+# --- 3. start: home working dir, registry, URL, no .gitignore touch -----------
 cd "$REPO"
 git init -q -b main .
 git config user.email accept@otacon.test
@@ -111,16 +112,18 @@ printf 'node_modules/\n' > .gitignore
 git add .gitignore && git commit -q -m "initial"
 otacon start --title "acceptance-demo" > "$TMP/start.json" 2> "$TMP/start.err"
 SID="$(json_field session "$TMP/start.json")"
+PLAN="$(json_field plan "$TMP/start.json")"
 [[ "$SID" == otc_* ]] || fail "start printed no otc_ session id"
 DAEMON_PID="$(curl -sf "$BASE/api/health" | node -pe "JSON.parse(require('fs').readFileSync(0,'utf8')).pid")"
-[ -d "$REPO/.otacon/$SID" ] || fail ".otacon/<session> dir not created"
+[ "$PLAN" = "$OTACON_HOME/sessions/$SID/plan.md" ] || fail "start printed an unexpected plan path"
+[ -d "$OTACON_HOME/sessions/$SID" ] || fail "home session dir not created"
 # otacon manages no .gitignore: the user's file is left exactly as written and
 # no notice is emitted (DECISIONS.md "otacon manages no .gitignore").
 [ "$(cat .gitignore)" = "node_modules/" ] || fail "start modified .gitignore"
 if grep -q 'appended' "$TMP/start.err"; then fail "start emitted a .gitignore notice"; fi
 grep -q "$SID" "$OTACON_HOME/registry.json" || fail "session missing from the registry"
 json_field url "$TMP/start.json" | grep -q "/s/$SID" || fail "start printed no review URL"
-ok "start: .otacon created, .gitignore left untouched, registered, review URL printed"
+ok "start: home session created, .gitignore left untouched, registered, review URL printed"
 
 # --- 4. grill: ask a chip question; a parked wait is fed the phone's answer ----
 otacon ask --question "RS256 or HS256 for token signing?" \
@@ -144,7 +147,7 @@ ok "grill: ask minted q1; a parked wait received the phone's RS256 answer over c
 # --- 5. draft: an INVALID plan is lint-rejected with machine-readable errors ---
 # Deliberately invalid: missing required sections (L1) + an over-budget Summary
 # (L2) + a decision citing a q id that does not exist in the transcript (L3).
-cat > ".otacon/$SID/plan.md" <<EOF
+cat > "$PLAN" <<EOF
 ---
 title: acceptance-demo
 session: $SID
@@ -188,12 +191,12 @@ ok "draft: deliberately invalid plan rejected exit 1 with machine-readable L1/L2
 # Decisions cite the REAL q1 (+ one [assumed]) — exactly what L3 enforces.
 sed -e "s/otc_test01/$SID/" \
     -e "s/- D1: RS256 over HS256 \[assumed\]/- D1: RS256 over HS256 ← q1/" \
-    "$ROOT/test/fixtures/valid-plan.md" > ".otacon/$SID/plan.md"
+    "$ROOT/test/fixtures/valid-plan.md" > "$PLAN"
 otacon submit > "$TMP/r1.json"
 [ "$(json_field ok "$TMP/r1.json")" = "true" ] || fail "valid submit did not say ok"
 [ "$(json_field revision "$TMP/r1.json")" = "1" ] || fail "expected revision 1"
 [ "$(json_field status "$TMP/r1.json")" = "in_review" ] || fail "expected in_review"
-[ -f "$REPO/.otacon/$SID/r1.md" ] || fail "r1.md snapshot not stored"
+[ -f "$OTACON_HOME/sessions/$SID/r1.md" ] || fail "r1.md snapshot not stored"
 ok "draft: valid plan (D1 ← q1, D2 [assumed]) stored as revision 1, status in_review"
 
 # --- 7. review: a parked wait is fed a comment batch from the phone ------------
@@ -215,8 +218,8 @@ ok "review: a parked wait received the phone's comment batch b1 anchored to phas
 
 # --- 8. revise: resubmit WITHOUT resolutions → 422 L5 (nothing stored) ---------
 # r2 edits phase 1 and deletes t1's quoted text ("key rotation").
-sed -e 's/key rotation\.$/scheduled re-issue./' ".otacon/$SID/plan.md" > "$TMP/r2.md"
-cp "$TMP/r2.md" ".otacon/$SID/plan.md"
+sed -e 's/key rotation\.$/scheduled re-issue./' "$PLAN" > "$TMP/r2.md"
+cp "$TMP/r2.md" "$PLAN"
 set +e
 otacon submit > "$TMP/l5-reject.json" 2> /dev/null
 CODE=$?
@@ -229,7 +232,7 @@ curl -s "$BASE/api/sessions/$SID" > "$TMP/detail-after-reject.json"
 [ "$(json_field revision "$TMP/detail-after-reject.json")" = "1" ] || fail "rejected resubmit stored a revision"
 ok "revise: resubmit without resolutions rejected 422 with L5 errors; r1 still latest"
 
-# --- 9. revise: WITH resolutions.json → r2, thread resolved, diff vs reviewed --
+# --- 9. revise: WITH resolutions.json → r2, thread replied, diff vs reviewed ---
 cat > "$TMP/res.json" <<'JSON'
 {
   "changelog": "Replaced key rotation with scheduled re-issue; addressed the cadence comment.",
@@ -243,8 +246,15 @@ curl -s "$BASE/api/sessions/$SID/threads" > "$TMP/threads.json"
 node -e '
 const data = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
 const t1 = data.threads.find((t) => t.id === "t1");
-if (!t1?.resolution || t1.resolution.revision !== 2) process.exit(1);
-' "$TMP/threads.json" || fail "t1 is not resolved at r2 after resubmit"
+if (!t1?.reply || t1.reply.revision !== 2) process.exit(1);
+' "$TMP/threads.json" || fail "t1 does not carry the r2 reply after resubmit"
+# Agent replies do not close a conversation. Exercise the reviewer's explicit
+# Resolve verb before the approval warning below, so that the one deliberately
+# added comment remains the only unresolved conversation.
+HTTP=$(curl -s -o "$TMP/resolve-t1.json" -w '%{http_code}' \
+  -X POST "$BASE/api/sessions/$SID/threads/t1/resolve" \
+  -H 'content-type: application/json' -d '{"resolved":true}')
+[ "$HTTP" = "202" ] || fail "reviewer resolve for t1 answered $HTTP"
 # Diff defaults to last-reviewed (r1, marked by the comment flush) → r2; phase-1
 # changed vs unchanged summary.
 curl -s "$BASE/api/sessions/$SID/diff" > "$TMP/diff.json"
@@ -256,7 +266,7 @@ const byId = Object.fromEntries(diff.sections.map((s) => [s.id, s]));
 if (byId["phase-1"]?.status !== "changed" || !byId["phase-1"].hunks.length) process.exit(1);
 if (byId["summary"]?.status !== "unchanged" || byId["summary"].hunks.length) process.exit(2);
 ' "$TMP/diff.json" || fail "diff vs last-reviewed did not flag phase-1 changed (summary unchanged)"
-ok "revise: r2 stored with resolutions+changelog; t1 resolved; diff flags phase-1 vs reviewed r1"
+ok "revise: r2 stored with resolutions+changelog; t1 replied then reviewer-resolved; diff flags phase-1 vs reviewed r1"
 
 # --- 10. approve: unresolved-thread path is covered; resolved → Save write-out -
 # Sanity: an extra open comment makes approve refuse 409 (the warned path). The
@@ -350,19 +360,18 @@ set -e
 [ "$(json_field error.code "$TMP/oversubmit2.json")" = "E_SESSION_OVER" ] || fail "expected E_SESSION_OVER"
 ok "post-approve: implicit submit finds no active session; explicit --session is refused (session over)"
 
-# --- 13. clean archives the working state and prunes the registry -------------
+# --- 13. clean removes the home state and prunes the registry -----------------
 otacon clean > "$TMP/clean.json" 2> /dev/null
 [ "$(json_field 'cleaned[0].session' "$TMP/clean.json")" = "$SID" ] || fail "clean did not report the session"
-[ -d "$REPO/.otacon/archive/$SID" ] || fail "session dir was not archived"
-[ -f "$REPO/.otacon/archive/$SID/session.json" ] || fail "archived dir lost its state files"
-[ ! -d "$REPO/.otacon/$SID" ] || fail "live session dir still exists after clean"
-# clean archives .otacon/<id>/ session dirs but must never touch the project plan
-# copy (.otacon/plans) nor the permanent home archive (~/.otacon/sessions/).
+[ ! -d "$OTACON_HOME/sessions/$SID" ] || fail "home session folder still exists after clean"
+[ ! -d "$REPO/.otacon/archive" ] || fail "clean must not create a legacy repo archive"
+# Clean permanently removes the home working folder but must never touch the
+# durable project plan copy under plans.dir.
 [ -f "$REPO/$ART_PATH" ] || fail "clean must never touch the .otacon/plans project copy"
 [ -d "$REPO/.otacon/plans" ] || fail "clean archived the .otacon/plans dir (must stay)"
-[ -f "$HOME_ART" ] || fail "clean must never touch the home archive (~/.otacon/sessions/)"
+[ ! -f "$HOME_ART" ] || fail "clean left the home artifact behind"
 curl -s "$BASE/api/sessions" | grep -q "$SID" && fail "registry still lists the cleaned session"
-ok "clean: archived .otacon/$SID → .otacon/archive/, pruned the registry, kept the .otacon/plans copy + home archive"
+ok "clean: removed the home session, pruned the registry, kept the durable .otacon/plans copy"
 
 echo "# ── ACT 3: ZERO-API-SPEND INVARIANT (structural) ─────────────────────"
 
@@ -373,7 +382,10 @@ echo "# ── ACT 3: ZERO-API-SPEND INVARIANT (structural) ──────�
 # to a model.) Scope the host check to the server-side artifact the daemon and
 # CLI run, where a stray fetch would actually spend.
 SERVER_DIST="$ROOT/dist/cli $ROOT/dist/daemon $ROOT/dist/shared"
-if grep -rniE 'api\.openai\.com|api\.anthropic\.com|generativelanguage\.googleapis|@anthropic-ai|openai|langchain|@ai-sdk|claude-[0-9]' \
+# Package names, model ids, and provider hosts are lowercase. Keep this
+# case-sensitive so explanatory capture comments that name "OpenAI" do not
+# masquerade as a shipped SDK or network integration.
+if grep -rnE 'api\.openai\.com|api\.anthropic\.com|generativelanguage\.googleapis|@anthropic-ai|openai|langchain|@ai-sdk|claude-[0-9]' \
   $SERVER_DIST 2>/dev/null; then
   fail "found a model/LLM reference in the shipped server artifact — the zero-spend invariant is broken"
 fi

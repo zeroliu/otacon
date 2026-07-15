@@ -3,7 +3,7 @@
 // touches the DOM — defense in depth against raw-HTML injection via plan
 // content (review UI).
 
-import DOMPurify from "dompurify";
+import createDOMPurify from "dompurify";
 import { memo, useMemo } from "react";
 // marked, configured with the plan's markdown-native visuals (decision
 // matrices) and inline tokens (callout badges, scope pills). The whole
@@ -18,9 +18,15 @@ import { marked } from "./marked-setup";
 // keeps the wrapper stable across re-renders at the mechanism level; memo on
 // top skips the re-render entirely.
 export const Markdown = memo(function Markdown({ source }: { source: string }) {
+  // dompurify's Node import is a window-bound factory; another renderer may
+  // import it before a test/browser window exists. Bind at render time when
+  // needed so lazy PR-report reuse is independent of module import order.
+  const purify = typeof (createDOMPurify as { sanitize?: unknown }).sanitize === "function"
+    ? createDOMPurify
+    : createDOMPurify(window);
   const markup = useMemo(
     () => ({
-      __html: DOMPurify.sanitize(marked.parse(source, { async: false }), {
+      __html: purify.sanitize(marked.parse(source, { async: false }), {
         USE_PROFILES: { html: true },
         // The html profile still permits <form>/<style>/inline style — plan
         // prose never needs them, and they are the remaining phishing-form
@@ -31,7 +37,7 @@ export const Markdown = memo(function Markdown({ source }: { source: string }) {
         FORBID_ATTR: ["style"],
       }),
     }),
-    [source],
+    [purify, source],
   );
   // eslint-disable-next-line react/no-danger — sanitized above
   return <div className="md" dangerouslySetInnerHTML={markup} />;

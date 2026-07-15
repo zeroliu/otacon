@@ -22,7 +22,7 @@ import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent a
 import { useSessions } from "./api";
 import { linkClick, usePath } from "./router";
 import { useSessionNav } from "./review/session-nav";
-import { partitionSessions } from "./session-filter";
+import { partitionSessionKinds, partitionSessions } from "./session-filter";
 import { SessionList } from "./session-list";
 import { SessionSheetProvider } from "./session-sheet";
 import {
@@ -53,8 +53,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   // every route, not just the review screen. partitionSessions is the shared
   // split (session-filter), never reimplemented; only `active` matters here, and
   // its meaning (the non-terminal set) is unchanged by the three-way split.
-  const { active } = partitionSessions(sessions);
-  useSessionNav(active.map((s) => s.id), currentId ?? "");
+  const { plans, reviews } = partitionSessionKinds(sessions);
+  const { active } = partitionSessions(plans);
+  const currentKind = sessions.find((session) => session.id === currentId)?.kind;
+  const navigable = currentKind === "review" ? reviews : active;
+  useSessionNav(navigable.map((session) => session.id), currentId ?? "");
 
   const [collapsed, toggleCollapsed] = useSidebarCollapsed();
   // The dragged column width (≥960px only), seeded once from localStorage so the
@@ -133,8 +136,19 @@ export function AppShell({ children }: { children: ReactNode }) {
           <div className="app-sidebar-tools">
             <a
               className="settings-link"
+              href="/knowledge"
+              aria-label="knowledge"
+              aria-current={path === "/knowledge" ? "page" : undefined}
+              title="knowledge"
+              onClick={linkClick("/knowledge")}
+            >
+              ▤
+            </a>
+            <a
+              className="settings-link"
               href="/settings"
               aria-label="settings"
+              aria-current={path === "/settings" ? "page" : undefined}
               title="settings"
               onClick={linkClick("/settings")}
             >
@@ -201,15 +215,28 @@ export function AppShell({ children }: { children: ReactNode }) {
                 style={{ "--wordmark": `url(${wordmarkUrl})` } as CSSProperties}
               />
             </a>
-            <a
-              className="settings-link"
-              href="/settings"
-              aria-label="settings"
-              title="settings"
-              onClick={linkClick("/settings")}
-            >
-              ⚙
-            </a>
+            <div className="app-topbar-tools">
+              <a
+                className="settings-link"
+                href="/knowledge"
+                aria-label="knowledge"
+                aria-current={path === "/knowledge" ? "page" : undefined}
+                title="knowledge"
+                onClick={linkClick("/knowledge")}
+              >
+                ▤
+              </a>
+              <a
+                className="settings-link"
+                href="/settings"
+                aria-label="settings"
+                aria-current={path === "/settings" ? "page" : undefined}
+                title="settings"
+                onClick={linkClick("/settings")}
+              >
+                ⚙
+              </a>
+            </div>
           </div>
         )}
         {children}

@@ -19,7 +19,10 @@
 
 <br/>
 
-Otacon replaces your coding agent's native plan mode with a review surface you'll actually use. Your agent (Claude Code, Codex, or OpenCode) interviews you until it understands the goal, drafts a concise plan with the discipline of an engineering design doc, and hands you a real place to comment, ask, and diff revisions, then sign off before a line of code is written.
+Otacon gives plans and pull requests a review surface you'll actually use. Your agent
+(Claude Code, Codex, or OpenCode) can interview you and draft a concise implementation
+plan, or explain an existing PR through a personalized walkthrough and comprehension quiz.
+Both flows give you one place to comment, ask, revise, and finish deliberately.
 
 ## Installation
 
@@ -32,14 +35,18 @@ npm install -g otacon
 > **Preview builds:** `npm i -g otacon@staging` opts into the staging channel to try the
 > newest pre-release. Regular users stay on `npm install -g otacon`.
 
-**Install the skill into your agent.** This drops the Otacon skill into the agent's skill
-folder so it knows how to run a review:
+**Install the skills into your agent.** This installs both `/otacon` for plan review and
+`/otacon-review` for PR understanding:
 
 ```sh
 otacon install --all              # all three agents
 otacon install --agent claude     # or just one: claude, codex, or opencode
 otacon install --project --all    # write into the current repo so you can commit + share it
 ```
+
+After upgrading an older Otacon installation, run `otacon install` again for each agent
+you use. Refresh updates skill directories that are already installed, but deliberately
+does not make the new `/otacon-review` command appear without that explicit reinstall.
 
 ## Get started
 
@@ -61,6 +68,25 @@ When the plan is ready, choose how it ships:
 
 - **Save**: the approved plan lands in your home archive (`~/.otacon/sessions/`) plus a copy in the project (`.otacon/plans/` by default; set `plans.dir` to `docs/plans` to group it with your tracked plans). Commit the project copy if you want it in git.
 - **Implement**: the same agent builds it in an isolated git worktree, phase by phase, and opens a PR.
+
+**Understand a pull request.** From the target repository, pass a GitHub PR to the second
+skill:
+
+```text
+/otacon-review https://github.com/acme/app/pull/42
+```
+
+Otacon reopens an existing review for the same PR (or revises it when the head changes),
+then presents Background, Intuition, and a causal Code walkthrough tailored from your
+local User and Project knowledge. The Quiz asks you to explain important ideas in your own
+words and updates that knowledge only from demonstrated understanding. Use `--force` only
+when you explicitly want a separate review from scratch.
+
+Select report prose or code to **Ask** or **Comment**. Ask answers without changing the
+report; Comment revises the explanation and, as a separate explicit action, can offer
+**Conduct code change** on a writable same-repository PR. The Knowledge page lets you edit
+the User and Project Markdown summaries directly; Otacon keeps quiz evidence separate from
+high-level file/function exposure.
 
 ## Why Otacon
 

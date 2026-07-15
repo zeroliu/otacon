@@ -24,12 +24,15 @@ let savedPort: string | undefined;
 let savedNoBrowser: string | undefined;
 let savedCwd: string;
 let cwd: string;
+let navigateBodies: unknown[];
 
 interface Fake {
   /** Live SSE viewers reported on /api/health (open-tab reuse signal). */
   viewers: number;
   /** The index the daemon serves on GET /api/sessions. */
   index: Array<Record<string, unknown>>;
+  /** Whether the daemon reports that it routed an existing tab. */
+  navigateDelivered?: boolean;
 }
 
 async function listen(fake: Fake): Promise<void> {
@@ -42,6 +45,15 @@ async function listen(fake: Fake): Promise<void> {
     }
     if (req.method === "GET" && req.url === "/api/sessions") {
       return void res.end(JSON.stringify({ sessions: fake.index }));
+    }
+    if (req.method === "POST" && req.url === "/api/viewers/navigate") {
+      let raw = "";
+      req.on("data", (chunk) => (raw += String(chunk)));
+      req.on("end", () => {
+        navigateBodies.push(JSON.parse(raw));
+        res.end(JSON.stringify({ ok: true, delivered: fake.navigateDelivered === true, path: "/" }));
+      });
+      return;
     }
     res.statusCode = 404;
     res.end("{}");
@@ -72,6 +84,7 @@ beforeEach(() => {
   savedNoBrowser = process.env.OTACON_NO_BROWSER;
   savedCwd = process.cwd();
   process.env.OTACON_NO_BROWSER = "1";
+  navigateBodies = [];
   cwd = realpathSync(mkdtempSync(join(tmpdir(), "otacon-open-")));
   process.chdir(cwd);
 });
@@ -115,6 +128,19 @@ test("viewers: 2 dedups: same url, reused: true, no spawn", async () => {
   expect(printed?.reused).toBe(true);
   expect(printed?.session).toBe(id);
   expect(printed?.url).toBe(`http://127.0.0.1:${process.env.OTACON_PORT}/s/${id}`);
+  expect(navigateBodies).toEqual([]); // headless mode has no browser side effects
+});
+
+test("interactive open routes one existing tab to the exact session", async () => {
+  const id = "otc_routed";
+  await listen({ viewers: 2, index: [session(id)], navigateDelivered: true });
+  delete process.env.OTACON_NO_BROWSER;
+
+  const { code, printed } = await run(["--session", id]);
+
+  expect(code).toBe(0);
+  expect(printed).toBeUndefined();
+  expect(navigateBodies).toEqual([{ session: id }]);
 });
 
 test("index fallback dedups too when viewers >= 1", async () => {

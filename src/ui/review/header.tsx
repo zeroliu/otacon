@@ -16,7 +16,7 @@
 
 import type { MouseEvent } from "react";
 import { useEffect, useState } from "react";
-import type { LiveSession } from "../api";
+import type { PlanLiveSession } from "../api";
 import { AgentDot, StatusChip } from "../chip";
 import { prNumber, relativeTime, repoName } from "../format";
 import { navigate } from "../router";
@@ -75,7 +75,7 @@ export function ReviewHeader({
   onApprove,
   onDelete,
 }: {
-  session: LiveSession;
+  session: PlanLiveSession;
   /** A ticking clock (useNow) so the agent dot + timestamp stay honest. */
   now: number;
   view: ReviewView;

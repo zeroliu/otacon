@@ -10,7 +10,9 @@ import type {
   StreamEvent,
   Thread,
   TranscriptEntry,
+  PublicReviewThread,
 } from "../shared/types.js";
+import type { ReviewQuizPublicState } from "../shared/review-quiz.js";
 
 /**
  * One UI event: `type` becomes the SSE event name, `session` is the routing
@@ -28,6 +30,7 @@ import type {
  * its cleaned state (approval and archive lifecycle).
  */
 export type UiEvent =
+  | { type: "navigate"; session: null; data: { clientId: string; path: string } }
   | { type: "session"; session: string; data: { session: SessionSummary } }
   | { type: "removed"; session: string; data: { session: string } }
   | {
@@ -36,7 +39,8 @@ export type UiEvent =
       data: { session: string; revision: number; changelog: string | null };
     }
   | { type: "queue"; session: string; data: { session: string; pending: number } }
-  | { type: "thread"; session: string; data: { session: string; thread: Thread } }
+  | { type: "quiz"; session: string; data: { session: string; quiz: ReviewQuizPublicState } }
+  | { type: "thread"; session: string; data: { session: string; thread: Thread | PublicReviewThread } }
   | { type: "grill"; session: string; data: { session: string; entry: TranscriptEntry } }
   | { type: "activity"; session: string; data: { session: string; note: ActivityNote } }
   | { type: "stream"; session: string; data: { session: string; events: StreamEvent[] } };

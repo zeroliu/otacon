@@ -28,10 +28,13 @@
     "test": "bun test",
     "dev:daemon": "bun run src/daemon/main.ts",
     "dev:ui": "vite src/ui",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build",
     "e2e": "bash test/e2e-daemon.sh",
     "e2e:cli": "bash test/e2e-cli.sh",
     "e2e:revise": "bash test/e2e-revise.sh",
     "e2e:grill": "bash test/e2e-grill.sh",
+    "e2e:review": "bash test/e2e-review.sh",
     "e2e:install": "bash test/e2e-install.sh",
     "e2e:ui": "bun run build && playwright test",
     "smoke": "bash test/smoke.sh",
@@ -51,6 +54,8 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
+    "@storybook/addon-a11y": "^10.5.0",
+    "@storybook/react-vite": "^10.5.0",
     "@types/bun": "latest",
     "@types/node": "^24",
     "@types/react": "^19.2.17",
@@ -62,6 +67,7 @@
     "marked": "^18.0.5",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
+    "storybook": "^10.5.0",
     "typescript": "^5",
     "vite": "^8.0.16"
   }

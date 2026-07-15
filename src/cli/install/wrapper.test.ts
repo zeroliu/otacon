@@ -13,9 +13,10 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { writeSkillAsset } from "../../../scripts/gen-skill-asset.js";
-import { skillMd } from "./assets.js";
+import { reviewSkillMd, skillMd } from "./assets.js";
 import {
   ensureSkill,
+  ensureNamedSkill,
   packagedSkillPath,
   refreshInstalledWrappers,
 } from "./wrapper.js";
@@ -33,11 +34,50 @@ function pkgFile(dir: string): string {
   return path;
 }
 
+function reviewPkgFile(dir: string): string {
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "SKILL.md");
+  writeFileSync(path, reviewSkillMd());
+  return path;
+}
+
 // In the source/test context this module resolves to src/skills/otacon/SKILL.md,
 // which never exists, so the packaged path is unreachable, deterministically
 // undefined. That is the source-run behavior callers rely on to copy instead.
 test("packagedSkillPath is undefined when run from source", () => {
   expect(packagedSkillPath()).toBeUndefined();
+  expect(packagedSkillPath("otacon-review")).toBeUndefined();
+});
+
+test("ensureNamedSkill copies only the selected review protocol", () => {
+  const dir = scratch();
+  try {
+    const wrapper = join(dir, "skills", "otacon-review", "SKILL.md");
+    expect(ensureNamedSkill("otacon-review", wrapper, "user", undefined)).toEqual({
+      mode: "copy",
+      changed: true,
+    });
+    expect(readFileSync(wrapper, "utf8")).toBe(reviewSkillMd());
+    expect(readFileSync(wrapper, "utf8")).not.toContain("otacon start --title");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ensureNamedSkill links the complete packaged review directory", () => {
+  const dir = scratch();
+  try {
+    const pkg = reviewPkgFile(join(dir, "package", "otacon-review"));
+    const wrapper = join(dir, "skills", "otacon-review", "SKILL.md");
+    expect(ensureNamedSkill("otacon-review", wrapper, "user", pkg)).toEqual({
+      mode: "symlink",
+      changed: true,
+    });
+    expect(lstatSync(dirname(wrapper)).isSymbolicLink()).toBe(true);
+    expect(readFileSync(wrapper, "utf8")).toBe(reviewSkillMd());
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // Drift guard: the shipped asset must byte-equal skillMd(). writeSkillAsset() is the
@@ -211,7 +251,7 @@ test("ensureSkill keeps project installs as portable copies", () => {
 const REFRESH_DRIVER = `
 import { lstatSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { skillMd } from ${JSON.stringify(join(import.meta.dir, "assets.ts"))};
+import { reviewSkillMd, skillMd } from ${JSON.stringify(join(import.meta.dir, "assets.ts"))};
 import { claudeSkillPath, codexSkillPath, opencodeSkillPath } from ${JSON.stringify(join(import.meta.dir, "locations.ts"))};
 import { refreshInstalledWrappers } from ${JSON.stringify(join(import.meta.dir, "wrapper.ts"))};
 
@@ -228,9 +268,11 @@ const skillPath = env.RF_AGENT === "codex"
   : env.RF_AGENT === "opencode"
     ? opencodeSkillPath
     : claudeSkillPath;
-const wrapper = env.RF_CWD
-  ? skillPath({ kind: "project", root: env.RF_CWD })
-  : skillPath();
+const skill = env.RF_SKILL || "otacon";
+const scope = env.RF_CWD ? { kind: "project", root: env.RF_CWD } : { kind: "user" };
+const wrapper = skillPath(scope, skill);
+const otherSkill = skill === "otacon" ? "otacon-review" : "otacon";
+const otherWrapper = skillPath(scope, otherSkill);
 
 if (env.RF_FIXTURE === "dir-symlink") {
   mkdirSync(dirname(dirname(wrapper)), { recursive: true });
@@ -240,13 +282,14 @@ if (env.RF_FIXTURE === "dir-symlink") {
   symlinkSync(dirname(pkg) + "-missing", dirname(wrapper), "dir");
 } else {
   mkdirSync(dirname(wrapper), { recursive: true });
-  if (env.RF_FIXTURE === "copy") writeFileSync(wrapper, skillMd());
-  else if (env.RF_FIXTURE === "stale-copy") writeFileSync(wrapper, "STALE PROTOCOL\\n" + skillMd());
+  const content = skill === "otacon" ? skillMd() : reviewSkillMd();
+  if (env.RF_FIXTURE === "copy") writeFileSync(wrapper, content);
+  else if (env.RF_FIXTURE === "stale-copy") writeFileSync(wrapper, "STALE PROTOCOL\\n" + content);
   else if (env.RF_FIXTURE === "symlink") symlinkSync(pkg, wrapper);
   else if (env.RF_FIXTURE === "foreign") writeFileSync(wrapper, "# my own notes, not an otacon wrapper\\n");
 }
 
-const deps = { pkgPath: pkg, sourceRun: () => env.RF_SOURCE_RUN === "1" };
+const deps = { pkgPaths: { [skill]: pkg }, sourceRun: () => env.RF_SOURCE_RUN === "1" };
 if (env.RF_CWD) deps.cwd = env.RF_CWD;
 
 const result = refreshInstalledWrappers(deps);
@@ -270,6 +313,7 @@ const out = {
       : null,
   // The wrapper's own resolved location, to match against result[].real.
   wrapperReal: resolveSelf(wrapper),
+  otherExists: lstatSync(otherWrapper, { throwIfNoEntry: false }) !== undefined,
 };
 process.stdout.write(JSON.stringify(out));
 `;
@@ -283,6 +327,7 @@ interface RefreshChildOut {
   skillDirIsSymlink: boolean;
   skillDirTarget: string | null;
   wrapperReal: string;
+  otherExists: boolean;
 }
 
 // Spawn the driver under a hermetic temp HOME (every user-scope candidate roots
@@ -301,6 +346,7 @@ function runRefreshChild(opts: {
   pkg: string;
   cwd?: string;
   agent?: "claude" | "codex" | "opencode";
+  skill?: "otacon" | "otacon-review";
 }): RefreshChildOut {
   const home = mkdtempSync(join(tmpdir(), "otacon-refresh-home-"));
   try {
@@ -313,6 +359,7 @@ function runRefreshChild(opts: {
       RF_FIXTURE: opts.fixture,
       RF_SOURCE_RUN: opts.sourceRun ? "1" : "0",
       RF_AGENT: opts.agent ?? "claude",
+      RF_SKILL: opts.skill ?? "otacon",
     };
     if (opts.cwd !== undefined) env.RF_CWD = opts.cwd;
     const child = spawnSync(process.execPath, ["-"], { input: REFRESH_DRIVER, encoding: "utf8", env });
@@ -350,6 +397,23 @@ test("refreshInstalledWrappers promotes a user-scope copy to a directory symlink
     expect(out.skillDirIsSymlink).toBe(true);
     expect(out.skillDirTarget).toBe(realpathSync(dirname(pkg)));
     expect(out.result).toContainEqual({ mode: "symlink", real: out.wrapperReal });
+    // Refresh is deliberately not install: updating an old plan-only install
+    // must not make the new review skill silently discoverable.
+    expect(out.otherExists).toBe(false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("refreshInstalledWrappers refreshes an already-installed review skill independently", () => {
+  const dir = scratch();
+  try {
+    const pkg = reviewPkgFile(join(dir, "package", "otacon-review"));
+    const out = runRefreshChild({ fixture: "stale-copy", pkg, skill: "otacon-review" });
+    expect(out.skillDirIsSymlink).toBe(true);
+    expect(out.skillDirTarget).toBe(realpathSync(dirname(pkg)));
+    expect(out.content).toBe(reviewSkillMd());
+    expect(out.otherExists).toBe(false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

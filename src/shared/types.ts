@@ -2,6 +2,8 @@
 // Wire shapes (EventPayload) follow review loop and daemon API exactly.
 
 import type { QuestionSpec } from "./question-spec.js";
+import type { ReviewDoneEvent, ReviewSessionDetail, ReviewSessionStatus } from "./review.js";
+import type { ReviewQuizAnswerEvent } from "./review-quiz.js";
 
 export type { QuestionSpec };
 
@@ -14,6 +16,8 @@ export type SessionStatus =
   | "implementing"
   | "implemented"
   | "implement_failed";
+
+export type AnySessionStatus = SessionStatus | ReviewSessionStatus;
 
 export const SESSION_STATUSES: readonly SessionStatus[] = [
   "draft",
@@ -41,14 +45,30 @@ export const SESSION_STATUSES: readonly SessionStatus[] = [
  * instead of spawning a second worktree). Terminal means "over until explicitly
  * reopened", not "forever".
  */
-export const TERMINAL_STATUSES: readonly SessionStatus[] = [
+export const PLAN_TERMINAL_STATUSES: readonly SessionStatus[] = [
   "approved",
   "implemented",
   "implement_failed",
 ];
 
+export const TERMINAL_STATUSES: readonly AnySessionStatus[] = [
+  ...PLAN_TERMINAL_STATUSES,
+  "done",
+];
+
+/** Kind-aware terminal check for registry/session operations. */
+export function isTerminalSession(
+  session:
+    | Pick<PlanRegistrySession, "kind" | "status">
+    | Pick<ReviewRegistrySession, "kind" | "status">,
+): boolean {
+  return session.kind === "review"
+    ? session.status === "done"
+    : PLAN_TERMINAL_STATUSES.includes(session.status);
+}
+
 /** One entry in ~/.otacon/registry.json. */
-export interface RegistrySession {
+interface RegistrySessionBase {
   id: string;
   title: string;
   /** The user's verbatim request that triggered this session; absent when not captured. */
@@ -64,7 +84,6 @@ export interface RegistrySession {
    * end-to-end like `quick` with no behavior change yet.
    */
   socratic: boolean;
-  status: SessionStatus;
   createdAt: string;
   updatedAt: string;
   /**
@@ -90,13 +109,31 @@ export interface RegistrySession {
   impl?: { worktree: string; branch: string };
 }
 
+export interface PlanRegistrySession extends RegistrySessionBase {
+  kind: "plan";
+  status: SessionStatus;
+  review?: never;
+}
+
+export interface ReviewRegistrySession extends RegistrySessionBase {
+  kind: "review";
+  status: ReviewSessionStatus;
+  quick: false;
+  socratic: false;
+  review: ReviewSessionDetail;
+  impl?: never;
+}
+
+/** Every in-memory registry entry has an explicit discriminant. */
+export type RegistrySession = PlanRegistrySession | ReviewRegistrySession;
+
 export interface RegistryFile {
   version: 1;
   sessions: Record<string, RegistrySession>;
 }
 
 /** Registry entry plus live detail — what the web UI renders (SSE snapshot/session frames). */
-export interface SessionSummary extends RegistrySession {
+interface SessionSummaryFields {
   revision: number;
   lastReviewedRevision: number;
   pendingEvents: number;
@@ -123,6 +160,8 @@ export interface SessionSummary extends RegistrySession {
   /** True while the agent is parked in `otacon wait` (a live long-poll connection). */
   parked: boolean;
 }
+
+export type SessionSummary = RegistrySession & SessionSummaryFields;
 
 /**
  * One entry in a session's append-only activity feed (review loop and daemon API) — a
@@ -186,6 +225,81 @@ export interface Anchor {
   suffix?: string;
 }
 
+export type ReviewKnowledgeScope = "user" | "project";
+
+/**
+ * A conversation anchored to one immutable PR-review report revision. Review
+ * threads deliberately use a distinct persisted shape from plan threads: a
+ * report comment is feedback first, and becomes branch-mutation authority only
+ * after the reviewer explicitly requests a code action on that comment.
+ */
+export interface ReviewThread {
+  id: string; // q<n> for Ask, t<n> for Comment
+  surface: "review";
+  intent: "question" | "comment";
+  anchor: Anchor;
+  body: string;
+  createdAt: string;
+  /** Root conversation id; absent on the root turn itself. */
+  replyTo?: string;
+  identity: {
+    session: string;
+    reportRevision: number;
+    headRevision: number;
+    headSha: string;
+  };
+  /** Browser retry key. Persisted for exact create dedupe; omitted publicly. */
+  idempotencyKey: string;
+  /** A request for the agent to remember the exchange; not a saved receipt. */
+  remember?: { scope: ReviewKnowledgeScope };
+  response?: {
+    body: string;
+    respondedAt: string;
+    /** Required for report-feedback responses; absent for ordinary answers. */
+    reportRevision?: number;
+  };
+  /** Present only after the agent explicitly acknowledges the requested scope. */
+  saved?: { scope: ReviewKnowledgeScope; savedAt: string };
+  codeAction?: {
+    status: "requested" | "working" | "completed" | "failed";
+    requestedAt: string;
+    updatedAt: string;
+    /** Ordered conversation turns covered by this explicit authorization. */
+    authorizedTurns?: string[];
+    message?: string;
+  };
+}
+
+/** Browser-safe projection; the persisted create idempotency key stays private. */
+export type PublicReviewThread = Omit<ReviewThread, "idempotencyKey">;
+
+/**
+ * Private, immutable work handed to `/otacon-review` through `otacon wait`.
+ * Questions never authorize checkout; report feedback asks for a report
+ * response/revision; code-change is the explicit second-step authorization.
+ */
+export interface ReviewThreadEvent {
+  event: "review-thread";
+  work: "question" | "report-feedback" | "code-change";
+  session: string;
+  thread: string;
+  reportRevision: number;
+  headRevision: number;
+  headSha: string;
+  anchor: Anchor;
+  body: string;
+  remember?: { scope: ReviewKnowledgeScope };
+  /** Self-contained ordered context; optional only for legacy queued events. */
+  conversation?: {
+    root: string;
+    turns: Array<{
+      thread: string;
+      body: string;
+      response?: string;
+    }>;
+  };
+}
+
 export interface CommentItem {
   thread: string;
   anchor: Anchor | null;
@@ -223,6 +337,9 @@ export type EventPayload =
       /** The pre-overwrite answer's content (no `answeredAt`); present only alongside `revised`. */
       prior?: { choice?: string; choices?: string[]; text?: string };
     }
+  | ReviewQuizAnswerEvent
+  | ReviewThreadEvent
+  | ReviewDoneEvent
   // The approval wake-up. `home` is the absolute canonical
   // copy under `~/.otacon/sessions/<id>/`. `path` is the copy the agent acts on:
   // on **Save** (no `implement`) the repo-relative project copy under `plans.dir`,

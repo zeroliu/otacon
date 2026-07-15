@@ -93,9 +93,13 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 ## Spawn race: the port is the lock
 
 - **Decision:** No lockfile. Two CLIs may both spawn a daemon; the loser exits 0 on
-  EADDRINUSE and both health-poll whoever won the bind.
+  EADDRINUSE and both health-poll whoever won the bind. App construction is read-only:
+  durable recovery, the first PR poll, and transcript tailers start only in the successful
+  listen callback after the process owns the port.
 - **Why:** The OS already serializes port binds; a lockfile adds stale-lock cleanup for
-  zero extra safety.
+  zero extra safety. Delaying writers is essential because each contender may have loaded a
+  different registry snapshot before the bind — an EADDRINUSE loser must not flush stale
+  recovery state over the winner's newer registry or queues.
 - **Revisit when:** The daemon ever listens on more than one resource.
 
 ## SessionQueue: synchronous methods only
@@ -2785,7 +2789,8 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 
 - **Decision:** Each per-agent wrapper check in `otacon doctor` now passes against a
   list of candidate paths and is `ok` if the managed `SKILL.md` (file present AND
-  containing `MANAGED_MARKER`) exists at any of them. The candidates are the user path
+  containing `MANAGED_MARKER`) exists at any of them and declares the expected skill name
+  plus its protocol command (`otacon start` or `otacon review start`). The candidates are the
   always, plus — when `findRepoRoot(process.cwd())` resolves — the project path
   (`<root>/.claude/...`, `<root>/.codex/skills/...`, `<root>/.opencode/...`). The
   satisfying scope is named in `detail` (`<path> (project)` / `<path> (user)`); the user
@@ -2804,6 +2809,8 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   (the otacon protocol skill, the `SKILL.md` that `otacon install` writes), shows the
   exact paths it probed, and surfaces `--project` as the in-repo fix. Keeping the miss a
   warning preserves today's contract that wrappers for unused agents never fail the run.
+  Identity validation also prevents two valid managed cards from being swapped while Doctor
+  incorrectly reports both protocols as installed.
 - **Revisit when:** Agents gain more wrapper search locations doctor should accept, or a
   per-agent "expected scope" makes listing every candidate path too noisy.
 
@@ -4300,3 +4307,666 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** An agent drops directory-symlink discovery, package managers no
   longer provide a stable package directory, or Otacon needs to preserve user-owned
   files inside `skills/otacon/` rather than owning that directory wholesale.
+
+## Storybook is a permanent dev-only React/Vite lab (2026-07-14)
+
+- **Decision:** Keep the official `@storybook/react-vite` framework and the
+  accessibility addon as development dependencies, with dedicated `storybook` and
+  `build-storybook` scripts. Stories import the application's shared stylesheet and are
+  excluded from the published `dist` runtime.
+- **Why:** PR review has many important states that are expensive to reach through a
+  daemon—grading, retry, memory receipts, conflict, and phone layouts. A permanent lab
+  makes those states reproducible and reviewable without adding Storybook to the CLI or
+  daemon dependency surface.
+- **Revisit when:** Storybook stops supporting the repository's Vite/React versions, or
+  another dev-only harness provides the same full-page state coverage with less upkeep.
+
+## PR-review stories render production components through an adapter (2026-07-14)
+
+- **Decision:** The full-page stories mount `PrReviewScreen`, `QuizCard`, the feedback
+  and thread surfaces, and `KnowledgeScreen` directly. They receive a deterministic
+  in-memory `ReviewAdapter`; stories do not copy markup, fork CSS, or call daemon APIs.
+- **Why:** A disposable mock can win design approval and still leave the real UI
+  untested. An adapter keeps the approved composition identical across Storybook and the
+  application, while preserving a clean seam for the later daemon-backed implementation.
+- **Revisit when:** The production data flow can no longer be expressed as snapshot,
+  subscribe, and intent methods; extend the adapter before introducing story-only views.
+
+## The complete PR-review prototype is a human gate before service integration (2026-07-14)
+
+- **Decision:** The balanced/expert desktop and phone stories must expose the complete
+  report, quiz, feedback, Done, and Knowledge interactions and receive explicit human
+  approval before daemon, storage, CLI, or Git worktree integration begins.
+- **Why:** Information order and grouping are the core product here. Settling those
+  decisions against a real interactive page first prevents backend contracts from
+  hardening around an explanation flow the reviewer has not accepted.
+- **Revisit when:** The review information architecture is stable enough that backend
+  and UI changes can safely proceed in parallel without multiplying contract churn.
+
+## PR-review selection feedback uses a two-stage comment-to-change flow (2026-07-14)
+
+- **Decision:** Selecting prose or a code surface in a PR report reuses the plan-review
+  selection bar and anchored composer, with only **Ask** and **Comment** actions. PR review
+  positions the compact bar next to the selected passage while plan review keeps its
+  existing docked placement. A Comment becomes a normal thread first; only its later
+  **Conduct code change** action may request the worktree/subagent handoff. Ask threads
+  never expose that action.
+- **Why:** A suggestion about the explanation is not permission to mutate the PR branch.
+  Making branch work a second, explicit decision preserves that boundary, while reusing
+  the established selection interaction avoids teaching reviewers a second feedback
+  model. The contextual placement keeps the PR action visibly attached to either prose
+  or code without adding a permanent fixture card to every report.
+- **Revisit when:** Reviewers need more initial intents than Ask/Comment, browsers make
+  contextual selection placement unreliable, or code-change authorization moves to a
+  separate repository-level approval workflow.
+
+## Review conversations use a disjoint version-2 thread envelope (2026-07-15)
+
+- **Decision:** A review session writes strict version-2 entries to its own `threads.json`;
+  plan sessions retain their byte-compatible version-1 shape. Generic plan thread routes
+  reject review ids before reading the file, while SSE/GET route by the session discriminant.
+- **Why:** Reusing the pathname preserves the per-session storage model, but extending plan
+  entries would entangle L5/Resolve semantics with report/head provenance, memory receipts,
+  and code actions. A version boundary makes malformed mixed state quarantine locally and
+  lets old plan sessions remain readable without migration.
+- **Revisit when:** Plan and PR conversations converge on one lifecycle and one linter
+  contract, making a shared versioned union simpler than two deliberately separate schemas.
+
+## PR-review follow-ups are same-head conversations with snapshot code authority (2026-07-15)
+
+- **Decision:** A PR-review root may carry same-intent follow-up turns across report
+  revisions while its PR head is unchanged. Follow-ups inherit the root anchor, do not
+  inherit its Remember request, and group with the root as one unresolved conversation.
+  Conduct code change remains one conversation-level second step: it persists the ordered
+  turn ids present at the click, replaces only their undelivered report-feedback work, and
+  disables further turns while requested or working. A failed action restores unanswered
+  report feedback; an old-head conversation is readable but not writable.
+- **Why:** Explanation revisions should not force the reviewer to abandon a useful
+  discussion, while a changed commit invalidates the code context that made the thread
+  safe. Same-kind turns preserve the Ask-versus-Comment contract, no implicit Remember
+  inheritance avoids silent profile mutation, and an immutable authorization snapshot
+  prevents later prose from expanding code scope after consent.
+- **Revisit when:** PR review gains explicit conversation reopening across head changes,
+  code actions support multiple audited attempts, or knowledge updates become a
+  conversation-level policy rather than an exchange-level request.
+
+## Review work is durable before wake-up and keyed by immutable provenance (2026-07-15)
+
+- **Decision:** Ask, report-feedback, and code-change work carry session/thread/report/head
+  identity. Thread/action state lands through an atomic state-file write before enqueue;
+  startup and browser request-loss retries reconstruct only missing unresponded work, with
+  queue dedupe and the existing monotonic review event seq. Once code work is requested it
+  owns recovery for the eventual report refresh, so an already-acked older feedback wake
+  cannot be resurrected behind it; working and terminal code actions are never re-enqueued.
+  A failed code action restores only authorized unanswered turns whose persisted head
+  generation/SHA still match the session's current head.
+- **Why:** The durable conversation is the user's record; an event is only an at-least-once
+  wake. Persist-first prevents a daemon crash from losing visible intent, while full identity
+  prevents a retry or late response from attaching to a different report/head generation.
+- **Revisit when:** The daemon gains a transactional queue/store primitive that can atomically
+  commit both state and wake-up without recovery scanning.
+
+## Memory receipts require an exact agent acknowledgement (2026-07-15)
+
+- **Decision:** A thread may request User or Project memory (Project is the composer default),
+  but renders no saved receipt until `review respond` explicitly acknowledges `updated:true`
+  for that same requested scope. Mismatched and unsolicited acknowledgements are rejected.
+- **Why:** Selecting “remember” tells the future skill what to update; it does not prove that a
+  CAS write succeeded. Separating request from receipt prevents optimistic UI copy from
+  becoming a false claim about the user's cognition profile.
+- **Revisit when:** Knowledge mutation moves into a daemon transaction that can return its own
+  authoritative receipt rather than relying on an agent acknowledgement.
+
+## PR checkout is conservative routing, not branch automation (2026-07-15)
+
+- **Decision:** `review checkout` re-resolves GitHub head/permission, returns read-only for
+  forks or insufficient access, reuses only an exact clean worktree, and otherwise verifies
+  local/remote refs before one fetch/create under `worktree.dir`. Dirty, stale, prunable,
+  colliding, terminal, and closed/merged cases refuse without reset; the command returns the
+  explicit push remote/ref and never commits or pushes. A same-SHA refresh updates mutable PR
+  metadata without incrementing the report head generation.
+- **Why:** The user authorizes code work from a Comment, not destructive repair of whatever
+  checkout happens to be current. Exact routing protects unrelated work and gives the skill
+  enough metadata to delegate one implementation task while keeping verification and publish
+  responsibility with the main agent.
+- **Revisit when:** Fork contribution branches can be safely authenticated/pushed, or Git
+  exposes an atomic worktree-creation API that removes the remaining fetch/create seam.
+
+## Review completion persists its baseline before the terminal wake (2026-07-15)
+
+- **Decision:** Review Done appends an immutable completion summary containing the exact
+  report/head baseline, unresolved counts, force choice, timestamp, and reserved event seq.
+  The summary is first persisted with a pending wake marker; the per-session queue is then
+  replaced by exactly one `review-done` event and the marker becomes queued. Startup repairs
+  a pending marker before serving requests, and repeated Done calls reuse the same summary.
+- **Why:** The completion record is the durable fact and the event is only the wake that lets
+  a parked review agent exit. Persisting the fact first makes the crash seam recoverable,
+  while replacing older review work prevents a terminal session from waking for obsolete
+  feedback after it has already told the agent to stop. Reopening on a changed head drops
+  only that session's obsolete terminal wake, including during startup repair.
+- **Revisit when:** Registry state and event delivery share one transactional log, or running
+  code-change workers gain explicit cancellation and acknowledgement semantics.
+
+## Done gates only durable unresolved review work (2026-07-15)
+
+- **Decision:** A non-forced Done refuses while a current-head public conversation lacks an agent response,
+  a requested code action is not completed, or a current non-stale quiz is not passed. The
+  dialog reports those counts. Force Done records the same counts and preserves reports,
+  threads, actions, quiz attempts, and completion history rather than resolving or deleting
+  them implicitly. Older-head conversations remain readable but do not block or wake work for
+  the newly reopened head. Current-head counting compares both generation and SHA, including
+  in the browser's preflight warning, so an A-B-A sequence never treats old history as live.
+- **Why:** Visible durable state is the only deterministic definition both daemon and browser
+  can reconstruct after refresh. Treating a comment as resolved merely because it was queued,
+  or erasing incomplete learning on force-close, would turn a lifecycle action into silent
+  data loss and make later audit impossible.
+- **Revisit when:** Conversations gain an explicit reviewer-resolved state, or quiz policy
+  distinguishes intentionally skipped concepts from failed or unanswered ones.
+
+## A completed review reopens only for a changed PR head (2026-07-15)
+
+- **Decision:** Starting the canonical PR again at the completed head returns the same
+  read-only session as `reused-complete`. A new head reopens that session as
+  `reopened-changed`, increments its head generation, retains every completion, and marks
+  older-head quiz definitions stale. `--force` remains the only way to create a parallel
+  session even when an earlier one is complete.
+- **Why:** Completion describes understanding of one exact code snapshot, not permanent
+  ownership of the PR identity. Reusing an unchanged terminal session prevents duplicate
+  learning records, while reopening on code change preserves continuity without pretending
+  the old quiz still proves understanding of the new implementation.
+- **Revisit when:** Reviews need parallel audience-specific histories, or changed files can be
+  mapped precisely enough to stale individual quiz concepts instead of the whole definition.
+
+## Plans and Reviews share the production sidebar row grammar (2026-07-14)
+
+- **Decision:** The Plans / Reviews switch sits immediately below the unchanged production
+  sidebar header. Both modes render their items with the existing `SessionList` / `.sl-row`
+  visual grammar and the same hairlines, typography, current-row treatment, fold handle,
+  and phone drawer. Plans retain the production disclosure grammar for the **Open PRs**
+  collection, with its count derived from member items. The switch has an inline active
+  underline, not a boxed segmented-control card, and it never becomes a horizontal top
+  navigation fallback.
+- **Why:** Plans and reviews are two collections in one Otacon shell, not two applications.
+  Prototype-specific rows and divider treatments made the modes feel structurally different
+  and competed with the already-established sidebar hierarchy. Reusing the production row
+  grammar preserves recognition and makes mode changes affect content only.
+- **Revisit when:** Plans and reviews need genuinely different navigation metadata that the
+  shared row cannot express, or the production sidebar itself adopts a new collection switch
+  pattern.
+
+## PR explanations use typed editorial blocks instead of fixed Intuition cards (2026-07-14)
+
+- **Decision:** Background and Intuition are ordered typed narrative sections made from
+  discriminated prose or sequence-figure blocks. Intuition additionally requires one
+  sentence that states the change's goal. The sections render as one continuous document;
+  figures are optional and used only when they clarify a mental model. Code remains ordered
+  by comprehension and places explanatory prose before every selectable excerpt.
+- **Why:** A three-card Intuition encoded a fixture count as product structure: long ideas
+  became cramped, while one or two ideas left an obviously broken composition. The useful
+  invariant is pedagogical order—prerequisites, essence, then literate implementation—not a
+  number of boxes. Typed ordered blocks support one, two, or many ideas and give future
+  report producers a scalable schema without pushing content cases into CSS selectors.
+- **Revisit when:** Reports need richer block kinds such as interactive simulations or
+  diagrams with their own data contracts; add another explicit union member rather than a
+  story-specific escape hatch.
+
+## Code explanations put contract deltas and integration before internals (2026-07-14)
+
+- **Decision:** `ReviewReport.code` is one required typed object in the reader order
+  **Interface changes → Integration path → Implementation walkthrough**. Interface items
+  use an `added` / `changed` / `removed` discriminated union so the schema requires the
+  appropriate before/after selectable excerpts, and all contract kinds share one vertical
+  renderer. Integration starts with one abridged call-site trace of the values crossing
+  modules, followed by an ordered sequence of module/symbol ownership and handoff details;
+  the existing literate `CodeGroup` becomes only the final walkthrough layer.
+- **Why:** A flat list could mention a type or file but could not prove what changed for a
+  caller or show how modules compose at runtime. Readers otherwise had to reconstruct the
+  contract delta and data flow from implementation prose. A step list alone still makes the
+  reader mentally reconstruct arguments and returned values, while full implementation code
+  hides the boundary in noise; the abridged trace establishes value flow before the list adds
+  ownership detail. Making both layers mandatory puts the cheapest, most consequential review
+  questions first while keeping the detailed walkthrough comprehension-ordered. The
+  discriminated delta also prevents producers from labeling a contract "changed" while
+  supplying only its final declaration.
+- **Revisit when:** Contract reviews need richer comparisons than before/after code (for
+  example generated schema diffs), or runtime integration becomes a branching graph that
+  an ordered handoff path cannot explain without loss.
+
+## Knowledge uses one implicit local user profile (2026-07-14)
+
+- **Decision:** V1 has exactly one profile for the current OS user. User and project
+  knowledge live under `~/.otacon/knowledge/`; no account selector or project-local
+  knowledge file is introduced.
+- **Why:** Otacon is a local, single-user tool today. An identity/account system would add
+  migration and selection states without improving the common path, while home storage
+  keeps personal understanding out of git and available to every local project.
+- **Revisit when:** Otacon supports shared machines, synced profiles, multiple personas,
+  or team-owned knowledge with separate authorization and retention rules.
+
+## Project knowledge is keyed by canonical GitHub owner/repo (2026-07-14)
+
+- **Decision:** Project knowledge paths use lowercase `github.com/<owner>/<repo>`, derived
+  from validated GitHub HTTPS/SSH/`owner/repo` forms. Local clone paths are never keys.
+- **Why:** Clone locations and worktrees are incidental and multiply over time. GitHub
+  repository identity lets all clones converge on one model and rejects traversal or an
+  unrelated host before it can influence a home-store path.
+- **Revisit when:** Reviews support another forge, repositories can migrate while retaining
+  identity, or GitHub exposes a stable immutable repository id worth storing alongside the
+  human-readable key.
+
+## Editable summaries and append-only evidence are separate (2026-07-14)
+
+- **Decision:** Markdown summaries are the compact current knowledge agents read; JSONL
+  evidence is an append-only audit trail. Exposure and demonstrated understanding use
+  distinct verdicts, and raw answers remain in their source review session.
+- **Why:** Markdown is understandable and directly editable, but editing a summary must not
+  erase retries or make a claimed understanding indistinguishable from quiz evidence.
+  JSONL keeps the high-volume history cheap while summaries stay small and useful in prompts.
+- **Revisit when:** Evidence volume needs indexed queries, automatic summary rebuilding, or
+  cross-device merge semantics that a local append-only file cannot provide.
+
+## Knowledge summaries use hash compare-and-swap (2026-07-14)
+
+- **Decision:** Every knowledge GET returns a SHA-256 hash; PUT must supply it as `baseHash`.
+  The daemon validates the standard Markdown sections, compares without yielding, and writes
+  via atomic rename. A stale writer receives 409 plus the current document. Malformed summary
+  or evidence files are quarantined beside the original before recovery.
+- **Why:** The web editor and an agent can race. Last-write-wins would silently discard
+  somebody's understanding; a small local CAS contract preserves both the unsaved draft and
+  disk state for daemon/API writers without introducing a database or lock service. A direct
+  filesystem editor does not honor that protocol and is only detected if its write lands
+  before the daemon comparison, so simultaneous direct edits remain an explicit limitation.
+  Quarantine keeps the daemon usable while retaining damaged bytes for inspection.
+- **Revisit when:** Multiple daemon processes or remote writers require an OS-level lock,
+  summaries need field-level merges, or a database owns transactional summary/evidence updates.
+
+## Legacy session kinds decode at the registry boundary (2026-07-14)
+
+- **Decision:** New registry records carry `kind:"plan"` or `kind:"review"`; a v1 record
+  with no `kind` is normalized in memory to `plan`. Review lifecycle and PR metadata live
+  on the review record, while existing plan `session.json` files and status transitions are
+  unchanged. The same boundary defaults an absent legacy `socratic` field to `false`.
+- **Why:** Reusing plan statuses or rewriting every legacy file would make review semantics
+  leak into a mature approval/implementation machine and turn a compatible feature into a
+  migration. Boundary normalization gives all downstream code a real discriminant without
+  making old sessions disappear or behave differently.
+- **Revisit when:** The registry gains a versioned migration framework or session detail
+  becomes large enough to move both kinds behind dedicated stores.
+
+## Canonical PR identity owns review reuse (2026-07-14)
+
+- **Decision:** Lowercase GitHub base `owner/repo` plus PR number identifies a review.
+  An unchanged head reuses it untouched, a changed head increments and reopens the same
+  session, and only `--force` creates a parallel session. The CLI rejects a base-repo
+  mismatch before calling the daemon.
+- **Why:** Local clone paths, branches, and head SHAs all change while the human review
+  target remains one PR. Keeping head as revision input rather than identity preserves
+  history and makes reopening deterministic; the pre-create repo check prevents a command
+  run in the wrong checkout from polluting the registry.
+- **Revisit when:** Reviews support non-GitHub forges, a repository transfer needs aliasing,
+  or GitHub's immutable repository/node id becomes necessary to survive renames.
+
+## PR writability comes from authenticated repository permission (2026-07-14)
+
+- **Decision:** PR metadata records the authenticated viewer's base-repository permission
+  from `gh repo view`. A review is writable only when it is same-repository and that
+  permission is Write, Maintain, or Admin. `maintainerCanModify` remains descriptive fork
+  metadata and does not grant authority by itself.
+- **Why:** `maintainerCanModify` is chosen by the PR author and says nothing about whether
+  the current `gh` identity is a maintainer. Treating it as capability would mark unrelated
+  viewers writable and could authorize a later code-change path incorrectly. Persisting the
+  verified permission gives the worktree phase a conservative boundary it can re-check.
+- **Revisit when:** GitHub exposes a direct pull-request `viewerCanUpdate` field through
+  `gh pr view`, fork pushes become an explicitly supported V1 path, or code-change execution
+  adopts a narrower per-branch capability check.
+
+## PR-head generations and report revisions are separate axes (2026-07-14)
+
+- **Decision:** `session.review.revision` counts canonical PR-head generations, while the
+  dedicated review store assigns its own monotonic report revision. A review summary's
+  top-level `revision` is the latest submitted report. An explicit prepare route may create
+  another report revision without changing the head.
+- **Why:** Questions and later code changes can require a refreshed explanation on the same
+  SHA, while a head may advance before its new explanation is ready. Overloading one number
+  would either forbid same-head revisions or announce an unpersisted report to the renderer.
+- **Revisit when:** Report history becomes a DAG, or every authoring trigger gains a durable
+  identity that should replace the sequential local report number.
+
+## Each report revision freezes both knowledge scopes (2026-07-14)
+
+- **Decision:** Preparing a report atomically stores exact User and Project Markdown, their
+  individual hashes, canonical project identity, head provenance, and a composite manifest
+  hash. Submission is a second exclusive directory rename and refuses mismatched ownership
+  or a prepared revision whose PR head is now stale. Its own manifest hashes the exact report,
+  quiz, warnings, and timestamp bytes so later reads detect incomplete or corrupt history.
+  Committed revisions are never overwritten.
+- **Why:** Quiz evidence is supposed to improve future explanations. If current knowledge were
+  read at render time, grading the open report could change the prerequisites or detail level
+  underneath the reader. Exact copies keep the input auditable; the composite hash makes the
+  frontmatter ownership check compact without hiding either scope's provenance.
+- **Revisit when:** Cross-device synchronization needs content-addressed object deduplication,
+  or a database can offer the same inspectability with transactional multi-record commits.
+
+## Review Markdown is strict at submit and tolerant at display (2026-07-14)
+
+- **Decision:** Durable reports use fixed ordered frontmatter and H2 sections. Typed H3 Code
+  groups carry Purpose, Changed behavior, and `file#symbol` Surfaces in causal layer order.
+  Strict lint blocks publication; the renderer recovers safe sections/groups from damaged
+  stored or manually edited input and visibly marks that recovery. Group anchors derive from
+  typed layer plus authored title, with source ranges retained by the parser.
+- **Why:** Agents need a narrow contract to produce the same information architecture for every
+  PR, while a local user's old report must remain readable even after corruption or manual edits.
+  Stable semantic anchors survive line movement better than diff order or line-number ids.
+- **Revisit when:** The report needs richer typed blocks that Markdown labels cannot express, or
+  anchor migration requires persisted UUIDs rather than authored semantic identity.
+
+## Quiz rubrics are private while live state is a sanitized projection (2026-07-14)
+
+- **Decision:** A report owns one strict 1–20-question companion with open/choice modes,
+  concept scope, and private rubric; bounded choices additionally own a private answer key.
+  Browser detail, revision, submit, snapshot, and `quiz` SSE frames replace that companion
+  with prompt/options plus sanitized attempt state. Open answers wake the agent through a
+  private `quiz-answer` event; choices grade inside the daemon without a wake.
+- **Why:** Rubrics and keys in browser JSON turn a comprehension check into answer lookup.
+  Keeping one immutable private source while deriving every public payload through one
+  projection prevents accidental leakage without forking report storage or UI structure.
+- **Revisit when:** Grading moves to a separate trusted service, encrypted local profiles are
+  introduced, or a rubric needs a reviewer-visible hint distinct from its answer criteria.
+
+## Open-ended grading is durable, at-least-once, and single-pending (2026-07-14)
+
+- **Decision:** Open-ended is the default authoring mode; adaptive complexity chooses one to
+  twenty questions. An answer is atomically persisted before the event queue is touched and
+  one question may have only one pending attempt. Retrying an answer's idempotency key
+  requests the same private work while it is pending: queued/in-flight work is not duplicated,
+  but acknowledged work may be enqueued again. On daemon startup, pending choices are
+  finished locally with one synchronous CAS rebase retry, and pending open attempts reconstruct
+  only missing durable queue work after deduplication against queued/in-flight
+  report/head/question/attempt identity. Malformed persisted queue envelopes are quarantined
+  before recovery. A verdict is identity-bound to report,
+  head, question, and attempt; duplicate identical grades are no-ops. Pending cognition, not
+  queue length, drives summary counts. Sanitized quiz updates ride the existing per-session
+  SSE stream.
+- **Why:** The daemon may crash between persistence and enqueue, including before a browser can
+  retry, or the response may disappear after enqueue. State-driven startup repair, at-least-once
+  delivery, and idempotent grading close both windows without exposing private wake payloads. A single
+  pending attempt prevents an older retry from regressing a newer pass, and separating grade
+  state from queue occupancy keeps the UI honest after the agent consumes its wake.
+- **Revisit when:** Agent grading becomes a durable job service with transactional enqueue, or
+  parallel rubric graders need an explicit quorum/merge state.
+
+## Quiz verdict knowledge updates use managed CAS patches and append-once evidence (2026-07-14)
+
+- **Decision:** Each session+report+concept+attempt owns a narrowly-scoped Markdown list marker,
+  recognized for crash replay only when it is an exact managed list line. Retry writes
+  only Needs reinforcement; pass removes that managed gap and writes Demonstrated concepts.
+  The grade transaction persists a stable timestamp, CAS-patches the current summary, appends
+  deterministic revision-aware evidence exactly once, then atomically records the terminal
+  attempt. A summary conflict leaves the attempt pending and appends nothing; crash replay may
+  recognize only its exact marker and byte-identical evidence id/content. Because a bounded
+  choice's verdict is daemon-known, replaying that same pending idempotency key may rebase its
+  managed patch to the latest profile hash; open-answer grades remain bound to the durable
+  answer-time hash and conflict if the caller substitutes a newer profile hash.
+- **Why:** Replacing whole knowledge documents would clobber manual edits, while marking pass
+  before knowledge commits would claim understanding the profile never received. Managed
+  items preserve user prose, revision-aware ids avoid cross-report collisions, and the ordered
+  replayable transaction handles local crashes without a database transaction. Deterministic
+  choice rebasing is safe because no rubric judgment changes, and avoids a stale-hash dead end
+  the browser cannot resolve itself.
+- **Revisit when:** Knowledge summaries are generated entirely from evidence, multiple daemon
+  processes write concurrently, or a transactional database replaces Markdown plus JSONL.
+
+## Plan review and PR review are separate generated skills on one daemon (2026-07-15)
+
+- **Decision:** `otacon install` binds two complete discovery directories per selected agent:
+  `otacon` and `otacon-review`. Each has an independent generated protocol card and source
+  dogfood variant, while both use the same CLI/daemon/session registry/browser. Refresh is
+  presence-gated per directory and never creates the other skill; therefore package update
+  alone does not silently add `/otacon-review` to an existing plan-only install. Doctor
+  checks both names independently and points any miss at reinstalling the pair. User scope
+  keeps whole-directory symlinks; project/fallback scope keeps copies. The shared cross-agent
+  directory format remains only `SKILL.md` with name + description frontmatter; no
+  Codex-only `agents/openai.yaml` is emitted. Explicit install attempts and reports every
+  selected agent/skill destination independently; any failure produces exit 1 only after the
+  remaining destinations have had a chance to converge.
+- **Why:** A single card would leak two unrelated triggers, commands, terminal events, and
+  safety gates into every invocation. Separate discovery is predictable, but creating a new
+  command during self-heal would surprise users immediately after an npm update. Explicit
+  reinstall makes that capability change deliberate. Keeping the directory byte-compatible
+  across Claude, Codex, and OpenCode preserves the installer/generator architecture instead
+  of adding metadata consumed by only one agent.
+- **Revisit when:** Every supported agent adopts a shared richer skill manifest, skills can be
+  discovered dynamically without process restart, or product policy allows an update to add
+  new agent-visible capabilities without explicit install.
+
+## The PR-review card is the orchestrator; Comment revision and code work stay distinct (2026-07-15)
+
+- **Decision:** `/otacon-review` reads the frozen User + Project snapshot before every
+  Background → Intuition → Code → Quiz revision, then owns the long-poll event loop until
+  `review-done`/`deleted`. Ask is answer-only. Comment feedback calls the supported
+  `otacon review revise --session` verb, which preflights current submitted report/head
+  identity before preparing a same-head revision. Only a later Comment-only `code-change`
+  event authorizes edits: the main agent delegates implementation to one native subagent in
+  the conservative checkout, then itself reviews, verifies, commits, pushes to the returned
+  destination, refreshes the PR head, authors the replacement report, and records status.
+  The revise CLI sends the exact submitted report/head source identity to the daemon; the
+  daemon rechecks it synchronously with absence of an in-progress preparation before writing
+  the next immutable revision. A Comment Remember request is CAS-applied before this step so
+  the new frozen snapshot includes the acknowledged knowledge.
+- **Why:** Raw HTTP in a skill would recreate the manual setup the CLI exists to eliminate,
+  and using `refresh-head` for prose feedback cannot mint a same-SHA report revision.
+  Keeping report feedback separate from mutation preserves the user's two-step consent.
+  Delegating implementation retains the interactive agent as the auditable authority for
+  permission, verification, push, report revision, and knowledge acknowledgement.
+- **Revisit when:** Same-head revisions become automatic daemon jobs, code changes gain a
+  transactional hosted executor, or review threads can safely carry narrower capabilities
+  than the current explicit second-step event.
+
+## Realistic fixtures connect Storybook, production UI, and release E2E (2026-07-15)
+
+- **Decision:** One valid personalized Markdown report and private quiz companion seed both
+  the real built-daemon Playwright scenarios and local manual prototype sessions. Storybook
+  remains a production-component lab; a conformance test compares its major labels, order,
+  and shared component classes with the production page instead of blessing duplicate
+  screenshots. The hermetic shell loop fakes only `gh`/`git`, and the branch verifier opens
+  local balanced and expert sessions without resolving or mutating a real PR.
+- **Why:** Hand-built test JSON and a visually independent Storybook page would drift from
+  the strict authoring format while still appearing plausible. Reusing valid authored input
+  makes parser, daemon, browser, and design-lab failures meet at one contract; narrow process
+  fakes prove checkout routing without granting a release test authority over GitHub.
+- **Revisit when:** GitHub offers an official local PR emulator, visual-regression snapshots
+  become stable across supported browsers, or the authoring format gains a fixture generator
+  that can replace the committed human-readable examples.
+
+## Review mutations revalidate durable ownership across every asynchronous boundary (2026-07-15)
+
+- **Decision:** Head refresh, quiz answer, and quiz grade capture session status, head
+  generation, and head SHA before awaiting the request body, then re-read and compare all
+  three before any durable write. Report submission owns both head SHA and generation, quiz
+  grades own the persisted attempt's answer-time knowledge hash, terminal queue envelopes own
+  the completion event sequence, and thread creation cannot provide server-owned lifecycle fields. Thread
+  transitions validate the complete candidate before replacement. A thread response also
+  requires its head generation/SHA to remain current unless its turn is part of an explicitly
+  authorized requested/working code action that must finish after the resulting head refresh.
+  The browser coalesces duplicate Conduct requests per thread while one is in flight.
+- **Why:** SHA-only checks miss A-B-A head changes; trusting caller-supplied current hashes,
+  lifecycle fields, or completion sequences lets stale or forged data cross ownership
+  boundaries. Revalidation makes each persisted transition correspond to the exact state the
+  caller observed even when body parsing or another request yields control.
+- **Revisit when:** Review state and its queues move into one transactional database or a
+  serialized per-session actor makes these compare-before-write guards redundant.
+
+## Review worktrees require an explicit durable handoff lease (2026-07-15)
+
+- **Decision:** `review checkout` never reuses a Git-reported locked worktree and, after
+  verifying or creating an otherwise usable checkout, atomically publishes a separate
+  PR-keyed owner record under `~/.otacon/review-worktree-leases/` before returning it.
+  Therefore two callers that both observed the same clean checkout still have one winner.
+  `completed` and `failed` code-status transitions release their matching lease only after
+  the daemon accepts the terminal state. A crash before terminal status deliberately leaves
+  the lease held; recovery marks the action terminal. A crash after the daemon commit but
+  before unlink is repaired by repeating the idempotent terminal transition. Owner mismatch
+  refuses rather than deleting another workflow's lease.
+- **Why:** Git's lock is an ownership signal but an unlocked checkout has no exclusive
+  handoff: cleanliness is an observation, not a claim. A small atomic record gives the
+  orchestrator a durable lease across the short-lived checkout CLI and the implementation
+  subagent, while terminal retry ordering prevents both concurrent editing and premature
+  release on a rejected status update.
+- **Revisit when:** Checkout and code-action state share one transactional coordinator that
+  can acquire and release ownership without a filesystem compare-and-release seam.
+
+## Review worktree leases belong to an immutable code-action generation (2026-07-15)
+
+- **Decision:** Checkout requires exactly one current code action already marked `working`
+  and derives its lease owner from session, thread, report revision, PR-head generation/SHA,
+  and action request time. The PR-keyed lease is a complete atomically-published directory
+  with an owner-specific record, so terminal cleanup compare-and-releases only that action.
+  Done and deletion refuse requested/working actions even with force. Repeating an already
+  terminal status remains available after Done, while deletion compare-and-releases terminal
+  action leases before erasing their session records.
+- **Why:** A session can conduct several code actions over time. Session-only ownership lets a
+  crash-repair retry for action A delete action B's newer lease, and a plain read-then-unlink
+  has the same race between duplicate cleanup retries. Terminalizing or deleting active work
+  also removes the only durable proof needed for safe cleanup. Generation identity plus an
+  owner-specific directory record makes late retries harmless without canceling live work.
+- **Revisit when:** The daemon and checkout worker share a transactional lease coordinator,
+  or code actions gain an explicit cancellation handshake that can safely replace refusal.
+
+## Review modals contain and restore focus (2026-07-15)
+
+- **Decision:** The mobile review sheet and Done dialog make the background inert while open,
+  trap forward and backward Tab navigation inside the modal, support Escape dismissal, and
+  restore focus to the trigger on close.
+- **Why:** `aria-modal` describes a boundary but does not enforce one. Without inertness and
+  focus containment, keyboard and assistive-technology users can interact with obscured review
+  controls or lose their place after dismissal.
+- **Revisit when:** The surfaces move to a native dialog/popover primitive that provides the
+  same containment and focus restoration across supported browsers.
+
+## Review anchors are validated against rendered text, not report bytes (2026-07-15)
+
+- **Decision:** `POST /api/reviews/:id/threads` checks the anchor quote against a
+  rendered-text projection of the submitted report (fence delimiters, heading/list/quote
+  markers, and link syntax removed; backticks and asterisks stripped from both sides;
+  whitespace collapsed), falling back from an exact byte match. A quote absent from both
+  forms is still refused as E_REVIEW_ANCHOR.
+- **Why:** The browser captures `exact` with Range#toString(), which yields the rendered
+  DOM text. Any selection touching inline code, emphasis, links, or a block boundary can
+  never equal the raw markdown, so byte-exact validation rejected most Code-section
+  comments outright. The check guards revision identity, not authenticity; a permissive
+  projection keeps stale-revision refusal while accepting every legitimate selection.
+- **Revisit when:** Anchors carry structured source positions (section id + source line
+  range) captured at render time, making text projection unnecessary.
+
+## `otacon open` routes one existing tab to the exact session (2026-07-15)
+
+- **Decision:** Superseding the earlier dedup-without-navigation rule, an interactive
+  `otacon open [--session]` asks `POST /api/viewers/navigate` to route exactly one live
+  Otacon SPA to the resolved session/index. Heartbeats now carry `visible` on every browser
+  visibility transition as well as the periodic liveness beat; `Viewers`
+  chooses the freshest visible client, otherwise the freshest live client, and a global
+  SSE frame carries `{clientId,path}` so every non-target tab ignores it. If no target
+  remains, the CLI launches the browser. `OTACON_NO_BROWSER` remains side-effect-free.
+- **Why:** Session-first PR review is only useful if the reviewer lands in the session
+  before research starts. Merely suppressing a duplicate tab left the reviewer on an
+  unrelated page and forced them back through the agent or sidebar. Targeted in-page
+  navigation is reliable and local, while still avoiding the fragile OS/browser focus
+  automation rejected by the prior decision and avoiding the worse all-tabs broadcast.
+  Publishing hidden immediately prevents a throttled background tab's stale `visible:true`
+  from outranking the tab the reviewer is actually using.
+- **Revisit when:** A browser integration can reliably raise the chosen window (add focus
+  without changing target selection), or navigation must survive an SSE disconnect race
+  (persist a short-lived targeted command until the SPA acknowledges it).
+
+## Plan and PR review share one session activity dock and tailer lifecycle (2026-07-15)
+
+- **Decision:** Every active plan or PR-review session starts the same idempotent transcript
+  tailer on create/reuse/reopen and daemon restart; terminal transitions stop it by kind.
+  Both screens render a shared `ActivityDock` over the same normalized stream. PR review
+  keeps the resting bar present before report r1 and after submission/Done, treats only
+  `working` as agent-active, and accepts `otacon progress` as the universal fallback.
+- **Why:** PR research was invisible because the daemon attached capture only to plan
+  sessions and the PR screen did not mount activity until a report existed. A review-only
+  log/store would duplicate redaction, caps, SSE, folding, filters, and accessibility.
+  Sharing the infrastructure fixes the lifecycle gap and guarantees identical semantics
+  while keeping report/quiz/thread schemas untouched.
+- **Revisit when:** PR activity needs durable archival distinct from ephemeral build
+  telemetry, or the plan and PR layouts diverge enough that only the stream model—not the
+  dock component—should remain shared.
+
+## PR interface explanations show self-contained contracts (2026-07-15)
+
+- **Decision:** The generated PR-review protocol requires every Interface changes group to
+  show actual signatures in code fences instead of describing them in prose. Changed
+  contracts use a `diff` fence, added or removed contracts use a signature-only fence, and
+  behavior consequences are short comments on the affected signature. Referenced types
+  must be legible in place through their own fence or an inline shape comment.
+- **Why:** Interface review is about the contract a caller must reason about. Prose can hide
+  the exact changed surface, while an excerpt that only names an unfamiliar type still
+  forces the reviewer to leave Otacon and reconstruct the contract elsewhere. Compact,
+  self-contained signatures make the explanation precise without leaking implementation
+  bodies into the interface layer.
+- **Revisit when:** The report schema represents interface deltas structurally enough for
+  the daemon to validate and render signatures without relying on authoring instructions.
+
+## Open-quiz grades bind to the attempt hash but tolerate profile drift (2026-07-15)
+
+- **Decision:** `review grade` still refuses any hash other than the attempt's answer-time
+  knowledge hash, but applying the verdict patches the profile as it currently exists: the
+  current document is read and CAS-written in one synchronous block, instead of requiring
+  the profile to still equal the answer-time hash.
+- **Why:** Requiring both bindings deadlocked sequential open grades: grading one question
+  patches the shared scope summary, which moved the hash and made every other pending open
+  attempt in that scope permanently ungradeable (the outer check refused the current hash,
+  the inner guard refused the frozen one). Binding to the attempt keeps the real security
+  property (an agent cannot rebind an old answer to a newer profile); the marker-keyed patch
+  plus write-time CAS already make drift-tolerant application safe and idempotent.
+- **Revisit when:** Knowledge scopes gain per-concept storage (no shared-document hash), or
+  grading moves into a transaction that spans attempt state and profile together.
+
+## Interrupted revise retries reuse the prepared revision from the CLI (2026-07-15)
+
+- **Decision:** `otacon review revise` reuses an already-prepared next revision for the
+  current head, printing its existing report/quiz/snapshot paths, instead of refusing
+  with `E_REVIEW_REVISION_STALE`. The daemon's `POST /api/reviews/:id/revisions` keeps
+  refusing already-prepared state; only the CLI preflight resolves the retry.
+- **Why:** Recovery re-delivers a still-unanswered Comment after an interruption, and the
+  documented loop re-runs `review revise`. If a prior run died between preparing the
+  revision and submitting the report, a hard refusal wedged the conversation until manual
+  repair. Reusing from the CLI keeps the daemon route strictly non-idempotent (one prepare
+  per source identity, no silent double-begin) while the retry path, which already knows
+  the session's current head, simply resumes authoring the revision that exists.
+- **Revisit when:** The prepare route gains a durable idempotency key that would let the
+  daemon safely answer retries itself, or revise stops being the recovery entry point for
+  Comment feedback.
+
+## Canonical review reuse rebinds clone-local ownership (2026-07-15)
+
+- **Decision:** Every non-forced `review start` persists the invoking clone's absolute
+  repo root and current branch on the reused canonical session, even when the PR head and
+  metadata are otherwise unchanged. An active transcript tailer is keyed by session and
+  repo root: reuse in another clone stops the old tailer and starts a replacement in the
+  new clone. Head refresh alone does not change the local binding.
+- **Why:** Canonical GitHub identity correctly owns report history, but refresh, checkout,
+  project config, and transcript discovery are local operations. Leaving those operations
+  attached to whichever clone first created the review makes a later valid invocation
+  depend on stale or deleted filesystem state and can silently capture activity/config from
+  the wrong checkout. Rebinding at start follows the explicit current invocation without
+  conflating clone paths with canonical identity.
+- **Revisit when:** Local operations receive an explicit repo root per command instead of
+  reading the session binding, or one review intentionally tails several clones at once.
+
+## Clean uses daemon-conditional terminal deletion (2026-07-15)
+
+- **Decision:** `otacon clean` sends
+  `DELETE /api/sessions/:id?terminalOnly=true`. The daemon checks the session's current
+  kind-aware terminal status and, without yielding between that check and removal, either
+  deletes it or returns `409 E_SESSION_NOT_TERMINAL`. Confirmed UI deletion omits the
+  condition and retains its deliberate any-status behavior.
+- **Why:** Candidate selection and a separate detail GET cannot protect a later
+  unconditional DELETE: a completed PR review can reopen on a changed head between the
+  requests, turning the same id into active work whose home folder must survive. Keeping
+  the precondition beside the destructive mutation closes that race while preserving the
+  UI's explicit ability to discard a live session.
+- **Revisit when:** Session mutations move behind a general version/CAS token that can
+  express deletion preconditions consistently for every caller.

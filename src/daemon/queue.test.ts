@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { hashKnowledge } from "../shared/knowledge.js";
+import type { ReviewQuizAnswerEvent } from "../shared/review-quiz.js";
 import type { EventPayload, QueuedEvent } from "../shared/types.js";
 import { SessionQueue } from "./queue.js";
 
@@ -27,6 +29,22 @@ function payload(n: number): EventPayload {
   };
 }
 
+function quizPayload(): ReviewQuizAnswerEvent {
+  return {
+    event: "quiz-answer",
+    session: "otc_abc123",
+    revision: 1,
+    headRevision: 1,
+    headSha: "a".repeat(40),
+    question: "q1",
+    attempt: "qa1",
+    answer: "Because the queue is synchronous.",
+    concept: { id: "c1", label: "Queue", scope: "project" },
+    rubric: { criteria: ["Names the invariant"] },
+    knowledge: { scope: "project", baseHash: hashKnowledge("queue state") },
+  };
+}
+
 describe("SessionQueue fast path", () => {
   test("take returns queued events FIFO when no waiter is parked", () => {
     const q = new SessionQueue(file);
@@ -44,6 +62,16 @@ describe("SessionQueue fast path", () => {
     expect(event.seq).toBe(7);
     expect(Number.isNaN(Date.parse(event.queuedAt))).toBe(false);
     expect(event.payload).toEqual(payload(1));
+  });
+
+  test("startup repair can deduplicate against queued and in-flight payloads", () => {
+    const q = new SessionQueue(file);
+    q.enqueue(payload(1), 1);
+    q.enqueue(payload(2), 2);
+    expect(q.hasPayload((item) => item.event === "question" && item.id === "q1")).toBe(true);
+    expect(q.hasPayload((item) => item.event === "question" && item.id === "q3")).toBe(false);
+    q.take();
+    expect(q.hasPayload((item) => item.event === "question" && item.id === "q1")).toBe(true);
   });
 
   test("parking when events are already queued delivers synchronously", () => {
@@ -318,6 +346,114 @@ describe("SessionQueue persistence", () => {
     expect(new SessionQueue(file).size).toBe(1);
   });
 
+  test("a queued envelope with a null payload is corrupt, not deliverable work", () => {
+    writeFileSync(file, JSON.stringify({
+      version: 1,
+      events: [{ seq: 1, queuedAt: "2026-07-14T00:00:00.000Z", payload: null }],
+    }));
+    const q = new SessionQueue(file);
+    expect(q.size).toBe(0);
+    expect(q.hasPayload(() => true)).toBe(false);
+  });
+
+  test("review-thread work round-trips only with its strict immutable identity", () => {
+    const event: EventPayload = {
+      event: "review-thread",
+      work: "report-feedback",
+      session: "otc_abc123",
+      thread: "t1",
+      reportRevision: 2,
+      headRevision: 1,
+      headSha: "a".repeat(40),
+      anchor: { section: "code", exact: "selected text", prefix: "before", suffix: "after" },
+      body: "Explain this boundary.",
+      remember: { scope: "project" },
+      conversation: {
+        root: "t1",
+        turns: [{ thread: "t1", body: "Explain this boundary." }],
+      },
+    };
+    const q = new SessionQueue(file);
+    q.enqueue(event, 1);
+    expect(new SessionQueue(file).take()?.payload).toEqual(event);
+
+    writeFileSync(file, JSON.stringify({
+      version: 1,
+      events: [{ seq: 1, queuedAt: "2026-07-14T00:00:00.000Z", payload: { ...event, surprise: true } }],
+    }));
+    expect(new SessionQueue(file).size).toBe(0);
+
+    writeFileSync(file, JSON.stringify({
+      version: 1,
+      events: [{ seq: 1, queuedAt: "2026-07-14T00:00:00.000Z", payload: { ...event, work: "question", thread: "t1" } }],
+    }));
+    expect(new SessionQueue(file).size).toBe(0);
+  });
+
+  test("quiz-answer work is accepted only with its complete strict envelope", () => {
+    const event = quizPayload();
+    const q = new SessionQueue(file);
+    q.enqueue(event, 1);
+    expect(new SessionQueue(file).take()?.payload).toEqual(event);
+
+    const { answer: _answer, concept: _concept, rubric: _rubric, knowledge: _knowledge, ...identityOnly } = event;
+    writeFileSync(file, JSON.stringify({
+      version: 1,
+      events: [{ seq: 1, queuedAt: "2026-07-14T00:00:00.000Z", payload: identityOnly }],
+    }));
+    const recovered = new SessionQueue(file);
+    expect(recovered.size).toBe(0);
+    expect(recovered.hasPayload(() => true)).toBe(false);
+    expect(readdirSync(dir).filter((name) => name.startsWith("events.json.corrupt-"))).toHaveLength(1);
+  });
+
+  test("a head change drops quiz and thread work for the previous head only", () => {
+    const q = new SessionQueue(file);
+    const thread: EventPayload = {
+      event: "review-thread",
+      work: "report-feedback",
+      session: "otc_abc123",
+      thread: "t1",
+      reportRevision: 1,
+      headRevision: 1,
+      headSha: "a".repeat(40),
+      anchor: { section: "code", exact: "selected text" },
+      body: "Change this.",
+    };
+    const quiz = quizPayload();
+    q.enqueue(thread, 1);
+    q.enqueue(quiz, 2);
+    q.enqueue({ ...thread, thread: "t2", headRevision: 2, headSha: "c".repeat(40) }, 3);
+    q.enqueue({ event: "question", session: "otc_abc123", id: "q9", anchor: null, body: "plan work" }, 4);
+    q.dropStaleReviewWork({ revision: 2, sha: "c".repeat(40) });
+    expect(q.size).toBe(2);
+    expect(q.take()?.payload).toMatchObject({ event: "review-thread", thread: "t2" });
+    expect(q.take()?.payload).toMatchObject({ event: "question", id: "q9" });
+    const restarted = new SessionQueue(file);
+    expect(restarted.size).toBe(2);
+  });
+
+  test("a code handoff removes queued report feedback without touching other review work", () => {
+    const q = new SessionQueue(file);
+    const base: EventPayload = {
+      event: "review-thread",
+      work: "report-feedback",
+      session: "otc_abc123",
+      thread: "t1",
+      reportRevision: 1,
+      headRevision: 1,
+      headSha: "a".repeat(40),
+      anchor: { section: "code", exact: "selected text" },
+      body: "Change this.",
+    };
+    q.enqueue(base, 1);
+    q.enqueue({ ...base, thread: "t2", body: "And this." }, 2);
+    q.enqueue({ ...base, thread: "t3", body: "Separate conversation." }, 3);
+    q.dropQueuedReviewThreadWork(new Set(["t1", "t2"]), "report-feedback");
+    expect(q.size).toBe(1);
+    expect(q.take()?.payload).toMatchObject({ thread: "t3" });
+  });
+
   test("wrong-shape events files are quarantined too", () => {
     writeFileSync(file, JSON.stringify({ version: 2, events: [] }));
     expect(new SessionQueue(file).size).toBe(0);
@@ -334,5 +470,81 @@ describe("SessionQueue persistence", () => {
     const parsed = JSON.parse(readFileSync(file, "utf8"));
     expect(parsed.version).toBe(1);
     expect(parsed.events).toHaveLength(2);
+  });
+});
+
+describe("SessionQueue review terminal replacement", () => {
+  const done: EventPayload = {
+    event: "review-done",
+    session: "otc_abc123",
+    completion: {
+      version: 1,
+      session: "otc_abc123",
+      completedAt: "2026-07-15T12:00:00.000Z",
+      reportRevision: 2,
+      headRevision: 3,
+      headSha: "a".repeat(40),
+      forced: true,
+      unresolved: { conversations: 1, quizzes: 2 },
+      eventSeq: 9,
+    },
+  };
+
+  test("quarantines a persisted terminal wake whose completion does not own its envelope sequence", () => {
+    writeFileSync(file, JSON.stringify({
+      version: 1,
+      events: [{
+        seq: 8,
+        queuedAt: "2026-07-15T12:00:00.000Z",
+        payload: done,
+      }],
+    }));
+    expect(new SessionQueue(file).size).toBe(0);
+    expect(readdirSync(dir).some((name) => name.startsWith("events.json.corrupt-"))).toBe(true);
+  });
+
+  test("defers the terminal wake until its owner marks it queued and drops older review work", () => {
+    const q = new SessionQueue(file);
+    const got: EventPayload[] = [];
+    q.park((event) => got.push(event.payload));
+    q.replaceReviewWorkWithDone(done, 9, false);
+    expect(got).toEqual([]);
+    expect(new SessionQueue(file).take()?.payload).toEqual(done);
+    q.dispatchPending();
+    expect(got).toEqual([done]);
+
+    const oldPath = join(dir, "old-work.json");
+    const withOldWork = new SessionQueue(oldPath);
+    withOldWork.enqueue(payload(1), 1);
+    withOldWork.replaceReviewWorkWithDone(done, 9, false);
+    const restarted = new SessionQueue(oldPath);
+    expect(restarted.take()?.payload).toEqual(done);
+    expect(restarted.take()).toBeUndefined();
+  });
+
+  test("drops an obsolete terminal wake when its review reopens", () => {
+    const q = new SessionQueue(file);
+    q.enqueue(payload(1), 1, false);
+    q.enqueue(done, 9, false);
+    q.dropReviewDone();
+    const restarted = new SessionQueue(file);
+    expect(restarted.take()?.payload).toEqual(payload(1));
+    expect(restarted.take()).toBeUndefined();
+  });
+
+  test("rejects a terminal wake whose private seq does not own its queue envelope", () => {
+    const q = new SessionQueue(file);
+    expect(() => q.replaceReviewWorkWithDone(done, 10, false)).toThrow("event seq");
+    expect(q.size).toBe(0);
+  });
+
+  test("ordinary plan enqueue retains its immediate FIFO wake behavior", () => {
+    const q = new SessionQueue(file);
+    const got: EventPayload[] = [];
+    q.park((event) => got.push(event.payload));
+    q.enqueue(payload(1), 1);
+    q.enqueue(payload(2), 2);
+    expect(got).toEqual([payload(1)]);
+    expect(q.take()?.payload).toEqual(payload(2));
   });
 });

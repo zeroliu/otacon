@@ -3,6 +3,9 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registryPath, sessionDir } from "../shared/paths.js";
+import type { CanonicalGitHubRepo } from "../shared/knowledge.js";
+import { pullRequestIdentity } from "../shared/review.js";
+import type { PullRequestMetadata } from "../shared/review.js";
 import type { RegistrySession } from "../shared/types.js";
 import { SessionQueue } from "./queue.js";
 import { quarantineCorruptFile, Store, writeFileAtomic } from "./store.js";
@@ -26,6 +29,23 @@ afterEach(() => {
 });
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const project = "acme/app" as CanonicalGitHubRepo;
+function pullRequest(headSha = "a".repeat(40)): PullRequestMetadata {
+  return {
+    identity: pullRequestIdentity(project, 42),
+    url: "https://github.com/acme/app/pull/42",
+    title: "Typed review sessions",
+    author: "octo",
+    baseRef: "main",
+    headRef: "feature",
+    headRepository: project,
+    headSha,
+    state: "open",
+    isCrossRepository: false,
+    permissions: { maintainerCanModify: true, viewerPermission: "write", readOnly: false },
+  };
+}
 
 describe("writeFileAtomic", () => {
   test("creates parent directories and writes the content", () => {
@@ -57,6 +77,7 @@ describe("Store session CRUD", () => {
     const store = new Store();
     const session = store.createSession({ title: "auth refactor", repo });
     expect(session.id).toMatch(/^otc_[0-9a-z]{6}$/);
+    expect(session.kind).toBe("plan");
     expect(session.status).toBe("draft");
     expect(session.branch).toBe("");
     expect(session.quick).toBe(false);
@@ -178,6 +199,137 @@ describe("Store session CRUD", () => {
     writeFileSync(registryPath(), JSON.stringify({ version: 9, sessions: {} }));
     expect(new Store().listSessions()).toEqual([]);
     expect(readdirSync(home).some((f) => f.startsWith("registry.json.corrupt-"))).toBe(true);
+  });
+
+  test("a legacy registry entry without kind decodes as a plan", () => {
+    const now = "2026-07-14T00:00:00.000Z";
+    writeFileSync(registryPath(), JSON.stringify({
+      version: 1,
+      sessions: {
+        otc_legacy: {
+          id: "otc_legacy",
+          title: "legacy plan",
+          repo,
+          branch: "main",
+          quick: false,
+          status: "draft",
+          createdAt: now,
+          updatedAt: now,
+        },
+      },
+    }));
+    const legacy = new Store().getSession("otc_legacy");
+    expect(legacy?.kind).toBe("plan");
+    expect(legacy?.socratic).toBe(false);
+    expect(readdirSync(home).some((file) => file.startsWith("registry.json.corrupt-"))).toBe(false);
+  });
+});
+
+describe("Store review lifecycle", () => {
+  test("creates, reuses unchanged head, and revises changed head in one session", () => {
+    const store = new Store();
+    const created = store.startReviewSession({ repo, branch: "main", pullRequest: pullRequest() });
+    expect(created.action).toBe("created");
+    expect(created.session.kind).toBe("review");
+    expect(created.session.status).toBe("working");
+    expect(created.session.review.revision).toBe(1);
+    expect(existsSync(join(sessionDir(created.session.id), "session.json"))).toBe(false);
+
+    const reused = store.startReviewSession({ repo, branch: "main", pullRequest: pullRequest() });
+    expect(reused.action).toBe("reused");
+    expect(reused.session.id).toBe(created.session.id);
+    expect(reused.session.updatedAt).toBe(created.session.updatedAt);
+
+    const eventSeq = store.bumpCounter(created.session.id, "eventSeq");
+    store.completeReviewSession(created.session.id, {
+      version: 1,
+      session: created.session.id,
+      completedAt: "2026-07-15T12:00:00.000Z",
+      reportRevision: 1,
+      headRevision: 1,
+      headSha: "a".repeat(40),
+      forced: false,
+      unresolved: { conversations: 0, quizzes: 0 },
+      eventSeq,
+      wake: "pending",
+    });
+    expect(store.startReviewSession({ repo, branch: "main", pullRequest: pullRequest() }).action)
+      .toBe("reused-complete");
+    const revised = store.startReviewSession({
+      repo,
+      branch: "main",
+      pullRequest: pullRequest("b".repeat(40)),
+    });
+    expect(revised.action).toBe("reopened-changed");
+    expect(revised.session.id).toBe(created.session.id);
+    expect(revised.session.status).toBe("working");
+    expect(revised.session.review.revision).toBe(2);
+    expect(revised.session.review.head.sha).toBe("b".repeat(40));
+    expect(revised.session.review.completions).toHaveLength(1);
+  });
+
+  test("force creates a second session for the same canonical PR", () => {
+    const store = new Store();
+    const first = store.startReviewSession({ repo, pullRequest: pullRequest() });
+    const forced = store.startReviewSession({ repo, pullRequest: pullRequest(), force: true });
+    expect(forced.action).toBe("created");
+    expect(forced.session.id).not.toBe(first.session.id);
+    expect(store.listSessions()).toHaveLength(2);
+    expect(store.startReviewSession({ repo, pullRequest: pullRequest() }).session.id)
+      .toBe(forced.session.id);
+  });
+
+  test("reuse rebinds local operations to the invoking clone and branch", () => {
+    const store = new Store();
+    const first = store.startReviewSession({ repo, branch: "main", pullRequest: pullRequest() });
+    const otherRepo = mkdtempSync(join(tmpdir(), "otacon-repo-clone-"));
+    try {
+      const reused = store.startReviewSession({
+        repo: otherRepo,
+        branch: "review-from-clone-b",
+        pullRequest: pullRequest(),
+      });
+      expect(reused.action).toBe("reused");
+      expect(reused.session.id).toBe(first.session.id);
+      expect(reused.session.repo).toBe(otherRepo);
+      expect(reused.session.branch).toBe("review-from-clone-b");
+      expect(new Store().getSession(first.session.id)).toMatchObject({
+        repo: otherRepo,
+        branch: "review-from-clone-b",
+      });
+    } finally {
+      rmSync(otherRepo, { recursive: true, force: true });
+    }
+  });
+
+  test("head refresh cannot change canonical PR identity", () => {
+    const store = new Store();
+    const created = store.startReviewSession({ repo, pullRequest: pullRequest() });
+    const other = {
+      ...pullRequest("b".repeat(40)),
+      identity: pullRequestIdentity(project, 43),
+      url: "https://github.com/acme/app/pull/43",
+    };
+    expect(() => store.refreshReviewHead(created.session.id, other)).toThrow(/identity/);
+  });
+
+  test("same-head refresh persists mutable PR metadata without advancing the head generation", () => {
+    const store = new Store();
+    const created = store.startReviewSession({ repo, pullRequest: pullRequest() });
+    const fresh: PullRequestMetadata = {
+      ...pullRequest(),
+      title: "Renamed review",
+      headRef: "renamed-feature",
+      permissions: { maintainerCanModify: false, viewerPermission: "read", readOnly: true },
+    };
+    const refreshed = store.refreshReviewHead(created.session.id, fresh);
+    expect(refreshed.review.revision).toBe(1);
+    expect(refreshed.title).toBe("#42 Renamed review");
+    expect(refreshed.review.head).toMatchObject({ sha: "a".repeat(40), ref: "renamed-feature" });
+    expect(refreshed.review.pullRequest.permissions.readOnly).toBe(true);
+    expect(new Store().getSession(created.session.id)).toMatchObject({
+      review: { revision: 1, pullRequest: { title: "Renamed review", headRef: "renamed-feature" } },
+    });
   });
 });
 

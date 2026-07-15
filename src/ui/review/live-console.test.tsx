@@ -205,10 +205,10 @@ describe("streamMode + isAgentActive", () => {
   });
 
   test("agent-active statuses pulse; resting states do not", () => {
-    for (const s of ["draft", "revising", "finalizing", "implementing"] as const) {
+    for (const s of ["draft", "revising", "finalizing", "implementing", "working"] as const) {
       expect(isAgentActive(s)).toBe(true);
     }
-    for (const s of ["in_review", "approved", "implemented", "implement_failed"] as const) {
+    for (const s of ["in_review", "approved", "implemented", "implement_failed", "reviewing", "done"] as const) {
       expect(isAgentActive(s)).toBe(false);
     }
   });

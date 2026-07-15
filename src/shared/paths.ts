@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { CanonicalGitHubRepo } from "./knowledge.js";
 
 // OTACON_HOME and OTACON_PORT exist for hermetic tests and as a port-conflict
 // escape hatch (DECISIONS.md "Env overrides"). Read at call time, not import
@@ -43,6 +44,95 @@ export function updateCachePath(): string {
  */
 export function homeSessionsDir(): string {
   return join(otaconHome(), "sessions");
+}
+
+/** Local, implicit-profile knowledge root. No knowledge file is written in a repo. */
+export function knowledgeDir(): string {
+  return join(otaconHome(), "knowledge");
+}
+
+export function userKnowledgePath(): string {
+  return join(knowledgeDir(), "user.md");
+}
+
+export function userKnowledgeEvidencePath(): string {
+  return join(knowledgeDir(), "user.evidence.jsonl");
+}
+
+export function projectKnowledgeDir(repo: CanonicalGitHubRepo): string {
+  return join(knowledgeDir(), "projects", "github.com", ...repo.split("/"));
+}
+
+export function projectKnowledgePath(repo: CanonicalGitHubRepo): string {
+  return join(projectKnowledgeDir(repo), "knowledge.md");
+}
+
+export function projectKnowledgeEvidencePath(repo: CanonicalGitHubRepo): string {
+  return join(projectKnowledgeDir(repo), "evidence.jsonl");
+}
+
+/** Agent-authored working inputs. Phase 3 exposes paths; Phase 4 owns persistence. */
+export function reviewDraftPath(id: string): string {
+  return join(sessionDir(id), "review.md");
+}
+
+export function reviewQuizDraftPath(id: string): string {
+  return join(sessionDir(id), "quiz.json");
+}
+
+/** Immutable PR-review report history; separate from plan r<n>.md snapshots. */
+export function reviewRevisionsDir(id: string): string {
+  return join(sessionDir(id), "review", "revisions");
+}
+
+/** Review queues share the daemon's monotonic event-seq contract without plan session.json. */
+export function reviewEventSeqPath(id: string): string {
+  return join(sessionDir(id), "review", "event-seq");
+}
+
+export function reviewRevisionDir(id: string, revision: number): string {
+  return join(reviewRevisionsDir(id), `r${revision}`);
+}
+
+export function reviewRevisionMetadataPath(id: string, revision: number): string {
+  return join(reviewRevisionDir(id, revision), "revision.json");
+}
+
+export function reviewRevisionSnapshotPath(id: string, revision: number): string {
+  return join(reviewRevisionDir(id, revision), "knowledge-snapshot.json");
+}
+
+export function reviewRevisionUserKnowledgePath(id: string, revision: number): string {
+  return join(reviewRevisionDir(id, revision), "user.md");
+}
+
+export function reviewRevisionProjectKnowledgePath(id: string, revision: number): string {
+  return join(reviewRevisionDir(id, revision), "project.md");
+}
+
+export function reviewRevisionSubmissionDir(id: string, revision: number): string {
+  return join(reviewRevisionDir(id, revision), "submission");
+}
+
+export function reviewRevisionReportPath(id: string, revision: number): string {
+  return join(reviewRevisionSubmissionDir(id, revision), "report.md");
+}
+
+export function reviewRevisionSubmissionMetadataPath(id: string, revision: number): string {
+  return join(reviewRevisionSubmissionDir(id, revision), "submission.json");
+}
+
+export function reviewRevisionQuizPath(id: string, revision: number): string {
+  return join(reviewRevisionSubmissionDir(id, revision), "quiz.json");
+}
+
+export function reviewRevisionWarningsPath(id: string, revision: number): string {
+  return join(reviewRevisionSubmissionDir(id, revision), "warnings.json");
+}
+
+/** Mutable quiz attempt state; report, companion, and knowledge snapshot stay immutable. */
+export function reviewRevisionQuizStatePath(id: string, revision: number): string {
+  return join(reviewRevisionDir(id, revision), "quiz-state.json");
 }
 
 /**

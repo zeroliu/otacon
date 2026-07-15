@@ -26,6 +26,9 @@ function resolveTarget(sessions: RegistrySession[], explicit: string | undefined
     if (target === undefined) {
       fail("E_UNKNOWN_SESSION", `--session ${explicit}: not in the daemon registry`);
     }
+    if (target.kind === "review") {
+      fail("E_SESSION_KIND", `--session ${explicit} is a PR review, not a plan session`);
+    }
     return target;
   }
   const owners = worktreeOwners(sessions, realpathOr(process.cwd()));

@@ -6,7 +6,7 @@
 
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { TERMINAL_STATUSES, type RegistrySession } from "../shared/types.js";
+import { isTerminalSession, type RegistrySession } from "../shared/types.js";
 import { api } from "./client.js";
 import { fail } from "./output.js";
 
@@ -58,14 +58,16 @@ export async function listSessions(): Promise<RegistrySession[]> {
  */
 export function worktreeOwners(sessions: RegistrySession[], cwd: string): RegistrySession[] {
   const root = findRepoRoot(cwd) ?? realpathOr(cwd);
-  return sessions.filter((s) => s.impl !== undefined && realpathOr(s.impl.worktree) === root);
+  return sessions.filter(
+    (s) => s.kind !== "review" && s.impl !== undefined && realpathOr(s.impl.worktree) === root,
+  );
 }
 
 // Exactly the terminal states are inactive (the single source of truth in
 // shared/types.ts): `implementing` resolves as the active session so the agent
 // can keep narrating/asking mid-build and `otacon resume` re-adopts it, while
 // `implemented`/`implement_failed` no longer count once the build is over.
-const isActive = (s: RegistrySession): boolean => !TERMINAL_STATUSES.includes(s.status);
+const isActive = (s: RegistrySession): boolean => !isTerminalSession(s);
 
 export function resolveSession(
   sessions: RegistrySession[],
@@ -76,6 +78,9 @@ export function resolveSession(
     const session = sessions.find((s) => s.id === explicit);
     if (!session) {
       fail("E_UNKNOWN_SESSION", `--session ${explicit}: not in the daemon registry`);
+    }
+    if (session.kind === "review") {
+      fail("E_SESSION_KIND", `--session ${explicit} is a PR review, not a plan session`);
     }
     return session;
   }
@@ -90,7 +95,8 @@ export function resolveSession(
   // is unrecoverable confusion.
   const root = findRepoRoot(cwd) ?? realpathOr(cwd);
   const here = sessions.filter(
-    (s) => isActive(s) && (realpathOr(s.repo) === root || (s.impl !== undefined && realpathOr(s.impl.worktree) === root)),
+    (s) => s.kind !== "review" && isActive(s) &&
+      (realpathOr(s.repo) === root || (s.impl !== undefined && realpathOr(s.impl.worktree) === root)),
   );
   if (here.length === 1) return here[0] as RegistrySession;
   if (here.length === 0) {
@@ -104,4 +110,19 @@ export function resolveSession(
     `${here.length} active sessions for ${root}; pass --session <id>`,
     { sessions: here.map((s) => ({ id: s.id, title: s.title, status: s.status })) },
   );
+}
+
+/**
+ * `wait` alone still resolves only the repo's plan session, but an explicit
+ * review id is allowed so `/otacon-review` can consume private quiz work.
+ */
+export function resolveWaitSession(
+  sessions: RegistrySession[],
+  explicit: string | undefined,
+  cwd: string,
+): RegistrySession {
+  if (explicit === undefined) return resolveSession(sessions, undefined, cwd);
+  const session = sessions.find((candidate) => candidate.id === explicit);
+  if (session === undefined) fail("E_UNKNOWN_SESSION", `--session ${explicit}: not in the daemon registry`);
+  return session;
 }

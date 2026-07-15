@@ -15,9 +15,16 @@
 // so it stays out of the DOM-bound api.ts module and the root typecheck program
 // never pulls that in.
 
-import { TERMINAL_STATUSES, type SessionStatus } from "../shared/types.js";
+import {
+  isTerminalSession,
+  TERMINAL_STATUSES,
+  type AnySessionStatus,
+  type PlanRegistrySession,
+  type ReviewRegistrySession,
+  type SessionStatus,
+} from "../shared/types.js";
 
-const TERMINAL = new Set<SessionStatus>(TERMINAL_STATUSES);
+const TERMINAL = new Set<AnySessionStatus>(TERMINAL_STATUSES);
 
 /**
  * A session is over once it reaches a terminal state (approval and archive lifecycle:
@@ -28,8 +35,44 @@ const TERMINAL = new Set<SessionStatus>(TERMINAL_STATUSES);
  * TERMINAL_STATUSES set so every surface (here, the app guard, the CLI
  * resolver) agrees on "done".
  */
-export function isOver(status: SessionStatus): boolean {
+export function isOver(status: AnySessionStatus): boolean {
   return TERMINAL.has(status);
+}
+
+/** Only plan sessions use the live active -> terminal redirect to the index. */
+export function shouldRedirectAfterTerminalTransition(
+  session:
+    | Pick<PlanRegistrySession, "kind" | "status">
+    | Pick<ReviewRegistrySession, "kind" | "status">,
+  sawActive: boolean,
+): boolean {
+  return session.kind === "plan" && sawActive && isOver(session.status);
+}
+
+export function partitionSessionKinds<T extends PlanRegistrySession | ReviewRegistrySession>(sessions: T[]): {
+  plans: Array<Extract<T, { kind: "plan" }>>;
+  reviews: Array<Extract<T, { kind: "review" }>>;
+} {
+  const plans = sessions.filter(
+    (session): session is Extract<T, { kind: "plan" }> => session.kind === "plan",
+  );
+  const reviews = sessions.filter(
+    (session): session is Extract<T, { kind: "review" }> => session.kind === "review",
+  );
+  return { plans, reviews };
+}
+
+/** Review navigation keeps completed reading sessions visible under Done. */
+export function partitionReviewSessions<T extends ReviewRegistrySession>(sessions: T[]): {
+  active: T[];
+  done: T[];
+} {
+  const active: T[] = [];
+  const done: T[] = [];
+  for (const session of sessions) {
+    (isTerminalSession(session) ? done : active).push(session);
+  }
+  return { active, done };
 }
 
 /**

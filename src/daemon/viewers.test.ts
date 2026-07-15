@@ -24,6 +24,37 @@ describe("Viewers", () => {
     expect(viewers.count()).toBe(2);
   });
 
+  test("prefers the freshest visible client over a newer hidden client", () => {
+    const viewers = new Viewers();
+    viewers.beat("tab-visible", true);
+    viewers.beat("tab-hidden", false);
+    expect(viewers.preferred()).toBe("tab-visible");
+  });
+
+  test("a newly hidden client loses precedence to an older visible client", () => {
+    const viewers = new Viewers();
+    viewers.beat("tab-older-visible", true);
+    viewers.beat("tab-current", true);
+    expect(viewers.preferred()).toBe("tab-current");
+    viewers.beat("tab-current", false);
+    expect(viewers.preferred()).toBe("tab-older-visible");
+  });
+
+  test("falls back to the freshest live client when none are visible", () => {
+    const viewers = new Viewers();
+    viewers.beat("tab-old", false);
+    viewers.beat("tab-new", false);
+    expect(viewers.preferred()).toBe("tab-new");
+  });
+
+  test("a heartbeat without visibility preserves the prior visibility", () => {
+    const viewers = new Viewers();
+    viewers.beat("tab-visible", true);
+    viewers.beat("tab-hidden", false);
+    viewers.beat("tab-visible");
+    expect(viewers.preferred()).toBe("tab-visible");
+  });
+
   test("a stale client expires after the TTL (closed/crashed tab)", () => {
     const c = clock();
     const viewers = new Viewers(c.now, 90_000);
@@ -50,6 +81,7 @@ describe("Viewers", () => {
     expect(viewers.count()).toBe(1);
     viewers.drop("tab-a");
     expect(viewers.count()).toBe(0);
+    expect(viewers.preferred()).toBeUndefined();
   });
 
   test("one expiring client does not drop a still-live one", () => {

@@ -14,11 +14,14 @@ import { Portal } from "../portal";
 
 export function DeleteDialog({
   sessionId,
+  sessionKind,
   approved,
   onClose,
   onDeleted,
 }: {
   sessionId: string;
+  /** Reviews own report/quiz history; plans own draft/approval artifacts. */
+  sessionKind: "plan" | "review";
   /** Approved → durable copy survives elsewhere; pending → no committed plan. Drives the copy. */
   approved: boolean;
   onClose: () => void;
@@ -75,7 +78,13 @@ export function DeleteDialog({
           </button>
         </div>
         <p className="approve-copy">Delete this session?</p>
-        {approved ? (
+        {sessionKind === "review" ? (
+          <p className="approve-sub">
+            Permanently removes this review's report, quiz history, threads, and local session
+            metadata from <code>~/.otacon/sessions/</code>. This can't be undone and does not
+            change the pull request.
+          </p>
+        ) : approved ? (
           <p className="approve-sub">
             Permanently removes its home folder (<code>~/.otacon/sessions/</code>) and drops it from
             the index. This can't be undone. The approved plan still survives as the saved copy in

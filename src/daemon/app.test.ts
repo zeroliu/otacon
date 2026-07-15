@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,18 +9,40 @@ import {
   eventsPath,
   globalConfigPath,
   homeSessionDir,
+  projectKnowledgePath,
   otaconPort,
   repoConfigPath,
   repoLocalConfigPath,
+  reviewEventSeqPath,
+  reviewRevisionDir,
+  reviewRevisionQuizStatePath,
+  reviewRevisionQuizPath,
+  reviewRevisionReportPath,
   revisionPath,
   sessionDir,
+  sessionStatePath,
+  threadsPath,
 } from "../shared/paths.js";
-import type { RegistrySession } from "../shared/types.js";
+import { canonicalizeGitHubRepo, defaultKnowledgeMarkdown } from "../shared/knowledge.js";
+import type { CanonicalGitHubRepo } from "../shared/knowledge.js";
+import { pullRequestIdentity } from "../shared/review.js";
+import type { PullRequestMetadata } from "../shared/review.js";
+import {
+  claimReviewWorktreeLeaseFile,
+  reviewWorktreeLeaseAction,
+  reviewWorktreeLeaseOwner,
+  reviewWorktreeLeasePathForPr,
+} from "../shared/review-worktree-lease.js";
+import type { RegistrySession, ReviewThread, StreamEvent } from "../shared/types.js";
 import { VERSION } from "../shared/version.js";
 import type { NodeBindings } from "./app.js";
 import { createApp } from "./app.js";
 import type { DesktopNotification } from "./desktop-notify.js";
 import { Presence } from "./presence.js";
+import { KnowledgeStore } from "./knowledge-store.js";
+import { ReviewQuizConflictError, ReviewQuizStore } from "./review-quiz-store.js";
+import { ReviewStore } from "./review-store.js";
+import { createReviewThread, requestReviewCodeAction } from "./review-threads.js";
 import { Store } from "./store.js";
 import { Viewers } from "./viewers.js";
 
@@ -43,6 +65,23 @@ let presence: Presence;
 let viewers: Viewers;
 let viewerNow: number;
 const VIEWER_TTL = 1_000;
+const reviewRepo = "acme/app" as CanonicalGitHubRepo;
+
+function reviewMetadata(headSha = "a".repeat(40), number = 42): PullRequestMetadata {
+  return {
+    identity: pullRequestIdentity(reviewRepo, number),
+    url: `https://github.com/acme/app/pull/${number}`,
+    title: "Typed review sessions",
+    author: "octo",
+    baseRef: "main",
+    headRef: "feature",
+    headRepository: reviewRepo,
+    headSha,
+    state: "open",
+    isCrossRepository: false,
+    permissions: { maintainerCanModify: true, viewerPermission: "write", readOnly: false },
+  };
+}
 
 beforeEach(() => {
   savedHome = process.env.OTACON_HOME;
@@ -116,6 +155,87 @@ function validPlanFor(id: string): string {
   return fixture.replace("otc_test01", id);
 }
 
+function validReviewReport(id: string, revision: number, snapshot: string, head = "a".repeat(40)): string {
+  const group = (layer: string, title: string) => `### ${layer} — ${title}
+
+**Purpose:** Explain why this boundary belongs in the reader's causal path.
+**Changed behavior:** Calls now preserve the frozen value instead of mutable state.
+**Surfaces:** \`src/example.ts#${title.replaceAll(" ", "")}\`
+
+This paragraph explains the handoff.`;
+  return `---
+type: otacon-pr-review
+version: 1
+session: ${id}
+revision: ${revision}
+pr: github.com/acme/app#42
+head: ${head}
+knowledge-snapshot: ${snapshot}
+altitude: balanced
+---
+
+## Background
+
+The old input could move while the report was open.
+That made the explanation impossible to reproduce.
+
+## Intuition
+
+The snapshot is a labeled photograph of reader knowledge.
+A later report can take another photograph.
+
+## Code
+
+Read the contract before runtime wiring.
+
+${group("Interface changes", "Snapshot contract")}
+
+${group("Integration path", "Capture handoff")}
+
+${group("Implementation walkthrough", "Atomic commit")}
+
+## Quiz
+
+Structured cards render at this stable insertion point.
+`;
+}
+
+function validReviewQuiz(id: string, revision: number, head = "a".repeat(40), headRevision = 1): string {
+  return JSON.stringify({
+    version: 1,
+    session: id,
+    revision,
+    headRevision,
+    headSha: head,
+    questions: [{
+      id: "q1",
+      concept: { id: "snapshot-boundary", label: "Snapshot boundary", scope: "project" },
+      prompt: "Why is the snapshot immutable?",
+      mode: "open",
+      rubric: { criteria: ["Connects stable input to reproducible explanation"] },
+    }],
+  });
+}
+
+function validReviewChoiceQuiz(id: string, revision: number, head = "a".repeat(40), headRevision = 1): string {
+  return JSON.stringify({
+    version: 1,
+    session: id,
+    revision,
+    headRevision,
+    headSha: head,
+    questions: [{
+      id: "q1",
+      concept: { id: "snapshot-boundary", label: "Snapshot boundary", scope: "project" },
+      prompt: "Which input keeps the explanation reproducible?",
+      mode: "choice",
+      rubric: { criteria: ["Identifies the immutable snapshot"] },
+      options: ["Immutable snapshot", "Mutable profile"],
+      answerKey: "Immutable snapshot",
+    }],
+  });
+}
+
 type FakeOutgoing = Omit<ServerResponse, "writableFinished"> & {
   destroyed: boolean;
   closed: boolean;
@@ -163,6 +283,89 @@ describe("health and shutdown", () => {
     expect(res.status).toBe(404);
     const body = (await res.json()) as { error: { code: string } };
     expect(body.error.code).toBe("E_NOT_FOUND");
+  });
+});
+
+describe("knowledge API", () => {
+  const projectRepo = canonicalizeGitHubRepo("acme/app");
+  if (projectRepo === undefined) throw new Error("fixture repository should canonicalize");
+
+  async function putKnowledge(body: unknown): Promise<Response> {
+    return app.request("/api/knowledge", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  test("GET returns a no-history baseline without writing a personal file", async () => {
+    const res = await app.request("/api/knowledge?scope=project&repo=ACME%2FApp");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { document: { repo: string; markdown: string; hash: string } };
+    expect(body.document.repo).toBe("acme/app");
+    expect(body.document.markdown).toBe(defaultKnowledgeMarkdown({ scope: "project", repo: projectRepo }));
+    expect(body.document.hash).toMatch(/^[a-f0-9]{64}$/);
+    expect(existsSync(projectKnowledgePath(projectRepo))).toBe(false);
+    expect(existsSync(join(repo, ".otacon"))).toBe(false);
+  });
+
+  test("canonical clone spellings address the same project document", async () => {
+    const first = await app.request(
+      "/api/knowledge?scope=project&repo=https%3A%2F%2Fgithub.com%2FAcme%2FApp.git",
+    );
+    const second = await app.request(
+      "/api/knowledge?scope=project&repo=git%40github.com%3Aacme%2Fapp.git",
+    );
+    const a = (await first.json()) as { document: { path: string; hash: string } };
+    const b = (await second.json()) as { document: { path: string; hash: string } };
+    expect(a.document).toEqual(b.document);
+  });
+
+  test("a stale PUT returns current disk text and does not overwrite it", async () => {
+    const loaded = await app.request("/api/knowledge?scope=project&repo=acme%2Fapp");
+    const baseline = (await loaded.json()) as { document: { markdown: string; hash: string } };
+    const firstText = baseline.document.markdown.replace("- None yet.", "- Understands CAS.");
+    const first = await putKnowledge({
+      scope: "project",
+      repo: "acme/app",
+      markdown: firstText,
+      baseHash: baseline.document.hash,
+    });
+    expect(first.status).toBe(200);
+
+    const staleText = baseline.document.markdown.replace("- None yet.", "- My unsaved draft.");
+    const stale = await putKnowledge({
+      scope: "project",
+      repo: "acme/app",
+      markdown: staleText,
+      baseHash: baseline.document.hash,
+    });
+    expect(stale.status).toBe(409);
+    const conflict = (await stale.json()) as {
+      error: { code: string };
+      document: { markdown: string };
+    };
+    expect(conflict.error.code).toBe("E_KNOWLEDGE_CONFLICT");
+    expect(conflict.document.markdown).toContain("Understands CAS");
+    expect(conflict.document.markdown).not.toContain("My unsaved draft");
+  });
+
+  test("invalid scope, repository, hash, and Markdown write nothing", async () => {
+    expect((await app.request("/api/knowledge?scope=project&repo=gitlab.com%2Facme%2Fapp")).status).toBe(400);
+    expect((await app.request("/api/knowledge?scope=nope")).status).toBe(400);
+    expect((await putKnowledge({ scope: "project", repo: "acme/app", markdown: "# Bad\n", baseHash: "nope" })).status).toBe(400);
+
+    const loaded = await app.request("/api/knowledge?scope=project&repo=acme%2Fapp");
+    const { document } = (await loaded.json()) as { document: { hash: string } };
+    const invalid = await putKnowledge({
+      scope: "project",
+      repo: "acme/app",
+      markdown: "# Missing standard sections\n",
+      baseHash: document.hash,
+    });
+    expect(invalid.status).toBe(422);
+    expect(((await invalid.json()) as { error: { code: string } }).error.code).toBe("E_INVALID_KNOWLEDGE");
+    expect(existsSync(projectKnowledgePath(projectRepo))).toBe(false);
   });
 });
 
@@ -306,6 +509,1496 @@ describe("session CRUD", () => {
   test("GET /api/sessions/:id 404s on unknown ids", async () => {
     const res = await app.request("/api/sessions/otc_zzzzzz");
     expect(res.status).toBe(404);
+  });
+});
+
+describe("review session identity and lifecycle", () => {
+  const startReview = (overrides: Record<string, unknown> = {}) => postJson("/api/reviews", {
+    repo,
+    repository: reviewRepo,
+    branch: "main",
+    pullRequest: reviewMetadata(),
+    ...overrides,
+  });
+
+  const submittedReview = async (): Promise<{ id: string; snapshot: string }> => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    expect((await postJson(`/api/reviews/${first.session.id}/submit`, {
+      report: validReviewReport(first.session.id, 1, first.preparation.snapshot.hash),
+      quiz: validReviewQuiz(first.session.id, 1),
+    })).status).toBe(201);
+    return { id: first.session.id, snapshot: first.preparation.snapshot.hash };
+  };
+
+  test("create and lookup use canonical PR identity without plan state", async () => {
+    const created = await startReview();
+    expect(created.status).toBe(201);
+    const body = (await created.json()) as {
+      action: string;
+      session: { id: string; kind: string; review: { revision: number } };
+      preparation: { revision: { revision: number }; snapshot: { hash: string } };
+    };
+    expect(body.action).toBe("created");
+    expect(body.session.kind).toBe("review");
+    expect(body.session.review.revision).toBe(1);
+    expect(body.preparation.revision.revision).toBe(1);
+    expect(body.preparation.snapshot.hash).toHaveLength(64);
+    expect(existsSync(join(sessionDir(body.session.id), "session.json"))).toBe(false);
+
+    const lookup = await app.request("/api/reviews?repo=ACME%2FAPP&number=42");
+    expect(lookup.status).toBe(200);
+    const found = (await lookup.json()) as { session: { id: string; revision: number } };
+    expect(found.session.id).toBe(body.session.id);
+    expect(found.session.revision).toBe(0);
+  });
+
+  test("unchanged active head reuses; changed active head revises the same session", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as { session: { id: string } };
+    const reused = await startReview();
+    expect(reused.status).toBe(200);
+    expect(((await reused.json()) as { action: string }).action).toBe("reused");
+
+    const revised = await startReview({ pullRequest: reviewMetadata("b".repeat(40)) });
+    expect(revised.status).toBe(200);
+    const body = (await revised.json()) as {
+      action: string;
+      session: { id: string; status: string; review: { revision: number; head: { sha: string } } };
+    };
+    expect(body.action).toBe("revised");
+    expect(body.session.id).toBe(first.session.id);
+    expect(body.session.status).toBe("working");
+    expect(body.session.review.revision).toBe(2);
+    expect(body.session.review.head.sha).toBe("b".repeat(40));
+  });
+
+  test("Done warns with public unresolved counts, then force-closes without rewriting history", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const id = first.session.id;
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 1, first.preparation.snapshot.hash),
+      quiz: validReviewQuiz(id, 1),
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "question",
+      anchor: { section: "background", exact: "The old input could move while the report was open." },
+      body: "Why is movement harmful?",
+      reportRevision: 1,
+      headRevision: 1,
+      headSha: "a".repeat(40),
+      idempotencyKey: "done-question",
+    })).status).toBe(201);
+    const before = {
+      report: readFileSync(reviewRevisionReportPath(id, 1), "utf8"),
+      quiz: readFileSync(reviewRevisionQuizPath(id, 1), "utf8"),
+      threads: readFileSync(threadsPath(id), "utf8"),
+    };
+
+    const warned = await postJson(`/api/reviews/${id}/done`, {});
+    expect(warned.status).toBe(409);
+    expect((await warned.json()) as unknown).toMatchObject({
+      error: { code: "E_REVIEW_INCOMPLETE" },
+      warning: { unresolved: { conversations: 1, quizzes: 1 } },
+    });
+    expect(store.getSession(id)?.status).toBe("reviewing");
+
+    const closed = await postJson(`/api/reviews/${id}/done`, { force: true });
+    expect(closed.status).toBe(200);
+    const body = (await closed.json()) as {
+      session: { status: string; pendingEvents: number };
+      completion: { forced: boolean; unresolved: { conversations: number; quizzes: number }; wake: string };
+    };
+    expect(body.session).toMatchObject({ status: "done", pendingEvents: 0 });
+    expect(body.completion).toMatchObject({
+      forced: true,
+      unresolved: { conversations: 1, quizzes: 1 },
+      wake: "queued",
+    });
+    expect(readFileSync(reviewRevisionReportPath(id, 1), "utf8")).toBe(before.report);
+    expect(readFileSync(reviewRevisionQuizPath(id, 1), "utf8")).toBe(before.quiz);
+    expect(readFileSync(threadsPath(id), "utf8")).toBe(before.threads);
+  });
+
+  test("force Done refuses while an authorized code action still owns its handoff", async () => {
+    const { id } = await submittedReview();
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "comment",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Make this change.",
+      ...source,
+      idempotencyKey: "active-code-done",
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/threads/t1/code-action`, { source })).status).toBe(202);
+    expect((await postJson(`/api/reviews/${id}/threads/t1/code-action/status`, {
+      source,
+      status: "working",
+    })).status).toBe(200);
+
+    const closed = await postJson(`/api/reviews/${id}/done`, { force: true });
+    expect(closed.status).toBe(409);
+    expect((await closed.json()) as object).toMatchObject({
+      error: { code: "E_REVIEW_CODE_ACTION_ACTIVE" },
+    });
+    expect(store.getSession(id)?.status).toBe("reviewing");
+  });
+
+  test("delete refuses while an authorized code action still owns its handoff", async () => {
+    const { id } = await submittedReview();
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "comment",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Make this change.",
+      ...source,
+      idempotencyKey: "active-code-delete",
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/threads/t1/code-action`, { source })).status).toBe(202);
+    expect((await postJson(`/api/reviews/${id}/threads/t1/code-action/status`, {
+      source,
+      status: "working",
+    })).status).toBe(200);
+
+    const deleted = await app.request(`/api/sessions/${id}`, { method: "DELETE" });
+    expect(deleted.status).toBe(409);
+    expect((await deleted.json()) as object).toMatchObject({
+      error: { code: "E_REVIEW_CODE_ACTION_ACTIVE" },
+    });
+    expect(store.getSession(id)?.kind).toBe("review");
+    expect(existsSync(sessionDir(id))).toBe(true);
+  });
+
+  test("delete repairs a crash-surviving terminal action lease before removing its owner record", async () => {
+    const { id } = await submittedReview();
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "comment",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Make this change.",
+      ...source,
+      idempotencyKey: "terminal-code-delete",
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/threads/t1/code-action`, { source })).status).toBe(202);
+    const failed = await postJson(`/api/reviews/${id}/threads/t1/code-action/status`, {
+      source,
+      status: "failed",
+      message: "implementation stopped",
+    });
+    const thread = ((await failed.json()) as { thread: ReviewThread }).thread;
+    const action = reviewWorktreeLeaseAction(thread);
+    if (action === undefined) throw new Error("expected terminal code action");
+    const session = store.getSession(id);
+    if (session?.kind !== "review") throw new Error("expected review session");
+    const leasePath = reviewWorktreeLeasePathForPr(session.review.pullRequest.identity.key);
+    claimReviewWorktreeLeaseFile(leasePath, {
+      version: 2,
+      owner: reviewWorktreeLeaseOwner(action),
+      action,
+      worktree: "/worktrees/review-acme-app-pr-42",
+      branch: "feature",
+      head: source.headSha,
+      acquiredAt: "2026-07-15T12:00:00.000Z",
+    });
+    expect(existsSync(leasePath)).toBe(true);
+
+    const deleted = await app.request(`/api/sessions/${id}`, { method: "DELETE" });
+    expect(deleted.status).toBe(200);
+    expect(existsSync(leasePath)).toBe(false);
+    expect(store.getSession(id)).toBeUndefined();
+  });
+
+  test("a repeated terminal code status can repair its lease after force Done", async () => {
+    const { id } = await submittedReview();
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "comment",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Make this change.",
+      ...source,
+      idempotencyKey: "terminal-code-done",
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/threads/t1/code-action`, { source })).status).toBe(202);
+    const terminal = { source, status: "failed", message: "implementation stopped" };
+    expect((await postJson(`/api/reviews/${id}/threads/t1/code-action/status`, terminal)).status).toBe(200);
+    expect((await postJson(`/api/reviews/${id}/done`, { force: true })).status).toBe(200);
+
+    const replay = await postJson(`/api/reviews/${id}/threads/t1/code-action/status`, terminal);
+    expect(replay.status).toBe(200);
+    expect((await replay.json()) as object).toMatchObject({
+      repeated: true,
+      thread: { id: "t1", codeAction: { status: "failed" } },
+    });
+  });
+
+  test("clean Done wakes a parked reviewer once and repeated Done is idempotent", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const id = first.session.id;
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 1, first.preparation.snapshot.hash),
+      quiz: validReviewChoiceQuiz(id, 1),
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/quiz/q1/answer`, {
+      revision: 1,
+      answer: "Immutable snapshot",
+      idempotencyKey: "done-pass",
+    })).status).toBe(201);
+
+    const parked = app.request(`/api/sessions/${id}/events?wait=1`);
+    await sleep(10);
+    const closed = await postJson(`/api/reviews/${id}/done`, {});
+    expect(closed.status).toBe(200);
+    const wake = (await (await parked).json()) as { event: string; completion: { forced: boolean } };
+    expect(wake).toMatchObject({ event: "review-done", completion: { forced: false } });
+
+    const repeated = await postJson(`/api/reviews/${id}/done`, {});
+    expect(repeated.status).toBe(200);
+    expect((await repeated.json()) as unknown).toMatchObject({ repeated: true });
+    expect(await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()).toEqual({ event: "timeout" });
+    expect(() => new Store()).not.toThrow();
+  });
+
+  test("completion records an explicit force choice even when unresolved counts are zero", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const id = first.session.id;
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 1, first.preparation.snapshot.hash),
+      quiz: validReviewChoiceQuiz(id, 1),
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/quiz/q1/answer`, {
+      revision: 1,
+      answer: "Immutable snapshot",
+      idempotencyKey: "done-explicit-force-pass",
+    })).status).toBe(201);
+
+    const closed = await postJson(`/api/reviews/${id}/done`, { force: true });
+    expect(closed.status).toBe(200);
+    expect((await closed.json()) as unknown).toMatchObject({
+      completion: { forced: true, unresolved: { conversations: 0, quizzes: 0 } },
+    });
+  });
+
+  test("concurrent Done requests commit one completion and one terminal wake", async () => {
+    const { id } = await submittedReview();
+
+    const [first, second] = await Promise.all([
+      postJson(`/api/reviews/${id}/done`, { force: true }),
+      postJson(`/api/reviews/${id}/done`, { force: true }),
+    ]);
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    const repeated = [await first.json(), await second.json()] as Array<{ repeated: boolean }>;
+    expect(repeated.map((body) => body.repeated).sort()).toEqual([false, true]);
+
+    const completed = store.getSession(id);
+    expect(completed?.kind).toBe("review");
+    if (completed?.kind !== "review") throw new Error("expected review session");
+    expect(completed.review.completions).toHaveLength(1);
+    expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as unknown)
+      .toMatchObject({ event: "review-done", session: id });
+    expect(await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()).toEqual({ event: "timeout" });
+  });
+
+  test("completed reviews reuse unchanged heads and reopen changed heads with stale old quizzes", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const id = first.session.id;
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 1, first.preparation.snapshot.hash),
+      quiz: validReviewQuiz(id, 1),
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/done`, { force: true })).status).toBe(200);
+
+    const unchanged = await startReview();
+    expect(unchanged.status).toBe(200);
+    expect((await unchanged.json()) as unknown).toMatchObject({
+      action: "reused-complete",
+      session: { id, status: "done" },
+    });
+
+    const changed = await startReview({ pullRequest: reviewMetadata("b".repeat(40)) });
+    expect(changed.status).toBe(200);
+    const reopened = (await changed.json()) as {
+      action: string;
+      session: { id: string; status: string; review: { revision: number; completions: unknown[] } };
+      preparation: { revision: { revision: number } };
+    };
+    expect(reopened).toMatchObject({
+      action: "reopened-changed",
+      session: { id, status: "working", review: { revision: 2 } },
+      preparation: { revision: { revision: 2 } },
+    });
+    expect(reopened.session.review.completions).toHaveLength(1);
+    const old = await app.request(`/api/reviews/${id}/revisions/1`);
+    expect(old.status).toBe(200);
+    expect((await old.json()) as unknown).toMatchObject({ revision: { quiz: { stale: true } } });
+  });
+
+  test("restart after a changed-head reopen drops stale Done and ignores old-head unresolved history", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const id = first.session.id;
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 1, first.preparation.snapshot.hash),
+      quiz: validReviewChoiceQuiz(id, 1),
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "question",
+      anchor: { section: "background", exact: "The old input could move while the report was open." },
+      body: "Why is movement harmful?",
+      reportRevision: 1,
+      headRevision: 1,
+      headSha: "a".repeat(40),
+      idempotencyKey: "old-head-question",
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/done`, { force: true })).status).toBe(200);
+
+    // Mimic a crash after the registry head commit but before the route can
+    // prune the old terminal wake from this session's durable queue.
+    store.refreshReviewHead(id, reviewMetadata("b".repeat(40)));
+    store = new Store();
+    app = createApp({ store, uiDir, notify: () => {}, presence, viewers });
+    expect(await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()).toEqual({ event: "timeout" });
+
+    const reused = await startReview({ pullRequest: reviewMetadata("b".repeat(40)) });
+    const reopened = (await reused.json()) as { preparation: { revision: { revision: number }; snapshot: { hash: string } } };
+    expect(reopened.preparation.revision.revision).toBe(2);
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 2, reopened.preparation.snapshot.hash, "b".repeat(40)),
+      quiz: validReviewChoiceQuiz(id, 2, "b".repeat(40), 2),
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/quiz/q1/answer`, {
+      revision: 2,
+      answer: "Immutable snapshot",
+      idempotencyKey: "new-head-pass",
+    })).status).toBe(201);
+    const finished = await postJson(`/api/reviews/${id}/done`, {});
+    expect(finished.status).toBe(200);
+    expect((await finished.json()) as unknown).toMatchObject({
+      completion: { unresolved: { conversations: 0, quizzes: 0 } },
+    });
+    expect(readFileSync(threadsPath(id), "utf8").includes("old-head-question")).toBe(true);
+  });
+
+  test("restart preserves exactly one queued review-done wake", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const id = first.session.id;
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 1, first.preparation.snapshot.hash),
+      quiz: validReviewQuiz(id, 1),
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/done`, { force: true })).status).toBe(200);
+
+    store = new Store();
+    app = createApp({ store, uiDir, notify: () => {}, presence, viewers });
+    expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as unknown)
+      .toMatchObject({ event: "review-done", session: id });
+    expect(await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()).toEqual({ event: "timeout" });
+  });
+
+  test("restart repairs a completion persisted before its terminal wake", async () => {
+    const { id } = await submittedReview();
+    const current = store.getSession(id);
+    if (current?.kind !== "review") throw new Error("expected review session");
+    const eventSeq = store.bumpCounter(id, "eventSeq");
+    store.completeReviewSession(id, {
+      version: 1,
+      session: id,
+      completedAt: new Date().toISOString(),
+      reportRevision: 1,
+      headRevision: current.review.revision,
+      headSha: current.review.head.sha,
+      forced: true,
+      unresolved: { conversations: 0, quizzes: 1 },
+      eventSeq,
+      wake: "pending",
+    });
+
+    store = new Store();
+    app = createApp({ store, uiDir, notify: () => {}, presence, viewers });
+    const repaired = store.getSession(id);
+    expect(repaired?.kind).toBe("review");
+    if (repaired?.kind !== "review") throw new Error("expected review session");
+    expect(repaired.review.completions?.at(-1)?.wake).toBe("queued");
+    expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as unknown)
+      .toMatchObject({ event: "review-done", session: id });
+    expect(await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()).toEqual({ event: "timeout" });
+  });
+
+  test("a pre-bind spawn loser cannot flush stale recovery over the winner's newer registry or queue", async () => {
+    const { id } = await submittedReview();
+    const current = store.getSession(id);
+    if (current?.kind !== "review") throw new Error("expected review session");
+    const eventSeq = store.bumpCounter(id, "eventSeq");
+    store.completeReviewSession(id, {
+      version: 1,
+      session: id,
+      completedAt: new Date().toISOString(),
+      reportRevision: 1,
+      headRevision: current.review.revision,
+      headSha: current.review.head.sha,
+      forced: true,
+      unresolved: { conversations: 0, quizzes: 1 },
+      eventSeq,
+      wake: "pending",
+    });
+
+    // The losing process loaded this pending recovery snapshot first. The
+    // winner then bound the port and committed newer registry + queue state.
+    const losingStore = new Store();
+    store.updateSession(id, { title: "winner owns the newest registry" });
+    writeFileSync(eventsPath(id), JSON.stringify({
+      version: 1,
+      events: [{
+        seq: eventSeq + 1,
+        queuedAt: new Date().toISOString(),
+        payload: { event: "deleted", session: id },
+      }],
+    }));
+    const queueAfterWinner = readFileSync(eventsPath(id), "utf8");
+
+    // main.ts constructs this app before serve(), but never calls start() when
+    // serve reports EADDRINUSE. Construction therefore has zero durable writes.
+    createApp({
+      store: losingStore,
+      startOnCreate: false,
+      uiDir,
+      notify: () => {},
+      makeTailer: () => ({ start: () => { throw new Error("loser started a tailer"); }, stop: () => {} }),
+    });
+    const durable = new Store().getSession(id);
+    expect(durable).toMatchObject({ title: "winner owns the newest registry" });
+    expect(durable?.kind === "review" && durable.review.completions?.at(-1)?.wake).toBe("pending");
+    expect(readFileSync(eventsPath(id), "utf8")).toBe(queueAfterWinner);
+  });
+
+  test("force creates a separate session", async () => {
+    const first = await startReview();
+    const firstId = ((await first.json()) as { session: { id: string } }).session.id;
+    const forced = await startReview({ force: true });
+    expect(forced.status).toBe(201);
+    expect(((await forced.json()) as { session: { id: string } }).session.id).not.toBe(firstId);
+  });
+
+  test("repo mismatch is rejected before creation", async () => {
+    const mismatch = await startReview({ repository: "other/repo" });
+    expect(mismatch.status).toBe(409);
+    expect(((await mismatch.json()) as { error: { code: string } }).error.code).toBe("E_REPO_MISMATCH");
+    expect(store.listSessions()).toEqual([]);
+  });
+
+  test("explicit head refresh preserves canonical identity", async () => {
+    const created = await startReview();
+    const id = ((await created.json()) as { session: { id: string } }).session.id;
+    const refreshed = await postJson(`/api/reviews/${id}/head`, {
+      pullRequest: reviewMetadata("c".repeat(40)),
+    });
+    expect(refreshed.status).toBe(200);
+    expect(((await refreshed.json()) as { action: string }).action).toBe("revised");
+
+    const changedIdentity = await postJson(`/api/reviews/${id}/head`, {
+      pullRequest: reviewMetadata("d".repeat(40), 43),
+    });
+    expect(changedIdentity.status).toBe(409);
+    expect(((await changedIdentity.json()) as { error: { code: string } }).error.code).toBe("E_REVIEW_IDENTITY");
+  });
+
+  test("a changed head discards queued work prepared for the previous head", async () => {
+    const { id } = await submittedReview();
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "question",
+      anchor: { section: "background", exact: "The old input could move while the report was open." },
+      body: "Why is movement harmful?",
+      reportRevision: 1,
+      headRevision: 1,
+      headSha: "a".repeat(40),
+      idempotencyKey: "stale-head-question",
+    })).status).toBe(201);
+
+    const refreshed = await postJson(`/api/reviews/${id}/head`, {
+      pullRequest: reviewMetadata("c".repeat(40)),
+    });
+    expect(refreshed.status).toBe(200);
+    expect(((await refreshed.json()) as { action: string }).action).toBe("revised");
+    // The queued question belonged to head revision 1; delivering it now would
+    // only bounce off the stale-identity guards on respond/revise.
+    expect(await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()).toEqual({ event: "timeout" });
+  });
+
+  test("a delivered Question cannot be answered after the PR head changes", async () => {
+    const { id } = await submittedReview();
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "question",
+      anchor: { section: "background", exact: "The old input could move while the report was open." },
+      body: "Why is movement harmful?",
+      ...source,
+      idempotencyKey: "delivered-stale-question",
+    })).status).toBe(201);
+    expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as object)
+      .toMatchObject({ event: "review-thread", work: "question", thread: "q1" });
+
+    expect((await postJson(`/api/reviews/${id}/head`, {
+      pullRequest: reviewMetadata("c".repeat(40)),
+    })).status).toBe(200);
+    const response = await postJson(`/api/reviews/${id}/threads/q1/respond`, {
+      source,
+      body: "The answer arrived after the code changed.",
+    });
+    expect(response.status).toBe(409);
+    expect((await response.json()) as object).toMatchObject({ error: { code: "E_REVIEW_THREAD_STALE" } });
+  });
+
+  test("delivered ordinary Comment feedback cannot attach to a replacement report for a newer head", async () => {
+    const { id } = await submittedReview();
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "comment",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Keep this boundary explicit.",
+      ...source,
+      idempotencyKey: "delivered-stale-comment",
+    })).status).toBe(201);
+    expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as object)
+      .toMatchObject({ event: "review-thread", work: "report-feedback", thread: "t1" });
+
+    const refreshed = await postJson(`/api/reviews/${id}/head`, {
+      pullRequest: reviewMetadata("c".repeat(40)),
+    });
+    const preparation = (await refreshed.json()) as { preparation: { snapshot: { hash: string } } };
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 2, preparation.preparation.snapshot.hash, "c".repeat(40)),
+      quiz: validReviewQuiz(id, 2, "c".repeat(40), 2),
+    })).status).toBe(201);
+
+    const response = await postJson(`/api/reviews/${id}/threads/t1/respond`, {
+      source,
+      body: "This stale feedback must not claim the new report.",
+      responseReportRevision: 2,
+    });
+    expect(response.status).toBe(409);
+    expect((await response.json()) as object).toMatchObject({ error: { code: "E_REVIEW_THREAD_STALE" } });
+  });
+
+  test("requested and working code actions may finish their authorized turns after the head refresh", async () => {
+    const { id } = await submittedReview();
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    for (const [key, body] of [["requested", "Change the first boundary."], ["working", "Change the second boundary."]] as const) {
+      expect((await postJson(`/api/reviews/${id}/threads`, {
+        intent: "comment",
+        anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+        body,
+        ...source,
+        idempotencyKey: `authorized-${key}`,
+      })).status).toBe(201);
+      const thread = key === "requested" ? "t1" : "t2";
+      expect((await postJson(`/api/reviews/${id}/threads/${thread}/code-action`, { source })).status).toBe(202);
+    }
+    expect((await postJson(`/api/reviews/${id}/threads/t2/code-action/status`, {
+      source,
+      status: "working",
+    })).status).toBe(200);
+    expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as object)
+      .toMatchObject({ event: "review-thread", work: "code-change", thread: "t1" });
+    expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as object)
+      .toMatchObject({ event: "review-thread", work: "code-change", thread: "t2" });
+
+    const refreshed = await postJson(`/api/reviews/${id}/head`, {
+      pullRequest: reviewMetadata("c".repeat(40)),
+    });
+    const preparation = (await refreshed.json()) as { preparation: { snapshot: { hash: string } } };
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 2, preparation.preparation.snapshot.hash, "c".repeat(40)),
+      quiz: validReviewQuiz(id, 2, "c".repeat(40), 2),
+    })).status).toBe(201);
+
+    for (const thread of ["t1", "t2"]) {
+      expect((await postJson(`/api/reviews/${id}/threads/${thread}/respond`, {
+        source,
+        body: `Authorized code work for ${thread} is reflected in report r2.`,
+        responseReportRevision: 2,
+      })).status).toBe(200);
+      expect((await postJson(`/api/reviews/${id}/threads/${thread}/code-action/status`, {
+        source,
+        status: "completed",
+      })).status).toBe(200);
+    }
+  });
+
+  test("review ids are rejected by plan-only routes before plan artifacts are written", async () => {
+    const created = await startReview();
+    const id = ((await created.json()) as { session: { id: string } }).session.id;
+
+    const submit = await app.request(`/api/sessions/${id}/submit`, {
+      method: "POST",
+      body: validPlanFor(id),
+    });
+    const comments = await postJson(`/api/sessions/${id}/comments`, {
+      items: [{ anchor: null, body: "change this" }],
+    });
+
+    expect(submit.status).toBe(400);
+    expect(((await submit.json()) as { error: { code: string } }).error.code).toBe("E_SESSION_KIND");
+    expect(comments.status).toBe(400);
+    expect(((await comments.json()) as { error: { code: string } }).error.code).toBe("E_SESSION_KIND");
+    expect(existsSync(sessionStatePath(id))).toBe(false);
+    expect(existsSync(threadsPath(id))).toBe(false);
+  });
+
+  test("review ids keep the generic session SSE snapshot used by SessionScreen", async () => {
+    const created = await startReview();
+    const id = ((await created.json()) as { session: { id: string } }).session.id;
+    const response = await app.request(`/api/sessions/${id}/stream`);
+    expect(response.status).toBe(200);
+    const reader = sseReader(response);
+    const snapshot = await reader.next();
+    expect(snapshot.event).toBe("snapshot");
+    expect(snapshot.data).toMatchObject({
+      session: { id, kind: "review", revision: 0, status: "working" },
+      threads: [],
+      transcript: [],
+      activity: [],
+      stream: [],
+    });
+    await reader.cancel();
+    expect(existsSync(sessionStatePath(id))).toBe(false);
+  });
+
+  test("submits immutable report revisions and exposes detail, revision, and diff endpoints", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { revision: { revision: number }; snapshot: { hash: string } };
+    };
+    const id = first.session.id;
+    const submitted = await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 1, first.preparation.snapshot.hash),
+      quiz: validReviewQuiz(id, 1),
+    });
+    expect(submitted.status).toBe(201);
+    expect(((await submitted.json()) as { revision: { revision: { status: string } } }).revision.revision.status).toBe("submitted");
+
+    const detail = await app.request(`/api/reviews/${id}`);
+    const detailBody = (await detail.json()) as {
+      session: { revision: number; review: { revision: number } };
+      report: { report: string; snapshot: { user: { markdown: string }; project: { markdown: string } } };
+    };
+    expect(detailBody.session.revision).toBe(1);
+    expect(detailBody.session.review.revision).toBe(1);
+    expect(detailBody.report.report).toContain("## Background");
+    expect(detailBody.report.snapshot.user.markdown).toContain("# User knowledge");
+    expect(detailBody.report.snapshot.project.markdown).toContain("# Project knowledge");
+
+    const missingSource = await postJson(`/api/reviews/${id}/revisions`, {});
+    expect(missingSource.status).toBe(400);
+    expect((await missingSource.json()) as object).toMatchObject({
+      error: { code: "E_REVIEW_REVISION_INPUT" },
+    });
+    expect(existsSync(reviewRevisionDir(id, 2))).toBe(false);
+
+    const stale = await postJson(`/api/reviews/${id}/revisions`, {
+      source: { reportRevision: 2, headRevision: 1, headSha: "a".repeat(40) },
+    });
+    expect(stale.status).toBe(409);
+    expect((await stale.json()) as object).toMatchObject({
+      error: { code: "E_REVIEW_REVISION_STALE" },
+    });
+    expect(existsSync(reviewRevisionDir(id, 2))).toBe(false);
+
+    const next = await postJson(`/api/reviews/${id}/revisions`, {
+      source: { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) },
+    });
+    const nextBody = (await next.json()) as { preparation: { revision: { revision: number }; snapshot: { hash: string } } };
+    expect(nextBody.preparation.revision.revision).toBe(2);
+    const duplicatePreparation = await postJson(`/api/reviews/${id}/revisions`, {
+      source: { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) },
+    });
+    expect(duplicatePreparation.status).toBe(409);
+    expect(existsSync(reviewRevisionDir(id, 3))).toBe(false);
+    const second = await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 2, nextBody.preparation.snapshot.hash).replace("old input", "prior input"),
+      quiz: validReviewQuiz(id, 2),
+    });
+    expect(second.status).toBe(201);
+    expect((await app.request(`/api/reviews/${id}/revisions/1`)).status).toBe(200);
+    const exactFirst = await app.request(`/api/reviews/${id}?revision=1`);
+    expect(exactFirst.status).toBe(200);
+    expect(((await exactFirst.json()) as { report: { revision: { revision: number } } }).report.revision.revision).toBe(1);
+    const exactSecond = await app.request(`/api/reviews/${id}?revision=2`);
+    expect(((await exactSecond.json()) as { report: { revision: { revision: number } } }).report.revision.revision).toBe(2);
+    const diff = await app.request(`/api/reviews/${id}/diff?from=1&to=2`);
+    expect(diff.status).toBe(200);
+    expect(((await diff.json()) as { from: number; to: number }).from).toBe(1);
+  });
+
+  test("returns useful lint issues without publishing an invalid report", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const invalid = await postJson(`/api/reviews/${first.session.id}/submit`, {
+      report: validReviewReport(first.session.id, 1, first.preparation.snapshot.hash)
+        .replace("## Background", "## Intuition"),
+      quiz: validReviewQuiz(first.session.id, 1),
+    });
+    expect(invalid.status).toBe(422);
+    const body = (await invalid.json()) as { issues: Array<{ code: string }> };
+    expect(body.issues.map((issue) => issue.code)).toContain("E_REPORT_SECTION_ORDER");
+    expect((await app.request(`/api/reviews/${first.session.id}`)).status).toBe(200);
+  });
+
+  test("reports an unavailable prepared revision as a conflict instead of an internal error", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const unavailable = await postJson(`/api/reviews/${first.session.id}/submit`, {
+      report: validReviewReport(first.session.id, 99, first.preparation.snapshot.hash),
+      quiz: validReviewQuiz(first.session.id, 99),
+    });
+    expect(unavailable.status).toBe(409);
+    expect((await unavailable.json()) as object).toMatchObject({
+      error: { code: "E_REVIEW_REVISION_UNAVAILABLE" },
+    });
+  });
+
+  test("returns a typed conflict when immutable report bytes are corrupt", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const id = first.session.id;
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 1, first.preparation.snapshot.hash),
+      quiz: validReviewQuiz(id, 1),
+    })).status).toBe(201);
+    writeFileSync(reviewRevisionReportPath(id, 1), "corrupt\n");
+    const corrupted = await app.request(`/api/reviews/${id}?revision=1`);
+    expect(corrupted.status).toBe(409);
+    expect((await corrupted.json()) as object).toMatchObject({
+      error: { code: "E_REVIEW_REVISION_UNAVAILABLE" },
+    });
+  });
+
+  test("keeps quiz secrets private while choice and open grading update live state", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const id = first.session.id;
+    const privateQuiz = JSON.stringify({
+      version: 1,
+      session: id,
+      revision: 1,
+      headRevision: 1,
+      headSha: "a".repeat(40),
+      questions: [
+        {
+          id: "q-open",
+          concept: { id: "boundary", label: "Boundary", scope: "project" },
+          prompt: "Explain the handoff.",
+          mode: "open",
+          rubric: { criteria: ["SECRET_RUBRIC_SENTINEL"] },
+        },
+        {
+          id: "q-choice",
+          concept: { id: "mode", label: "Mode", scope: "user" },
+          prompt: "Which mode wakes the agent?",
+          mode: "choice",
+          rubric: { criteria: ["Bounded response"] },
+          options: ["choice", "open"],
+          answerKey: "open",
+        },
+      ],
+    });
+    const submitted = await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 1, first.preparation.snapshot.hash),
+      quiz: privateQuiz,
+    });
+    expect(submitted.status).toBe(201);
+    const submissionWire = JSON.stringify(await submitted.json());
+    expect(submissionWire).not.toContain("SECRET_RUBRIC_SENTINEL");
+    expect(submissionWire).not.toContain("answerKey");
+    const detailWire = JSON.stringify(await (await app.request(`/api/reviews/${id}`)).json());
+    const revisionWire = JSON.stringify(await (await app.request(`/api/reviews/${id}/revisions/1`)).json());
+    for (const wire of [detailWire, revisionWire]) {
+      expect(wire).not.toContain("SECRET_RUBRIC_SENTINEL");
+      expect(wire).not.toContain("answerKey");
+      expect(wire).toContain("q-choice");
+    }
+
+    const choice = await postJson(`/api/reviews/${id}/quiz/q-choice/answer`, {
+      revision: 1,
+      answer: "open",
+      idempotencyKey: "choice-1",
+    });
+    expect(choice.status).toBe(201);
+    expect((await choice.json()) as object).toMatchObject({ attempt: { status: "pass" } });
+    expect(((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as { event: string }).event).toBe("timeout");
+
+    const open = await postJson(`/api/reviews/${id}/quiz/q-open/answer`, {
+      revision: 1,
+      answer: "The daemon hands a sanitized projection to the UI.",
+      idempotencyKey: "open-1",
+    });
+    expect(open.status).toBe(201);
+    expect(readFileSync(reviewEventSeqPath(id), "utf8").trim()).toBe("1");
+    const replayWhileQueued = await postJson(`/api/reviews/${id}/quiz/q-open/answer`, {
+      revision: 1,
+      answer: "The daemon hands a sanitized projection to the UI.",
+      idempotencyKey: "open-1",
+    });
+    expect(replayWhileQueued.status).toBe(200);
+    expect(eventsOnDisk(id)).toHaveLength(1);
+    expect(readFileSync(reviewEventSeqPath(id), "utf8").trim()).toBe("1");
+    const outgoing = fakeOutgoing();
+    const deliveredInFlight = await app.request(`/api/sessions/${id}/events?wait=0`, {}, { outgoing });
+    const privateEvent = (await deliveredInFlight.json()) as {
+      event: string;
+      revision: number;
+      headRevision: number;
+      headSha: string;
+      question: string;
+      attempt: string;
+      rubric: { criteria: string[] };
+      knowledge: { baseHash: string };
+    };
+    expect(privateEvent).toMatchObject({ event: "quiz-answer", rubric: { criteria: ["SECRET_RUBRIC_SENTINEL"] } });
+    const replayWhileInFlight = await postJson(`/api/reviews/${id}/quiz/q-open/answer`, {
+      revision: 1,
+      answer: "The daemon hands a sanitized projection to the UI.",
+      idempotencyKey: "open-1",
+    });
+    expect(replayWhileInFlight.status).toBe(200);
+    expect(eventsOnDisk(id)).toHaveLength(1);
+    expect(readFileSync(reviewEventSeqPath(id), "utf8").trim()).toBe("1");
+    outgoing.writableFinished = true;
+    outgoing.emit("close");
+    expect(eventsOnDisk(id)).toEqual([]);
+    const replayAfterAck = await postJson(`/api/reviews/${id}/quiz/q-open/answer`, {
+      revision: 1,
+      answer: "The daemon hands a sanitized projection to the UI.",
+      idempotencyKey: "open-1",
+    });
+    expect(replayAfterAck.status).toBe(200);
+    expect(eventsOnDisk(id)).toHaveLength(1);
+    expect(readFileSync(reviewEventSeqPath(id), "utf8").trim()).toBe("2");
+    expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as object)
+      .toMatchObject({ event: "quiz-answer", attempt: privateEvent.attempt });
+    // Consuming the wake does not complete the cognition task.
+    expect((await (await app.request(`/api/sessions/${id}`)).json()) as object).toMatchObject({ pendingEvents: 1 });
+
+    const stream = sseReader(await app.request(`/api/sessions/${id}/stream`));
+    const snapshot = await stream.next();
+    const snapshotWire = JSON.stringify(snapshot.data);
+    expect(snapshotWire).not.toContain("SECRET_RUBRIC_SENTINEL");
+    expect(snapshotWire).not.toContain("answerKey");
+    expect(snapshotWire).not.toContain("knowledgeBaseHash");
+    expect(snapshotWire).not.toContain("idempotencyKey");
+    expect(snapshotWire).not.toContain("gradeStartedAt");
+    expect(snapshotWire).not.toContain(privateEvent.knowledge.baseHash);
+    expect((snapshot.data as { quiz: { questions: unknown[] } }).quiz.questions[0]).toMatchObject({ id: "q-open", status: "grading" });
+    const grade = await postJson(`/api/reviews/${id}/quiz/q-open/grade`, {
+      version: 1,
+      session: id,
+      revision: privateEvent.revision,
+      headRevision: privateEvent.headRevision,
+      headSha: privateEvent.headSha,
+      question: privateEvent.question,
+      attempt: privateEvent.attempt,
+      verdict: "pass",
+      feedback: "You named both sides of the handoff.",
+      knowledgeBaseHash: privateEvent.knowledge.baseHash,
+    });
+    expect(grade.status).toBe(200);
+    const quizFrame = await stream.next();
+    expect(quizFrame.event).toBe("quiz");
+    const quizWire = JSON.stringify(quizFrame.data);
+    expect(quizWire).not.toContain("SECRET_RUBRIC_SENTINEL");
+    expect(quizWire).not.toContain("answerKey");
+    expect(quizWire).not.toContain("knowledgeBaseHash");
+    expect(quizWire).not.toContain("idempotencyKey");
+    expect(quizWire).not.toContain("gradeStartedAt");
+    expect((quizFrame.data as { quiz: { questions: unknown[] } }).quiz.questions[0]).toMatchObject({ id: "q-open", status: "passed" });
+    expect((await (await app.request(`/api/sessions/${id}`)).json()) as object).toMatchObject({ pendingEvents: 0 });
+    for (const wire of [
+      JSON.stringify(await (await app.request(`/api/reviews/${id}`)).json()),
+      JSON.stringify(await (await app.request(`/api/reviews/${id}/revisions/1`)).json()),
+    ]) {
+      expect(wire).not.toContain("knowledgeBaseHash");
+      expect(wire).not.toContain("idempotencyKey");
+      expect(wire).not.toContain("gradeStartedAt");
+    }
+    await stream.cancel();
+  });
+
+  test("keeps the session index and SSE alive when mutable quiz state is corrupt", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const id = first.session.id;
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 1, first.preparation.snapshot.hash),
+      quiz: validReviewQuiz(id, 1),
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/quiz/q1/answer`, {
+      revision: 1,
+      answer: "The daemon owns the boundary.",
+      idempotencyKey: "corrupt-state",
+    })).status).toBe(201);
+
+    const path = reviewRevisionQuizStatePath(id, 1);
+    writeFileSync(path, "{broken\n");
+    writeFileSync(`${path}.backup`, "{also broken\n");
+
+    const index = await app.request("/api/sessions");
+    expect(index.status).toBe(200);
+    expect(((await index.json()) as { sessions: Array<{ id: string }> }).sessions.map((item) => item.id)).toContain(id);
+    const detailSummary = await app.request(`/api/sessions/${id}`);
+    expect(detailSummary.status).toBe(200);
+    expect((await detailSummary.json()) as object).toMatchObject({ id, pendingEvents: 0 });
+
+    const stream = sseReader(await app.request(`/api/sessions/${id}/stream`));
+    const snapshot = await stream.next();
+    expect(snapshot.event).toBe("snapshot");
+    expect(snapshot.data).not.toHaveProperty("quiz");
+    await stream.cancel();
+
+    const detail = await app.request(`/api/reviews/${id}`);
+    expect(detail.status).toBe(409);
+    expect((await detail.json()) as object).toMatchObject({
+      error: { code: "E_REVIEW_REVISION_UNAVAILABLE" },
+    });
+  });
+
+  test("repairs the durable-before-enqueue crash window once across daemon restarts", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const id = first.session.id;
+    const quiz = JSON.stringify({
+      version: 1,
+      session: id,
+      revision: 1,
+      headRevision: 1,
+      headSha: "a".repeat(40),
+      questions: [
+        {
+          id: "q-open",
+          concept: { id: "handoff", label: "Handoff", scope: "project" },
+          prompt: "Explain the handoff.",
+          mode: "open",
+          rubric: { criteria: ["Names both sides"] },
+        },
+        {
+          id: "q-choice",
+          concept: { id: "mode", label: "Mode", scope: "user" },
+          prompt: "Which answer wakes the agent?",
+          mode: "choice",
+          rubric: { criteria: ["Picks open"] },
+          options: ["choice", "open"],
+          answerKey: "open",
+        },
+      ],
+    });
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 1, first.preparation.snapshot.hash),
+      quiz,
+    })).status).toBe(201);
+
+    const knowledge = new KnowledgeStore();
+    const reviews = new ReviewStore(knowledge);
+    const quizzes = new ReviewQuizStore(reviews, knowledge);
+    const session = store.getSession(id);
+    if (session?.kind !== "review") throw new Error("fixture review disappeared");
+    const pendingOpen = quizzes.answer(session, {
+      revision: 1, question: "q-open", answer: "daemon to browser", idempotencyKey: "crash-open",
+    });
+    expect(pendingOpen.event?.event).toBe("quiz-answer");
+
+    const originalReplace = knowledge.replace.bind(knowledge);
+    knowledge.replace = ((target, _markdown, _baseHash) => ({ ok: false as const, current: knowledge.read(target) })) as KnowledgeStore["replace"];
+    expect(() => quizzes.answer(session, {
+      revision: 1, question: "q-choice", answer: "open", idempotencyKey: "crash-choice",
+    })).toThrow(ReviewQuizConflictError);
+
+    const pendingIdentity = pendingOpen.event!;
+    writeFileSync(eventsPath(id), JSON.stringify({
+      version: 1,
+      events: [{
+        seq: 1,
+        queuedAt: "2026-07-14T00:00:00.000Z",
+        payload: {
+          event: pendingIdentity.event,
+          session: pendingIdentity.session,
+          revision: pendingIdentity.revision,
+          headRevision: pendingIdentity.headRevision,
+          headSha: pendingIdentity.headSha,
+          question: pendingIdentity.question,
+          attempt: pendingIdentity.attempt,
+        },
+      }],
+    }));
+
+    const conflictedApp = createApp({ store, knowledge, reviews, quizzes, uiDir, notify: () => {} });
+    expect(readdirSync(homeSessionDir(id)).some((name) => name.startsWith("events.json.corrupt-"))).toBe(true);
+    const conflict = await conflictedApp.request(`/api/reviews/${id}/quiz/q-choice/answer`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ revision: 1, answer: "open", idempotencyKey: "crash-choice" }),
+    });
+    expect(conflict.status).toBe(409);
+    const conflictWire = JSON.stringify(await conflict.json());
+    expect(conflictWire).not.toContain("currentHash");
+    expect(conflictWire).not.toMatch(/[a-f0-9]{64}/);
+
+    knowledge.replace = originalReplace;
+    const restartedStore = new Store();
+    const restartedKnowledge = new KnowledgeStore();
+    const restartedReviews = new ReviewStore(restartedKnowledge);
+    const restartedQuizzes = new ReviewQuizStore(restartedReviews, restartedKnowledge);
+    createApp({
+      store: restartedStore,
+      knowledge: restartedKnowledge,
+      reviews: restartedReviews,
+      quizzes: restartedQuizzes,
+      uiDir,
+      notify: () => {},
+    });
+    const restartedSession = restartedStore.getSession(id);
+    if (restartedSession?.kind !== "review") throw new Error("restarted review disappeared");
+    expect(restartedQuizzes.publicState(restartedSession, 1).questions.find((question) => question.id === "q-choice")?.status).toBe("passed");
+    expect((JSON.parse(readFileSync(eventsPath(id), "utf8")) as { events: unknown[] }).events).toHaveLength(1);
+    expect(readFileSync(reviewEventSeqPath(id), "utf8").trim()).toBe("1");
+
+    const restartedAgain = createApp({ store: new Store(), uiDir, notify: () => {} });
+    expect((JSON.parse(readFileSync(eventsPath(id), "utf8")) as { events: unknown[] }).events).toHaveLength(1);
+    expect(readFileSync(reviewEventSeqPath(id), "utf8").trim()).toBe("1");
+    const delivered = await restartedAgain.request(`/api/sessions/${id}/events?wait=0`);
+    expect(delivered.status).toBe(200);
+    expect((await delivered.json()) as object).toMatchObject({
+      event: "quiz-answer",
+      question: "q-open",
+      answer: "daemon to browser",
+      concept: { id: "handoff", label: "Handoff", scope: "project" },
+      rubric: { criteria: ["Names both sides"] },
+      knowledge: { scope: "project" },
+    });
+    expect(((await (await restartedAgain.request(`/api/sessions/${id}/events?wait=0`)).json()) as { event: string }).event).toBe("timeout");
+  });
+
+  test("persists anchored Ask/Comment threads before private work and sanitizes SSE", async () => {
+    const { id } = await submittedReview();
+    const stream = sseReader(await app.request(`/api/sessions/${id}/stream`));
+    expect((await stream.next()).event).toBe("snapshot");
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    const anchor = {
+      section: "background",
+      exact: "The old input could move while the report was open.",
+      prefix: "",
+      suffix: " That made",
+    };
+    const created = await postJson(`/api/reviews/${id}/threads`, {
+      intent: "question",
+      anchor,
+      body: "Why can it move?",
+      ...source,
+      idempotencyKey: "ask-create-1",
+      rememberScope: "user",
+    });
+    expect(created.status).toBe(201);
+    const createdBody = (await created.json()) as { thread: { id: string; anchor: unknown; saved?: unknown }; seq: number };
+    expect(createdBody.thread).toMatchObject({ id: "q1", anchor, remember: { scope: "user" } });
+    expect(createdBody.thread).not.toHaveProperty("idempotencyKey");
+    expect(createdBody.thread).not.toHaveProperty("saved");
+    expect(createdBody.seq).toBe(1);
+
+    const frame = await stream.next();
+    expect(frame.event).toBe("thread");
+    expect(JSON.stringify(frame.data)).not.toContain("ask-create-1");
+    expect(frame.data).toMatchObject({ thread: { id: "q1", anchor } });
+    const event = (await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as object;
+    expect(event).toMatchObject({
+      event: "review-thread",
+      work: "question",
+      session: id,
+      thread: "q1",
+      ...source,
+      anchor,
+      remember: { scope: "user" },
+    });
+
+    const response = await postJson(`/api/reviews/${id}/threads/q1/respond`, {
+      source,
+      body: "The input was previously read live during rendering.",
+      saved: { scope: "user", updated: true },
+    });
+    expect(response.status).toBe(200);
+    expect((await response.json()) as object).toMatchObject({
+      thread: {
+        response: { body: "The input was previously read live during rendering." },
+        saved: { scope: "user" },
+      },
+    });
+    const replayAfterResponse = await postJson(`/api/reviews/${id}/threads`, {
+      intent: "question",
+      anchor,
+      body: "Why can it move?",
+      ...source,
+      idempotencyKey: "ask-create-1",
+      rememberScope: "user",
+    });
+    expect(replayAfterResponse.status).toBe(200);
+    expect(eventsOnDisk(id)).toHaveLength(0);
+    expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as object)
+      .toEqual({ event: "timeout" });
+    expect((await (await app.request(`/api/sessions/${id}`)).json()) as object).toMatchObject({ pendingEvents: 0 });
+    await stream.cancel();
+  });
+
+  test("Comment escalation is explicit/idempotent, Ask is refused, and report response names a real newer revision", async () => {
+    const { id } = await submittedReview();
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    const create = await postJson(`/api/reviews/${id}/threads`, {
+      intent: "comment",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Keep this boundary explicit.",
+      ...source,
+      idempotencyKey: "comment-create-1",
+      rememberScope: "project",
+    });
+    expect(create.status).toBe(201);
+    const createdThread = (await create.json()) as { thread: Record<string, unknown> };
+    expect(createdThread).toMatchObject({ thread: { id: "t1" } });
+    expect(createdThread.thread).not.toHaveProperty("codeAction");
+    const replay = await postJson(`/api/reviews/${id}/threads`, {
+      intent: "comment",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Keep this boundary explicit.",
+      ...source,
+      idempotencyKey: "comment-create-1",
+      rememberScope: "project",
+    });
+    expect(replay.status).toBe(200);
+    expect(eventsOnDisk(id)).toHaveLength(1);
+
+    const action = await postJson(`/api/reviews/${id}/threads/t1/code-action`, { source });
+    expect(action.status).toBe(202);
+    expect((await action.json()) as object).toMatchObject({ thread: { codeAction: { status: "requested" } } });
+    expect((await (await app.request(`/api/sessions/${id}`)).json()) as object).toMatchObject({ pendingEvents: 1 });
+    expect((await postJson(`/api/reviews/${id}/threads/t1/code-action`, { source })).status).toBe(200);
+    expect(eventsOnDisk(id)).toHaveLength(1);
+    expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as object)
+      .toMatchObject({ event: "review-thread", work: "code-change", thread: "t1" });
+
+    expect((await postJson(`/api/reviews/${id}/threads/t1/respond`, {
+      source, body: "changed", responseReportRevision: 2,
+    })).status).toBe(409);
+    const next = await postJson(`/api/reviews/${id}/revisions`, { source });
+    const preparation = (await next.json()) as { preparation: { snapshot: { hash: string } } };
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 2, preparation.preparation.snapshot.hash).replace("old input", "prior input"),
+      quiz: validReviewQuiz(id, 2),
+    })).status).toBe(201);
+    const responded = await postJson(`/api/reviews/${id}/threads/t1/respond`, {
+      source,
+      body: "The report now makes the boundary explicit.",
+      responseReportRevision: 2,
+      saved: { scope: "project", updated: true },
+    });
+    expect(responded.status).toBe(200);
+    expect((await responded.json()) as object).toMatchObject({
+      thread: { response: { reportRevision: 2 }, saved: { scope: "project" } },
+    });
+    expect((await postJson(`/api/reviews/${id}/threads/t1/code-action/status`, {
+      source,
+      status: "completed",
+      message: "pushed reviewed change",
+    })).status).toBe(200);
+    const terminalReplay = await postJson(`/api/reviews/${id}/threads/t1/code-action`, { source });
+    expect(terminalReplay.status).toBe(200);
+    expect(eventsOnDisk(id)).toHaveLength(0);
+
+    const ask = await postJson(`/api/reviews/${id}/threads`, {
+      intent: "question",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Why this order?",
+      reportRevision: 2,
+      headRevision: 1,
+      headSha: "a".repeat(40),
+      idempotencyKey: "ask-create-2",
+    });
+    expect(ask.status).toBe(201);
+    const askId = ((await ask.json()) as { thread: { id: string } }).thread.id;
+    expect((await postJson(`/api/reviews/${id}/threads/${askId}/code-action`, {
+      source: { reportRevision: 2, headRevision: 1, headSha: "a".repeat(40) },
+    })).status).toBe(409);
+  });
+
+  test("same-head PR follow-ups stay grouped and code authorization snapshots the whole conversation", async () => {
+    const { id } = await submittedReview();
+    const firstSource = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "comment",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Make the boundary explicit.",
+      ...firstSource,
+      idempotencyKey: "conversation-root",
+      rememberScope: "project",
+    })).status).toBe(201);
+    await app.request(`/api/sessions/${id}/events?wait=0`);
+
+    const next = await postJson(`/api/reviews/${id}/revisions`, { source: firstSource });
+    const preparation = (await next.json()) as { preparation: { snapshot: { hash: string } } };
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 2, preparation.preparation.snapshot.hash),
+      quiz: validReviewQuiz(id, 2),
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/threads/t1/respond`, {
+      source: firstSource,
+      body: "Explained in report r2.",
+      responseReportRevision: 2,
+      saved: { scope: "project", updated: true },
+    })).status).toBe(200);
+
+    const currentSource = { reportRevision: 2, headRevision: 1, headSha: "a".repeat(40) };
+    const followup = await postJson(`/api/reviews/${id}/threads/t1/followups`, {
+      body: "Now apply that boundary to the implementation.",
+      ...currentSource,
+      idempotencyKey: "conversation-followup",
+    });
+    expect(followup.status).toBe(201);
+    const followupBody = (await followup.json()) as { thread: Record<string, unknown> };
+    expect(followupBody).toMatchObject({
+      thread: { id: "t2", replyTo: "t1", intent: "comment", identity: currentSource },
+    });
+    expect(followupBody.thread).not.toHaveProperty("remember");
+
+    const action = await postJson(`/api/reviews/${id}/threads/t1/code-action`, { source: firstSource });
+    expect(action.status).toBe(202);
+    expect((await action.json()) as object).toMatchObject({
+      thread: { id: "t1", codeAction: { authorizedTurns: ["t1", "t2"], status: "requested" } },
+    });
+    expect(eventsOnDisk(id)).toHaveLength(1);
+    const replay = await postJson(`/api/reviews/${id}/threads/t1/followups`, {
+      body: "Now apply that boundary to the implementation.",
+      ...currentSource,
+      idempotencyKey: "conversation-followup",
+    });
+    expect(replay.status).toBe(200);
+    const locked = await postJson(`/api/reviews/${id}/threads/t1/followups`, {
+      body: "This must wait.",
+      ...currentSource,
+      idempotencyKey: "conversation-locked",
+    });
+    expect(locked.status).toBe(409);
+    expect((await locked.json()) as object).toMatchObject({ error: { code: "E_REVIEW_CODE_ACTION_PENDING" } });
+
+    const codeWork = (await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as object;
+    expect(codeWork).toMatchObject({
+      event: "review-thread",
+      work: "code-change",
+      thread: "t1",
+      conversation: {
+        root: "t1",
+        turns: [
+          { thread: "t1", body: "Make the boundary explicit.", response: "Explained in report r2." },
+          { thread: "t2", body: "Now apply that boundary to the implementation." },
+        ],
+      },
+    });
+    expect((await postJson(`/api/reviews/${id}/threads/t1/code-action/status`, {
+      source: firstSource,
+      status: "failed",
+      message: "checkout unavailable",
+    })).status).toBe(200);
+    expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as object).toMatchObject({
+      event: "review-thread",
+      work: "report-feedback",
+      thread: "t2",
+      conversation: { root: "t1" },
+    });
+    const done = await postJson(`/api/reviews/${id}/done`, {});
+    expect(done.status).toBe(409);
+    expect((await done.json()) as object).toMatchObject({ warning: { unresolved: { conversations: 1 } } });
+  });
+
+  test("failing an old-head code action after refresh does not resurrect stale report feedback", async () => {
+    const { id } = await submittedReview();
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "comment",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Apply this boundary in code.",
+      ...source,
+      idempotencyKey: "old-head-code-failure",
+    })).status).toBe(201);
+    await app.request(`/api/sessions/${id}/events?wait=0`); // initial report-feedback
+    expect((await postJson(`/api/reviews/${id}/threads/t1/code-action`, { source })).status).toBe(202);
+    await app.request(`/api/sessions/${id}/events?wait=0`); // authorized code-change
+    expect((await postJson(`/api/reviews/${id}/threads/t1/code-action/status`, {
+      source,
+      status: "working",
+    })).status).toBe(200);
+
+    expect((await postJson(`/api/reviews/${id}/head`, {
+      pullRequest: reviewMetadata("b".repeat(40)),
+    })).status).toBe(200);
+    const failed = await postJson(`/api/reviews/${id}/threads/t1/code-action/status`, {
+      source,
+      status: "failed",
+      message: "replacement report could not be submitted",
+    });
+    expect(failed.status).toBe(200);
+    expect((await failed.json()) as object).toMatchObject({ thread: { codeAction: { status: "failed" } } });
+    expect(await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()).toEqual({ event: "timeout" });
+  });
+
+  test("a responded Comment can still escalate when its immutable source report is older on the same PR head", async () => {
+    const { id } = await submittedReview();
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "comment",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Please make the boundary explicit.",
+      ...source,
+      idempotencyKey: "respond-then-change",
+    })).status).toBe(201);
+    await app.request(`/api/sessions/${id}/events?wait=0`);
+    const next = await postJson(`/api/reviews/${id}/revisions`, { source });
+    const preparation = (await next.json()) as { preparation: { snapshot: { hash: string } } };
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 2, preparation.preparation.snapshot.hash),
+      quiz: validReviewQuiz(id, 2),
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/threads/t1/respond`, {
+      source,
+      body: "The report explanation is clearer in r2.",
+      responseReportRevision: 2,
+    })).status).toBe(200);
+    const escalated = await postJson(`/api/reviews/${id}/threads/t1/code-action`, { source });
+    expect(escalated.status).toBe(202);
+    expect((await escalated.json()) as object).toMatchObject({ thread: { response: { reportRevision: 2 }, codeAction: { status: "requested" } } });
+  });
+
+  test("a fork Comment remains conversational but cannot enqueue code work", async () => {
+    const pullRequest = {
+      ...reviewMetadata(),
+      headRepository: "contributor/app" as CanonicalGitHubRepo,
+      isCrossRepository: true,
+      permissions: { maintainerCanModify: true, viewerPermission: "write" as const, readOnly: true },
+    };
+    const created = await startReview({ pullRequest });
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    expect((await postJson(`/api/reviews/${first.session.id}/submit`, {
+      report: validReviewReport(first.session.id, 1, first.preparation.snapshot.hash),
+      quiz: validReviewQuiz(first.session.id, 1),
+    })).status).toBe(201);
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    expect((await postJson(`/api/reviews/${first.session.id}/threads`, {
+      intent: "comment",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Explain this boundary.",
+      ...source,
+      idempotencyKey: "fork-comment",
+    })).status).toBe(201);
+    const denied = await postJson(`/api/reviews/${first.session.id}/threads/t1/code-action`, { source });
+    expect(denied.status).toBe(409);
+    expect((await denied.json()) as object).toMatchObject({ error: { code: "E_REVIEW_READ_ONLY" } });
+    expect(eventsOnDisk(first.session.id)).toHaveLength(1);
+    expect((await (await app.request(`/api/sessions/${first.session.id}/threads`)).json()) as object)
+      .toMatchObject({ threads: [{ id: "t1" }] });
+    expect(JSON.stringify(await (await app.request(`/api/sessions/${first.session.id}/threads`)).json()))
+      .not.toContain("codeAction");
+  });
+
+  test("generic plan thread endpoints reject a review without quarantining its v2 file", async () => {
+    const { id } = await submittedReview();
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "question",
+      anchor: { section: "background", exact: "The old input could move while the report was open." },
+      body: "Why?",
+      ...source,
+      idempotencyKey: "isolation-1",
+    })).status).toBe(201);
+    const before = readFileSync(threadsPath(id), "utf8");
+    for (const response of [
+      await postJson(`/api/sessions/${id}/questions`, { body: "plan question" }),
+      await postJson(`/api/sessions/${id}/questions/q1/answer`, { body: "plan answer" }),
+      await postJson(`/api/sessions/${id}/threads/q1/resolve`, { resolved: true }),
+      await postJson(`/api/sessions/${id}/comments`, { items: [{ body: "plan comment", anchor: null }] }),
+    ]) {
+      expect(response.status).toBe(400);
+      expect((await response.json()) as object).toMatchObject({ error: { code: "E_SESSION_KIND" } });
+    }
+    const listed = await app.request(`/api/sessions/${id}/threads`);
+    const listedBody = await listed.json();
+    expect({ status: listed.status, body: listedBody }).toMatchObject({ status: 200, body: { threads: [{ id: "q1", surface: "review" }] } });
+    expect(readFileSync(threadsPath(id), "utf8")).toBe(before);
+    expect(existsSync(`${threadsPath(id)}.corrupt-`)).toBe(false);
+  });
+
+  test("repairs persisted-before-enqueue review work once after restart", async () => {
+    const { id } = await submittedReview();
+    const session = store.getSession(id);
+    if (session?.kind !== "review") throw new Error("review fixture disappeared");
+    const thread = {
+      id: "t1",
+      surface: "review" as const,
+      intent: "comment" as const,
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Change this.",
+      createdAt: "2026-07-15T10:00:00.000Z",
+      identity: { session: id, reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) },
+      idempotencyKey: "crash-thread",
+    };
+    createReviewThread(threadsPath(id), thread);
+    requestReviewCodeAction(threadsPath(id), "t1", "2026-07-15T10:01:00.000Z");
+    expect(existsSync(eventsPath(id))).toBe(true);
+    const restarted = createApp({ store: new Store(), uiDir, notify: () => {} });
+    expect(eventsOnDisk(id)).toHaveLength(1);
+    expect(eventsOnDisk(id)[0]).toMatchObject({ payload: { event: "review-thread", work: "code-change", thread: "t1" } });
+    createApp({ store: new Store(), uiDir, notify: () => {} });
+    expect(eventsOnDisk(id)).toHaveLength(1);
+    expect((await (await restarted.request(`/api/sessions/${id}/events?wait=0`)).json()) as object)
+      .toMatchObject({ event: "review-thread", work: "code-change", thread: "t1" });
   });
 });
 
@@ -1006,9 +2699,9 @@ describe("revisions", () => {
 });
 
 describe("SPA shell and static assets", () => {
-  test("GET / and GET /s/:id serve the shell — including unknown session ids", async () => {
+  test("GET /, settings, knowledge, and /s/:id serve the same persistent shell", async () => {
     const session = mintSession();
-    for (const path of ["/", `/s/${session.id}`, "/s/otc_zzzzzz"]) {
+    for (const path of ["/", "/settings", "/knowledge", `/s/${session.id}`, "/s/otc_zzzzzz"]) {
       const res = await app.request(path);
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type")).toContain("text/html");
@@ -1035,6 +2728,7 @@ describe("SPA shell and static assets", () => {
     const bare = createApp({ store, uiDir: null, notify: () => {} });
     expect((await bare.request("/")).status).toBe(503);
     expect((await bare.request("/s/otc_zzzzzz")).status).toBe(503);
+    expect((await bare.request("/knowledge")).status).toBe(503);
     expect((await bare.request("/assets/app-abc123.js")).status).toBe(404);
   });
 });
@@ -1164,7 +2858,7 @@ describe("live-tab heartbeat (open-tab reuse)", () => {
 
   test("a heartbeat makes /api/health.viewers report a live tab", async () => {
     expect(await liveViewers()).toBe(0);
-    const res = await postJson("/api/viewers/heartbeat", { clientId: "tab-a" });
+    const res = await postJson("/api/viewers/heartbeat", { clientId: "tab-a", visible: true });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
     expect(await liveViewers()).toBe(1);
@@ -1191,6 +2885,45 @@ describe("live-tab heartbeat (open-tab reuse)", () => {
     expect(((await missing.json()) as { error: { code: string } }).error.code).toBe("E_BAD_REQUEST");
     const empty = await postJson("/api/viewers/heartbeat", { clientId: "" });
     expect(empty.status).toBe(400);
+
+    const invalidVisible = await postJson("/api/viewers/heartbeat", {
+      clientId: "tab-a",
+      visible: "yes",
+    });
+    expect(invalidVisible.status).toBe(400);
+  });
+
+  test("navigate targets one preferred viewer and streams the exact session path", async () => {
+    const session = mintSession();
+    await postJson("/api/viewers/heartbeat", { clientId: "tab-visible", visible: true });
+    await postJson("/api/viewers/heartbeat", { clientId: "tab-hidden", visible: false });
+    const reader = sseReader(await app.request("/api/stream"));
+    await reader.next(); // snapshot
+
+    const res = await postJson("/api/viewers/navigate", { session: session.id });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      ok: true,
+      delivered: true,
+      path: `/s/${session.id}`,
+    });
+    expect(await reader.next()).toEqual({
+      event: "navigate",
+      data: { clientId: "tab-visible", path: `/s/${session.id}` },
+    });
+    await reader.cancel();
+  });
+
+  test("navigate reports no delivery without a viewer and validates the session", async () => {
+    expect(await (await postJson("/api/viewers/navigate", {})).json()).toEqual({
+      ok: true,
+      delivered: false,
+      path: "/",
+    });
+    const unknown = await postJson("/api/viewers/navigate", { session: "otc_unknown" });
+    expect(unknown.status).toBe(404);
+    const extra = await postJson("/api/viewers/navigate", { path: "/settings" });
+    expect(extra.status).toBe(400);
   });
 });
 
@@ -1864,6 +3597,26 @@ describe("progress and live activity (live-agent-activity)", () => {
     expect(detail.latestActivity?.text).toBe("reading the auth module");
   });
 
+  test("review sessions use the same progress fallback and stream highlight", async () => {
+    const created = await postJson("/api/reviews", {
+      repo,
+      repository: reviewRepo,
+      branch: "main",
+      pullRequest: reviewMetadata(),
+    });
+    const { session } = (await created.json()) as { session: { id: string } };
+    const res = await postJson(`/api/sessions/${session.id}/progress`, {
+      note: "reading the PR integration path",
+    });
+    expect(res.status).toBe(200);
+    const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
+    const snapshot = await reader.next();
+    expect((snapshot.data as { stream: StreamEvent[] }).stream).toEqual([
+      expect.objectContaining({ kind: "highlight", label: "reading the PR integration path" }),
+    ]);
+    await reader.cancel();
+  });
+
   test("a progress note pushes an activity frame, a stream highlight, then a session frame for the chip", async () => {
     const session = mintSession();
     const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
@@ -1995,7 +3748,7 @@ describe("progress and live activity (live-agent-activity)", () => {
 describe("transcript tailer lifecycle (live-progress-activity-redesign)", () => {
   // A stub tailer factory records start/stop per repo so the test observes the
   // lifecycle wiring without a real fs poll or any ~/.claude dependency.
-  type Stub = { start(): void; stop(): void; started: number; stopped: number };
+  type Stub = { start(): void; stop(): void; started: number; stopped: number; repoRoot: string };
   function tailedApp() {
     const stubs: Stub[] = [];
     const tailed = createApp({
@@ -2003,10 +3756,11 @@ describe("transcript tailer lifecycle (live-progress-activity-redesign)", () => 
       uiDir,
       presence,
       notify: () => {},
-      makeTailer: () => {
+      makeTailer: (deps) => {
         const stub: Stub = {
           started: 0,
           stopped: 0,
+          repoRoot: deps.repoRoot,
           start() {
             this.started += 1;
           },
@@ -2030,6 +3784,84 @@ describe("transcript tailer lifecycle (live-progress-activity-redesign)", () => 
     expect(stubs).toHaveLength(1);
     expect(stubs[0]?.started).toBe(1);
     expect(stubs[0]?.stopped).toBe(0);
+  });
+
+  test("creating and reusing an active review starts exactly one tailer", async () => {
+    const { tailed, stubs } = tailedApp();
+    const input = {
+      repo,
+      repository: reviewRepo,
+      branch: "main",
+      pullRequest: reviewMetadata(),
+    };
+    expect((await post(tailed, "/api/reviews", input)).status).toBe(201);
+    expect((await post(tailed, "/api/reviews", input)).status).toBe(200);
+    expect(stubs).toHaveLength(1);
+    expect(stubs[0]?.started).toBe(1);
+    expect(stubs[0]?.stopped).toBe(0);
+  });
+
+  test("reusing a review from another clone rebinds the session and replaces its tailer", async () => {
+    const { tailed, stubs } = tailedApp();
+    const input = {
+      repo,
+      repository: reviewRepo,
+      branch: "main",
+      pullRequest: reviewMetadata(),
+    };
+    const created = (await (await post(tailed, "/api/reviews", input)).json()) as {
+      session: { id: string };
+    };
+    const otherRepo = mkdtempSync(join(tmpdir(), "otacon-repo-clone-"));
+    try {
+      const reused = await post(tailed, "/api/reviews", {
+        ...input,
+        repo: otherRepo,
+        branch: "review-from-clone-b",
+      });
+      expect(reused.status).toBe(200);
+      expect(stubs).toHaveLength(2);
+      expect(stubs[0]).toMatchObject({ repoRoot: repo, started: 1, stopped: 1 });
+      expect(stubs[1]).toMatchObject({ repoRoot: otherRepo, started: 1, stopped: 0 });
+      expect(store.getSession(created.session.id)).toMatchObject({
+        repo: otherRepo,
+        branch: "review-from-clone-b",
+      });
+      // The original clone may disappear after the handoff; later local work
+      // and activity capture remain bound to the valid invoking clone.
+      rmSync(repo, { recursive: true, force: true });
+      expect(store.getSession(created.session.id)?.repo).toBe(otherRepo);
+    } finally {
+      rmSync(otherRepo, { recursive: true, force: true });
+    }
+  });
+
+  test("daemon restart reattaches one tailer to an active review", () => {
+    store.startReviewSession({ repo, branch: "main", pullRequest: reviewMetadata() });
+    const { stubs } = tailedApp();
+    expect(stubs).toHaveLength(1);
+    expect(stubs[0]?.started).toBe(1);
+  });
+
+  test("review Done stops its active tailer", async () => {
+    const { tailed, stubs } = tailedApp();
+    const created = await post(tailed, "/api/reviews", {
+      repo,
+      repository: reviewRepo,
+      branch: "main",
+      pullRequest: reviewMetadata(),
+    });
+    const body = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    expect((await post(tailed, `/api/reviews/${body.session.id}/submit`, {
+      report: validReviewReport(body.session.id, 1, body.preparation.snapshot.hash),
+      quiz: validReviewQuiz(body.session.id, 1),
+    })).status).toBe(201);
+    expect((await post(tailed, `/api/reviews/${body.session.id}/done`, { force: true })).status).toBe(200);
+    expect(stubs).toHaveLength(1);
+    expect(stubs[0]?.stopped).toBe(1);
   });
 
   test("Save (approve) stops the tailer; the session is terminal", async () => {
@@ -2948,6 +4780,42 @@ describe("DELETE /api/sessions/:id (otacon clean, M5)", () => {
   test("404 on an unknown session", async () => {
     const res = await app.request("/api/sessions/otc_nope", { method: "DELETE" });
     expect(res.status).toBe(404);
+  });
+
+  test("terminal-only delete refuses a Done review that reopened on a changed head", async () => {
+    const created = await postJson("/api/reviews", {
+      repo,
+      repository: reviewRepo,
+      branch: "main",
+      pullRequest: reviewMetadata(),
+    });
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const id = first.session.id;
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 1, first.preparation.snapshot.hash),
+      quiz: validReviewQuiz(id, 1),
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/done`, { force: true })).status).toBe(200);
+
+    const reopened = await postJson("/api/reviews", {
+      repo,
+      repository: reviewRepo,
+      branch: "main",
+      pullRequest: reviewMetadata("b".repeat(40)),
+    });
+    expect(((await reopened.json()) as { action: string }).action).toBe("reopened-changed");
+
+    const rejected = await app.request(`/api/sessions/${id}?terminalOnly=true`, {
+      method: "DELETE",
+    });
+    expect(rejected.status).toBe(409);
+    expect(((await rejected.json()) as { error: { code: string } }).error.code)
+      .toBe("E_SESSION_NOT_TERMINAL");
+    expect(store.getSession(id)).toMatchObject({ kind: "review", status: "working" });
+    expect(existsSync(reviewRevisionReportPath(id, 1))).toBe(true);
   });
 
   test("deregisters an approved session, removes its home dir, and reports pending events", async () => {

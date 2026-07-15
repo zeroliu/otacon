@@ -5,11 +5,16 @@
 
 import type { ReactNode } from "react";
 import { createContext, createElement, useContext, useEffect, useMemo, useState } from "react";
+import { navigate } from "./router";
 import { maybeSelfHeal } from "./self-heal";
 import type { ConfigField, ScopeFieldError, ScopeValues } from "../shared/config";
+import type { KnowledgeDocument, KnowledgeScope } from "../shared/knowledge";
+import type { ReviewReportRevisionPayload } from "../shared/review-report";
+import type { ReviewQuizPublicState } from "../shared/review-quiz";
 import type {
   ActivityNote,
   Anchor,
+  AnySessionStatus,
   DiffHunk,
   DiffPayload,
   GrillAnswer,
@@ -22,13 +27,15 @@ import type {
   StreamKind,
   Thread,
   TranscriptEntry,
+  PublicReviewThread,
 } from "../shared/types";
 
-export type { ConfigField, ScopeFieldError, ScopeValues };
+export type { ConfigField, KnowledgeDocument, KnowledgeScope, ScopeFieldError, ScopeValues };
 
 export type {
   ActivityNote,
   Anchor,
+  AnySessionStatus,
   DiffHunk,
   DiffPayload,
   GrillAnswer,
@@ -61,8 +68,14 @@ const ACTIVITY_VIEW_CAP = 60;
 const STREAM_VIEW_CAP = 500;
 
 /** A summary plus the client-side "this card just changed" timestamp. */
-export interface LiveSession extends SessionSummary {
-  changedAt?: number;
+export type LiveSession = SessionSummary & { changedAt?: number };
+export type PlanLiveSession = Extract<LiveSession, { kind: "plan" }>;
+export type ReviewLiveSession = Extract<LiveSession, { kind: "review" }>;
+
+export interface ReviewDetailPayload {
+  session: ReviewLiveSession;
+  report: ReviewReportRevisionPayload | null;
+  preparation: ReviewReportRevisionPayload | null;
 }
 
 type SessionMap = ReadonlyMap<string, LiveSession>;
@@ -76,7 +89,10 @@ function on<T>(source: EventSource, type: string, handler: (data: T) => void): v
 function patch(prev: SessionMap, id: string, fields: Partial<LiveSession>): SessionMap {
   const existing = prev.get(id);
   if (!existing) return prev;
-  return new Map(prev).set(id, { ...existing, ...fields, changedAt: Date.now() });
+  return new Map(prev).set(
+    id,
+    { ...existing, ...fields, changedAt: Date.now() } as LiveSession,
+  );
 }
 
 export interface SessionsState {
@@ -94,24 +110,38 @@ export interface SessionsState {
 const SessionsContext = createContext<SessionsState | null>(null);
 
 /**
- * This tab's stable id, minted once per page load (open-tab reuse, DECISIONS.md
- * "reuse an existing open tab"). The daemon counts distinct live ids to know
- * whether any otacon tab is open, so a reload that re-mints the id is fine: the
- * old id self-expires on its TTL while the fresh one keeps the tab counted.
+ * This tab's stable id, minted once per page load (exact-tab reuse, DECISIONS.md
+ * "routes one existing tab"). The daemon counts and ranks distinct live ids, so
+ * a reload that re-mints the id is fine: the old id self-expires on its TTL while
+ * the fresh one keeps the tab counted and eligible for targeted navigation.
  */
 const CLIENT_ID = crypto.randomUUID();
 const VIEWER_HEARTBEAT_MS = 30_000;
 
+/** Pure target/safety gate for the daemon's global viewer-navigation frame. */
+export function viewerNavigationPath(
+  clientId: string,
+  target: { clientId: string; path: string },
+): string | undefined {
+  if (target.clientId !== clientId) return undefined;
+  if (target.path !== "/" && !/^\/s\/[^/]+$/.test(target.path)) return undefined;
+  return target.path;
+}
+
 /**
- * Tell the daemon this tab is alive (open-tab reuse): a ~30s heartbeat plus a
- * `gone:true` beacon on tab close so `otacon open` can skip a duplicate tab. The
- * TTL covers a crash that skips the beacon. Uses sendBeacon for the close path
+ * Tell the daemon this tab is alive and whether it is visible: a ~30s heartbeat
+ * plus a `gone:true` beacon on tab close lets `otacon open` route this tab or
+ * avoid a duplicate. The TTL covers a crash that skips the beacon. Uses sendBeacon for the close path
  * (it survives teardown where a keepalive fetch can still race) and a keepalive
  * fetch otherwise. Errors are swallowed: liveness reporting must never break the
  * UI, and a missed beat just lets the daemon's TTL lapse the tab.
  */
 function postViewerHeartbeat(gone = false): void {
-  const payload = JSON.stringify({ clientId: CLIENT_ID, gone });
+  const payload = JSON.stringify({
+    clientId: CLIENT_ID,
+    gone,
+    visible: !gone && document.visibilityState === "visible",
+  });
   if (gone) {
     navigator.sendBeacon?.(
       "/api/viewers/heartbeat",
@@ -127,28 +157,32 @@ function postViewerHeartbeat(gone = false): void {
   }).catch(() => undefined);
 }
 
+/** Subscribe one unconditional heartbeat to every tab visibility transition. */
+export function observeViewerVisibility(target: EventTarget, heartbeat: () => void): () => void {
+  const sync = (): void => heartbeat();
+  target.addEventListener("visibilitychange", sync);
+  return () => target.removeEventListener("visibilitychange", sync);
+}
+
 /** Owns the single `/api/stream` connection and feeds every `useSessions()` reader. */
 export function SessionsProvider({ children }: { children: ReactNode }) {
   const [byId, setById] = useState<SessionMap>(new Map());
   const [connected, setConnected] = useState(false);
 
-  // Heartbeat this tab's liveness to the daemon (open-tab reuse): one per tab,
+  // Heartbeat this tab's liveness and visibility to the daemon: one per tab,
   // homed here because the provider mounts exactly once per page. Beat on mount,
-  // on a ~30s interval, and whenever the tab becomes visible again (the interval
-  // can be throttled while backgrounded; the 90s TTL comfortably outlasts that).
+  // on a ~30s interval, and on every visibility transition. Hidden must publish
+  // immediately so a background tab cannot outrank a genuinely visible tab.
   // Drop the tab immediately on close (`pagehide`) and on unmount.
   useEffect(() => {
     postViewerHeartbeat();
     const interval = setInterval(() => postViewerHeartbeat(), VIEWER_HEARTBEAT_MS);
-    const onVisible = (): void => {
-      if (document.visibilityState === "visible") postViewerHeartbeat();
-    };
+    const stopObservingVisibility = observeViewerVisibility(document, () => postViewerHeartbeat());
     const onUnload = (): void => postViewerHeartbeat(true);
-    document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("pagehide", onUnload);
     return () => {
       clearInterval(interval);
-      document.removeEventListener("visibilitychange", onVisible);
+      stopObservingVisibility();
       window.removeEventListener("pagehide", onUnload);
       postViewerHeartbeat(true);
     };
@@ -174,6 +208,13 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
     });
     on<{ session: string; pending: number }>(source, "queue", (data) => {
       setById((prev) => patch(prev, data.session, { pendingEvents: data.pending }));
+    });
+    // `otacon open --session` reuses exactly one existing tab. Every index
+    // stream hears the frame, but only the daemon-selected stable client id
+    // navigates; other Otacon tabs keep their current reading position.
+    on<{ clientId: string; path: string }>(source, "navigate", (target) => {
+      const path = viewerNavigationPath(CLIENT_ID, target);
+      if (path !== undefined) navigate(path);
     });
     // Terminal: the session left the registry (clean or a UI delete) — drop its card.
     on<{ session: string }>(source, "removed", (data) => {
@@ -210,8 +251,10 @@ export function useSessions(): SessionsState {
 
 export interface SessionDetail {
   session?: LiveSession;
+  /** Sanitized review quiz state, live on the same per-session stream. */
+  quiz?: ReviewQuizPublicState;
   /** Review threads, oldest first; live over the stream's `thread` frames. */
-  threads: Thread[];
+  threads: (Thread | PublicReviewThread)[];
   /** The grill transcript, oldest first; live over `grill` frames (interview questions). */
   transcript: TranscriptEntry[];
   /** The live-activity feed, oldest first; live over `activity` frames (review loop and daemon API). */
@@ -241,10 +284,11 @@ function upsertById<T extends { id: string }>(prev: T[], item: T): T[] {
 
 export function useSession(id: string): SessionDetail {
   const [session, setSession] = useState<LiveSession>();
-  const [threads, setThreads] = useState<Thread[]>([]);
+  const [threads, setThreads] = useState<(Thread | PublicReviewThread)[]>([]);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [activity, setActivity] = useState<ActivityNote[]>([]);
   const [stream, setStream] = useState<StreamEvent[]>([]);
+  const [quiz, setQuiz] = useState<ReviewQuizPublicState>();
   const [missing, setMissing] = useState(false);
   const [cleaned, setCleaned] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -255,6 +299,7 @@ export function useSession(id: string): SessionDetail {
     setTranscript([]);
     setActivity([]);
     setStream([]);
+    setQuiz(undefined);
     setMissing(false);
     setCleaned(false);
     setConnected(false);
@@ -286,10 +331,11 @@ export function useSession(id: string): SessionDetail {
           on<{
             version?: string;
             session: SessionSummary;
-            threads?: Thread[];
+            threads?: (Thread | PublicReviewThread)[];
             transcript?: TranscriptEntry[];
             activity?: ActivityNote[];
             stream?: StreamEvent[];
+            quiz?: ReviewQuizPublicState;
           }>(source, "snapshot", (data) => {
             // Self-heal on a daemon version change (install/update): a reconnect
             // after an update-restart re-delivers the version, reloading a stale
@@ -300,6 +346,7 @@ export function useSession(id: string): SessionDetail {
             setTranscript(data.transcript ?? []);
             setActivity(data.activity ?? []);
             setStream(data.stream ?? []);
+            setQuiz(data.quiz);
           });
           on<{ session: SessionSummary }>(source, "session", (data) =>
             setSession({ ...data.session, changedAt: Date.now() }),
@@ -310,7 +357,10 @@ export function useSession(id: string): SessionDetail {
           on<{ session: string; pending: number }>(source, "queue", (data) =>
             setSession((prev) => (prev ? { ...prev, pendingEvents: data.pending } : prev)),
           );
-          on<{ session: string; thread: Thread }>(source, "thread", ({ thread }) =>
+          on<{ session: string; quiz: ReviewQuizPublicState }>(source, "quiz", (data) =>
+            setQuiz(data.quiz),
+          );
+          on<{ session: string; thread: Thread | PublicReviewThread }>(source, "thread", ({ thread }) =>
             setThreads((prev) => upsertById(prev, thread)),
           );
           on<{ session: string; entry: TranscriptEntry }>(source, "grill", ({ entry }) =>
@@ -351,7 +401,7 @@ export function useSession(id: string): SessionDetail {
     };
   }, [id]);
 
-  return { session, threads, transcript, activity, stream, missing, cleaned, connected };
+  return { session, quiz, threads, transcript, activity, stream, missing, cleaned, connected };
 }
 
 const PRESENCE_HEARTBEAT_MS = 20_000;
@@ -660,6 +710,144 @@ export function useRevision(id: string, n: number): RevisionPayload | undefined 
   return usePolledJson<RevisionPayload>(n < 1 ? null : `/api/sessions/${id}/revisions/${n}`);
 }
 
+/** Latest immutable PR-review report; `revision` changes the URL after its SSE frame. */
+export function useReviewDetail(id: string, revision: number): ReviewDetailPayload | undefined {
+  return usePolledJson<ReviewDetailPayload>(
+    revision < 1 ? null : `/api/reviews/${id}?revision=${revision}`,
+  );
+}
+
+export function useReviewRevision(id: string, revision: number): ReviewReportRevisionPayload | undefined {
+  const payload = usePolledJson<{ revision: ReviewReportRevisionPayload }>(
+    revision < 1 ? null : `/api/reviews/${id}/revisions/${revision}`,
+  );
+  return payload?.revision;
+}
+
+export function useReviewDiff(id: string, from: number, to: number): DiffPayload | undefined {
+  return usePolledJson<DiffPayload>(
+    to < 1 || from >= to ? null : `/api/reviews/${id}/diff?from=${from}&to=${to}`,
+  );
+}
+
+/** Submit one durable quiz attempt; bounded choices may already be graded in this response. */
+export async function postReviewQuizAnswer(
+  id: string,
+  revision: number,
+  question: string,
+  answer: string,
+  idempotencyKey: string = crypto.randomUUID(),
+): Promise<ReviewQuizPublicState> {
+  const response = await fetch(`/api/reviews/${id}/quiz/${question}/answer`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ revision, answer, idempotencyKey }),
+  });
+  const body = (await response.json().catch(() => ({}))) as {
+    quiz?: ReviewQuizPublicState;
+    error?: { message?: string };
+  };
+  if (!response.ok || body.quiz === undefined) throw new Error(body.error?.message ?? `quiz answer failed: ${response.status}`);
+  return body.quiz;
+}
+
+export async function postReviewThread(
+  id: string,
+  input: {
+    intent: "question" | "comment";
+    anchor: Anchor;
+    body: string;
+    reportRevision: number;
+    headRevision: number;
+    headSha: string;
+    idempotencyKey: string;
+    rememberScope?: "user" | "project";
+  },
+): Promise<PublicReviewThread> {
+  const response = await fetch(`/api/reviews/${id}/threads`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const payload = await response.json() as { thread?: PublicReviewThread; error?: { message?: string } };
+  if (!response.ok || payload.thread === undefined) throw new Error(payload.error?.message ?? "review thread was rejected");
+  return payload.thread;
+}
+
+export async function postReviewFollowup(
+  id: string,
+  root: string,
+  input: {
+    body: string;
+    reportRevision: number;
+    headRevision: number;
+    headSha: string;
+    idempotencyKey: string;
+  },
+): Promise<PublicReviewThread> {
+  const response = await fetch(`/api/reviews/${id}/threads/${root}/followups`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const payload = await response.json() as { thread?: PublicReviewThread; error?: { message?: string } };
+  if (!response.ok || payload.thread === undefined) throw new Error(payload.error?.message ?? "review follow-up was rejected");
+  return payload.thread;
+}
+
+export async function postReviewCodeAction(
+  id: string,
+  thread: string,
+  source: { reportRevision: number; headRevision: number; headSha: string },
+): Promise<PublicReviewThread> {
+  const response = await fetch(`/api/reviews/${id}/threads/${thread}/code-action`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ source }),
+  });
+  const payload = await response.json() as { thread?: PublicReviewThread; error?: { message?: string } };
+  if (!response.ok || payload.thread === undefined) throw new Error(payload.error?.message ?? "code change was rejected");
+  return payload.thread;
+}
+
+export interface ReviewUnresolvedCounts {
+  conversations: number;
+  quizzes: number;
+}
+
+/** Typed 409 so a clean-looking client can render a raced server warning. */
+export class ReviewIncompleteError extends Error {
+  constructor(public readonly unresolved: ReviewUnresolvedCounts, message: string) {
+    super(message);
+    this.name = "ReviewIncompleteError";
+  }
+}
+
+/** Finish one review; force is the explicit Close-anyway acknowledgement. */
+export async function postReviewDone(id: string, force: boolean): Promise<void> {
+  const response = await fetch(`/api/reviews/${id}/done`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(force ? { force: true } : {}),
+  });
+  const payload = await response.json().catch(() => ({})) as {
+    error?: { code?: string; message?: string };
+    warning?: { unresolved?: Partial<ReviewUnresolvedCounts> };
+  };
+  if (response.status === 409 && payload.error?.code === "E_REVIEW_INCOMPLETE") {
+    const conversations = payload.warning?.unresolved?.conversations;
+    const quizzes = payload.warning?.unresolved?.quizzes;
+    if (Number.isSafeInteger(conversations) && (conversations as number) >= 0 &&
+        Number.isSafeInteger(quizzes) && (quizzes as number) >= 0) {
+      throw new ReviewIncompleteError(
+        { conversations: conversations as number, quizzes: quizzes as number },
+        payload.error.message ?? "this review still has unresolved work",
+      );
+    }
+  }
+  if (!response.ok) throw new Error(payload.error?.message ?? "review completion was rejected");
+}
+
 /** One scope's target file path and its sparse, currently-set overrides. */
 export interface ConfigScope {
   path: string;
@@ -795,5 +983,129 @@ export async function saveConfig(
     };
   } catch {
     return { ok: false, status: 0, error: { code: "E_UNREACHABLE", message: "couldn't reach otacond" } };
+  }
+}
+
+interface KnowledgePayload {
+  document: KnowledgeDocument;
+}
+
+export interface KnowledgeState {
+  document?: KnowledgeDocument;
+  loading: boolean;
+  error?: string;
+  reload: () => void;
+}
+
+function knowledgeUrl(scope: KnowledgeScope, repo?: string): string | null {
+  if (scope === "project" && !repo) return null;
+  const query = new URLSearchParams({ scope });
+  if (scope === "project" && repo) query.set("repo", repo);
+  return `/api/knowledge?${query.toString()}`;
+}
+
+/**
+ * Load one knowledge document. Knowledge is a flat CAS-managed file rather than
+ * a live stream, so a scope/repo change or an explicit reload performs one GET.
+ * Project loading stays inert until a canonical repo is supplied.
+ */
+export function useKnowledge(scope: KnowledgeScope, repo?: string): KnowledgeState {
+  const [document, setDocument] = useState<KnowledgeDocument>();
+  const [loading, setLoading] = useState(scope === "user" || Boolean(repo));
+  const [error, setError] = useState<string>();
+  const [nonce, setNonce] = useState(0);
+  const reload = () => setNonce((value) => value + 1);
+
+  useEffect(() => {
+    const url = knowledgeUrl(scope, repo);
+    if (url === null) {
+      setDocument(undefined);
+      setLoading(false);
+      setError(undefined);
+      return;
+    }
+
+    let live = true;
+    setDocument(undefined);
+    setLoading(true);
+    setError(undefined);
+    fetch(url, { headers: { accept: "application/json" } })
+      .then(async (response) => {
+        const body = (await response.json().catch(() => ({}))) as Partial<KnowledgePayload> & {
+          error?: { message?: string };
+        };
+        if (!response.ok || body.document === undefined) {
+          throw new Error(body.error?.message ?? `knowledge fetch failed: ${response.status}`);
+        }
+        return body.document;
+      })
+      .then((next) => {
+        if (!live) return;
+        setDocument(next);
+        setLoading(false);
+      })
+      .catch((cause: unknown) => {
+        if (!live) return;
+        setError(cause instanceof Error ? cause.message : "couldn't load knowledge");
+        setLoading(false);
+      });
+
+    return () => {
+      live = false;
+    };
+  }, [scope, repo, nonce]);
+
+  return { document, loading, error, reload };
+}
+
+/** PUT /api/knowledge outcome, including the current disk document on CAS conflict. */
+export type SaveKnowledgeResult =
+  | { ok: true; document: KnowledgeDocument }
+  | {
+      ok: false;
+      status: number;
+      error: { code: string; message: string };
+      /** Present for E_KNOWLEDGE_CONFLICT so the editor can preserve and compare its draft. */
+      document?: KnowledgeDocument;
+    };
+
+/**
+ * Replace one knowledge Markdown file iff `baseHash` still matches the disk.
+ * A 409 is deliberately data-bearing: the caller keeps the local draft and
+ * presents `document.markdown` as the newer disk version.
+ */
+export async function saveKnowledge(
+  scope: KnowledgeScope,
+  repo: string | undefined,
+  markdown: string,
+  baseHash: string,
+): Promise<SaveKnowledgeResult> {
+  try {
+    const response = await fetch("/api/knowledge", {
+      method: "PUT",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify(scope === "user"
+        ? { scope, markdown, baseHash }
+        : { scope, repo, markdown, baseHash }),
+    });
+    const body = (await response.json().catch(() => ({}))) as Partial<KnowledgePayload> & {
+      error?: { code?: string; message?: string };
+    };
+    if (response.ok && body.document !== undefined) return { ok: true, document: body.document };
+    return {
+      ok: false,
+      status: response.status,
+      error: {
+        code: body.error?.code ?? "E_INTERNAL",
+        message: body.error?.message ?? "knowledge save failed",
+      },
+      document: body.document,
+    };
+  } catch {
+    return {
+      ok: false,
+      status: 0,
+      error: { code: "E_UNREACHABLE", message: "couldn't reach otacond" },
+    };
   }
 }

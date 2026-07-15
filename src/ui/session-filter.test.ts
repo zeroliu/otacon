@@ -9,14 +9,22 @@
 
 import { describe, expect, test } from "bun:test";
 import type { SessionStatus, SessionSummary } from "../shared/types.js";
-import { isOver, partitionSessions, prInReview } from "./session-filter.js";
+import {
+  isOver,
+  partitionReviewSessions,
+  partitionSessionKinds,
+  partitionSessions,
+  prInReview,
+  shouldRedirectAfterTerminalTransition,
+} from "./session-filter.js";
 
 function session(
   id: string,
   status: SessionStatus,
   pr?: { prUrl?: string; prState?: "open" | "merged" | "closed" },
-): SessionSummary {
+): Extract<SessionSummary, { kind: "plan" }> {
   return {
+    kind: "plan",
     id,
     title: id,
     repo: "/repo",
@@ -46,6 +54,13 @@ describe("isOver", () => {
     for (const status of ["draft", "in_review", "revising", "finalizing", "implementing"] as const) {
       expect(isOver(status)).toBe(false);
     }
+  });
+});
+
+describe("terminal screen redirect", () => {
+  test("redirects a live plan transition but leaves a completed review readable", () => {
+    expect(shouldRedirectAfterTerminalTransition({ kind: "plan", status: "approved" }, true)).toBe(true);
+    expect(shouldRedirectAfterTerminalTransition({ kind: "review", status: "done" }, true)).toBe(false);
   });
 });
 
@@ -150,5 +165,33 @@ describe("partitionSessions", () => {
     expect(active).toEqual([]);
     expect(prReview.map((s) => s.id)).toEqual(["b"]);
     expect(done.map((s) => s.id)).toEqual(["a"]);
+  });
+});
+
+describe("partitionSessionKinds", () => {
+  test("keeps plans and reviews in separate sidebar modes", () => {
+    const plan = session("plan", "draft");
+    const review = {
+      ...plan,
+      id: "review",
+      kind: "review",
+      status: "working",
+      review: {},
+    } as unknown as SessionSummary;
+    const groups = partitionSessionKinds([plan, review]);
+    expect(groups.plans.map((item) => item.id)).toEqual(["plan"]);
+    expect(groups.reviews.map((item) => item.id)).toEqual(["review"]);
+  });
+});
+
+describe("partitionReviewSessions", () => {
+  test("keeps active reviews visible and completed reviews in Done", () => {
+    const active = { kind: "review", id: "active", status: "reviewing" } as unknown as
+      Extract<SessionSummary, { kind: "review" }>;
+    const done = { kind: "review", id: "done", status: "done" } as unknown as
+      Extract<SessionSummary, { kind: "review" }>;
+    const groups = partitionReviewSessions([done, active]);
+    expect(groups.active.map((item) => item.id)).toEqual(["active"]);
+    expect(groups.done.map((item) => item.id)).toEqual(["done"]);
   });
 });

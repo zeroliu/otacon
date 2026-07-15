@@ -11,10 +11,30 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import * as paths from "../shared/paths.js";
-import type { LintIssue, RegistryFile, RegistrySession, SessionStateFile } from "../shared/types.js";
+import { parsePullRequestMetadata, REVIEW_SESSION_STATUSES } from "../shared/review.js";
+import type {
+  PullRequestMetadata,
+  ReviewCompletionSummary,
+  ReviewStartAction,
+} from "../shared/review.js";
+import type {
+  LintIssue,
+  PlanRegistrySession,
+  RegistryFile,
+  RegistrySession,
+  ReviewRegistrySession,
+  SessionStateFile,
+} from "../shared/types.js";
+import { SESSION_STATUSES } from "../shared/types.js";
 
 let tmpSerial = 0;
 let quarantineSerial = 0;
+
+function exactIso(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const milliseconds = Date.parse(value);
+  return Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === value;
+}
 
 /** Atomic write: temp file in the destination directory (created if needed) + rename. */
 export function writeFileAtomic(path: string, data: string): void {
@@ -66,14 +86,86 @@ export function readJsonOr(path: string): unknown {
 }
 
 function parseRegistry(raw: unknown): RegistryFile | undefined {
-  const file = raw as RegistryFile;
+  const file = raw as { version?: unknown; sessions?: unknown };
   const valid =
     typeof file === "object" &&
     file !== null &&
     file.version === 1 &&
     typeof file.sessions === "object" &&
     file.sessions !== null;
-  return valid ? file : undefined;
+  if (!valid) return undefined;
+  const sessions: Record<string, RegistrySession> = {};
+  for (const [id, value] of Object.entries(file.sessions as Record<string, unknown>)) {
+    if (typeof value !== "object" || value === null) return undefined;
+    const stored = value as Record<string, unknown>;
+    // Registry v1 predates the discriminant. Decode, don't rewrite: a legacy
+    // entry remains byte-for-byte untouched until some later mutation flushes.
+    const kind = stored.kind ?? "plan";
+    if (kind !== "plan" && kind !== "review") return undefined;
+    if (
+      stored.id !== id || typeof stored.title !== "string" || typeof stored.repo !== "string" ||
+      typeof stored.branch !== "string" || typeof stored.quick !== "boolean" ||
+      (stored.socratic !== undefined && typeof stored.socratic !== "boolean") ||
+      typeof stored.createdAt !== "string" || typeof stored.updatedAt !== "string"
+    ) return undefined;
+    if (kind === "plan") {
+      if (!SESSION_STATUSES.includes(stored.status as never)) return undefined;
+    } else {
+      if (!REVIEW_SESSION_STATUSES.includes(stored.status as never)) {
+        return undefined;
+      }
+      const review = stored.review as Record<string, unknown> | undefined;
+      const head = review?.head as Record<string, unknown> | undefined;
+      const pullRequest = parsePullRequestMetadata(review?.pullRequest);
+      const completions = review?.completions;
+      const parsedCompletions = Array.isArray(completions)
+        ? completions.filter((completion): completion is ReviewCompletionSummary => validReviewCompletion(completion, id))
+        : undefined;
+      const latestCompletion = parsedCompletions?.at(-1);
+      if (
+        pullRequest === undefined || typeof head !== "object" || head === null ||
+        head.sha !== pullRequest.headSha || head.ref !== pullRequest.headRef ||
+        head.repository !== pullRequest.headRepository || typeof head.capturedAt !== "string" ||
+        !Number.isInteger(review?.revision) || (review?.revision as number) < 1 ||
+        (completions !== undefined && (!Array.isArray(completions) ||
+          parsedCompletions?.length !== completions.length ||
+          parsedCompletions.some((completion, index) => index > 0 &&
+            (completion.eventSeq <= parsedCompletions[index - 1]!.eventSeq ||
+             Date.parse(completion.completedAt) < Date.parse(parsedCompletions[index - 1]!.completedAt))))) ||
+        (stored.status === "done" && (latestCompletion === undefined ||
+          latestCompletion.headRevision !== review?.revision || latestCompletion.headSha !== head.sha))
+      ) return undefined;
+    }
+    sessions[id] = {
+      ...stored,
+      kind,
+      // `socratic` was added after registry v1 shipped. Normalize the absent
+      // legacy field in memory just like the missing session discriminant; the
+      // file is not rewritten until a later real mutation flushes the registry.
+      socratic: stored.socratic ?? false,
+    } as unknown as RegistrySession;
+  }
+  return { version: 1, sessions };
+}
+
+function validReviewCompletion(raw: unknown, session: string): raw is ReviewCompletionSummary {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return false;
+  const value = raw as Record<string, unknown>;
+  const expected = ["version", "session", "completedAt", "reportRevision", "headRevision", "headSha", "forced", "unresolved", "eventSeq", "wake"].sort();
+  const actual = Object.keys(value).sort();
+  if (actual.length !== expected.length || !actual.every((key, index) => key === expected[index]) ||
+      value.version !== 1 || value.session !== session || !exactIso(value.completedAt) ||
+      !Number.isSafeInteger(value.reportRevision) ||
+      (value.reportRevision as number) < 1 || !Number.isSafeInteger(value.headRevision) ||
+      (value.headRevision as number) < 1 || typeof value.headSha !== "string" ||
+      !/^[0-9a-f]{40}$/i.test(value.headSha) || typeof value.forced !== "boolean" ||
+      !Number.isSafeInteger(value.eventSeq) || (value.eventSeq as number) < 1 ||
+      (value.wake !== "pending" && value.wake !== "queued") || typeof value.unresolved !== "object" ||
+      value.unresolved === null || Array.isArray(value.unresolved)) return false;
+  const unresolved = value.unresolved as Record<string, unknown>;
+  return Object.keys(unresolved).sort().join(",") === "conversations,quizzes" &&
+    Number.isSafeInteger(unresolved.conversations) && (unresolved.conversations as number) >= 0 &&
+    Number.isSafeInteger(unresolved.quizzes) && (unresolved.quizzes as number) >= 0;
 }
 
 function parseState(raw: unknown): SessionStateFile | undefined {
@@ -188,6 +280,18 @@ export interface CreateSessionInput {
   socratic?: boolean;
 }
 
+export interface StartReviewInput {
+  repo: string;
+  branch?: string;
+  pullRequest: PullRequestMetadata;
+  force?: boolean;
+}
+
+export interface StartReviewResult {
+  action: ReviewStartAction;
+  session: ReviewRegistrySession;
+}
+
 /**
  * Owns `$OTACON_HOME/registry.json` plus each session's working state in the
  * home store (`~/.otacon/sessions/<id>/`). Event seqs and the b/t/q stable ids
@@ -218,18 +322,19 @@ export class Store {
   }
 
   listSessions(): RegistrySession[] {
-    return Object.values(this.registry.sessions).map((s) => ({ ...s }));
+    return Object.values(this.registry.sessions).map((s) => structuredClone(s));
   }
 
   getSession(id: string): RegistrySession | undefined {
     const session = this.registry.sessions[id];
-    return session ? { ...session } : undefined;
+    return session ? structuredClone(session) : undefined;
   }
 
-  createSession(input: CreateSessionInput): RegistrySession {
+  createSession(input: CreateSessionInput): PlanRegistrySession {
     const id = this.mintId();
     const now = new Date().toISOString();
-    const session: RegistrySession = {
+    const session: PlanRegistrySession = {
+      kind: "plan",
       id,
       title: input.title,
       repo: input.repo,
@@ -259,7 +364,122 @@ export class Store {
     writeFileAtomic(paths.eventsPath(id), stringify({ version: 1, events: [] }));
     this.registry.sessions[id] = session;
     this.flushRegistry();
-    return { ...session };
+    return structuredClone(session);
+  }
+
+  findReviewSession(
+    repository: PullRequestMetadata["identity"]["repository"],
+    number: number,
+  ): ReviewRegistrySession | undefined {
+    const found = Object.values(this.registry.sessions)
+      .filter((session): session is ReviewRegistrySession =>
+        session.kind === "review" &&
+        session.review.pullRequest.identity.repository === repository &&
+        session.review.pullRequest.identity.number === number,
+      )
+      .reverse()
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+    return found ? structuredClone(found) : undefined;
+  }
+
+  /** Atomic create/reuse/head-refresh boundary for canonical PR identity. */
+  startReviewSession(input: StartReviewInput): StartReviewResult {
+    const identity = input.pullRequest.identity;
+    const existing = input.force === true
+      ? undefined
+      : this.findReviewSession(identity.repository, identity.number);
+    if (existing !== undefined) {
+      if (existing.review.head.sha === input.pullRequest.headSha) {
+        return {
+          action: existing.status === "done" ? "reused-complete" : "reused",
+          session: this.refreshReviewHead(existing.id, input.pullRequest, {
+            repo: input.repo,
+            branch: input.branch ?? "",
+          }),
+        };
+      }
+      return {
+        action: existing.status === "done" ? "reopened-changed" : "revised",
+        session: this.refreshReviewHead(existing.id, input.pullRequest, {
+          repo: input.repo,
+          branch: input.branch ?? "",
+        }),
+      };
+    }
+
+    const id = this.mintId();
+    const now = new Date().toISOString();
+    const session: ReviewRegistrySession = {
+      kind: "review",
+      id,
+      title: `#${identity.number} ${input.pullRequest.title}`,
+      repo: input.repo,
+      branch: input.branch ?? "",
+      quick: false,
+      socratic: false,
+      status: "working",
+      createdAt: now,
+      updatedAt: now,
+      prUrl: input.pullRequest.url,
+      prState: input.pullRequest.state,
+      review: {
+        pullRequest: structuredClone(input.pullRequest),
+        head: {
+          sha: input.pullRequest.headSha,
+          ref: input.pullRequest.headRef,
+          repository: input.pullRequest.headRepository,
+          capturedAt: now,
+        },
+        revision: 1,
+      },
+    };
+    // The dedicated review store owns report/state files. Session creation only
+    // creates its queue here; plan session.json is never created or repurposed.
+    writeFileAtomic(paths.eventsPath(id), stringify({ version: 1, events: [] }));
+    this.registry.sessions[id] = session;
+    this.flushRegistry();
+    return { action: "created", session: structuredClone(session) };
+  }
+
+  refreshReviewHead(
+    id: string,
+    pullRequest: PullRequestMetadata,
+    local?: { repo: string; branch: string },
+  ): ReviewRegistrySession {
+    const session = this.require(id);
+    if (session.kind !== "review") throw new Error(`session ${id} is not a review`);
+    if (session.review.pullRequest.identity.key !== pullRequest.identity.key) {
+      throw new Error("cannot change a review session's canonical pull request identity");
+    }
+    const sameHead = session.review.head.sha === pullRequest.headSha;
+    const sameLocal = local === undefined ||
+      (session.repo === local.repo && session.branch === local.branch);
+    if (sameHead && sameLocal && JSON.stringify(session.review.pullRequest) === JSON.stringify(pullRequest)) {
+      return structuredClone(session);
+    }
+    const now = new Date().toISOString();
+    session.title = `#${pullRequest.identity.number} ${pullRequest.title}`;
+    if (local !== undefined) {
+      session.repo = local.repo;
+      session.branch = local.branch;
+    }
+    if (!sameHead) session.status = "working";
+    session.updatedAt = now;
+    session.prUrl = pullRequest.url;
+    session.prState = pullRequest.state;
+    session.review = {
+      ...session.review,
+      pullRequest: structuredClone(pullRequest),
+      head: {
+        sha: pullRequest.headSha,
+        ref: pullRequest.headRef,
+        repository: pullRequest.headRepository,
+        capturedAt: now,
+      },
+      revision: sameHead ? session.review.revision : session.review.revision + 1,
+    };
+    this.flushRegistry();
+    return structuredClone(session);
   }
 
   updateSession(
@@ -267,10 +487,56 @@ export class Store {
     patch: Partial<Pick<RegistrySession, "title" | "status" | "prUrl" | "prState" | "impl">>,
   ): RegistrySession {
     const session = this.require(id);
+    if (patch.status !== undefined) {
+      if (session.kind === "review" && patch.status === "done") {
+        throw new Error("review Done must persist a completion baseline");
+      }
+      const valid = session.kind === "plan"
+        ? SESSION_STATUSES.includes(patch.status as never)
+        : REVIEW_SESSION_STATUSES.includes(patch.status as never);
+      if (!valid) throw new Error(`invalid ${session.kind} status: ${patch.status}`);
+    }
+    if (session.kind === "review" && patch.impl !== undefined) {
+      throw new Error("review sessions cannot own plan implementation worktrees");
+    }
     Object.assign(session, patch);
     session.updatedAt = new Date().toISOString();
     this.flushRegistry();
-    return { ...session };
+    return structuredClone(session);
+  }
+
+  /** Commit one immutable Done baseline and its reserved terminal event seq. */
+  completeReviewSession(id: string, completion: ReviewCompletionSummary): ReviewRegistrySession {
+    const session = this.require(id);
+    if (session.kind !== "review") throw new Error(`session ${id} is not a review`);
+    const existing = session.review.completions?.at(-1);
+    if (session.status === "done") {
+      if (existing !== undefined) return structuredClone(session);
+      throw new Error(`done review ${id} has no completion baseline`);
+    }
+    if (!validReviewCompletion(completion, id) || completion.wake !== "pending" ||
+        completion.headRevision !== session.review.revision || completion.headSha !== session.review.head.sha) {
+      throw new Error("review completion does not match the current session/head");
+    }
+    session.status = "done";
+    session.updatedAt = completion.completedAt;
+    session.review.completions = [...(session.review.completions ?? []), structuredClone(completion)];
+    this.flushRegistry();
+    return structuredClone(session);
+  }
+
+  /** Mark the reserved terminal wake durable before allowing queue dispatch. */
+  markReviewCompletionQueued(id: string, eventSeq: number): ReviewRegistrySession {
+    const session = this.require(id);
+    if (session.kind !== "review") throw new Error(`session ${id} is not a review`);
+    const completion = session.review.completions?.at(-1);
+    if (completion === undefined || completion.eventSeq !== eventSeq) {
+      throw new Error(`review ${id} has no completion for event ${eventSeq}`);
+    }
+    if (completion.wake === "queued") return structuredClone(session);
+    completion.wake = "queued";
+    this.flushRegistry();
+    return structuredClone(session);
   }
 
   /**
@@ -281,7 +547,7 @@ export class Store {
     const session = this.require(id);
     delete this.registry.sessions[id];
     this.flushRegistry();
-    return { ...session };
+    return structuredClone(session);
   }
 
   /**
@@ -355,6 +621,22 @@ export class Store {
 
   /** Increment one daemon-owned counter (review loop and daemon API stable ids) and persist it. */
   bumpCounter(id: string, key: keyof SessionStateFile["counters"]): number {
+    const session = this.require(id);
+    if (session.kind === "review") {
+      if (key !== "eventSeq") throw new Error(`review sessions do not own the ${key} plan counter`);
+      const path = paths.reviewEventSeqPath(id);
+      let current = 0;
+      try {
+        const raw = readFileSync(path, "utf8").trim();
+        if (!/^\d+$/.test(raw)) throw new Error("invalid review event sequence");
+        current = Number(raw);
+      } catch (error) {
+        if (existsSync(path)) throw error;
+      }
+      const next = current + 1;
+      writeFileAtomic(path, `${next}\n`);
+      return next;
+    }
     return this.bumpCounters(id, { [key]: 1 })[key];
   }
 
