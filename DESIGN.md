@@ -1583,7 +1583,12 @@ items name `kind` (type definition, function signature, route, command, or event
 `file#symbol`, caller impact, and a discriminated `added` / `changed` / `removed` delta:
 added items carry an after excerpt, changed items carry before and after excerpts, and
 removed items carry a before excerpt. Every excerpt is a real selectable code fence. New
-contract kinds use the same content-adaptive vertical renderer rather than kind-specific
+review authoring must show those interface contracts rather than paraphrase them: changed
+contracts use a `diff` fence with the actual before/after signatures, added or removed
+contracts use a signature-only fence, and the behavior consequence sits as a short comment
+on the signature it qualifies. Each excerpt is self-contained; a referenced type gets its
+own signature fence or an inline shape comment instead of requiring name-only knowledge.
+New contract kinds use the same content-adaptive vertical renderer rather than kind-specific
 layout CSS. The integration layer is an ordered list of required module, symbol, role, and
 handoff fields; it must explain how output crosses into the next module from the entry
 through storage/authoring to grading and a future revision, not merely inventory files.

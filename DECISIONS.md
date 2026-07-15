@@ -4838,3 +4838,18 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** PR activity needs durable archival distinct from ephemeral build
   telemetry, or the plan and PR layouts diverge enough that only the stream model—not the
   dock component—should remain shared.
+
+## PR interface explanations show self-contained contracts (2026-07-15)
+
+- **Decision:** The generated PR-review protocol requires every Interface changes group to
+  show actual signatures in code fences instead of describing them in prose. Changed
+  contracts use a `diff` fence, added or removed contracts use a signature-only fence, and
+  behavior consequences are short comments on the affected signature. Referenced types
+  must be legible in place through their own fence or an inline shape comment.
+- **Why:** Interface review is about the contract a caller must reason about. Prose can hide
+  the exact changed surface, while an excerpt that only names an unfamiliar type still
+  forces the reviewer to leave Otacon and reconstruct the contract elsewhere. Compact,
+  self-contained signatures make the explanation precise without leaking implementation
+  bodies into the interface layer.
+- **Revisit when:** The report schema represents interface deltas structurally enough for
+  the daemon to validate and render signatures without relying on authoring instructions.

@@ -67,7 +67,17 @@ Explain in cognition-first order rather than diff order:
    order. Within each group, order by cause and dependency, not filename or
    patch order. Include these exact labels in every group:
    `**Purpose:**`, `**Changed behavior:**`, and `**Surfaces:**` with concrete
-   `file#symbol` references.
+   `file#symbol` references. Interface groups show contracts, not prose: after
+   the labels, present each contract as a real code excerpt with no
+   implementation bodies — a changed contract as a ```diff fence whose
+   before/after lines are the actual signatures, an added or removed contract as
+   a signature-only fence — and inline the behavior consequence as a short
+   comment on the signature line it belongs to. Never describe a signature in a
+   paragraph instead of showing it, and never open an interface group with more
+   than one sentence before its first fence. Keep every excerpt self-contained:
+   a type referenced inside one must be legible in place — give it its own
+   signature fence or an inline `// = ...` shape comment where it appears;
+   never make the reader know a type by name alone.
 4. **Quiz** — summarize what the questions verify; keep private rubrics and keys
    only in the companion JSON.
 

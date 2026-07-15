@@ -146,6 +146,16 @@ describe("single-source wrappers (D7)", () => {
     }
   });
 
+  test("the PR-review wrapper requires self-contained interface contracts", () => {
+    for (const text of [reviewSkillMd(), dogfoodReviewSkillMd()]) {
+      expect(text).toContain("Interface groups show contracts, not prose");
+      expect(text).toContain("actual signatures");
+      expect(text).toContain("signature-only fence");
+      expect(text).toContain("Keep every excerpt self-contained");
+      expect(text).toContain("inline `// = ...` shape comment");
+    }
+  });
+
   test("every wrapper makes implementation wait for explicit Implement approval", () => {
     for (const text of [skillMd(), dogfoodSkillMd()]) {
       expect(text).toContain("## Hard implementation gate");
