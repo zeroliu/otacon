@@ -4368,6 +4368,24 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** Plan and PR conversations converge on one lifecycle and one linter
   contract, making a shared versioned union simpler than two deliberately separate schemas.
 
+## PR-review follow-ups are same-head conversations with snapshot code authority (2026-07-15)
+
+- **Decision:** A PR-review root may carry same-intent follow-up turns across report
+  revisions while its PR head is unchanged. Follow-ups inherit the root anchor, do not
+  inherit its Remember request, and group with the root as one unresolved conversation.
+  Conduct code change remains one conversation-level second step: it persists the ordered
+  turn ids present at the click, replaces only their undelivered report-feedback work, and
+  disables further turns while requested or working. A failed action restores unanswered
+  report feedback; an old-head conversation is readable but not writable.
+- **Why:** Explanation revisions should not force the reviewer to abandon a useful
+  discussion, while a changed commit invalidates the code context that made the thread
+  safe. Same-kind turns preserve the Ask-versus-Comment contract, no implicit Remember
+  inheritance avoids silent profile mutation, and an immutable authorization snapshot
+  prevents later prose from expanding code scope after consent.
+- **Revisit when:** PR review gains explicit conversation reopening across head changes,
+  code actions support multiple audited attempts, or knowledge updates become a
+  conversation-level policy rather than an exchange-level request.
+
 ## Review work is durable before wake-up and keyed by immutable provenance (2026-07-15)
 
 - **Decision:** Ask, report-feedback, and code-change work carry session/thread/report/head
@@ -4853,3 +4871,18 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   bodies into the interface layer.
 - **Revisit when:** The report schema represents interface deltas structurally enough for
   the daemon to validate and render signatures without relying on authoring instructions.
+
+## Open-quiz grades bind to the attempt hash but tolerate profile drift (2026-07-15)
+
+- **Decision:** `review grade` still refuses any hash other than the attempt's answer-time
+  knowledge hash, but applying the verdict patches the profile as it currently exists: the
+  current document is read and CAS-written in one synchronous block, instead of requiring
+  the profile to still equal the answer-time hash.
+- **Why:** Requiring both bindings deadlocked sequential open grades: grading one question
+  patches the shared scope summary, which moved the hash and made every other pending open
+  attempt in that scope permanently ungradeable (the outer check refused the current hash,
+  the inner guard refused the frozen one). Binding to the attempt keeps the real security
+  property (an agent cannot rebind an old answer to a newer profile); the marker-keyed patch
+  plus write-time CAS already make drift-tolerant application safe and idempotent.
+- **Revisit when:** Knowledge scopes gain per-concept storage (no shared-document hash), or
+  grading moves into a transaction that spans attempt state and profile together.

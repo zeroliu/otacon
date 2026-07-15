@@ -240,6 +240,8 @@ export interface ReviewThread {
   anchor: Anchor;
   body: string;
   createdAt: string;
+  /** Root conversation id; absent on the root turn itself. */
+  replyTo?: string;
   identity: {
     session: string;
     reportRevision: number;
@@ -262,6 +264,8 @@ export interface ReviewThread {
     status: "requested" | "working" | "completed" | "failed";
     requestedAt: string;
     updatedAt: string;
+    /** Ordered conversation turns covered by this explicit authorization. */
+    authorizedTurns?: string[];
     message?: string;
   };
 }
@@ -285,6 +289,15 @@ export interface ReviewThreadEvent {
   anchor: Anchor;
   body: string;
   remember?: { scope: ReviewKnowledgeScope };
+  /** Self-contained ordered context; optional only for legacy queued events. */
+  conversation?: {
+    root: string;
+    turns: Array<{
+      thread: string;
+      body: string;
+      response?: string;
+    }>;
+  };
 }
 
 export interface CommentItem {

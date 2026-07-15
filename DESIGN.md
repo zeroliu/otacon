@@ -587,6 +587,10 @@ POST /api/reviews/:id/threads               create an anchored Ask/Comment on th
                                             markdown syntax stripped, whitespace collapsed), not
                                             its raw bytes; a quote from any other revision is
                                             still refused (E_REVIEW_ANCHOR)
+POST /api/reviews/:id/threads/:tid/followups
+                                            create a same-intent turn on a root conversation;
+                                            inherit its anchor, bind the current report on the
+                                            same PR head, and request no additional memory update
 POST /api/reviews/:id/threads/:tid/respond  agent answer/report response + optional matching memory acknowledgement
 POST /api/reviews/:id/threads/:tid/code-action
                                             explicit reviewer authorization for code work on a persisted Comment only
@@ -1648,7 +1652,11 @@ race a newer explanation. Choice answers are graded deterministically inside the
 never wake the agent. An open answer is atomically persisted before its private `quiz-answer`
 event is queued; the event carries the answer, rubric, attempt/report/head identity, concept,
 scope, and answer-time knowledge hash. A grade is bound to that durable attempt hash; a
-caller cannot substitute the latest profile hash after the answer was submitted. Repeating
+caller cannot substitute the latest profile hash after the answer was submitted. The binding
+is to the attempt, not to the profile staying still: applying a bound verdict tolerates a
+summary that legitimately advanced since the answer (an earlier grade in the same scope moves
+it), because the marker-keyed patch is computed against, and CAS-written with, the current
+document read in the same synchronous block. Repeating
 the same idempotency key requests delivery
 of the same ungraded work without creating another attempt: queued or in-flight work is not
 duplicated and consumes no new event sequence, while acknowledged work may be enqueued again
@@ -1678,23 +1686,30 @@ by plan review: **Ask** or **Comment**. There is no direct code-mutation intent 
 selection. The shared anchored composer can optionally remember either exchange in
 **User** or **Project** knowledge (Project is the initial scope). Submitted items render
 as conversation cards in a desktop rail and a phone drawer, including the selected quote,
-an agent response when applicable, and the exact knowledge destination when one was
-selected. A Comment card alone offers **Conduct code change**; choosing it is the explicit
-second step that moves the thread into worktree/subagent handoff state. While that request
-is in flight, repeated Conduct actions for the same thread coalesce into the original
-request. An Ask thread can never trigger that path. This separates review discussion from
+every reviewer turn paired with its agent response, and the exact knowledge destination
+when one was selected. A compact **Follow up** composer keeps the root intent: Ask produces
+another Question and Comment produces another report-feedback turn. It inherits the root
+anchor but not its Remember request, stays writable across report revisions on the same PR
+head, and becomes read-only when that head changes. A Comment conversation alone offers
+**Conduct code change**; choosing it snapshots every current turn as one explicit
+worktree/subagent authorization and disables follow-ups while requested or working. An Ask
+conversation can never trigger that path. This separates review discussion from
 authorization to alter the PR branch.
 
 Review conversations persist in the session's `threads.json` with a strict version-2
-envelope, disjoint from the byte-compatible version-1 plan-thread schema. Creation accepts
-only intent, anchor, immutable report/head identity, optional memory scope, and idempotency
-key; response, saved receipt, and code-action lifecycle fields are server-owned and rejected
-when supplied by a browser. Each entry owns
+envelope, disjoint from the byte-compatible version-1 plan-thread schema. Root creation
+accepts only intent, anchor, immutable report/head identity, optional memory scope, and
+idempotency key. Follow-up creation accepts the root plus body/current identity and
+idempotency key; the daemon derives its intent/anchor and refuses nested, stale-head, or
+code-action-locked targets. Response, saved receipt, and code-action lifecycle fields are
+server-owned and rejected when supplied by a browser. Each entry owns
 the complete W3C-style anchor, immutable source report revision and PR head generation/SHA,
 the visible Ask/Comment intent, optional requested memory scope, agent response, exact saved
 receipt, and Comment-only code-action lifecycle. The browser projection omits its create
 idempotency key. Agent work is a private `review-thread` event whose `work` is `question`,
-`report-feedback`, or `code-change`; the durable thread/action is written before enqueue,
+`report-feedback`, or `code-change`; it carries an ordered self-contained conversation
+projection, and a code action persists the exact authorized turn ids. The durable
+thread/action is written before enqueue,
 and daemon startup reconstructs a missing wake by full immutable identity without minting a
 duplicate event sequence. A browser retry likewise reconstructs only still-pending work; it
 never resurrects a responded conversation or a working/terminal code action. Every response
@@ -1734,9 +1749,10 @@ queue again. Only `review-done`, `deleted`, or an already persisted read-only co
 terminal; timeout is never completion. `--force` is the sole way to create a separate
 session for an already-known PR.
 
-**Done** is deliberate rather than destructive. A conversation is unresolved until it has
-an agent response; requested, working, or failed code work also remains unresolved, and a
-completed code action cannot hide a missing response. A quiz is unresolved until passed.
+**Done** is deliberate rather than destructive. A conversation counts once and remains
+unresolved while any turn lacks an agent response; requested, working, or failed code work
+also keeps it unresolved, and a completed code action cannot hide a missing response. A
+quiz is unresolved until passed.
 When a changed PR head reopens the session, older-head conversations remain readable history
 but are not re-enqueued and do not block completion of the new head.
 The clean case finishes immediately. Otherwise the dialog names both counts and offers

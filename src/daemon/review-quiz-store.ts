@@ -494,6 +494,11 @@ export class ReviewQuizStore {
         "grade knowledge hash does not match the submitted answer",
       );
     }
+    // The binding above proves the grade belongs to this durable answer. The
+    // profile may have legitimately moved since then (an earlier grade in the
+    // same scope moves it), so apply against the current document — the read
+    // and the CAS replace inside applyKnowledge share one synchronous block.
+    const currentHash = this.knowledge.read(this.target(session, question)).hash;
     const receipt = this.applyKnowledge(
       session,
       question,
@@ -501,7 +506,7 @@ export class ReviewQuizStore {
       attempt,
       input.verdict,
       input.feedback,
-      attempt.knowledgeBaseHash,
+      currentHash,
     );
     Object.assign(attempt, {
       status: input.verdict,

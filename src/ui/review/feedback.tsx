@@ -14,7 +14,7 @@ import type {
   ReactNode,
   RefObject,
 } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Anchor } from "../api";
 import type { CapturedSelection } from "./anchor";
 import { anchorLabel, captureSelection } from "./anchor";
@@ -80,7 +80,11 @@ export function SelectionBar({
     contextualEdge,
     Math.min(viewportWidth - contextualEdge, rect.left + rect.width / 2),
   );
-  const y = above ? rect.top - 8 : rect.bottom + 8;
+  // A drag that auto-scrolls can leave the selection spanning past the
+  // viewport (rect.top negative, rect.bottom beyond the fold); clamp the bar
+  // fully on screen in both directions — 52 keeps its ~36px height plus a
+  // gutter visible when flipped above.
+  const y = Math.max(52, Math.min(viewportHeight - 8, above ? rect.top - 8 : rect.bottom + 8));
   const style = contextual
     ? ({ "--sx": `${x}px`, "--sy": `${y}px` } as CSSProperties)
     : undefined;
@@ -145,6 +149,28 @@ export function Composer({
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   useEffect(() => inputRef.current?.focus(), []);
 
+  // The pinned card's height is content-driven (the quote block grows with
+  // the selection), so no caller-side estimate can keep it on screen. Measure
+  // the rendered card and clamp the pin inside the viewport; `nudge` is the
+  // correction applied on top of the caller's point.
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const [nudge, setNudge] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const pinX = state.at?.x;
+  const pinY = state.at?.y;
+  useLayoutEffect(() => {
+    setNudge({ x: 0, y: 0 });
+    if (pinX === undefined || pinY === undefined) return;
+    const card = cardRef.current;
+    const win = card?.ownerDocument.defaultView;
+    if (!card || !win) return;
+    const rect = card.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return; // non-layout test DOM
+    const halfWidth = rect.width / 2;
+    const x = Math.max(halfWidth + 12, Math.min(win.innerWidth - halfWidth - 12, pinX));
+    const y = Math.max(12, Math.min(win.innerHeight - rect.height - 12, pinY));
+    if (x !== pinX || y !== pinY) setNudge({ x: x - pinX, y: y - pinY });
+  }, [pinX, pinY]);
+
   const ready = body.trim() !== "" && !busy;
   const fire = (action: (body: string) => Promise<boolean>) => {
     if (!ready) return;
@@ -173,9 +199,13 @@ export function Composer({
   const sheet = state.at === null;
   const style = sheet
     ? undefined
-    : ({ "--cx": `${state.at?.x}px`, "--cy": `${state.at?.y}px` } as CSSProperties);
+    : ({
+        "--cx": `${(state.at?.x ?? 0) + nudge.x}px`,
+        "--cy": `${(state.at?.y ?? 0) + nudge.y}px`,
+      } as CSSProperties);
   return (
     <div
+      ref={cardRef}
       className={sheet ? "composer composer-sheet" : "composer"}
       style={style}
       role="dialog"

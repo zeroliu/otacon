@@ -482,7 +482,10 @@ Explain in cognition-first order rather than diff order:
    than one sentence before its first fence. Keep every excerpt self-contained:
    a type referenced inside one must be legible in place — give it its own
    signature fence or an inline \`// = ...\` shape comment where it appears;
-   never make the reader know a type by name alone.
+   never make the reader know a type by name alone. Every symbol an interface
+   group names in \`**Surfaces:**\` must be backed by a signature excerpt in
+   that group; a surfaces chip whose shape appears nowhere reads as an
+   unfulfilled promise.
 4. **Quiz** — summarize what the questions verify; keep private rubrics and keys
    only in the companion JSON.
 
@@ -512,6 +515,11 @@ reported lint or identity error and resubmit. Then park with
 
 Handle exactly one returned event, then park again:
 
+A \`review-thread\` event may carry \`conversation:{root,turns}\`. Treat those
+ordered turns as the self-contained context for the current \`thread\`; answer or
+revise only for the event's current work. A follow-up keeps its root intent and
+does not inherit the root's Remember request.
+
 - \`quiz-answer\`: Compare the answer with every private rubric criterion and the
   code. Write a grade JSON containing exactly \`version:1\`, \`session\`,
   \`revision\`, \`headRevision\`, \`headSha\`, \`question\`, \`attempt\`,
@@ -534,8 +542,10 @@ Handle exactly one returned event, then park again:
   paths, submit them, then respond with the newer submitted
   \`responseReportRevision\` and the saved receipt only when that CAS succeeded.
 - \`review-thread\` with \`work:"code-change"\`: This event is the explicit second
-  step from a persisted Comment and the only thread event that authorizes code
-  edits. Mark it \`working\` with \`${cmd} review code-status\`, then run
+  step from a persisted Comment conversation and the only thread event that
+  authorizes code edits. Its ordered \`conversation.turns\` are the complete,
+  immutable scope authorized when the reviewer clicked; do not add later or
+  unrelated requests. Mark it \`working\` with \`${cmd} review code-status\`, then run
   \`${cmd} review checkout --session <id>\`. If checkout reports a fork,
   insufficient permission, a stale/dirty worktree, or any read-only path, make
   no mutation; explain the advice and mark the action \`failed\`.
@@ -554,13 +564,16 @@ never guess current values.
 
 For an authorized code change, remain the orchestrator. Spawn one native
 implementation subagent in the exact returned worktree and scope it to the
-Comment. Do not implement the change in the main agent. After the subagent
+authorized conversation snapshot. Do not implement the change in the main agent. After the subagent
 returns, the main agent reviews its diff, runs the relevant tests, commits, and
 pushes only to the returned remote/ref. Then run
 \`${cmd} review refresh-head --session <id>\`, rebuild and submit the personalized
-report/quiz for the new head, and mark the code action \`completed\`. On any
+report/quiz for the new head, respond to every authorized Comment turn in
+\`conversation.turns\` that did not already carry an agent response using that
+new submitted report revision, and mark the code action \`completed\`. On any
 failure, preserve the worktree and mark it \`failed\` with an actionable message;
-never reset, force-push, or silently switch branches.
+the daemon will restore unanswered report-feedback work so the conversation can
+continue. Never reset, force-push, or silently switch branches.
 
 ## Remember requested knowledge
 

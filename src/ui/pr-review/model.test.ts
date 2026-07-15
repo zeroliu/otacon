@@ -140,6 +140,32 @@ describe("LiveReviewAdapter conversation transport", () => {
     expect(adapter.getSnapshot().threads[0]).toMatchObject({ status: "change-requested", codeActionStatus: "requested" });
   });
 
+  test("creates a same-kind follow-up with a stable retry key and no inherited memory request", async () => {
+    const fixture = structuredClone(balancedFixture);
+    fixture.threads = [{
+      id: "q1", intent: "question", anchor: "quote", body: "why?", status: "answered", response: "because",
+      createdAt: "2026-07-15T10:00:00.000Z",
+      identity: { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) },
+    }];
+    const seen: string[] = [];
+    let fail = true;
+    const followup = async (root: ReviewThread, body: string, key: string): Promise<ReviewThread> => {
+      seen.push(key);
+      if (fail) { fail = false; throw new Error("response lost"); }
+      return {
+        id: "q2", intent: root.intent, anchor: root.anchor, body, replyTo: root.id,
+        createdAt: "2026-07-15T10:01:00.000Z", status: "open",
+      };
+    };
+    const adapter = new LiveReviewAdapter(fixture, undefined, undefined, undefined, undefined, followup);
+    await expect(adapter.createFollowup("q1", "and now?")).rejects.toThrow("response lost");
+    adapter.replaceSnapshot(fixture);
+    await adapter.createFollowup("q1", "and now?");
+    expect(seen[1]).toBe(seen[0]);
+    expect(adapter.getSnapshot().threads.at(-1)).toMatchObject({ id: "q2", intent: "question", replyTo: "q1" });
+    expect(adapter.getSnapshot().threads.at(-1)?.knowledgeScope).toBeUndefined();
+  });
+
   test("coalesces concurrent code-change requests per persisted Comment", async () => {
     const fixture = structuredClone(balancedFixture);
     fixture.threads = [{

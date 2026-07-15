@@ -770,6 +770,27 @@ export async function postReviewThread(
   return payload.thread;
 }
 
+export async function postReviewFollowup(
+  id: string,
+  root: string,
+  input: {
+    body: string;
+    reportRevision: number;
+    headRevision: number;
+    headSha: string;
+    idempotencyKey: string;
+  },
+): Promise<PublicReviewThread> {
+  const response = await fetch(`/api/reviews/${id}/threads/${root}/followups`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const payload = await response.json() as { thread?: PublicReviewThread; error?: { message?: string } };
+  if (!response.ok || payload.thread === undefined) throw new Error(payload.error?.message ?? "review follow-up was rejected");
+  return payload.thread;
+}
+
 export async function postReviewCodeAction(
   id: string,
   thread: string,

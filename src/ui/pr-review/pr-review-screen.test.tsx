@@ -547,6 +547,39 @@ describe("PrReviewScreen", () => {
     expect(card?.textContent).toContain("added to Project knowledge");
   });
 
+  test("keeps quiz card order frozen while an answer is graded", async () => {
+    const { host, win } = await mountReview(40);
+    const order = () =>
+      [...host.querySelectorAll("[data-quiz-id]")].map((el) => el.getAttribute("data-quiz-id"));
+    // Arrival order: pending work first (q4 grading, q2 retry), then the rest.
+    expect(order()).toEqual(["q4", "q2", "q1", "q3"]);
+    const card = host.querySelector('[data-quiz-id="q1"]') as HTMLElement;
+    await enterText(win, card.querySelector("textarea") as HTMLTextAreaElement, "It keeps a snapshot.");
+    await click(button(card, "Check answer"));
+    // q1 flips to grading but must not teleport above q2.
+    expect(card.textContent).toContain("agent grading");
+    expect(order()).toEqual(["q4", "q2", "q1", "q3"]);
+    await wait(45);
+    expect(order()).toEqual(["q4", "q2", "q1", "q3"]);
+  });
+
+  test("flips the comment composer above a selection near the viewport bottom", async () => {
+    const bottomSelection: CapturedSelection = {
+      anchor: {
+        section: "background",
+        exact: "Without a boundary, the report could become a moving target.",
+      },
+      rect: { top: 700, bottom: 720, left: 260, width: 220 },
+    };
+    const { host } = await mountReview(1, bottomSelection);
+    const toolbar = host.querySelector('[role="toolbar"][aria-label="selection actions"]') as HTMLElement;
+    await click(button(toolbar, "commentc"));
+    const composer = host.querySelector('[role="dialog"][aria-label="comment composer"]') as HTMLElement;
+    // 720 + 48 + 300 overflows the 768px viewport, so the card pins above the
+    // selection instead of rendering below the fold: 700 - 8 - 300.
+    expect(composer.style.getPropertyValue("--cy")).toBe("392px");
+  });
+
   test("turns selected report text into Ask or Comment threads, then escalates only from a Comment thread", async () => {
     const selection: CapturedSelection = {
       anchor: {

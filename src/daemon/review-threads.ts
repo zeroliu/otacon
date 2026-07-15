@@ -58,7 +58,7 @@ function isIdentity(raw: unknown): raw is ReviewThread["identity"] {
 function isReviewThread(raw: unknown): raw is ReviewThread {
   if (typeof raw !== "object" || raw === null) return false;
   const value = raw as Record<string, unknown>;
-  const optional = ["remember", "response", "saved", "codeAction"].filter((key) => value[key] !== undefined);
+  const optional = ["replyTo", "remember", "response", "saved", "codeAction"].filter((key) => value[key] !== undefined);
   if (!exactKeys(value, ["id", "surface", "intent", "anchor", "body", "createdAt", "identity", "idempotencyKey", ...optional])) return false;
   if (
     value.surface !== "review" || (value.intent !== "question" && value.intent !== "comment") ||
@@ -66,6 +66,7 @@ function isReviewThread(raw: unknown): raw is ReviewThread {
     (value.intent === "question" ? !value.id.startsWith("q") : !value.id.startsWith("t")) ||
     !isAnchor(value.anchor) || typeof value.body !== "string" || value.body.trim() === "" || value.body.length > 20_000 ||
     !isDate(value.createdAt) || !isIdentity(value.identity) ||
+    (value.replyTo !== undefined && (typeof value.replyTo !== "string" || !/^[qt][1-9]\d{0,8}$/.test(value.replyTo))) ||
     typeof value.idempotencyKey !== "string" || value.idempotencyKey.trim() === "" || value.idempotencyKey.length > 200
   ) return false;
   if (value.remember !== undefined) {
@@ -94,9 +95,12 @@ function isReviewThread(raw: unknown): raw is ReviewThread {
   if (value.codeAction !== undefined) {
     if (value.intent !== "comment" || typeof value.codeAction !== "object" || value.codeAction === null) return false;
     const action = value.codeAction as Record<string, unknown>;
-    if (!exactKeys(action, ["status", "requestedAt", "updatedAt", ...(action.message === undefined ? [] : ["message"])])) return false;
+    if (!exactKeys(action, ["status", "requestedAt", "updatedAt", ...(action.authorizedTurns === undefined ? [] : ["authorizedTurns"]), ...(action.message === undefined ? [] : ["message"])])) return false;
     if (!["requested", "working", "completed", "failed"].includes(String(action.status)) ||
       !isDate(action.requestedAt) || !isDate(action.updatedAt) ||
+      (action.authorizedTurns !== undefined && (!Array.isArray(action.authorizedTurns) || action.authorizedTurns.length === 0 ||
+        action.authorizedTurns.some((id) => typeof id !== "string" || !/^t[1-9]\d{0,8}$/.test(id)) ||
+        new Set(action.authorizedTurns).size !== action.authorizedTurns.length)) ||
       (action.message !== undefined && (typeof action.message !== "string" || action.message.trim() === "" || action.message.length > 20_000))) return false;
     if (Date.parse(action.requestedAt as string) < Date.parse(value.createdAt as string) ||
       Date.parse(action.updatedAt as string) < Date.parse(action.requestedAt as string)) return false;
@@ -120,6 +124,21 @@ function parseReviewThreads(raw: unknown, expectedSession?: string): ReviewThrea
     sessions.add(thread.identity.session);
   }
   if (sessions.size > 1) return undefined;
+  const byId = new Map(value.threads.map((thread) => [thread.id, thread]));
+  for (const thread of value.threads) {
+    if (thread.replyTo === undefined) continue;
+    const root = byId.get(thread.replyTo);
+    if (root === undefined || root.replyTo !== undefined || root.intent !== thread.intent ||
+      JSON.stringify(root.anchor) !== JSON.stringify(thread.anchor) ||
+      root.identity.headRevision !== thread.identity.headRevision || root.identity.headSha !== thread.identity.headSha ||
+      thread.identity.reportRevision < root.identity.reportRevision || Date.parse(thread.createdAt) < Date.parse(root.createdAt) ||
+      thread.remember !== undefined || thread.codeAction !== undefined) return undefined;
+  }
+  for (const root of value.threads.filter((thread) => thread.codeAction !== undefined)) {
+    const authorized = root.codeAction?.authorizedTurns ?? [root.id];
+    const conversationIds = new Set(value.threads.filter((thread) => thread.id === root.id || thread.replyTo === root.id).map((thread) => thread.id));
+    if (root.replyTo !== undefined || authorized.some((id) => !conversationIds.has(id))) return undefined;
+  }
   return value as unknown as ReviewThreadsFile;
 }
 
@@ -249,10 +268,15 @@ export function requestReviewCodeAction(
   const thread = threads.find((candidate) => candidate.id === id);
   if (thread === undefined) throw new ReviewThreadConflictError("E_REVIEW_THREAD_UNKNOWN", `unknown review thread: ${id}`);
   if (thread.intent !== "comment") throw new ReviewThreadConflictError("E_REVIEW_CODE_ACTION_KIND", "only a persisted Comment can conduct a code change");
+  if (thread.replyTo !== undefined) throw new ReviewThreadConflictError("E_REVIEW_CODE_ACTION_ROOT", "conduct code change on the conversation root");
   if (thread.codeAction !== undefined) return { thread, repeated: true };
+  const authorizedTurns = threads
+    .filter((candidate) => candidate.id === thread.id || candidate.replyTo === thread.id)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    .map((candidate) => candidate.id);
   const updated = validatedMutation({
     ...thread,
-    codeAction: { status: "requested", requestedAt: now, updatedAt: now },
+    codeAction: { status: "requested", requestedAt: now, updatedAt: now, authorizedTurns },
   });
   writeReviewThreads(path, threads.map((candidate) => candidate.id === id ? updated : candidate));
   return { thread: updated, repeated: false };

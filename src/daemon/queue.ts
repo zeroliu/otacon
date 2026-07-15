@@ -14,7 +14,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import type { ReviewDoneEvent } from "../shared/review.js";
-import type { EventPayload, EventsFile, QueuedEvent } from "../shared/types.js";
+import type { EventPayload, EventsFile, QueuedEvent, ReviewThreadEvent } from "../shared/types.js";
 import { quarantineCorruptFile, stringify, writeFileAtomic } from "./store.js";
 
 export type Waiter = (event: QueuedEvent) => void;
@@ -30,6 +30,12 @@ function exactIso(value: unknown): value is string {
   if (typeof value !== "string") return false;
   const milliseconds = Date.parse(value);
   return Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === value;
+}
+
+function exactKeys(value: Record<string, unknown>, expected: string[]): boolean {
+  const actual = Object.keys(value).sort();
+  const keys = [...expected].sort();
+  return actual.length === keys.length && actual.every((key, index) => key === keys[index]);
 }
 
 function validReviewDonePayload(raw: Record<string, unknown>): boolean {
@@ -56,7 +62,7 @@ function validReviewDonePayload(raw: Record<string, unknown>): boolean {
 
 function validReviewThreadPayload(raw: Record<string, unknown>): boolean {
   if (raw.event !== "review-thread") return true;
-  const optional = raw.remember === undefined ? [] : ["remember"];
+  const optional = ["remember", "conversation"].filter((key) => raw[key] !== undefined);
   const expected = ["event", "work", "session", "thread", "reportRevision", "headRevision", "headSha", "anchor", "body", ...optional].sort();
   const actual = Object.keys(raw).sort();
   if (actual.length !== expected.length || !actual.every((key, index) => key === expected[index])) return false;
@@ -82,6 +88,25 @@ function validReviewThreadPayload(raw: Record<string, unknown>): boolean {
     if (typeof raw.remember !== "object" || raw.remember === null || Array.isArray(raw.remember)) return false;
     const remember = raw.remember as Record<string, unknown>;
     if (Object.keys(remember).length !== 1 || (remember.scope !== "user" && remember.scope !== "project")) return false;
+  }
+  if (raw.conversation !== undefined) {
+    if (typeof raw.conversation !== "object" || raw.conversation === null || Array.isArray(raw.conversation)) return false;
+    const conversation = raw.conversation as Record<string, unknown>;
+    if (Object.keys(conversation).sort().join(",") !== "root,turns" ||
+      typeof conversation.root !== "string" || !/^[qt][1-9]\d{0,8}$/.test(conversation.root) ||
+      !Array.isArray(conversation.turns) || conversation.turns.length === 0) return false;
+    const ids = new Set<string>();
+    for (const turn of conversation.turns) {
+      if (typeof turn !== "object" || turn === null || Array.isArray(turn)) return false;
+      const value = turn as Record<string, unknown>;
+      const keys = ["thread", "body", ...(value.response === undefined ? [] : ["response"])].sort();
+      if (!exactKeys(value, keys) || typeof value.thread !== "string" || !/^[qt][1-9]\d{0,8}$/.test(value.thread) ||
+        typeof value.body !== "string" || value.body.trim() === "" || value.body.length > 20_000 ||
+        (value.response !== undefined && (typeof value.response !== "string" || value.response.trim() === "" || value.response.length > 20_000)) ||
+        ids.has(value.thread)) return false;
+      ids.add(value.thread);
+    }
+    if (!ids.has(conversation.root) || !ids.has(raw.thread as string)) return false;
   }
   return true;
 }
@@ -191,6 +216,15 @@ export class SessionQueue {
     const keep = (event: QueuedEvent): boolean => event.payload.event !== "review-done";
     this.events = this.events.filter(keep);
     this.inFlight = this.inFlight.filter(keep);
+    this.flush();
+  }
+
+  /** Supersede still-undelivered report feedback with one conversation code action. */
+  dropQueuedReviewThreadWork(threadIds: ReadonlySet<string>, work: ReviewThreadEvent["work"]): void {
+    this.events = this.events.filter((event) => {
+      const payload = event.payload;
+      return payload.event !== "review-thread" || payload.work !== work || !threadIds.has(payload.thread);
+    });
     this.flush();
   }
 

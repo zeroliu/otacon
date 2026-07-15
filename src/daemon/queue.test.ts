@@ -350,6 +350,10 @@ describe("SessionQueue persistence", () => {
       anchor: { section: "code", exact: "selected text", prefix: "before", suffix: "after" },
       body: "Explain this boundary.",
       remember: { scope: "project" },
+      conversation: {
+        root: "t1",
+        turns: [{ thread: "t1", body: "Explain this boundary." }],
+      },
     };
     const q = new SessionQueue(file);
     q.enqueue(event, 1);
@@ -366,6 +370,27 @@ describe("SessionQueue persistence", () => {
       events: [{ seq: 1, queuedAt: "2026-07-14T00:00:00.000Z", payload: { ...event, work: "question", thread: "t1" } }],
     }));
     expect(new SessionQueue(file).size).toBe(0);
+  });
+
+  test("a code handoff removes queued report feedback without touching other review work", () => {
+    const q = new SessionQueue(file);
+    const base: EventPayload = {
+      event: "review-thread",
+      work: "report-feedback",
+      session: "otc_abc123",
+      thread: "t1",
+      reportRevision: 1,
+      headRevision: 1,
+      headSha: "a".repeat(40),
+      anchor: { section: "code", exact: "selected text" },
+      body: "Change this.",
+    };
+    q.enqueue(base, 1);
+    q.enqueue({ ...base, thread: "t2", body: "And this." }, 2);
+    q.enqueue({ ...base, thread: "t3", body: "Separate conversation." }, 3);
+    q.dropQueuedReviewThreadWork(new Set(["t1", "t2"]), "report-feedback");
+    expect(q.size).toBe(1);
+    expect(q.take()?.payload).toMatchObject({ thread: "t3" });
   });
 
   test("wrong-shape events files are quarantined too", () => {

@@ -1,4 +1,5 @@
 import type { Anchor } from "../../shared/types";
+import { conversationIsUnresolved, groupReviewThreads } from "./group.js";
 
 /** Presentation contracts for the PR-review screen.
  *
@@ -172,6 +173,8 @@ export interface ReviewThread {
   intent: FeedbackIntent;
   anchor: string;
   body: string;
+  createdAt?: string;
+  replyTo?: string;
   status: "open" | "answered" | "change-requested";
   response?: string;
   knowledgeScope?: KnowledgeScope;
@@ -181,6 +184,7 @@ export interface ReviewThread {
   codeActionStatus?: "requested" | "working" | "completed" | "failed";
   actionMessage?: string;
   canConductCodeChange?: boolean;
+  canFollowup?: boolean;
 }
 
 export interface ReviewPresentation {
@@ -207,6 +211,7 @@ export interface ReviewAdapter {
   subscribe: (listener: () => void) => () => void;
   submitQuiz: (quizId: string, answer: string) => Promise<void>;
   createThread: (draft: ThreadDraft) => Promise<void>;
+  createFollowup: (rootId: string, body: string) => Promise<void>;
   conductCodeChange: (threadId: string) => Promise<void>;
   close: (force: boolean) => Promise<void>;
 }
@@ -284,12 +289,38 @@ export class MemoryReviewAdapter implements ReviewAdapter {
           intent: draft.intent,
           anchor: draft.anchor,
           body: draft.body,
+          createdAt: new Date().toISOString(),
           status: "open",
           knowledgeScope: draft.remember ? draft.scope : undefined,
           sourceAnchor: draft.sourceAnchor,
           canConductCodeChange: draft.intent === "comment",
         },
       ],
+    });
+  }
+
+  async createFollowup(rootId: string, body: string): Promise<void> {
+    if (this.state.closed) return;
+    const root = this.state.threads.find((thread) => thread.id === rootId && thread.replyTo === undefined);
+    if (root === undefined) return;
+    const prefix = root.intent === "question" ? "q" : "t";
+    const number = this.state.threads.reduce((max, thread) => (
+      thread.id.startsWith(prefix) ? Math.max(max, Number(thread.id.slice(1)) || 0) : max
+    ), 0) + 1;
+    this.update({
+      ...this.state,
+      threads: [...this.state.threads, {
+        id: `${prefix}${number}`,
+        intent: root.intent,
+        anchor: root.anchor,
+        sourceAnchor: root.sourceAnchor,
+        body: body.trim(),
+        createdAt: new Date().toISOString(),
+        replyTo: root.id,
+        status: "open",
+        canConductCodeChange: false,
+        canFollowup: false,
+      }],
     });
   }
 
@@ -338,6 +369,7 @@ export class LiveReviewAdapter implements ReviewAdapter {
     private readonly createLiveThread?: (draft: ThreadDraft, idempotencyKey: string) => Promise<ReviewThread>,
     private readonly conductLiveCodeChange?: (thread: ReviewThread) => Promise<ReviewThread>,
     private readonly closeLiveReview?: (force: boolean) => Promise<void>,
+    private readonly createLiveFollowup?: (root: ReviewThread, body: string, idempotencyKey: string) => Promise<ReviewThread>,
   ) {
     this.state = initial;
   }
@@ -413,6 +445,24 @@ export class LiveReviewAdapter implements ReviewAdapter {
     });
   }
 
+  async createFollowup(rootId: string, body: string): Promise<void> {
+    if (this.createLiveFollowup === undefined) throw new Error("review follow-up persistence is not available yet");
+    const root = this.state.threads.find((thread) => thread.id === rootId && thread.replyTo === undefined);
+    if (root === undefined) return;
+    const normalized = body.trim();
+    const retryId = `${rootId}:${normalized}`;
+    const keyName = `followup:${retryId}`;
+    const prior = this.retryKeys.get(keyName);
+    const idempotencyKey = prior?.key ?? crypto.randomUUID();
+    this.retryKeys.set(keyName, { answer: normalized, key: idempotencyKey });
+    const thread = await this.createLiveFollowup(root, normalized, idempotencyKey);
+    this.retryKeys.delete(keyName);
+    this.updateSnapshot({
+      ...this.state,
+      threads: [...this.state.threads.filter((item) => item.id !== thread.id), thread],
+    });
+  }
+
   async conductCodeChange(threadId: string): Promise<void> {
     if (this.conductLiveCodeChange === undefined) throw new Error("code-change execution is not available yet");
     const active = this.codeChangeInFlight.get(threadId);
@@ -444,10 +494,9 @@ export class LiveReviewAdapter implements ReviewAdapter {
 }
 
 export function unresolvedThreadCount(state: ReviewPresentation): number {
-  return state.threads.filter((thread) =>
-    thread.status !== "answered" &&
-    (thread.identity === undefined || thread.identity.headSha === state.pr.headSha)
-  ).length;
+  return groupReviewThreads(state.threads.filter((thread) =>
+    thread.identity === undefined || thread.identity.headSha === state.pr.headSha
+  )).filter(conversationIsUnresolved).length;
 }
 
 export function incompleteQuizCount(state: ReviewPresentation): number {

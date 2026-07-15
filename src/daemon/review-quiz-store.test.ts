@@ -219,19 +219,24 @@ describe("ReviewQuizStore", () => {
     expect(knowledge.readEvidence({ scope: "project", repo })).toHaveLength(1);
   });
 
-  test("leaves an attempt pending on knowledge CAS conflict", () => {
+  test("applies a bound grade after the profile legitimately moved since the answer", () => {
     const { knowledge, quizzes } = setup();
     const answer = quizzes.answer(session(), { revision: 1, question: "q-open", answer: "owner then consumer", idempotencyKey: "conflict" });
     const current = knowledge.read({ scope: "project", repo });
     expect(knowledge.replace({ scope: "project", repo }, current.markdown.replace("No preferences", "Concise preferences"), current.hash).ok).toBe(true);
-    expect(() => quizzes.grade(session(), {
+    const graded = quizzes.grade(session(), {
       version: 1, session: session().id, revision: 1, headRevision: 1, headSha: "a".repeat(40),
       question: "q-open", attempt: answer.attempt.id, verdict: "pass", feedback: "Clear.",
       knowledgeBaseHash: answer.event!.knowledge.baseHash,
-    })).toThrow(ReviewQuizConflictError);
-    expect(quizzes.publicState(session(), 1).questions[0]?.status).toBe("grading");
-    expect(knowledge.readEvidence({ scope: "project", repo })).toEqual([]);
+    });
+    expect(graded.attempt.status).toBe("pass");
+    const markdown = knowledge.read({ scope: "project", repo }).markdown;
+    // The marker-keyed patch lands without clobbering the interleaved edit.
+    expect(markdown).toContain("Concise preferences");
+    expect(markdown).toContain("otacon:quiz:boundary:otc_review1:r1:qa1");
+    expect(knowledge.readEvidence({ scope: "project", repo })).toHaveLength(1);
   });
+
 
   test("rejects a caller-substituted current hash instead of rebinding an older answer", () => {
     const { knowledge, quizzes } = setup();
@@ -267,13 +272,19 @@ describe("ReviewQuizStore", () => {
     const spoof = "<!-- otacon:quiz:boundary:otc_review1:r1:qa1 -->";
     const edited = current.markdown.replace("No preferences recorded yet.", `No preferences recorded yet. Mentioned as prose: ${spoof}`);
     expect(knowledge.replace({ scope: "project", repo }, edited, current.hash).ok).toBe(true);
-    expect(() => quizzes.grade(session(), {
+    const graded = quizzes.grade(session(), {
       version: 1, session: session().id, revision: 1, headRevision: 1, headSha: "a".repeat(40),
       question: "q-open", attempt: answer.attempt.id, verdict: "pass", feedback: "Clear.",
       knowledgeBaseHash: answer.event!.knowledge.baseHash,
-    })).toThrow(ReviewQuizConflictError);
-    expect(quizzes.publicState(session(), 1).questions[0]?.status).toBe("grading");
-    expect(knowledge.readEvidence({ scope: "project", repo })).toEqual([]);
+    });
+    // The prose mention neither blocks the grade nor substitutes for the real
+    // managed entry: the concept still lands under Demonstrated concepts, the
+    // spoof survives untouched, and exactly one evidence row is written.
+    expect(graded.attempt.status).toBe("pass");
+    const markdown = knowledge.read({ scope: "project", repo }).markdown;
+    expect(markdown).toContain(`Mentioned as prose: ${spoof}`);
+    expect(markdown).toContain(`## Demonstrated concepts\n\n- ${spoof} Boundary ownership`);
+    expect(knowledge.readEvidence({ scope: "project", repo })).toHaveLength(1);
   });
 
   test("repairs pending choices and exposes only pending open events after restart", () => {

@@ -1408,9 +1408,7 @@ describe("review session identity and lifecycle", () => {
     expect((await action.json()) as object).toMatchObject({ thread: { codeAction: { status: "requested" } } });
     expect((await (await app.request(`/api/sessions/${id}`)).json()) as object).toMatchObject({ pendingEvents: 1 });
     expect((await postJson(`/api/reviews/${id}/threads/t1/code-action`, { source })).status).toBe(200);
-    expect(eventsOnDisk(id)).toHaveLength(2);
-    expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as object)
-      .toMatchObject({ event: "review-thread", work: "report-feedback", thread: "t1" });
+    expect(eventsOnDisk(id)).toHaveLength(1);
     expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as object)
       .toMatchObject({ event: "review-thread", work: "code-change", thread: "t1" });
 
@@ -1456,6 +1454,94 @@ describe("review session identity and lifecycle", () => {
     expect((await postJson(`/api/reviews/${id}/threads/${askId}/code-action`, {
       source: { reportRevision: 2, headRevision: 1, headSha: "a".repeat(40) },
     })).status).toBe(409);
+  });
+
+  test("same-head PR follow-ups stay grouped and code authorization snapshots the whole conversation", async () => {
+    const { id } = await submittedReview();
+    const firstSource = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "comment",
+      anchor: { section: "code", exact: "Read the contract before runtime wiring." },
+      body: "Make the boundary explicit.",
+      ...firstSource,
+      idempotencyKey: "conversation-root",
+      rememberScope: "project",
+    })).status).toBe(201);
+    await app.request(`/api/sessions/${id}/events?wait=0`);
+
+    const next = await postJson(`/api/reviews/${id}/revisions`, { source: firstSource });
+    const preparation = (await next.json()) as { preparation: { snapshot: { hash: string } } };
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 2, preparation.preparation.snapshot.hash),
+      quiz: validReviewQuiz(id, 2),
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/threads/t1/respond`, {
+      source: firstSource,
+      body: "Explained in report r2.",
+      responseReportRevision: 2,
+      saved: { scope: "project", updated: true },
+    })).status).toBe(200);
+
+    const currentSource = { reportRevision: 2, headRevision: 1, headSha: "a".repeat(40) };
+    const followup = await postJson(`/api/reviews/${id}/threads/t1/followups`, {
+      body: "Now apply that boundary to the implementation.",
+      ...currentSource,
+      idempotencyKey: "conversation-followup",
+    });
+    expect(followup.status).toBe(201);
+    const followupBody = (await followup.json()) as { thread: Record<string, unknown> };
+    expect(followupBody).toMatchObject({
+      thread: { id: "t2", replyTo: "t1", intent: "comment", identity: currentSource },
+    });
+    expect(followupBody.thread).not.toHaveProperty("remember");
+
+    const action = await postJson(`/api/reviews/${id}/threads/t1/code-action`, { source: firstSource });
+    expect(action.status).toBe(202);
+    expect((await action.json()) as object).toMatchObject({
+      thread: { id: "t1", codeAction: { authorizedTurns: ["t1", "t2"], status: "requested" } },
+    });
+    expect(eventsOnDisk(id)).toHaveLength(1);
+    const replay = await postJson(`/api/reviews/${id}/threads/t1/followups`, {
+      body: "Now apply that boundary to the implementation.",
+      ...currentSource,
+      idempotencyKey: "conversation-followup",
+    });
+    expect(replay.status).toBe(200);
+    const locked = await postJson(`/api/reviews/${id}/threads/t1/followups`, {
+      body: "This must wait.",
+      ...currentSource,
+      idempotencyKey: "conversation-locked",
+    });
+    expect(locked.status).toBe(409);
+    expect((await locked.json()) as object).toMatchObject({ error: { code: "E_REVIEW_CODE_ACTION_PENDING" } });
+
+    const codeWork = (await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as object;
+    expect(codeWork).toMatchObject({
+      event: "review-thread",
+      work: "code-change",
+      thread: "t1",
+      conversation: {
+        root: "t1",
+        turns: [
+          { thread: "t1", body: "Make the boundary explicit.", response: "Explained in report r2." },
+          { thread: "t2", body: "Now apply that boundary to the implementation." },
+        ],
+      },
+    });
+    expect((await postJson(`/api/reviews/${id}/threads/t1/code-action/status`, {
+      source: firstSource,
+      status: "failed",
+      message: "checkout unavailable",
+    })).status).toBe(200);
+    expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as object).toMatchObject({
+      event: "review-thread",
+      work: "report-feedback",
+      thread: "t2",
+      conversation: { root: "t1" },
+    });
+    const done = await postJson(`/api/reviews/${id}/done`, {});
+    expect(done.status).toBe(409);
+    expect((await done.json()) as object).toMatchObject({ warning: { unresolved: { conversations: 1 } } });
   });
 
   test("a responded Comment can still escalate when its immutable source report is older on the same PR head", async () => {

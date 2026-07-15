@@ -339,6 +339,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   const reviewThreadEvent = (
     thread: ReviewThread,
     work: ReviewThreadEvent["work"],
+    threads: ReviewThread[] = [thread],
   ): ReviewThreadEvent => ({
     event: "review-thread",
     work,
@@ -350,6 +351,23 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     anchor: thread.anchor,
     body: thread.body,
     ...(thread.remember === undefined ? {} : { remember: thread.remember }),
+    conversation: (() => {
+      const root = thread.replyTo ?? thread.id;
+      const rootThread = threads.find((candidate) => candidate.id === root);
+      const authorized = work === "code-change" ? new Set(rootThread?.codeAction?.authorizedTurns ?? [root]) : undefined;
+      return {
+        root,
+        turns: threads
+          .filter((candidate) => (candidate.id === root || candidate.replyTo === root) &&
+            (authorized === undefined || authorized.has(candidate.id)))
+          .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+          .map((candidate) => ({
+            thread: candidate.id,
+            body: candidate.body,
+            ...(candidate.response === undefined ? {} : { response: candidate.response.body }),
+          })),
+      };
+    })(),
   });
 
   const sameReviewThreadWork = (payload: EventPayload, event: ReviewThreadEvent): boolean => {
@@ -424,20 +442,27 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       // damaged review must not prevent the daemon or other sessions starting.
     }
     try {
-      for (const thread of readReviewThreads(store.threadsPath(session.id), session.id)) {
+      const threads = readReviewThreads(store.threadsPath(session.id), session.id);
+      const authorizedByRequestedAction = new Set(threads.flatMap((candidate) =>
+        candidate.codeAction?.status === "requested" ? (candidate.codeAction.authorizedTurns ?? [candidate.id]) : []
+      ));
+      for (const thread of threads) {
         if (thread.identity.headRevision !== session.review.revision ||
             thread.identity.headSha !== session.review.head.sha) continue;
         // Once code work is explicitly requested it owns the eventual report
         // refresh/response. Do not resurrect an already-acked older
         // report-feedback wake after a restart and let it race the code result.
-        if (thread.response === undefined && thread.codeAction === undefined) {
+        if (thread.response === undefined &&
+            (thread.codeAction === undefined || thread.codeAction.status === "failed") &&
+            !authorizedByRequestedAction.has(thread.id)) {
           enqueueReviewThreadWork(reviewThreadEvent(
             thread,
             thread.intent === "question" ? "question" : "report-feedback",
+            threads,
           ));
         }
         if (thread.codeAction?.status === "requested") {
-          enqueueReviewThreadWork(reviewThreadEvent(thread, "code-change"));
+          enqueueReviewThreadWork(reviewThreadEvent(thread, "code-change", threads));
         }
       }
     } catch {
@@ -491,15 +516,23 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       return undefined;
     }
   };
+  const unresolvedReviewConversations = (
+    threads: PublicReviewThread[],
+    session: Extract<RegistrySession, { kind: "review" }>,
+  ): number => {
+    const unresolved = new Set<string>();
+    for (const thread of threads) {
+      if (thread.identity.headRevision !== session.review.revision || thread.identity.headSha !== session.review.head.sha) continue;
+      const root = thread.replyTo ?? thread.id;
+      const unresolvedCodeAction = thread.codeAction !== undefined && thread.codeAction.status !== "completed";
+      if (thread.response === undefined || unresolvedCodeAction) unresolved.add(root);
+    }
+    return unresolved.size;
+  };
   const safePendingReviewWork = (session: Extract<RegistrySession, { kind: "review" }>): number => {
     if (isTerminalSession(session)) return 0;
     try {
-      return readReviewThreads(store.threadsPath(session.id), session.id).reduce((count, thread) => {
-        if (thread.identity.headRevision !== session.review.revision ||
-            thread.identity.headSha !== session.review.head.sha) return count;
-        const unresolvedCodeAction = thread.codeAction !== undefined && thread.codeAction.status !== "completed";
-        return count + (thread.response === undefined || unresolvedCodeAction ? 1 : 0);
-      }, 0);
+      return unresolvedReviewConversations(publicReviewThreads(store.threadsPath(session.id), session.id), session);
     } catch {
       return 0;
     }
@@ -1352,12 +1385,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
         }, 409);
       }
       const unresolved = {
-        conversations: publicReviewThreads(store.threadsPath(current.id), current.id).filter((thread) =>
-          thread.identity.headRevision === current.review.revision &&
-          thread.identity.headSha === current.review.head.sha &&
-          (thread.response === undefined ||
-          (thread.codeAction !== undefined && thread.codeAction.status !== "completed"))
-        ).length,
+        conversations: unresolvedReviewConversations(publicReviewThreads(store.threadsPath(current.id), current.id), current),
         quizzes: quiz.questions.filter((question) => question.status !== "passed").length,
       };
       if ((unresolved.conversations > 0 || unresolved.quizzes > 0) && body.force !== true) {
@@ -1472,7 +1500,11 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
         idempotencyKey: body.idempotencyKey,
         ...(rememberScope === undefined ? {} : { remember: { scope: rememberScope } }),
       });
-      const event = reviewThreadEvent(result.thread, intent === "question" ? "question" : "report-feedback");
+      const event = reviewThreadEvent(
+        result.thread,
+        intent === "question" ? "question" : "report-feedback",
+        readReviewThreads(path, current.id),
+      );
       // A request-loss retry may arrive after the agent already responded (or
       // after a Comment advanced to code work). The persisted thread is the
       // authority: only reconstruct work that startup recovery would also own.
@@ -1488,6 +1520,83 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       if (error instanceof ReviewThreadConflictError) {
         return c.json({ error: { code: error.code, message: error.message } }, 409);
       }
+      throw error;
+    }
+  });
+
+  /** Browser follow-up on an existing same-head PR-review conversation. */
+  app.post("/api/reviews/:id/threads/:tid/followups", async (c) => {
+    const before = store.getSession(c.req.param("id"));
+    if (before === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (before.kind !== "review") return codedBadRequest(c, "E_SESSION_KIND", `session ${before.id} is not a review`);
+    const body = (await readJsonBody(c)) ?? {};
+    if (!hasExactKeys(body, ["body", "reportRevision", "headRevision", "headSha", "idempotencyKey"]) ||
+      typeof body.body !== "string" || body.body.trim() === "" || body.body.length > 20_000 ||
+      !Number.isInteger(body.reportRevision) || !Number.isInteger(body.headRevision) || typeof body.headSha !== "string" ||
+      typeof body.idempotencyKey !== "string" || body.idempotencyKey.trim() === "" || body.idempotencyKey.length > 200) {
+      return codedBadRequest(c, "E_REVIEW_THREAD_INPUT", "review follow-up request is invalid");
+    }
+    const current = store.getSession(before.id);
+    if (current?.kind !== "review") return notFound(c, `unknown review: ${before.id}`);
+    if (current.status === "done") return sessionOver(c, current.id);
+    const latest = reviews.latestSubmittedRevision(current.id);
+    if (body.reportRevision !== latest || body.headRevision !== current.review.revision || body.headSha !== current.review.head.sha) {
+      return c.json({ error: { code: "E_REVIEW_THREAD_STALE", message: "follow-up does not belong to the current report and PR head" } }, 409);
+    }
+    const path = store.threadsPath(current.id);
+    const threads = readReviewThreads(path, current.id);
+    const root = threads.find((candidate) => candidate.id === c.req.param("tid"));
+    if (root === undefined) return notFound(c, `unknown review thread: ${c.req.param("tid")}`);
+    if (root.replyTo !== undefined) {
+      return c.json({ error: { code: "E_REVIEW_THREAD_ROOT", message: "follow-ups must target the conversation root" } }, 409);
+    }
+    if (root.identity.headRevision !== current.review.revision || root.identity.headSha !== current.review.head.sha) {
+      return c.json({ error: { code: "E_REVIEW_THREAD_STALE", message: "conversation belongs to an older PR head" } }, 409);
+    }
+    const existing = threads.find((candidate) => candidate.idempotencyKey === body.idempotencyKey);
+    if (existing === undefined && (root.codeAction?.status === "requested" || root.codeAction?.status === "working")) {
+      return c.json({ error: { code: "E_REVIEW_CODE_ACTION_PENDING", message: "code work already owns this conversation snapshot" } }, 409);
+    }
+    try {
+      const report = reviews.readRevision(current.id, latest);
+      if (report.revision.status !== "submitted" || report.revision.headRevision !== current.review.revision || report.revision.headSha !== current.review.head.sha) {
+        return c.json({ error: { code: "E_REVIEW_THREAD_STALE", message: "current report has not been submitted for the current PR head" } }, 409);
+      }
+    } catch {
+      return reviewRevisionUnavailable(c, `review revision ${latest} is missing or corrupt`);
+    }
+    queueFor(current.id);
+    const prefix = root.intent === "question" ? "q" : "t";
+    const nextOrdinal = threads.reduce((max, candidate) => candidate.id.startsWith(prefix)
+      ? Math.max(max, Number(candidate.id.slice(1)) || 0)
+      : max, 0) + 1;
+    try {
+      const result = createReviewThread(path, {
+        id: existing?.id ?? `${prefix}${nextOrdinal}`,
+        surface: "review",
+        intent: root.intent,
+        anchor: root.anchor,
+        body: body.body,
+        createdAt: existing?.createdAt ?? new Date().toISOString(),
+        replyTo: root.id,
+        identity: {
+          session: current.id,
+          reportRevision: body.reportRevision as number,
+          headRevision: body.headRevision as number,
+          headSha: body.headSha,
+        },
+        idempotencyKey: body.idempotencyKey,
+      });
+      const allThreads = readReviewThreads(path, current.id);
+      const event = reviewThreadEvent(result.thread, root.intent === "question" ? "question" : "report-feedback", allThreads);
+      const seq = result.thread.response === undefined ? enqueueReviewThreadWork(event) : undefined;
+      const publicThread = publicReviewThread(result.thread);
+      publishThread(current.id, publicThread);
+      publishQueue(current.id, queueFor(current.id).size);
+      publishSession(current);
+      return c.json({ thread: publicThread, repeated: result.repeated, ...(seq === undefined ? {} : { seq }) }, result.repeated ? 200 : 201);
+    } catch (error) {
+      if (error instanceof ReviewThreadConflictError) return c.json({ error: { code: error.code, message: error.message } }, 409);
       throw error;
     }
   });
@@ -1598,7 +1707,10 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     }
     try {
       const result = requestReviewCodeAction(store.threadsPath(current.id), thread.id, new Date().toISOString(), current.id);
-      const event = reviewThreadEvent(result.thread, "code-change");
+      const allThreads = readReviewThreads(store.threadsPath(current.id), current.id);
+      const authorized = new Set(result.thread.codeAction?.authorizedTurns ?? [result.thread.id]);
+      queueFor(current.id).dropQueuedReviewThreadWork(authorized, "report-feedback");
+      const event = reviewThreadEvent(result.thread, "code-change", allThreads);
       // Retry can repair a missing enqueue while requested, but must never
       // resurrect work the agent already moved to working/terminal.
       const seq = result.thread.codeAction?.status === "requested"
@@ -1644,6 +1756,14 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
         status: body.status,
         ...(body.message === undefined ? {} : { message: body.message }),
       }, new Date().toISOString(), current.id);
+      if (body.status === "failed") {
+        const allThreads = readReviewThreads(store.threadsPath(current.id), current.id);
+        const authorized = new Set(result.thread.codeAction?.authorizedTurns ?? [result.thread.id]);
+        for (const candidate of allThreads) {
+          if (!authorized.has(candidate.id) || candidate.response !== undefined) continue;
+          enqueueReviewThreadWork(reviewThreadEvent(candidate, "report-feedback", allThreads));
+        }
+      }
       const publicThread = publicReviewThread(result.thread);
       publishThread(current.id, publicThread);
       publishQueue(current.id, queueFor(current.id).size);

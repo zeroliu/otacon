@@ -146,6 +146,28 @@ describe("review thread persistence", () => {
     expect(() => updateReviewCodeAction(path, "t1", { status: "failed" }, "2026-07-15T10:24:00.000Z")).toThrow(/terminal/);
   });
 
+  test("persists same-kind root follow-ups and snapshots every turn for one root code action", () => {
+    createReviewThread(path, comment());
+    const followup = comment({
+      id: "t2",
+      body: "Apply it to the integration too.",
+      createdAt: "2026-07-15T10:01:00.000Z",
+      replyTo: "t1",
+      identity: { ...comment().identity, reportRevision: 3 },
+      idempotencyKey: "create-t2",
+    });
+    delete followup.remember;
+    createReviewThread(path, followup);
+    expect(publicReviewThreads(path)).toMatchObject([
+      { id: "t1" },
+      { id: "t2", replyTo: "t1", intent: "comment", anchor: comment().anchor },
+    ]);
+    expect(requestReviewCodeAction(path, "t1", "2026-07-15T10:02:00.000Z").thread.codeAction)
+      .toMatchObject({ authorizedTurns: ["t1", "t2"] });
+    expect(() => requestReviewCodeAction(path, "t2", "2026-07-15T10:03:00.000Z"))
+      .toThrow(/conversation root/);
+  });
+
   test("question answers reject report revisions and comments require one", () => {
     createReviewThread(path, question());
     createReviewThread(path, comment());

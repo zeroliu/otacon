@@ -24,7 +24,7 @@ import { parseReviewReport } from "../../shared/review-report";
 import type { ReviewReportRevisionPayload } from "../../shared/review-report";
 import type { ReviewQuizPublicState } from "../../shared/review-quiz";
 import type { ReviewLiveSession } from "../api";
-import { postReviewCodeAction, postReviewDone, postReviewQuizAnswer, postReviewThread, ReviewIncompleteError } from "../api";
+import { postReviewCodeAction, postReviewDone, postReviewFollowup, postReviewQuizAnswer, postReviewThread, ReviewIncompleteError } from "../api";
 import type { ReviewUnresolvedCounts } from "../api";
 import type { PublicReviewThread } from "../../shared/types";
 import { SessionMenuButton } from "../session-sheet";
@@ -642,11 +642,24 @@ export function PrReviewScreen({
   const openComposer = (mode: ComposerState["mode"]): void => {
     if (selection === null || selection === undefined || state.closed) return;
     const narrow = typeof window !== "undefined" && window.innerWidth < 600;
-    const x = selection.rect.left + selection.rect.width / 2;
+    // .composer is a fixed 380px-wide card centered on --cx whose top sits at
+    // --cy; a selection near a viewport edge would otherwise pin it off
+    // screen. Mirror SelectionBar: flip above short-bottomed selections, then
+    // clamp both axes to the viewport.
+    const composerHeight = 300;
+    const edge = Math.min(202, window.innerWidth / 2);
+    const x = Math.max(
+      edge,
+      Math.min(window.innerWidth - edge, selection.rect.left + selection.rect.width / 2),
+    );
+    const below = selection.rect.bottom + 48;
+    const y = below + composerHeight > window.innerHeight
+      ? Math.max(12, selection.rect.top - 8 - composerHeight)
+      : below;
     setComposer({
       mode,
       anchor: selection.anchor,
-      at: narrow ? null : { x, y: selection.rect.bottom + 48 },
+      at: narrow ? null : { x, y },
     });
   };
   const sendThread = async (
@@ -745,7 +758,8 @@ export function PrReviewScreen({
           </div>
           <ThreadRail
             threads={state.threads}
-            disabled={state.closed}
+            disabled={state.closed || !feedbackEnabled}
+            onFollowup={(rootId, body) => adapter.createFollowup(rootId, body)}
             onConductCodeChange={(threadId) => adapter.conductCodeChange(threadId)}
           />
         </div>
@@ -919,6 +933,8 @@ export function productionPresentation(
       anchor: thread.anchor.exact ?? thread.anchor.section,
       sourceAnchor: thread.anchor,
       body: thread.body,
+      createdAt: thread.createdAt,
+      ...(thread.replyTo === undefined ? {} : { replyTo: thread.replyTo }),
       status: thread.codeAction?.status === "completed" && thread.response !== undefined
         ? "answered"
         : thread.codeAction !== undefined ? "change-requested" : thread.response !== undefined ? "answered" : "open",
@@ -935,6 +951,7 @@ export function productionPresentation(
         headSha: thread.identity.headSha,
       },
       canConductCodeChange: thread.intent === "comment" &&
+        thread.replyTo === undefined &&
         session.review.pullRequest.state === "open" &&
         !session.review.pullRequest.permissions.readOnly &&
         ["write", "maintain", "admin"].includes(session.review.pullRequest.permissions.viewerPermission) &&
@@ -942,6 +959,10 @@ export function productionPresentation(
         session.review.pullRequest.headRepository === session.review.pullRequest.identity.repository &&
         thread.identity.headRevision === session.review.revision &&
         thread.identity.headSha === session.review.head.sha,
+      canFollowup: thread.replyTo === undefined &&
+        thread.identity.headRevision === session.review.revision &&
+        thread.identity.headSha === session.review.head.sha &&
+        thread.codeAction?.status !== "requested" && thread.codeAction?.status !== "working",
       ...(thread.codeAction === undefined ? {} : {
         codeActionStatus: thread.codeAction.status,
         ...(thread.codeAction.message === undefined ? {} : { actionMessage: thread.codeAction.message }),
@@ -1008,6 +1029,16 @@ export function ProductionPrReviewScreen({
           return productionPresentation(session, payload, [updated]).threads[0]!;
         },
         async (force) => postReviewDone(session.id, force),
+        async (root, body, idempotencyKey) => {
+          const thread = await postReviewFollowup(session.id, root.id, {
+            body,
+            reportRevision: payload.revision.revision,
+            headRevision: payload.revision.headRevision,
+            headSha: payload.revision.headSha,
+            idempotencyKey,
+          });
+          return productionPresentation(session, payload, [thread]).threads[0]!;
+        },
       ),
     };
   }
