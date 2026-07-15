@@ -30,6 +30,7 @@ import type { ReviewQuizPublicState } from "../shared/review-quiz.js";
  * its cleaned state (approval and archive lifecycle).
  */
 export type UiEvent =
+  | { type: "navigate"; session: null; data: { clientId: string; path: string } }
   | { type: "session"; session: string; data: { session: SessionSummary } }
   | { type: "removed"; session: string; data: { session: string } }
   | {

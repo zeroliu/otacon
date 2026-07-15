@@ -3258,6 +3258,20 @@ code {
   margin: -10px 0 12px; /* close the header's bottom margin so they read as one unit */
 }
 
+/* PR review has its own dossier header rather than the plan masthead. Reuse
+ * the same dock below that header, constrained to the report's reading width;
+ * during revision-0 authoring it becomes the first visible session surface. */
+.pr-activity-dock {
+  top: 0;
+  max-width: 1120px;
+  margin: 12px auto;
+}
+
+.pr-authoring-shell {
+  width: 100%;
+  padding: 16px;
+}
+
 /* The bar itself: one mono line, a full-width button (the whole bar toggles). */
 .now-playing {
   display: flex;

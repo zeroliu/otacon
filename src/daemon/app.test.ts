@@ -27,7 +27,7 @@ import { canonicalizeGitHubRepo, defaultKnowledgeMarkdown } from "../shared/know
 import type { CanonicalGitHubRepo } from "../shared/knowledge.js";
 import { pullRequestIdentity } from "../shared/review.js";
 import type { PullRequestMetadata } from "../shared/review.js";
-import type { RegistrySession } from "../shared/types.js";
+import type { RegistrySession, StreamEvent } from "../shared/types.js";
 import { VERSION } from "../shared/version.js";
 import type { NodeBindings } from "./app.js";
 import { createApp } from "./app.js";
@@ -2429,7 +2429,7 @@ describe("live-tab heartbeat (open-tab reuse)", () => {
 
   test("a heartbeat makes /api/health.viewers report a live tab", async () => {
     expect(await liveViewers()).toBe(0);
-    const res = await postJson("/api/viewers/heartbeat", { clientId: "tab-a" });
+    const res = await postJson("/api/viewers/heartbeat", { clientId: "tab-a", visible: true });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
     expect(await liveViewers()).toBe(1);
@@ -2456,6 +2456,45 @@ describe("live-tab heartbeat (open-tab reuse)", () => {
     expect(((await missing.json()) as { error: { code: string } }).error.code).toBe("E_BAD_REQUEST");
     const empty = await postJson("/api/viewers/heartbeat", { clientId: "" });
     expect(empty.status).toBe(400);
+
+    const invalidVisible = await postJson("/api/viewers/heartbeat", {
+      clientId: "tab-a",
+      visible: "yes",
+    });
+    expect(invalidVisible.status).toBe(400);
+  });
+
+  test("navigate targets one preferred viewer and streams the exact session path", async () => {
+    const session = mintSession();
+    await postJson("/api/viewers/heartbeat", { clientId: "tab-visible", visible: true });
+    await postJson("/api/viewers/heartbeat", { clientId: "tab-hidden", visible: false });
+    const reader = sseReader(await app.request("/api/stream"));
+    await reader.next(); // snapshot
+
+    const res = await postJson("/api/viewers/navigate", { session: session.id });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      ok: true,
+      delivered: true,
+      path: `/s/${session.id}`,
+    });
+    expect(await reader.next()).toEqual({
+      event: "navigate",
+      data: { clientId: "tab-visible", path: `/s/${session.id}` },
+    });
+    await reader.cancel();
+  });
+
+  test("navigate reports no delivery without a viewer and validates the session", async () => {
+    expect(await (await postJson("/api/viewers/navigate", {})).json()).toEqual({
+      ok: true,
+      delivered: false,
+      path: "/",
+    });
+    const unknown = await postJson("/api/viewers/navigate", { session: "otc_unknown" });
+    expect(unknown.status).toBe(404);
+    const extra = await postJson("/api/viewers/navigate", { path: "/settings" });
+    expect(extra.status).toBe(400);
   });
 });
 
@@ -3129,6 +3168,26 @@ describe("progress and live activity (live-agent-activity)", () => {
     expect(detail.latestActivity?.text).toBe("reading the auth module");
   });
 
+  test("review sessions use the same progress fallback and stream highlight", async () => {
+    const created = await postJson("/api/reviews", {
+      repo,
+      repository: reviewRepo,
+      branch: "main",
+      pullRequest: reviewMetadata(),
+    });
+    const { session } = (await created.json()) as { session: { id: string } };
+    const res = await postJson(`/api/sessions/${session.id}/progress`, {
+      note: "reading the PR integration path",
+    });
+    expect(res.status).toBe(200);
+    const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
+    const snapshot = await reader.next();
+    expect((snapshot.data as { stream: StreamEvent[] }).stream).toEqual([
+      expect.objectContaining({ kind: "highlight", label: "reading the PR integration path" }),
+    ]);
+    await reader.cancel();
+  });
+
   test("a progress note pushes an activity frame, a stream highlight, then a session frame for the chip", async () => {
     const session = mintSession();
     const reader = sseReader(await app.request(`/api/sessions/${session.id}/stream`));
@@ -3295,6 +3354,49 @@ describe("transcript tailer lifecycle (live-progress-activity-redesign)", () => 
     expect(stubs).toHaveLength(1);
     expect(stubs[0]?.started).toBe(1);
     expect(stubs[0]?.stopped).toBe(0);
+  });
+
+  test("creating and reusing an active review starts exactly one tailer", async () => {
+    const { tailed, stubs } = tailedApp();
+    const input = {
+      repo,
+      repository: reviewRepo,
+      branch: "main",
+      pullRequest: reviewMetadata(),
+    };
+    expect((await post(tailed, "/api/reviews", input)).status).toBe(201);
+    expect((await post(tailed, "/api/reviews", input)).status).toBe(200);
+    expect(stubs).toHaveLength(1);
+    expect(stubs[0]?.started).toBe(1);
+    expect(stubs[0]?.stopped).toBe(0);
+  });
+
+  test("daemon restart reattaches one tailer to an active review", () => {
+    store.startReviewSession({ repo, branch: "main", pullRequest: reviewMetadata() });
+    const { stubs } = tailedApp();
+    expect(stubs).toHaveLength(1);
+    expect(stubs[0]?.started).toBe(1);
+  });
+
+  test("review Done stops its active tailer", async () => {
+    const { tailed, stubs } = tailedApp();
+    const created = await post(tailed, "/api/reviews", {
+      repo,
+      repository: reviewRepo,
+      branch: "main",
+      pullRequest: reviewMetadata(),
+    });
+    const body = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    expect((await post(tailed, `/api/reviews/${body.session.id}/submit`, {
+      report: validReviewReport(body.session.id, 1, body.preparation.snapshot.hash),
+      quiz: validReviewQuiz(body.session.id, 1),
+    })).status).toBe(201);
+    expect((await post(tailed, `/api/reviews/${body.session.id}/done`, { force: true })).status).toBe(200);
+    expect(stubs).toHaveLength(1);
+    expect(stubs[0]?.stopped).toBe(1);
   });
 
   test("Save (approve) stops the tailer; the session is terminal", async () => {

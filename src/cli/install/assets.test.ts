@@ -131,6 +131,21 @@ describe("single-source wrappers (D7)", () => {
     }
   });
 
+  test("the PR-review wrapper opens the exact session before knowledge or research", () => {
+    for (const text of [reviewSkillMd(), dogfoodReviewSkillMd()]) {
+      const start = text.indexOf("review start --pr <URL-or-number>");
+      const open = text.indexOf("open --session <returned-id>");
+      const knowledge = text.indexOf("read both frozen knowledge files");
+      const research = text.indexOf("Inspect the PR description");
+      expect(start).toBeGreaterThan(-1);
+      expect(open).toBeGreaterThan(start);
+      expect(knowledge).toBeGreaterThan(open);
+      expect(research).toBeGreaterThan(open);
+      expect(text).toContain('progress "<what you\'re doing>"');
+      expect(text).toContain("universal activity fallback");
+    }
+  });
+
   test("every wrapper makes implementation wait for explicit Implement approval", () => {
     for (const text of [skillMd(), dogfoodSkillMd()]) {
       expect(text).toContain("## Hard implementation gate");

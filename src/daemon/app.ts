@@ -632,9 +632,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   // started (a restart mid-build): the registry survives the restart, so the
   // live transcript is still being written. New sessions wire their tailer at
   // creation; terminal ones are skipped by startTailer's guard.
-  for (const session of store.listSessions()) {
-    if (session.kind === "plan") startTailer(session);
-  }
+  for (const session of store.listSessions()) startTailer(session);
 
   // Desktop attention banners (review loop and daemon API). Presence tracks which sessions
   // have a *visible* review open; the notify sink fires the native macOS banner
@@ -643,8 +641,9 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   const notify = options.notify ?? createDesktopNotifier();
 
   // Live browser tabs watching this daemon (any session or the index), tracked
-  // by an explicit SPA heartbeat with a TTL so `otacon open` can skip launching a
-  // duplicate tab (DECISIONS.md "reuse an existing open tab"). A heartbeat rather
+  // by an explicit SPA heartbeat with a TTL so `otacon open` can route one
+  // existing tab instead of launching a duplicate (DECISIONS.md "routes one
+  // existing tab"). A heartbeat rather
   // than an SSE-connection count because the dogfood daemon runs under Bun, whose
   // node:http does not detect a client disconnect, so a connection count leaks;
   // the TTL self-heals a closed/crashed tab under both Node and Bun. Ephemeral,
@@ -807,8 +806,8 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     await next();
   });
 
-  // Review sessions deliberately share only the generic session envelope and
-  // event/presence plumbing in Phase 3. Keep every plan-state endpoint behind
+  // Review sessions share the generic session envelope, event/presence
+  // plumbing, and progress telemetry. Keep every plan-state endpoint behind
   // the discriminant before it can parse a body or create plan files such as
   // session.json, threads.json, or transcript counters for a review id.
   app.use("/api/sessions/:id/*", async (c, next) => {
@@ -817,7 +816,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       const base = `/api/sessions/${session.id}`;
       const suffix = c.req.path.slice(base.length);
       const reviewThreadRead = suffix === "/threads" && c.req.method === "GET";
-      if (suffix !== "" && suffix !== "/events" && suffix !== "/presence" && suffix !== "/stream" && !reviewThreadRead) {
+      if (suffix !== "" && suffix !== "/events" && suffix !== "/presence" && suffix !== "/progress" && suffix !== "/stream" && !reviewThreadRead) {
         return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a plan`);
       }
     }
@@ -1073,6 +1072,11 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     });
     if (result.action === "reopened-changed") queueFor(result.session.id).dropReviewDone();
     const preparation = reviews.prepareForSession(result.session);
+    // Review authoring begins immediately after `review start`, before the
+    // agent reads its frozen knowledge or researches the PR. Reuse/reopen is
+    // safe because startTailer is idempotent per session id; completed reviews
+    // remain untouched through the terminal guard.
+    startTailer(result.session);
     publishSession(result.session);
     return c.json({ ...result, preparation }, result.action === "created" ? 201 : 200);
   });
@@ -2105,20 +2109,47 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     return c.json({ ok: true, session: session.id, visible: body.visible });
   });
 
-  // A browser tab reports its liveness here (open-tab reuse, DECISIONS.md "reuse
-  // an existing open tab"): one beat per tab on mount and a ~30s heartbeat, plus
-  // a `gone:true` beacon on tab close. Daemon-wide (NOT session-scoped): one tab,
-  // via the app-shell sidebar, reaches every session, so `otacon open` only needs
-  // to know whether ANY tab from this daemon is live. The 90s TTL self-expires a
-  // crashed/closed tab whose `gone` beacon never arrived.
+  // A browser tab reports its liveness and visibility here (exact-tab reuse,
+  // DECISIONS.md "routes one existing tab"): one beat per tab on mount and a
+  // ~30s heartbeat, plus a `gone:true` beacon on tab close. The daemon ranks
+  // these daemon-wide clients so `otacon open` can route one exact target. The
+  // 90s TTL self-expires a crashed/closed tab whose `gone` beacon never arrived.
   app.post("/api/viewers/heartbeat", async (c) => {
     const body = (await readJsonBody(c)) ?? {};
     if (typeof body.clientId !== "string" || body.clientId.length === 0) {
       return badRequest(c, "clientId must be a non-empty string");
     }
+    if (body.visible !== undefined && typeof body.visible !== "boolean") {
+      return badRequest(c, "visible must be a boolean");
+    }
     if (body.gone) viewers.drop(body.clientId);
-    else viewers.beat(body.clientId);
+    else viewers.beat(body.clientId, body.visible as boolean | undefined);
     return c.json({ ok: true });
+  });
+
+  // Route one existing Otacon tab to the exact page requested by `otacon
+  // open`. The daemon, not the CLI, chooses the tab from fresh heartbeat state:
+  // the newest visible viewer wins, then the newest live background viewer.
+  // A missing viewer is not an error — the CLI falls back to launching the URL.
+  app.post("/api/viewers/navigate", async (c) => {
+    const body = (await readJsonBody(c)) ?? {};
+    if (Object.keys(body).some((key) => key !== "session")) {
+      return badRequest(c, "navigate accepts only an optional session id");
+    }
+    let path = "/";
+    if (body.session !== undefined) {
+      if (typeof body.session !== "string" || body.session.length === 0) {
+        return badRequest(c, "session must be a non-empty string");
+      }
+      if (store.getSession(body.session) === undefined) {
+        return notFound(c, `unknown session: ${body.session}`);
+      }
+      path = `/s/${body.session}`;
+    }
+    const clientId = viewers.preferred();
+    if (clientId === undefined) return c.json({ ok: true, delivered: false, path });
+    notifier.publish({ type: "navigate", session: null, data: { clientId, path } });
+    return c.json({ ok: true, delivered: true, path });
   });
 
   // Structural diff between two stored revisions, defaulting to the last-reviewed baseline.

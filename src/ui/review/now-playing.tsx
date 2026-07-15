@@ -12,7 +12,7 @@
 // and the expand caret. Clicking the bar toggles the console.
 
 import { memo, useEffect, useState } from "react";
-import type { SessionStatus, StreamEvent } from "../api";
+import type { AnySessionStatus, StreamEvent } from "../api";
 import { isAgentActive, nowPlaying, streamMode } from "./console-model";
 import { KIND_GLYPH } from "./console-rows";
 
@@ -50,7 +50,7 @@ export const NowPlaying = memo(function NowPlaying({
   onToggle,
 }: {
   stream: StreamEvent[];
-  status: SessionStatus;
+  status: AnySessionStatus;
   /** Whether the console below is expanded; drives the caret + aria-expanded. */
   open: boolean;
   onToggle: () => void;

@@ -33,6 +33,38 @@ const STORYBOOK_MAJOR_STATE_CONTRACT = {
   sharedComponents: [".pr-quiz-experience", ".pr-thread-rail", ".pr-review-finish"],
 } as const;
 
+test("the shared activity log is visible before report authoring and persists after submit", async ({
+  page,
+  request,
+}) => {
+  const session = await createReviewSession(request, uniqueTitle("authoring-activity"));
+  await page.goto(`/s/${session.id}`);
+
+  const bar = page.getByRole("button", { name: "agent activity: toggle the live console" });
+  await expect(page.getByText("// report authoring in progress")).toBeVisible();
+  await expect(bar).toBeVisible();
+  await expect(bar).toContainText("working…");
+  await bar.click();
+  await expect(page.getByRole("region", { name: "live activity console" })).toContainText(
+    "// nothing captured yet",
+  );
+
+  const progress = await request.post(`/api/sessions/${session.id}/progress`, {
+    data: { note: "mapping the PR integration path" },
+  });
+  expect(progress.ok()).toBeTruthy();
+  await expect(bar).toContainText("mapping the PR integration path");
+
+  await submitFixtureReview(request, session);
+  await expect(page.locator(".pr-report #background")).toBeVisible();
+  const submittedBar = page.getByRole("button", { name: "agent activity: toggle the live console" });
+  await expect(submittedBar).toContainText("mapping the PR integration path");
+  await submittedBar.click();
+  await expect(page.getByRole("region", { name: "live activity console" })).toContainText(
+    "mapping the PR integration path",
+  );
+});
+
 async function createSubmittedReview(
   request: APIRequestContext,
   label: string,

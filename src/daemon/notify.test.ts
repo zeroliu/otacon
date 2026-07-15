@@ -11,8 +11,8 @@ const queueEvent = (session: string): UiEvent => ({
 describe("Notifier", () => {
   test("delivers published events to every subscriber, in order", () => {
     const notifier = new Notifier();
-    const seenA: string[] = [];
-    const seenB: string[] = [];
+    const seenA: Array<string | null> = [];
+    const seenB: Array<string | null> = [];
     notifier.subscribe((e) => seenA.push(e.session));
     notifier.subscribe((e) => seenB.push(e.session));
     notifier.publish(queueEvent("otc_aaaaaa"));
@@ -23,8 +23,8 @@ describe("Notifier", () => {
 
   test("unsubscribe stops delivery without touching other subscribers", () => {
     const notifier = new Notifier();
-    const kept: string[] = [];
-    const dropped: string[] = [];
+    const kept: Array<string | null> = [];
+    const dropped: Array<string | null> = [];
     notifier.subscribe((e) => kept.push(e.session));
     const unsubscribe = notifier.subscribe((e) => dropped.push(e.session));
     notifier.publish(queueEvent("otc_one111"));

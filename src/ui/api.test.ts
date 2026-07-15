@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { Window } from "happy-dom";
-import { saveKnowledge, useReviewDetail } from "./api.js";
+import { saveKnowledge, useReviewDetail, viewerNavigationPath } from "./api.js";
 
 const originalFetch = globalThis.fetch;
 let root: Root | undefined;
@@ -109,6 +109,20 @@ describe("knowledge API client", () => {
       status: 0,
       error: { code: "E_UNREACHABLE", message: "couldn't reach otacond" },
     });
+  });
+});
+
+describe("viewer navigation", () => {
+  test("accepts only the selected client and safe session/index paths", () => {
+    expect(viewerNavigationPath("tab-a", { clientId: "tab-a", path: "/s/otc_abc123" }))
+      .toBe("/s/otc_abc123");
+    expect(viewerNavigationPath("tab-a", { clientId: "tab-a", path: "/" })).toBe("/");
+    expect(viewerNavigationPath("tab-a", { clientId: "tab-b", path: "/s/otc_abc123" }))
+      .toBeUndefined();
+    expect(viewerNavigationPath("tab-a", { clientId: "tab-a", path: "/settings" }))
+      .toBeUndefined();
+    expect(viewerNavigationPath("tab-a", { clientId: "tab-a", path: "https://example.com" }))
+      .toBeUndefined();
   });
 });
 

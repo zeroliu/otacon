@@ -5,6 +5,7 @@
 
 import type { ReactNode } from "react";
 import { createContext, createElement, useContext, useEffect, useMemo, useState } from "react";
+import { navigate } from "./router";
 import { maybeSelfHeal } from "./self-heal";
 import type { ConfigField, ScopeFieldError, ScopeValues } from "../shared/config";
 import type { KnowledgeDocument, KnowledgeScope } from "../shared/knowledge";
@@ -13,6 +14,7 @@ import type { ReviewQuizPublicState } from "../shared/review-quiz";
 import type {
   ActivityNote,
   Anchor,
+  AnySessionStatus,
   DiffHunk,
   DiffPayload,
   GrillAnswer,
@@ -33,6 +35,7 @@ export type { ConfigField, KnowledgeDocument, KnowledgeScope, ScopeFieldError, S
 export type {
   ActivityNote,
   Anchor,
+  AnySessionStatus,
   DiffHunk,
   DiffPayload,
   GrillAnswer,
@@ -107,24 +110,38 @@ export interface SessionsState {
 const SessionsContext = createContext<SessionsState | null>(null);
 
 /**
- * This tab's stable id, minted once per page load (open-tab reuse, DECISIONS.md
- * "reuse an existing open tab"). The daemon counts distinct live ids to know
- * whether any otacon tab is open, so a reload that re-mints the id is fine: the
- * old id self-expires on its TTL while the fresh one keeps the tab counted.
+ * This tab's stable id, minted once per page load (exact-tab reuse, DECISIONS.md
+ * "routes one existing tab"). The daemon counts and ranks distinct live ids, so
+ * a reload that re-mints the id is fine: the old id self-expires on its TTL while
+ * the fresh one keeps the tab counted and eligible for targeted navigation.
  */
 const CLIENT_ID = crypto.randomUUID();
 const VIEWER_HEARTBEAT_MS = 30_000;
 
+/** Pure target/safety gate for the daemon's global viewer-navigation frame. */
+export function viewerNavigationPath(
+  clientId: string,
+  target: { clientId: string; path: string },
+): string | undefined {
+  if (target.clientId !== clientId) return undefined;
+  if (target.path !== "/" && !/^\/s\/[^/]+$/.test(target.path)) return undefined;
+  return target.path;
+}
+
 /**
- * Tell the daemon this tab is alive (open-tab reuse): a ~30s heartbeat plus a
- * `gone:true` beacon on tab close so `otacon open` can skip a duplicate tab. The
- * TTL covers a crash that skips the beacon. Uses sendBeacon for the close path
+ * Tell the daemon this tab is alive and whether it is visible: a ~30s heartbeat
+ * plus a `gone:true` beacon on tab close lets `otacon open` route this tab or
+ * avoid a duplicate. The TTL covers a crash that skips the beacon. Uses sendBeacon for the close path
  * (it survives teardown where a keepalive fetch can still race) and a keepalive
  * fetch otherwise. Errors are swallowed: liveness reporting must never break the
  * UI, and a missed beat just lets the daemon's TTL lapse the tab.
  */
 function postViewerHeartbeat(gone = false): void {
-  const payload = JSON.stringify({ clientId: CLIENT_ID, gone });
+  const payload = JSON.stringify({
+    clientId: CLIENT_ID,
+    gone,
+    visible: !gone && document.visibilityState === "visible",
+  });
   if (gone) {
     navigator.sendBeacon?.(
       "/api/viewers/heartbeat",
@@ -145,7 +162,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
   const [byId, setById] = useState<SessionMap>(new Map());
   const [connected, setConnected] = useState(false);
 
-  // Heartbeat this tab's liveness to the daemon (open-tab reuse): one per tab,
+  // Heartbeat this tab's liveness and visibility to the daemon: one per tab,
   // homed here because the provider mounts exactly once per page. Beat on mount,
   // on a ~30s interval, and whenever the tab becomes visible again (the interval
   // can be throttled while backgrounded; the 90s TTL comfortably outlasts that).
@@ -187,6 +204,13 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
     });
     on<{ session: string; pending: number }>(source, "queue", (data) => {
       setById((prev) => patch(prev, data.session, { pendingEvents: data.pending }));
+    });
+    // `otacon open --session` reuses exactly one existing tab. Every index
+    // stream hears the frame, but only the daemon-selected stable client id
+    // navigates; other Otacon tabs keep their current reading position.
+    on<{ clientId: string; path: string }>(source, "navigate", (target) => {
+      const path = viewerNavigationPath(CLIENT_ID, target);
+      if (path !== undefined) navigate(path);
     });
     // Terminal: the session left the registry (clean or a UI delete) — drop its card.
     on<{ session: string }>(source, "removed", (data) => {

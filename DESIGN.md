@@ -390,7 +390,7 @@ the model is suspended — no inference, no token spend.
 | `otacon implement-done [--pr <url>] [--failed]`                             | End an `implementing` session: record the PR link and flip to `implemented`, or `--failed` → `implement_failed` (§12) |
 | `otacon resume [--session <id>]`                                            | Reopen a finished session for amendment (flip terminal → `revising`): auto-detects the session that owns the cwd build worktree (its recorded `impl.worktree`), or `--session` names one. Prints the daemon's reopen body plus `title`, `repo`, `plan` (the file to amend, in the home store `~/.otacon/sessions/<id>/`) (§12) |
 | `otacon status [--all]`                                                     | Session state + undelivered event count (crash/resume entry point); also surfaces `resumeCandidate` (id, title, status, plan) when the cwd is inside a known build worktree |
-| `otacon open [--session <id>]`                                              | Open the review URL in the browser, or the index URL when no session resolves; skips the launch when an otacon tab from this daemon is already open (health `viewers >= 1`), dedup only, no focus (open-tab reuse, below); `OTACON_NO_BROWSER` prints it instead of launching (with `reused: true`/`false`) |
+| `otacon open [--session <id>]`                                              | Open the review URL, or the index when no session resolves. With an existing Otacon tab, route the freshest visible tab (otherwise the freshest live tab) to that exact page; with none, launch the browser. `OTACON_NO_BROWSER` stays print-only and reports `reused: true`/`false` without browser side effects |
 | `otacon config [open]`                                                      | Open the Settings web UI in the browser: `/settings?repo=<cwd repo root>` inside a repo (Project scope), bare `/settings` outside one (User scope); `OTACON_NO_BROWSER` prints the URL instead |
 | `otacon config get <key>`                                                   | Read-only: print the merged effective value of one dotted key (`worktree.dir`, `budgets.summaryLines`, …) from the config files; no daemon. Unknown key → exit 1 |
 | `otacon review respond <thread> --file <response.json>`                     | Agent-only: land an Ask answer or Comment report response against the event's immutable report/head identity; may acknowledge exactly the requested User/Project memory scope |
@@ -615,7 +615,8 @@ POST /api/sessions/:id/progress             agent narration (otacon progress):
                                             stream (below) as a `highlight` event —
                                             redacted, truncated, daemon-assigned seq —
                                             pushed as a `stream` SSE frame. No agent
-                                            event is queued — UI-only telemetry
+                                            event is queued — UI-only telemetry;
+                                            valid for active plan and review sessions
 POST /api/sessions/:id/answers              user's answer to an agent question:
                                             {question, choice|choices, text?} —
                                             validated against the question's options
@@ -679,10 +680,15 @@ GET  /api/sessions/:id/diff?from=&to=       computed structural diff (below)
 GET  /api/sessions/:id/stream               SSE for the UI (one session)
 GET  /api/stream                            SSE for the index (all sessions)
 POST /api/viewers/heartbeat                  a browser tab's liveness ping
-                                            ({clientId, gone?}); daemon-wide (not
+                                            ({clientId, visible?, gone?}); daemon-wide (not
                                             session-scoped), feeds health `viewers`
                                             for open-tab reuse (below). 400 on a
-                                            missing/empty clientId
+                                            missing/empty clientId or non-boolean visible
+POST /api/viewers/navigate                   select one live viewer and publish an
+                                            in-page navigation to `/` or a validated
+                                            session from `{session?}`; returns
+                                            `{ok, delivered, path}` so the CLI can
+                                            launch when no target remains
 GET  /                                      index page (the SPA)
 GET  /s/:id                                 review page for a session (same SPA)
 ```
@@ -738,7 +744,10 @@ orphaning); a `grill` frame is the transcript's upsert: a question asked via
 new progress note appended to the per-session activity log (the draft chip rides the
 `session` frame's `latestActivity` instead); a `stream` frame carries one or more new
 normalized live-activity events (the live-activity stream, §10a), newest last and
-coalesced/batched ok, which the UI appends to its stream view by `seq`; a `removed` frame is terminal —
+coalesced/batched ok, which the UI appends to its stream view by `seq`; a global
+`navigate` frame targets one browser `clientId` and carries only `/` or a validated
+`/s/<id>` path—the shared index-stream provider routes the selected tab and every other
+tab ignores it; a `removed` frame is terminal —
 the session left the registry (`otacon clean`): the session list drops it live, an
 open review screen flips to a quiet "session cleaned" state and
 closes its stream (a reconnect against the deregistered id could only 404), and the
@@ -747,20 +756,22 @@ session again, so a client that ignored the frame must not pin the connection; t
 index stream stays open) — with a comment heartbeat to keep idle proxies from
 closing the stream.
 The daemon also tracks its live browser tabs via an explicit SPA heartbeat: each
-tab POSTs `/api/viewers/heartbeat` ({clientId, gone?}) once on load and on a ~30s
+tab POSTs `/api/viewers/heartbeat` ({clientId, visible?, gone?}) once on load and on a ~30s
 interval, and the daemon counts the distinct clientIds seen within a 90s TTL,
 exposed as `viewers` on `GET /api/health`. `viewers >= 1` means at least one
 otacon tab from this daemon is live (any session or the index; the app-shell
-sidebar lets that one tab reach every session), which `otacon open` reads to skip
-launching a duplicate review tab. It is a daemon-wide presence check, not a
-session-scoped one. The TTL self-expires a closed or crashed tab whose ping
+sidebar lets that one tab reach every session). `otacon open` asks
+`POST /api/viewers/navigate` to select exactly one target: the most recently beating
+visible tab, falling back to the freshest live background tab. The daemon validates the
+requested session, publishes the client-targeted navigation frame, and reports
+`delivered:false` when no viewer remains so the CLI can launch the browser instead. It is
+a daemon-wide presence check, not a session-scoped one. The TTL self-expires a closed or crashed tab whose ping
 simply stops, while a `gone:true` beacon on tab close drops it immediately. It is
 ephemeral: a restart starts at 0 and live tabs re-count on their next beat.
-The skip is dedup only, with no focus (the open tab is not raised or navigated,
-since in-page focus is unreliable; the existing tab's sidebar already reaches every
-session), and it suppresses whichever url `otacon open` would launch, session or
-index. Under `OTACON_NO_BROWSER` the printed JSON carries `reused: true` when the
-launch was skipped and `reused: false` otherwise. Only `otacon open` dedups;
+Routing is in-page navigation, not OS-level focus: it switches the selected Otacon SPA
+to the requested session/index without trying to raise the browser window. Under
+`OTACON_NO_BROWSER` no navigation or launch occurs; printed JSON carries `reused: true`
+when a viewer was observed and `reused: false` otherwise. Only `otacon open` reuses tabs;
 `otacon config` always opens the Settings UI.
 Session payloads (snapshot, `session` frames, session detail) carry
 `lastReviewedRevision` alongside `revision`, and `openQuestions` — the count of
@@ -933,6 +944,11 @@ and uses argument arrays, not a shell. A second `gh repo view --json viewerPermi
 query records the authenticated viewer's base-repository capability. V1 is read-only for
 every fork and for same-repository PRs unless that permission is Write, Maintain, or Admin;
 `maintainerCanModify` is retained as PR metadata but never treated as viewer authority.
+The generated `/otacon-review` protocol runs `review start` first, immediately follows
+with `open --session <returned-id>`, and only then reads the frozen knowledge snapshot or
+researches the PR. An existing Otacon tab therefore switches to the new/reused review
+before authoring begins; the same session captures the research rather than appearing only
+after the completed report is submitted.
 
 Review ids may use the generic session detail, delete, event-queue, visibility-presence,
 and per-session summary stream envelope. Accepted report publication emits the same
@@ -1532,6 +1548,13 @@ PR-head generation, and the knowledge altitude used to personalize that revision
 of contents repeats the fixed path. The first three sections form
 one editorial teaching rhythm rather than three unrelated widget layouts:
 
+The PR screen also owns the same always-present activity dock as plan review. It renders a
+resting now-playing bar immediately in `working`, before report revision 1 exists; expands
+into the shared live console; and remains available through `reviewing` and `done`, even
+when the stream is empty. Submitted reports do not replace or reset the session stream.
+Supported agents populate it automatically; `otacon progress --session <review-id>` adds
+the same non-blocking highlight fallback and chapter markers used by plan sessions.
+
 - **Background** teaches the prerequisites needed before the change—such as the relevant
   system, coordinate model, or subsystems—at the reader's knowledge altitude. An expert report
   can compress or skip already-demonstrated prerequisites.
@@ -1866,12 +1889,17 @@ behind an off-by-default toggle (the noisiest kind). The draft chip and the inde
 keep riding `latestActivity`: the bar and console are the firehose, while the chip stays
 the one-line summary.
 
+For PR reviews, `working` is agent-active and pulses before the first event; `reviewing`
+and `done` are calm, but the activity dock remains present so history and later grading or
+thread work stay inspectable. Plan review retains its existing active-or-history visibility
+rule.
+
 **Capture: the transcript tailer.** While a session is active the daemon runs a
 per-session *tailer* that watches the coding agent's own on-disk transcript and feeds
 new activity into the stream — no per-agent hook, no cooperation from the agent. It is
 bound to the session lifecycle: it starts when the session is created (or, after a
-daemon restart, for every still-active session) and stops the moment the session goes
-terminal (Save/approve, implement-done, or delete). An `implementing` session keeps its
+daemon restart, for every still-active plan or review session) and stops the moment the session goes
+terminal (plan Save/approve or implement-done; review Done; either kind's delete). An `implementing` session keeps its
 tailer so the build's activity keeps streaming. The tailer polls the transcript on a
 short interval (a plain poll loop, chosen over `fs.watch` for cross-platform
 reliability), so a burst of writes between two polls naturally coalesces into one append

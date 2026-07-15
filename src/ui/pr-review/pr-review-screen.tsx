@@ -553,6 +553,7 @@ export function PrReviewScreen({
   feedbackEnabled = interactionsEnabled,
   doneEnabled = interactionsEnabled,
   interactionNotice,
+  activityDock,
 }: {
   adapter: ReviewAdapter;
   onOpenKnowledge?: () => void;
@@ -568,6 +569,8 @@ export function PrReviewScreen({
   feedbackEnabled?: boolean;
   doneEnabled?: boolean;
   interactionNotice?: ReactNode;
+  /** Shared plan/PR activity surface, placed directly below the PR identity header. */
+  activityDock?: ReactNode;
 }) {
   const state = useSyncExternalStore(adapter.subscribe, adapter.getSnapshot, adapter.getSnapshot);
   const [doneOpen, setDoneOpen] = useState(false);
@@ -734,6 +737,7 @@ export function PrReviewScreen({
         {revisionBanner}
         {interactionNotice}
         <ReviewHeader state={state} />
+        {activityDock}
         <div className="pr-review-grid">
           <TableOfContents groups={tocGroups} />
           <div className="pr-report" ref={reportRef}>
@@ -953,11 +957,13 @@ export function ProductionPrReviewScreen({
   payload,
   liveQuiz,
   liveThreads = [],
+  activityDock,
 }: {
   session: ReviewLiveSession;
   payload: ReviewReportRevisionPayload;
   liveQuiz?: ReviewQuizPublicState;
   liveThreads?: PublicReviewThread[];
+  activityDock?: ReactNode;
 }) {
   const matchingLiveQuiz = liveQuiz?.session === payload.revision.session &&
     liveQuiz.revision === payload.revision.revision &&
@@ -1039,6 +1045,7 @@ export function ProductionPrReviewScreen({
           Quiz answers, anchored conversations, and durable completion are live.
         </div>
       )}
+      activityDock={activityDock}
       renderReport={(state, liveAdapter) => (
         <Suspense fallback={<p className="loading">loading report renderer…</p>}>
           <ReportView

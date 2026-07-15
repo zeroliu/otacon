@@ -23,13 +23,17 @@ exit 2 = fix the invocation.
 ## Start in the PR repository
 
 1. Require the user's PR URL or number and run inside its target git repository.
-   Do not create a session from another directory. Run
+   Do not create a session from another directory. Before reading knowledge or
+   researching the PR, run
    `./bin/otacon review start --pr <URL-or-number>`; pass `--force` only when the user
    explicitly asks to restart or review from scratch.
 2. Reuse the returned session. The same unchanged PR opens its existing review;
    a changed head reopens that session with a new head revision; `--force` alone
    creates an independent session. Never substitute a second daemon or session.
-3. Open the returned `url` and tell the user it is ready. If the response is
+3. Immediately run `./bin/otacon open --session <returned-id>` before any knowledge
+   read or PR research, then tell the user it is ready. This routes an existing
+   Otacon tab to the exact review session, or opens one when none exists, so the
+   reviewer can watch authoring from the first second. If the response is
    `readOnly:true`, the persisted completion is the earlier `review-done`
    terminal result: show the historical review and stop without rewriting it.
    If it says `authoring:false`, the unchanged active report is already
@@ -45,6 +49,11 @@ use a balanced baseline. Never read the mutable current summaries in place of
 the returned frozen snapshot.
 
 Inspect the PR description, issue/context, diff, tests, and surrounding code.
+On supported agents the daemon automatically streams tool calls, text, and
+thinking into the session's activity console. Use
+`./bin/otacon progress "<what you're doing>"` only for occasional phase markers and
+important highlights. It remains the universal activity fallback when no
+transcript adapter is available; it never blocks and returns no reviewer answer.
 Explain in cognition-first order rather than diff order:
 
 1. **Background** — why the change exists, what failed or was missing, and the

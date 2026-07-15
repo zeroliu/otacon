@@ -6,7 +6,7 @@
 // components in now-playing.tsx / live-console.tsx render what these functions
 // return and own nothing but presentation.
 
-import type { SessionStatus, StreamEvent, StreamKind } from "../api";
+import type { AnySessionStatus, StreamEvent, StreamKind } from "../api";
 
 /**
  * The kind-filter chips on the console. "all" is every kind; the rest narrow to
@@ -130,15 +130,16 @@ export function buildRows(
 }
 
 /** The agent-active statuses: the now-playing bar pulses only during these. */
-const ACTIVE_STATUSES = new Set<SessionStatus>([
+const ACTIVE_STATUSES = new Set<AnySessionStatus>([
   "draft",
   "revising",
   "finalizing",
   "implementing",
+  "working",
 ]);
 
 /** Whether the agent is actively working (a live pulse belongs on the bar). */
-export function isAgentActive(status: SessionStatus): boolean {
+export function isAgentActive(status: AnySessionStatus): boolean {
   return ACTIVE_STATUSES.has(status);
 }
 

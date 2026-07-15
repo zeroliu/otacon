@@ -4805,3 +4805,36 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   projection keeps stale-revision refusal while accepting every legitimate selection.
 - **Revisit when:** Anchors carry structured source positions (section id + source line
   range) captured at render time, making text projection unnecessary.
+
+## `otacon open` routes one existing tab to the exact session (2026-07-15)
+
+- **Decision:** Superseding the earlier dedup-without-navigation rule, an interactive
+  `otacon open [--session]` asks `POST /api/viewers/navigate` to route exactly one live
+  Otacon SPA to the resolved session/index. Heartbeats now carry `visible`; `Viewers`
+  chooses the freshest visible client, otherwise the freshest live client, and a global
+  SSE frame carries `{clientId,path}` so every non-target tab ignores it. If no target
+  remains, the CLI launches the browser. `OTACON_NO_BROWSER` remains side-effect-free.
+- **Why:** Session-first PR review is only useful if the reviewer lands in the session
+  before research starts. Merely suppressing a duplicate tab left the reviewer on an
+  unrelated page and forced them back through the agent or sidebar. Targeted in-page
+  navigation is reliable and local, while still avoiding the fragile OS/browser focus
+  automation rejected by the prior decision and avoiding the worse all-tabs broadcast.
+- **Revisit when:** A browser integration can reliably raise the chosen window (add focus
+  without changing target selection), or navigation must survive an SSE disconnect race
+  (persist a short-lived targeted command until the SPA acknowledges it).
+
+## Plan and PR review share one session activity dock and tailer lifecycle (2026-07-15)
+
+- **Decision:** Every active plan or PR-review session starts the same idempotent transcript
+  tailer on create/reuse/reopen and daemon restart; terminal transitions stop it by kind.
+  Both screens render a shared `ActivityDock` over the same normalized stream. PR review
+  keeps the resting bar present before report r1 and after submission/Done, treats only
+  `working` as agent-active, and accepts `otacon progress` as the universal fallback.
+- **Why:** PR research was invisible because the daemon attached capture only to plan
+  sessions and the PR screen did not mount activity until a report existed. A review-only
+  log/store would duplicate redaction, caps, SSE, folding, filters, and accessibility.
+  Sharing the infrastructure fixes the lifecycle gap and guarantees identical semantics
+  while keeping report/quiz/thread schemas untouched.
+- **Revisit when:** PR activity needs durable archival distinct from ephemeral build
+  telemetry, or the plan and PR layouts diverge enough that only the stream model—not the
+  dock component—should remain shared.
