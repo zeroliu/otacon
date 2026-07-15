@@ -15,6 +15,7 @@ import {
   repoLocalConfigPath,
   reviewEventSeqPath,
   reviewRevisionQuizStatePath,
+  reviewRevisionQuizPath,
   reviewRevisionReportPath,
   revisionPath,
   sessionDir,
@@ -205,6 +206,25 @@ function validReviewQuiz(id: string, revision: number, head = "a".repeat(40), he
       prompt: "Why is the snapshot immutable?",
       mode: "open",
       rubric: { criteria: ["Connects stable input to reproducible explanation"] },
+    }],
+  });
+}
+
+function validReviewChoiceQuiz(id: string, revision: number, head = "a".repeat(40), headRevision = 1): string {
+  return JSON.stringify({
+    version: 1,
+    session: id,
+    revision,
+    headRevision,
+    headSha: head,
+    questions: [{
+      id: "q1",
+      concept: { id: "snapshot-boundary", label: "Snapshot boundary", scope: "project" },
+      prompt: "Which input keeps the explanation reproducible?",
+      mode: "choice",
+      rubric: { criteria: ["Identifies the immutable snapshot"] },
+      options: ["Immutable snapshot", "Mutable profile"],
+      answerKey: "Immutable snapshot",
     }],
   });
 }
@@ -529,14 +549,13 @@ describe("review session identity and lifecycle", () => {
     expect(found.session.revision).toBe(0);
   });
 
-  test("unchanged head reuses; changed head revises and reopens the same session", async () => {
+  test("unchanged active head reuses; changed active head revises the same session", async () => {
     const created = await startReview();
     const first = (await created.json()) as { session: { id: string } };
     const reused = await startReview();
     expect(reused.status).toBe(200);
     expect(((await reused.json()) as { action: string }).action).toBe("reused");
 
-    store.updateSession(first.session.id, { status: "done" });
     const revised = await startReview({ pullRequest: reviewMetadata("b".repeat(40)) });
     expect(revised.status).toBe(200);
     const body = (await revised.json()) as {
@@ -548,6 +567,269 @@ describe("review session identity and lifecycle", () => {
     expect(body.session.status).toBe("working");
     expect(body.session.review.revision).toBe(2);
     expect(body.session.review.head.sha).toBe("b".repeat(40));
+  });
+
+  test("Done warns with public unresolved counts, then force-closes without rewriting history", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const id = first.session.id;
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 1, first.preparation.snapshot.hash),
+      quiz: validReviewQuiz(id, 1),
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "question",
+      anchor: { section: "background", exact: "The old input could move while the report was open." },
+      body: "Why is movement harmful?",
+      reportRevision: 1,
+      headRevision: 1,
+      headSha: "a".repeat(40),
+      idempotencyKey: "done-question",
+    })).status).toBe(201);
+    const before = {
+      report: readFileSync(reviewRevisionReportPath(id, 1), "utf8"),
+      quiz: readFileSync(reviewRevisionQuizPath(id, 1), "utf8"),
+      threads: readFileSync(threadsPath(id), "utf8"),
+    };
+
+    const warned = await postJson(`/api/reviews/${id}/done`, {});
+    expect(warned.status).toBe(409);
+    expect((await warned.json()) as unknown).toMatchObject({
+      error: { code: "E_REVIEW_INCOMPLETE" },
+      warning: { unresolved: { conversations: 1, quizzes: 1 } },
+    });
+    expect(store.getSession(id)?.status).toBe("reviewing");
+
+    const closed = await postJson(`/api/reviews/${id}/done`, { force: true });
+    expect(closed.status).toBe(200);
+    const body = (await closed.json()) as {
+      session: { status: string; pendingEvents: number };
+      completion: { forced: boolean; unresolved: { conversations: number; quizzes: number }; wake: string };
+    };
+    expect(body.session).toMatchObject({ status: "done", pendingEvents: 0 });
+    expect(body.completion).toMatchObject({
+      forced: true,
+      unresolved: { conversations: 1, quizzes: 1 },
+      wake: "queued",
+    });
+    expect(readFileSync(reviewRevisionReportPath(id, 1), "utf8")).toBe(before.report);
+    expect(readFileSync(reviewRevisionQuizPath(id, 1), "utf8")).toBe(before.quiz);
+    expect(readFileSync(threadsPath(id), "utf8")).toBe(before.threads);
+  });
+
+  test("clean Done wakes a parked reviewer once and repeated Done is idempotent", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const id = first.session.id;
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 1, first.preparation.snapshot.hash),
+      quiz: validReviewChoiceQuiz(id, 1),
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/quiz/q1/answer`, {
+      revision: 1,
+      answer: "Immutable snapshot",
+      idempotencyKey: "done-pass",
+    })).status).toBe(201);
+
+    const parked = app.request(`/api/sessions/${id}/events?wait=1`);
+    await sleep(10);
+    const closed = await postJson(`/api/reviews/${id}/done`, {});
+    expect(closed.status).toBe(200);
+    const wake = (await (await parked).json()) as { event: string; completion: { forced: boolean } };
+    expect(wake).toMatchObject({ event: "review-done", completion: { forced: false } });
+
+    const repeated = await postJson(`/api/reviews/${id}/done`, {});
+    expect(repeated.status).toBe(200);
+    expect((await repeated.json()) as unknown).toMatchObject({ repeated: true });
+    expect(await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()).toEqual({ event: "timeout" });
+    expect(() => new Store()).not.toThrow();
+  });
+
+  test("completion records an explicit force choice even when unresolved counts are zero", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const id = first.session.id;
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 1, first.preparation.snapshot.hash),
+      quiz: validReviewChoiceQuiz(id, 1),
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/quiz/q1/answer`, {
+      revision: 1,
+      answer: "Immutable snapshot",
+      idempotencyKey: "done-explicit-force-pass",
+    })).status).toBe(201);
+
+    const closed = await postJson(`/api/reviews/${id}/done`, { force: true });
+    expect(closed.status).toBe(200);
+    expect((await closed.json()) as unknown).toMatchObject({
+      completion: { forced: true, unresolved: { conversations: 0, quizzes: 0 } },
+    });
+  });
+
+  test("concurrent Done requests commit one completion and one terminal wake", async () => {
+    const { id } = await submittedReview();
+
+    const [first, second] = await Promise.all([
+      postJson(`/api/reviews/${id}/done`, { force: true }),
+      postJson(`/api/reviews/${id}/done`, { force: true }),
+    ]);
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    const repeated = [await first.json(), await second.json()] as Array<{ repeated: boolean }>;
+    expect(repeated.map((body) => body.repeated).sort()).toEqual([false, true]);
+
+    const completed = store.getSession(id);
+    expect(completed?.kind).toBe("review");
+    if (completed?.kind !== "review") throw new Error("expected review session");
+    expect(completed.review.completions).toHaveLength(1);
+    expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as unknown)
+      .toMatchObject({ event: "review-done", session: id });
+    expect(await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()).toEqual({ event: "timeout" });
+  });
+
+  test("completed reviews reuse unchanged heads and reopen changed heads with stale old quizzes", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const id = first.session.id;
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 1, first.preparation.snapshot.hash),
+      quiz: validReviewQuiz(id, 1),
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/done`, { force: true })).status).toBe(200);
+
+    const unchanged = await startReview();
+    expect(unchanged.status).toBe(200);
+    expect((await unchanged.json()) as unknown).toMatchObject({
+      action: "reused-complete",
+      session: { id, status: "done" },
+    });
+
+    const changed = await startReview({ pullRequest: reviewMetadata("b".repeat(40)) });
+    expect(changed.status).toBe(200);
+    const reopened = (await changed.json()) as {
+      action: string;
+      session: { id: string; status: string; review: { revision: number; completions: unknown[] } };
+      preparation: { revision: { revision: number } };
+    };
+    expect(reopened).toMatchObject({
+      action: "reopened-changed",
+      session: { id, status: "working", review: { revision: 2 } },
+      preparation: { revision: { revision: 2 } },
+    });
+    expect(reopened.session.review.completions).toHaveLength(1);
+    const old = await app.request(`/api/reviews/${id}/revisions/1`);
+    expect(old.status).toBe(200);
+    expect((await old.json()) as unknown).toMatchObject({ revision: { quiz: { stale: true } } });
+  });
+
+  test("restart after a changed-head reopen drops stale Done and ignores old-head unresolved history", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const id = first.session.id;
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 1, first.preparation.snapshot.hash),
+      quiz: validReviewChoiceQuiz(id, 1),
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/threads`, {
+      intent: "question",
+      anchor: { section: "background", exact: "The old input could move while the report was open." },
+      body: "Why is movement harmful?",
+      reportRevision: 1,
+      headRevision: 1,
+      headSha: "a".repeat(40),
+      idempotencyKey: "old-head-question",
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/done`, { force: true })).status).toBe(200);
+
+    // Mimic a crash after the registry head commit but before the route can
+    // prune the old terminal wake from this session's durable queue.
+    store.refreshReviewHead(id, reviewMetadata("b".repeat(40)));
+    store = new Store();
+    app = createApp({ store, uiDir, notify: () => {}, presence, viewers });
+    expect(await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()).toEqual({ event: "timeout" });
+
+    const reused = await startReview({ pullRequest: reviewMetadata("b".repeat(40)) });
+    const reopened = (await reused.json()) as { preparation: { revision: { revision: number }; snapshot: { hash: string } } };
+    expect(reopened.preparation.revision.revision).toBe(2);
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 2, reopened.preparation.snapshot.hash, "b".repeat(40)),
+      quiz: validReviewChoiceQuiz(id, 2, "b".repeat(40), 2),
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/quiz/q1/answer`, {
+      revision: 2,
+      answer: "Immutable snapshot",
+      idempotencyKey: "new-head-pass",
+    })).status).toBe(201);
+    const finished = await postJson(`/api/reviews/${id}/done`, {});
+    expect(finished.status).toBe(200);
+    expect((await finished.json()) as unknown).toMatchObject({
+      completion: { unresolved: { conversations: 0, quizzes: 0 } },
+    });
+    expect(readFileSync(threadsPath(id), "utf8").includes("old-head-question")).toBe(true);
+  });
+
+  test("restart preserves exactly one queued review-done wake", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const id = first.session.id;
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 1, first.preparation.snapshot.hash),
+      quiz: validReviewQuiz(id, 1),
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/done`, { force: true })).status).toBe(200);
+
+    store = new Store();
+    app = createApp({ store, uiDir, notify: () => {}, presence, viewers });
+    expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as unknown)
+      .toMatchObject({ event: "review-done", session: id });
+    expect(await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()).toEqual({ event: "timeout" });
+  });
+
+  test("restart repairs a completion persisted before its terminal wake", async () => {
+    const { id } = await submittedReview();
+    const current = store.getSession(id);
+    if (current?.kind !== "review") throw new Error("expected review session");
+    const eventSeq = store.bumpCounter(id, "eventSeq");
+    store.completeReviewSession(id, {
+      version: 1,
+      session: id,
+      completedAt: new Date().toISOString(),
+      reportRevision: 1,
+      headRevision: current.review.revision,
+      headSha: current.review.head.sha,
+      forced: true,
+      unresolved: { conversations: 0, quizzes: 1 },
+      eventSeq,
+      wake: "pending",
+    });
+
+    store = new Store();
+    app = createApp({ store, uiDir, notify: () => {}, presence, viewers });
+    const repaired = store.getSession(id);
+    expect(repaired?.kind).toBe("review");
+    if (repaired?.kind !== "review") throw new Error("expected review session");
+    expect(repaired.review.completions?.at(-1)?.wake).toBe("queued");
+    expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as unknown)
+      .toMatchObject({ event: "review-done", session: id });
+    expect(await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()).toEqual({ event: "timeout" });
   });
 
   test("force creates a separate session", async () => {

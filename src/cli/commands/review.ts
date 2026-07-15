@@ -251,28 +251,35 @@ async function refreshReviewHead(argv: string[], deps: ReviewCommandDeps | undef
   if (session?.kind !== "review" || session.id !== resolved.session.id || preparation === undefined) {
     fail("E_INTERNAL", "review refresh-head did not return a review session and frozen preparation", undefined, 2);
   }
+  const action = response.body.action;
+  const readOnly = action === "reused-complete";
   printJson({
     ok: true,
-    action: response.body.action,
+    action,
     session: session.id,
     revision: preparation.revision.revision,
     headRevision: session.review.revision,
     head: session.review.head.sha,
-    report: reviewDraftPath(session.id),
-    quiz: reviewQuizDraftPath(session.id),
-    knowledge: {
-      snapshot: {
-        hash: preparation.snapshot.hash,
-        user: {
-          hash: preparation.snapshot.user.hash,
-          path: reviewRevisionUserKnowledgePath(session.id, preparation.revision.revision),
-        },
-        project: {
-          hash: preparation.snapshot.project.hash,
-          path: reviewRevisionProjectKnowledgePath(session.id, preparation.revision.revision),
+    ...(readOnly ? {
+      readOnly: true,
+      completion: session.review.completions?.at(-1),
+    } : {
+      report: reviewDraftPath(session.id),
+      quiz: reviewQuizDraftPath(session.id),
+      knowledge: {
+        snapshot: {
+          hash: preparation.snapshot.hash,
+          user: {
+            hash: preparation.snapshot.user.hash,
+            path: reviewRevisionUserKnowledgePath(session.id, preparation.revision.revision),
+          },
+          project: {
+            hash: preparation.snapshot.project.hash,
+            path: reviewRevisionProjectKnowledgePath(session.id, preparation.revision.revision),
+          },
         },
       },
-    },
+    }),
     url: `${baseUrl()}/s/${session.id}`,
   });
   return 0;
@@ -378,6 +385,7 @@ async function startReview(
     fail("E_INTERNAL", "review start did not return a frozen report preparation", undefined, 2);
   }
   const action = response.body.action;
+  const readOnly = action === "reused-complete";
   printJson({
     ok: true,
     action,
@@ -389,25 +397,30 @@ async function startReview(
     revision: preparation.revision.revision,
     headRevision: session.review.revision,
     url: `${baseUrl()}/s/${session.id}`,
-    report: reviewDraftPath(session.id),
-    quiz: reviewQuizDraftPath(session.id),
-    knowledge: {
-      current: {
-        user: userKnowledgePath(),
-        project: projectKnowledgePath(repository),
-      },
-      snapshot: {
-        hash: preparation.snapshot.hash,
-        user: {
-          hash: preparation.snapshot.user.hash,
-          path: reviewRevisionUserKnowledgePath(session.id, preparation.revision.revision),
+    ...(readOnly ? {
+      readOnly: true,
+      completion: session.review.completions?.at(-1),
+    } : {
+      report: reviewDraftPath(session.id),
+      quiz: reviewQuizDraftPath(session.id),
+      knowledge: {
+        current: {
+          user: userKnowledgePath(),
+          project: projectKnowledgePath(repository),
         },
-        project: {
-          hash: preparation.snapshot.project.hash,
-          path: reviewRevisionProjectKnowledgePath(session.id, preparation.revision.revision),
+        snapshot: {
+          hash: preparation.snapshot.hash,
+          user: {
+            hash: preparation.snapshot.user.hash,
+            path: reviewRevisionUserKnowledgePath(session.id, preparation.revision.revision),
+          },
+          project: {
+            hash: preparation.snapshot.project.hash,
+            path: reviewRevisionProjectKnowledgePath(session.id, preparation.revision.revision),
+          },
         },
       },
-    },
+    }),
   });
   return 0;
 }

@@ -11,8 +11,12 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import * as paths from "../shared/paths.js";
-import { parsePullRequestMetadata } from "../shared/review.js";
-import type { PullRequestMetadata, ReviewStartAction } from "../shared/review.js";
+import { parsePullRequestMetadata, REVIEW_SESSION_STATUSES } from "../shared/review.js";
+import type {
+  PullRequestMetadata,
+  ReviewCompletionSummary,
+  ReviewStartAction,
+} from "../shared/review.js";
 import type {
   LintIssue,
   PlanRegistrySession,
@@ -25,6 +29,12 @@ import { SESSION_STATUSES } from "../shared/types.js";
 
 let tmpSerial = 0;
 let quarantineSerial = 0;
+
+function exactIso(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const milliseconds = Date.parse(value);
+  return Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === value;
+}
 
 /** Atomic write: temp file in the destination directory (created if needed) + rename. */
 export function writeFileAtomic(path: string, data: string): void {
@@ -101,17 +111,29 @@ function parseRegistry(raw: unknown): RegistryFile | undefined {
     if (kind === "plan") {
       if (!SESSION_STATUSES.includes(stored.status as never)) return undefined;
     } else {
-      if (stored.status !== "working" && stored.status !== "reviewing" && stored.status !== "done") {
+      if (!REVIEW_SESSION_STATUSES.includes(stored.status as never)) {
         return undefined;
       }
       const review = stored.review as Record<string, unknown> | undefined;
       const head = review?.head as Record<string, unknown> | undefined;
       const pullRequest = parsePullRequestMetadata(review?.pullRequest);
+      const completions = review?.completions;
+      const parsedCompletions = Array.isArray(completions)
+        ? completions.filter((completion): completion is ReviewCompletionSummary => validReviewCompletion(completion, id))
+        : undefined;
+      const latestCompletion = parsedCompletions?.at(-1);
       if (
         pullRequest === undefined || typeof head !== "object" || head === null ||
         head.sha !== pullRequest.headSha || head.ref !== pullRequest.headRef ||
         head.repository !== pullRequest.headRepository || typeof head.capturedAt !== "string" ||
-        !Number.isInteger(review?.revision) || (review?.revision as number) < 1
+        !Number.isInteger(review?.revision) || (review?.revision as number) < 1 ||
+        (completions !== undefined && (!Array.isArray(completions) ||
+          parsedCompletions?.length !== completions.length ||
+          parsedCompletions.some((completion, index) => index > 0 &&
+            (completion.eventSeq <= parsedCompletions[index - 1]!.eventSeq ||
+             Date.parse(completion.completedAt) < Date.parse(parsedCompletions[index - 1]!.completedAt))))) ||
+        (stored.status === "done" && (latestCompletion === undefined ||
+          latestCompletion.headRevision !== review?.revision || latestCompletion.headSha !== head.sha))
       ) return undefined;
     }
     sessions[id] = {
@@ -124,6 +146,26 @@ function parseRegistry(raw: unknown): RegistryFile | undefined {
     } as unknown as RegistrySession;
   }
   return { version: 1, sessions };
+}
+
+function validReviewCompletion(raw: unknown, session: string): raw is ReviewCompletionSummary {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return false;
+  const value = raw as Record<string, unknown>;
+  const expected = ["version", "session", "completedAt", "reportRevision", "headRevision", "headSha", "forced", "unresolved", "eventSeq", "wake"].sort();
+  const actual = Object.keys(value).sort();
+  if (actual.length !== expected.length || !actual.every((key, index) => key === expected[index]) ||
+      value.version !== 1 || value.session !== session || !exactIso(value.completedAt) ||
+      !Number.isSafeInteger(value.reportRevision) ||
+      (value.reportRevision as number) < 1 || !Number.isSafeInteger(value.headRevision) ||
+      (value.headRevision as number) < 1 || typeof value.headSha !== "string" ||
+      !/^[0-9a-f]{40}$/i.test(value.headSha) || typeof value.forced !== "boolean" ||
+      !Number.isSafeInteger(value.eventSeq) || (value.eventSeq as number) < 1 ||
+      (value.wake !== "pending" && value.wake !== "queued") || typeof value.unresolved !== "object" ||
+      value.unresolved === null || Array.isArray(value.unresolved)) return false;
+  const unresolved = value.unresolved as Record<string, unknown>;
+  return Object.keys(unresolved).sort().join(",") === "conversations,quizzes" &&
+    Number.isSafeInteger(unresolved.conversations) && (unresolved.conversations as number) >= 0 &&
+    Number.isSafeInteger(unresolved.quizzes) && (unresolved.quizzes as number) >= 0;
 }
 
 function parseState(raw: unknown): SessionStateFile | undefined {
@@ -348,10 +390,13 @@ export class Store {
       : this.findReviewSession(identity.repository, identity.number);
     if (existing !== undefined) {
       if (existing.review.head.sha === input.pullRequest.headSha) {
-        return { action: "reused", session: this.refreshReviewHead(existing.id, input.pullRequest) };
+        return {
+          action: existing.status === "done" ? "reused-complete" : "reused",
+          session: this.refreshReviewHead(existing.id, input.pullRequest),
+        };
       }
       return {
-        action: "revised",
+        action: existing.status === "done" ? "reopened-changed" : "revised",
         session: this.refreshReviewHead(existing.id, input.pullRequest),
       };
     }
@@ -407,6 +452,7 @@ export class Store {
     session.prUrl = pullRequest.url;
     session.prState = pullRequest.state;
     session.review = {
+      ...session.review,
       pullRequest: structuredClone(pullRequest),
       head: {
         sha: pullRequest.headSha,
@@ -426,9 +472,12 @@ export class Store {
   ): RegistrySession {
     const session = this.require(id);
     if (patch.status !== undefined) {
+      if (session.kind === "review" && patch.status === "done") {
+        throw new Error("review Done must persist a completion baseline");
+      }
       const valid = session.kind === "plan"
         ? SESSION_STATUSES.includes(patch.status as never)
-        : patch.status === "working" || patch.status === "reviewing" || patch.status === "done";
+        : REVIEW_SESSION_STATUSES.includes(patch.status as never);
       if (!valid) throw new Error(`invalid ${session.kind} status: ${patch.status}`);
     }
     if (session.kind === "review" && patch.impl !== undefined) {
@@ -436,6 +485,40 @@ export class Store {
     }
     Object.assign(session, patch);
     session.updatedAt = new Date().toISOString();
+    this.flushRegistry();
+    return structuredClone(session);
+  }
+
+  /** Commit one immutable Done baseline and its reserved terminal event seq. */
+  completeReviewSession(id: string, completion: ReviewCompletionSummary): ReviewRegistrySession {
+    const session = this.require(id);
+    if (session.kind !== "review") throw new Error(`session ${id} is not a review`);
+    const existing = session.review.completions?.at(-1);
+    if (session.status === "done") {
+      if (existing !== undefined) return structuredClone(session);
+      throw new Error(`done review ${id} has no completion baseline`);
+    }
+    if (!validReviewCompletion(completion, id) || completion.wake !== "pending" ||
+        completion.headRevision !== session.review.revision || completion.headSha !== session.review.head.sha) {
+      throw new Error("review completion does not match the current session/head");
+    }
+    session.status = "done";
+    session.updatedAt = completion.completedAt;
+    session.review.completions = [...(session.review.completions ?? []), structuredClone(completion)];
+    this.flushRegistry();
+    return structuredClone(session);
+  }
+
+  /** Mark the reserved terminal wake durable before allowing queue dispatch. */
+  markReviewCompletionQueued(id: string, eventSeq: number): ReviewRegistrySession {
+    const session = this.require(id);
+    if (session.kind !== "review") throw new Error(`session ${id} is not a review`);
+    const completion = session.review.completions?.at(-1);
+    if (completion === undefined || completion.eventSeq !== eventSeq) {
+      throw new Error(`review ${id} has no completion for event ${eventSeq}`);
+    }
+    if (completion.wake === "queued") return structuredClone(session);
+    completion.wake = "queued";
     this.flushRegistry();
     return structuredClone(session);
   }

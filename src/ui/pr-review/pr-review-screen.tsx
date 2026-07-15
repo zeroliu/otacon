@@ -24,7 +24,8 @@ import { parseReviewReport } from "../../shared/review-report";
 import type { ReviewReportRevisionPayload } from "../../shared/review-report";
 import type { ReviewQuizPublicState } from "../../shared/review-quiz";
 import type { ReviewLiveSession } from "../api";
-import { postReviewCodeAction, postReviewQuizAnswer, postReviewThread } from "../api";
+import { postReviewCodeAction, postReviewDone, postReviewQuizAnswer, postReviewThread, ReviewIncompleteError } from "../api";
+import type { ReviewUnresolvedCounts } from "../api";
 import type { PublicReviewThread } from "../../shared/types";
 import { SessionMenuButton } from "../session-sheet";
 import { QuizSection } from "./quiz-section";
@@ -74,9 +75,13 @@ function ReviewSidebar({
 }) {
   const [mode, setMode] = useState<"plans" | "reviews">("reviews");
   const [openPrsOpen, setOpenPrsOpen] = useState(true);
+  const [activeReviewsOpen, setActiveReviewsOpen] = useState(true);
+  const [doneReviewsOpen, setDoneReviewsOpen] = useState(false);
   const items = mode === "reviews" ? state.navigation.reviews : state.navigation.plans;
   const openPrs = mode === "plans" ? items.filter((item) => item.group === "open-pr") : [];
-  const ungroupedItems = mode === "plans" ? items.filter((item) => item.group === undefined) : items;
+  const ungroupedItems = mode === "plans" ? items.filter((item) => item.group === undefined) : [];
+  const activeReviews = mode === "reviews" ? items.filter((item) => item.state !== "done") : [];
+  const doneReviews = mode === "reviews" ? items.filter((item) => item.state === "done") : [];
   return (
     <aside
       id="pr-review-navigation"
@@ -124,6 +129,29 @@ function ReviewSidebar({
       </div>
       <nav className="session-list pr-side-list" aria-label={`${mode === "reviews" ? "review" : "plan"} sessions`}>
         {ungroupedItems.map((item) => <ReviewNavigationRow key={item.id} item={item} />)}
+        {activeReviews.length > 0 && (
+          <section className="sl-group" aria-label={`Active review sessions (${activeReviews.length})`}>
+            <button type="button" className="sl-group-toggle" aria-expanded={activeReviewsOpen} onClick={() => setActiveReviewsOpen((open) => !open)}>
+              <span className="sl-group-word">Active</span>
+              <span className="sl-group-count">{activeReviews.length}</span>
+              <span className="sl-group-caret" aria-hidden="true">{activeReviewsOpen ? "▾" : "▸"}</span>
+            </button>
+            {activeReviewsOpen && <div className="sl-group-rows">
+              {activeReviews.map((item) => <ReviewNavigationRow key={item.id} item={item} />)}
+            </div>}
+          </section>
+        )}
+        {doneReviews.length > 0 && (
+          <section className="sl-group" aria-label="Done review sessions">
+            <button type="button" className="sl-group-toggle" aria-expanded={doneReviewsOpen} onClick={() => setDoneReviewsOpen((open) => !open)}>
+              <span className="sl-group-word">Done</span>
+              <span className="sl-group-caret" aria-hidden="true">{doneReviewsOpen ? "▾" : "▸"}</span>
+            </button>
+            {doneReviewsOpen && <div className="sl-group-rows">
+              {doneReviews.map((item) => <ReviewNavigationRow key={item.id} item={item} />)}
+            </div>}
+          </section>
+        )}
         {openPrs.length > 0 && (
           <section className="sl-group" aria-label={`Open PR sessions (${openPrs.length})`}>
             <button
@@ -384,10 +412,26 @@ function Report({
   );
 }
 
-function DoneDialog({ state, onCancel, onClose }: { state: ReviewPresentation; onCancel: () => void; onClose: () => void }) {
-  const threads = unresolvedThreadCount(state);
-  const quizzes = incompleteQuizCount(state);
+function DoneDialog({
+  state,
+  counts,
+  initialError,
+  onCancel,
+  onClose,
+}: {
+  state: ReviewPresentation;
+  counts?: ReviewUnresolvedCounts;
+  initialError?: string;
+  onCancel: () => void;
+  onClose: (force: boolean) => Promise<void>;
+}) {
+  const threads = counts?.conversations ?? unresolvedThreadCount(state);
+  const quizzes = counts?.quizzes ?? incompleteQuizCount(state);
+  const unresolved = threads > 0 || quizzes > 0;
   const continueRef = useRef<HTMLButtonElement>(null);
+  const submittingRef = useRef(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | undefined>(initialError);
 
   useEffect(() => {
     continueRef.current?.focus();
@@ -398,17 +442,41 @@ function DoneDialog({ state, onCancel, onClose }: { state: ReviewPresentation; o
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onCancel]);
 
+  const finish = async (): Promise<void> => {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    setSubmitting(true);
+    setError(undefined);
+    try {
+      await onClose(unresolved);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not finish this review.");
+      submittingRef.current = false;
+      setSubmitting(false);
+    }
+  };
+
   return (
     <div className="pr-modal-backdrop">
       <div className="pr-done-dialog" role="dialog" aria-modal="true" aria-labelledby="done-title" aria-describedby="done-description">
-        <span className="pr-done-glyph" aria-hidden="true">!</span>
-        <h2 id="done-title">This review still has loose ends</h2>
-        <div className="pr-done-counts">
-          <span><strong>{threads}</strong> unresolved {threads === 1 ? "thread" : "threads"}</span>
+        <span className="pr-done-glyph" aria-hidden="true">{unresolved ? "!" : "✓"}</span>
+        <h2 id="done-title">{unresolved ? "This review still has loose ends" : "Finish this review?"}</h2>
+        {unresolved && <div className="pr-done-counts">
+          <span><strong>{threads}</strong> unresolved {threads === 1 ? "conversation" : "conversations"}</span>
           <span><strong>{quizzes}</strong> unfinished {quizzes === 1 ? "quiz" : "quizzes"}</span>
-        </div>
-        <p id="done-description">You can keep working, or close anyway. Your report and attempts remain readable.</p>
-        <footer><button type="button" className="btn btn-ghost" onClick={onClose}>Close anyway</button><button ref={continueRef} type="button" className="btn btn-primary" onClick={onCancel}>Continue review</button></footer>
+        </div>}
+        <p id="done-description">{unresolved
+          ? "You can keep working, or close anyway. Your report, conversations, and attempts remain readable."
+          : "This keeps the completed report and review history available as read-only."}</p>
+        {error !== undefined && <p className="error" role="alert">{error}</p>}
+        <footer>
+          <button type="button" className="btn btn-ghost" disabled={submitting} onClick={() => void finish()}>
+            {submitting ? "Closing…" : unresolved ? "Close anyway" : "Finish review"}
+          </button>
+          <button ref={continueRef} type="button" className="btn btn-primary" disabled={submitting} onClick={onCancel}>
+            {unresolved ? "Continue review" : "Keep reviewing"}
+          </button>
+        </footer>
       </div>
     </div>
   );
@@ -444,6 +512,10 @@ export function PrReviewScreen({
 }) {
   const state = useSyncExternalStore(adapter.subscribe, adapter.getSnapshot, adapter.getSnapshot);
   const [doneOpen, setDoneOpen] = useState(false);
+  const [doneCounts, setDoneCounts] = useState<ReviewUnresolvedCounts>();
+  const [doneError, setDoneError] = useState<string>();
+  const [doneSubmitting, setDoneSubmitting] = useState(false);
+  const doneSubmittingRef = useRef(false);
   const [navCollapsed, setNavCollapsed] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [composer, setComposer] = useState<ComposerState | null>(null);
@@ -534,6 +606,25 @@ export function PrReviewScreen({
     }
   };
 
+  const closeCleanReview = async (): Promise<void> => {
+    if (doneSubmittingRef.current) return;
+    doneSubmittingRef.current = true;
+    setDoneSubmitting(true);
+    try {
+      await adapter.close(false);
+    } catch (caught) {
+      if (caught instanceof ReviewIncompleteError) {
+        setDoneCounts(caught.unresolved);
+      } else {
+        setDoneError(caught instanceof Error ? caught.message : "Could not finish this review.");
+      }
+      setDoneOpen(true);
+    } finally {
+      doneSubmittingRef.current = false;
+      setDoneSubmitting(false);
+    }
+  };
+
   const Page = embedded ? "div" : "main";
   return (
     <div className={shellClass}>
@@ -598,11 +689,14 @@ export function PrReviewScreen({
           <button
             type="button"
             className="btn btn-primary"
-            disabled={state.closed || !doneEnabled}
+            disabled={state.closed || !doneEnabled || doneSubmitting}
             title={doneEnabled ? undefined : "Done is enabled by the review lifecycle phase"}
             onClick={() => {
-            if (looseEnds === 0) adapter.close(false); else setDoneOpen(true);
-          }}>Done</button>
+              setDoneCounts(undefined);
+              setDoneError(undefined);
+              if (looseEnds === 0) void closeCleanReview();
+              else setDoneOpen(true);
+            }}>{doneSubmitting ? "Finishing…" : "Done"}</button>
         </footer>
       </Page>
       {feedbackEnabled && selection !== null && selection !== undefined && composer === null && !state.closed && (
@@ -650,7 +744,22 @@ export function PrReviewScreen({
           )}
         />
       )}
-      {doneOpen && <DoneDialog state={state} onCancel={() => setDoneOpen(false)} onClose={() => { adapter.close(true); setDoneOpen(false); }} />}
+      {doneOpen && <DoneDialog
+        state={state}
+        counts={doneCounts}
+        initialError={doneError}
+        onCancel={() => {
+          setDoneOpen(false);
+          setDoneCounts(undefined);
+          setDoneError(undefined);
+        }}
+        onClose={async (force) => {
+          await adapter.close(force);
+          setDoneOpen(false);
+          setDoneCounts(undefined);
+          setDoneError(undefined);
+        }}
+      />}
     </div>
   );
 }
@@ -823,6 +932,7 @@ export function ProductionPrReviewScreen({
           const updated = await postReviewCodeAction(session.id, thread.id, thread.identity);
           return productionPresentation(session, payload, [updated]).threads[0]!;
         },
+        async (force) => postReviewDone(session.id, force),
       ),
     };
   }
@@ -839,7 +949,7 @@ export function ProductionPrReviewScreen({
       adapter={adapter}
       embedded
       feedbackEnabled={!staleHead && !olderReport}
-      doneEnabled={false}
+      doneEnabled={!staleHead && !olderReport}
       tocGroups={parsed.codeGroups.map(({ id, title, kind }) => ({ id, title, kind }))}
       revisionBanner={(
         <div className="pr-report-revision-banner">
@@ -857,7 +967,7 @@ export function ProductionPrReviewScreen({
       )}
       interactionNotice={(
         <div className="pr-report-capability-note" role="note">
-          Quiz answers and anchored conversations are live. Done remains disabled until the review lifecycle phase.
+          Quiz answers, anchored conversations, and durable completion are live.
         </div>
       )}
       renderReport={(state, liveAdapter) => (

@@ -83,6 +83,8 @@ export interface ReviewQuizPublicState {
   headSha: string;
   questions: ReviewQuizPublicQuestion[];
   progress: { passed: number; total: number; pending: number };
+  /** The definition belongs to a prior PR head and is preserved read-only. */
+  stale?: true;
 }
 
 export interface ReviewQuizAnswerEvent {

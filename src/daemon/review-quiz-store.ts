@@ -248,13 +248,17 @@ export class ReviewQuizStore {
 
   publicState(session: ReviewRegistrySession, revision: number): ReviewQuizPublicState {
     const companion = this.reviews.readQuizCompanion(session.id, revision);
-    return publicQuizState(companion, this.readState(companion, session).attempts);
+    const quiz = publicQuizState(companion, this.readState(companion, session).attempts);
+    return companion.headRevision === session.review.revision && companion.headSha === session.review.head.sha
+      ? quiz
+      : { ...quiz, stale: true };
   }
 
   pendingCount(session: ReviewRegistrySession): number {
     const revision = this.reviews.latestSubmittedRevision(session.id);
     if (revision < 1) return 0;
-    return this.publicState(session, revision).progress.pending;
+    const quiz = this.publicState(session, revision);
+    return quiz.stale ? 0 : quiz.progress.pending;
   }
 
   /**

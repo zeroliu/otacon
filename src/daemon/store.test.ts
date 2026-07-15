@@ -240,17 +240,32 @@ describe("Store review lifecycle", () => {
     expect(reused.session.id).toBe(created.session.id);
     expect(reused.session.updatedAt).toBe(created.session.updatedAt);
 
-    store.updateSession(created.session.id, { status: "done" });
+    const eventSeq = store.bumpCounter(created.session.id, "eventSeq");
+    store.completeReviewSession(created.session.id, {
+      version: 1,
+      session: created.session.id,
+      completedAt: "2026-07-15T12:00:00.000Z",
+      reportRevision: 1,
+      headRevision: 1,
+      headSha: "a".repeat(40),
+      forced: false,
+      unresolved: { conversations: 0, quizzes: 0 },
+      eventSeq,
+      wake: "pending",
+    });
+    expect(store.startReviewSession({ repo, branch: "main", pullRequest: pullRequest() }).action)
+      .toBe("reused-complete");
     const revised = store.startReviewSession({
       repo,
       branch: "main",
       pullRequest: pullRequest("b".repeat(40)),
     });
-    expect(revised.action).toBe("revised");
+    expect(revised.action).toBe("reopened-changed");
     expect(revised.session.id).toBe(created.session.id);
     expect(revised.session.status).toBe("working");
     expect(revised.session.review.revision).toBe(2);
     expect(revised.session.review.head.sha).toBe("b".repeat(40));
+    expect(revised.session.review.completions).toHaveLength(1);
   });
 
   test("force creates a second session for the same canonical PR", () => {

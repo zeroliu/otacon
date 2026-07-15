@@ -13,6 +13,7 @@
 // "eventSeq") so seqs survive queue drains.
 
 import { existsSync, readFileSync } from "node:fs";
+import type { ReviewDoneEvent } from "../shared/review.js";
 import type { EventPayload, EventsFile, QueuedEvent } from "../shared/types.js";
 import { quarantineCorruptFile, stringify, writeFileAtomic } from "./store.js";
 
@@ -23,7 +24,35 @@ export interface ParkHandle {
   cancel(): void;
 }
 
-const EVENT_KINDS = new Set(["comments", "question", "answer", "quiz-answer", "review-thread", "approved", "deleted"]);
+const EVENT_KINDS = new Set(["comments", "question", "answer", "quiz-answer", "review-thread", "review-done", "approved", "deleted"]);
+
+function exactIso(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const milliseconds = Date.parse(value);
+  return Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === value;
+}
+
+function validReviewDonePayload(raw: Record<string, unknown>): boolean {
+  if (raw.event !== "review-done") return true;
+  if (Object.keys(raw).sort().join(",") !== "completion,event,session") return false;
+  if (typeof raw.session !== "string" || !/^otc_[0-9a-z]{6,64}$/.test(raw.session) ||
+      typeof raw.completion !== "object" || raw.completion === null || Array.isArray(raw.completion)) return false;
+  const completion = raw.completion as Record<string, unknown>;
+  if (Object.keys(completion).sort().join(",") !==
+      "completedAt,eventSeq,forced,headRevision,headSha,reportRevision,session,unresolved,version") return false;
+  if (completion.version !== 1 || completion.session !== raw.session ||
+      !exactIso(completion.completedAt) ||
+      !Number.isSafeInteger(completion.reportRevision) || (completion.reportRevision as number) < 1 ||
+      !Number.isSafeInteger(completion.headRevision) || (completion.headRevision as number) < 1 ||
+      typeof completion.headSha !== "string" || !/^[0-9a-f]{40}$/i.test(completion.headSha) ||
+      typeof completion.forced !== "boolean" || !Number.isSafeInteger(completion.eventSeq) ||
+      (completion.eventSeq as number) < 1 || typeof completion.unresolved !== "object" ||
+      completion.unresolved === null || Array.isArray(completion.unresolved)) return false;
+  const unresolved = completion.unresolved as Record<string, unknown>;
+  return Object.keys(unresolved).sort().join(",") === "conversations,quizzes" &&
+    Number.isSafeInteger(unresolved.conversations) && (unresolved.conversations as number) >= 0 &&
+    Number.isSafeInteger(unresolved.quizzes) && (unresolved.quizzes as number) >= 0;
+}
 
 function validReviewThreadPayload(raw: Record<string, unknown>): boolean {
   if (raw.event !== "review-thread") return true;
@@ -62,13 +91,14 @@ function validQueuedEvent(value: unknown): value is QueuedEvent {
   const event = value as Record<string, unknown>;
   const payload = event.payload;
   return Number.isSafeInteger(event.seq) && (event.seq as number) >= 0 &&
-    typeof event.queuedAt === "string" && Number.isFinite(Date.parse(event.queuedAt)) &&
+    exactIso(event.queuedAt) &&
     typeof payload === "object" && payload !== null && !Array.isArray(payload) &&
     typeof (payload as Record<string, unknown>).event === "string" &&
     EVENT_KINDS.has((payload as Record<string, unknown>).event as string) &&
     typeof (payload as Record<string, unknown>).session === "string" &&
     ((payload as Record<string, unknown>).session as string) !== "" &&
-    validReviewThreadPayload(payload as Record<string, unknown>);
+    validReviewThreadPayload(payload as Record<string, unknown>) &&
+    validReviewDonePayload(payload as Record<string, unknown>);
 }
 
 export class SessionQueue {
@@ -125,12 +155,41 @@ export class SessionQueue {
   }
 
   /** Durably append (flushes before any waiter sees it), then wake the first waiter. */
-  enqueue(payload: EventPayload, seq: number): QueuedEvent {
+  enqueue(payload: EventPayload, seq: number, dispatch = true): QueuedEvent {
     const event: QueuedEvent = { seq, queuedAt: new Date().toISOString(), payload };
     this.events.push(event);
     this.flush();
-    this.dispatch();
+    if (dispatch) this.dispatch();
     return event;
+  }
+
+  /**
+   * Supersede ordinary work with one durable terminal event. Deferring dispatch
+   * lets the caller persist its queued marker before a parked waiter can ack it.
+   */
+  replaceReviewWorkWithDone(payload: ReviewDoneEvent, seq: number, dispatch = true): QueuedEvent {
+    if (payload.completion.eventSeq !== seq) {
+      throw new Error("review-done event seq must match its queue envelope");
+    }
+    const event: QueuedEvent = { seq, queuedAt: new Date().toISOString(), payload };
+    this.events = [event];
+    this.inFlight = [];
+    this.flush();
+    if (dispatch) this.dispatch();
+    return event;
+  }
+
+  /** Drop obsolete terminal wakes when a completed review reopens on a new head. */
+  dropReviewDone(): void {
+    const keep = (event: QueuedEvent): boolean => event.payload.event !== "review-done";
+    this.events = this.events.filter(keep);
+    this.inFlight = this.inFlight.filter(keep);
+    this.flush();
+  }
+
+  /** Release work appended with dispatch=false after its durable owner commits. */
+  dispatchPending(): void {
+    this.dispatch();
   }
 
   /** Fast path: dequeue into the in-flight list. Respond, then flush(event) to ack. */

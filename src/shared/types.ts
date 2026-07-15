@@ -2,7 +2,7 @@
 // Wire shapes (EventPayload) follow review loop and daemon API exactly.
 
 import type { QuestionSpec } from "./question-spec.js";
-import type { ReviewSessionDetail, ReviewSessionStatus } from "./review.js";
+import type { ReviewDoneEvent, ReviewSessionDetail, ReviewSessionStatus } from "./review.js";
 import type { ReviewQuizAnswerEvent } from "./review-quiz.js";
 
 export type { QuestionSpec };
@@ -45,12 +45,25 @@ export const SESSION_STATUSES: readonly SessionStatus[] = [
  * instead of spawning a second worktree). Terminal means "over until explicitly
  * reopened", not "forever".
  */
-export const TERMINAL_STATUSES: readonly AnySessionStatus[] = [
+export const PLAN_TERMINAL_STATUSES: readonly SessionStatus[] = [
   "approved",
   "implemented",
   "implement_failed",
+];
+
+export const TERMINAL_STATUSES: readonly AnySessionStatus[] = [
+  ...PLAN_TERMINAL_STATUSES,
   "done",
 ];
+
+/** Kind-aware terminal check for registry/session operations. */
+export function isTerminalSession(
+  session: Pick<RegistrySession, "kind" | "status">,
+): boolean {
+  return session.kind === "review"
+    ? session.status === "done"
+    : PLAN_TERMINAL_STATUSES.includes(session.status as SessionStatus);
+}
 
 /** One entry in ~/.otacon/registry.json. */
 interface RegistrySessionBase {
@@ -311,6 +324,7 @@ export type EventPayload =
     }
   | ReviewQuizAnswerEvent
   | ReviewThreadEvent
+  | ReviewDoneEvent
   // The approval wake-up. `home` is the absolute canonical
   // copy under `~/.otacon/sessions/<id>/`. `path` is the copy the agent acts on:
   // on **Save** (no `implement`) the repo-relative project copy under `plans.dir`,

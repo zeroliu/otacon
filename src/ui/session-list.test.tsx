@@ -35,7 +35,7 @@ function plan(id: string, title: string, status: "draft" | "implemented", openPr
   };
 }
 
-function review(): LiveSession {
+function review(id = "review", status: "reviewing" | "done" = "reviewing"): LiveSession {
   const repository = "acme/app" as CanonicalGitHubRepo;
   const pullRequest = {
     identity: pullRequestIdentity(repository, 42),
@@ -53,11 +53,11 @@ function review(): LiveSession {
   return {
     ...common,
     kind: "review",
-    id: "review",
-    title: "#42 Typed sessions",
+    id,
+    title: status === "done" ? "#41 Completed review" : "#42 Typed sessions",
     quick: false,
     socratic: false,
-    status: "reviewing",
+    status,
     review: {
       pullRequest,
       head: { sha: pullRequest.headSha, ref: "feature", repository, capturedAt: common.updatedAt },
@@ -95,6 +95,7 @@ async function mount(): Promise<HTMLElement> {
         plan("active", "Active plan", "draft"),
         plan("open-pr", "Implemented plan", "implemented", true),
         review(),
+        review("done-review", "done"),
       ]}
       now={Date.now()}
     />,
@@ -113,10 +114,18 @@ describe("production Plans / Reviews sidebar switch", () => {
     if (!reviews) throw new Error("Reviews switch missing");
     await act(async () => (reviews as HTMLButtonElement).click());
     expect(host.textContent).toContain("#42 Typed sessions");
+    expect(host.textContent).toContain("Active");
+    expect(host.textContent).toContain("Done");
+    expect(host.textContent).not.toContain("#41 Completed review");
     expect(host.textContent).toContain("acme/app · acme/app:feature");
     expect(host.textContent).not.toContain("Active plan");
     expect(host.textContent).not.toContain("Open PRs");
     expect(host.querySelector('[aria-label="reviewing"]')).not.toBeNull();
+
+    const done = [...host.querySelectorAll("button")].find((button) => button.textContent === "Done▸");
+    if (!done) throw new Error("Done review group missing");
+    await act(async () => (done as HTMLButtonElement).click());
+    expect(host.textContent).toContain("#41 Completed review");
 
     const remove = host.querySelector('[aria-label="delete session #42 Typed sessions"]');
     if (!remove) throw new Error("review delete control missing");

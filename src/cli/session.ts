@@ -6,7 +6,7 @@
 
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { TERMINAL_STATUSES, type RegistrySession } from "../shared/types.js";
+import { isTerminalSession, type RegistrySession } from "../shared/types.js";
 import { api } from "./client.js";
 import { fail } from "./output.js";
 
@@ -67,7 +67,7 @@ export function worktreeOwners(sessions: RegistrySession[], cwd: string): Regist
 // shared/types.ts): `implementing` resolves as the active session so the agent
 // can keep narrating/asking mid-build and `otacon resume` re-adopts it, while
 // `implemented`/`implement_failed` no longer count once the build is over.
-const isActive = (s: RegistrySession): boolean => !TERMINAL_STATUSES.includes(s.status);
+const isActive = (s: RegistrySession): boolean => !isTerminalSession(s);
 
 export function resolveSession(
   sessions: RegistrySession[],

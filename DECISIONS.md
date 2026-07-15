@@ -4405,6 +4405,50 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** Fork contribution branches can be safely authenticated/pushed, or Git
   exposes an atomic worktree-creation API that removes the remaining fetch/create seam.
 
+## Review completion persists its baseline before the terminal wake (2026-07-15)
+
+- **Decision:** Review Done appends an immutable completion summary containing the exact
+  report/head baseline, unresolved counts, force choice, timestamp, and reserved event seq.
+  The summary is first persisted with a pending wake marker; the per-session queue is then
+  replaced by exactly one `review-done` event and the marker becomes queued. Startup repairs
+  a pending marker before serving requests, and repeated Done calls reuse the same summary.
+- **Why:** The completion record is the durable fact and the event is only the wake that lets
+  a parked review agent exit. Persisting the fact first makes the crash seam recoverable,
+  while replacing older review work prevents a terminal session from waking for obsolete
+  feedback after it has already told the agent to stop. Reopening on a changed head drops
+  only that session's obsolete terminal wake, including during startup repair.
+- **Revisit when:** Registry state and event delivery share one transactional log, or running
+  code-change workers gain explicit cancellation and acknowledgement semantics.
+
+## Done gates only durable unresolved review work (2026-07-15)
+
+- **Decision:** A non-forced Done refuses while a current-head public conversation lacks an agent response,
+  a requested code action is not completed, or a current non-stale quiz is not passed. The
+  dialog reports those counts. Force Done records the same counts and preserves reports,
+  threads, actions, quiz attempts, and completion history rather than resolving or deleting
+  them implicitly. Older-head conversations remain readable but do not block or wake work for
+  the newly reopened head.
+- **Why:** Visible durable state is the only deterministic definition both daemon and browser
+  can reconstruct after refresh. Treating a comment as resolved merely because it was queued,
+  or erasing incomplete learning on force-close, would turn a lifecycle action into silent
+  data loss and make later audit impossible.
+- **Revisit when:** Conversations gain an explicit reviewer-resolved state, or quiz policy
+  distinguishes intentionally skipped concepts from failed or unanswered ones.
+
+## A completed review reopens only for a changed PR head (2026-07-15)
+
+- **Decision:** Starting the canonical PR again at the completed head returns the same
+  read-only session as `reused-complete`. A new head reopens that session as
+  `reopened-changed`, increments its head generation, retains every completion, and marks
+  older-head quiz definitions stale. `--force` remains the only way to create a parallel
+  session even when an earlier one is complete.
+- **Why:** Completion describes understanding of one exact code snapshot, not permanent
+  ownership of the PR identity. Reusing an unchanged terminal session prevents duplicate
+  learning records, while reopening on code change preserves continuity without pretending
+  the old quiz still proves understanding of the new implementation.
+- **Revisit when:** Reviews need parallel audience-specific histories, or changed files can be
+  mapped precisely enough to stale individual quiz concepts instead of the whole definition.
+
 ## Plans and Reviews share the production sidebar row grammar (2026-07-14)
 
 - **Decision:** The Plans / Reviews switch sits immediately below the unchanged production

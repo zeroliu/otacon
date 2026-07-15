@@ -54,15 +54,65 @@ export interface ReviewHeadSnapshot {
 
 export type ReviewSessionStatus = "working" | "reviewing" | "done";
 
+export const REVIEW_SESSION_STATUSES: readonly ReviewSessionStatus[] = [
+  "working",
+  "reviewing",
+  "done",
+];
+
+export function isReviewTerminalStatus(status: ReviewSessionStatus): boolean {
+  return status === "done";
+}
+
+/** Durable evidence of the exact report/head the reviewer finished reading. */
+export interface ReviewCompletionSummary {
+  version: 1;
+  session: string;
+  completedAt: string;
+  reportRevision: number;
+  headRevision: number;
+  headSha: string;
+  forced: boolean;
+  unresolved: { conversations: number; quizzes: number };
+  /** Reserved before completion is committed; one terminal wake owns this seq. */
+  eventSeq: number;
+  /** Crash-recovery marker: pending is repaired before request routes open. */
+  wake: "pending" | "queued";
+}
+
+export interface ReviewDoneEvent {
+  event: "review-done";
+  session: string;
+  completion: Omit<ReviewCompletionSummary, "wake">;
+}
+
 /** Registry-resident detail needed before report persistence exists. */
 export interface ReviewSessionDetail {
   pullRequest: PullRequestMetadata;
   head: ReviewHeadSnapshot;
   /** Starts at one and advances only when the canonical PR's head changes. */
   revision: number;
+  /** Append-only completion baselines; a changed head reopens without erasing history. */
+  completions?: ReviewCompletionSummary[];
 }
 
-export type ReviewStartAction = "created" | "reused" | "revised";
+export type ReviewStartAction =
+  | "created"
+  | "reused"
+  | "revised"
+  | "reused-complete"
+  | "reopened-changed";
+
+export function latestReviewCompletion(
+  detail: ReviewSessionDetail,
+): ReviewCompletionSummary | undefined {
+  return detail.completions?.at(-1);
+}
+
+export function reviewDoneEvent(completion: ReviewCompletionSummary): ReviewDoneEvent {
+  const { wake: _wake, ...publicCompletion } = completion;
+  return { event: "review-done", session: completion.session, completion: publicCompletion };
+}
 
 export function pullRequestIdentity(
   repository: CanonicalGitHubRepo,

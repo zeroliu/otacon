@@ -16,6 +16,7 @@
 // never pulls that in.
 
 import {
+  isTerminalSession,
   TERMINAL_STATUSES,
   type AnySessionStatus,
   type PlanRegistrySession,
@@ -57,6 +58,19 @@ export function partitionSessionKinds<T extends { kind: "plan" | "review" }>(ses
     else plans.push(session as T & PlanRegistrySession);
   }
   return { plans, reviews };
+}
+
+/** Review navigation keeps completed reading sessions visible under Done. */
+export function partitionReviewSessions<T extends ReviewRegistrySession>(sessions: T[]): {
+  active: T[];
+  done: T[];
+} {
+  const active: T[] = [];
+  const done: T[] = [];
+  for (const session of sessions) {
+    (isTerminalSession(session) ? done : active).push(session);
+  }
+  return { active, done };
 }
 
 /**

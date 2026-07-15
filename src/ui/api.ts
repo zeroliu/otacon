@@ -759,6 +759,44 @@ export async function postReviewCodeAction(
   return payload.thread;
 }
 
+export interface ReviewUnresolvedCounts {
+  conversations: number;
+  quizzes: number;
+}
+
+/** Typed 409 so a clean-looking client can render a raced server warning. */
+export class ReviewIncompleteError extends Error {
+  constructor(public readonly unresolved: ReviewUnresolvedCounts, message: string) {
+    super(message);
+    this.name = "ReviewIncompleteError";
+  }
+}
+
+/** Finish one review; force is the explicit Close-anyway acknowledgement. */
+export async function postReviewDone(id: string, force: boolean): Promise<void> {
+  const response = await fetch(`/api/reviews/${id}/done`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(force ? { force: true } : {}),
+  });
+  const payload = await response.json().catch(() => ({})) as {
+    error?: { code?: string; message?: string };
+    warning?: { unresolved?: Partial<ReviewUnresolvedCounts> };
+  };
+  if (response.status === 409 && payload.error?.code === "E_REVIEW_INCOMPLETE") {
+    const conversations = payload.warning?.unresolved?.conversations;
+    const quizzes = payload.warning?.unresolved?.quizzes;
+    if (Number.isSafeInteger(conversations) && (conversations as number) >= 0 &&
+        Number.isSafeInteger(quizzes) && (quizzes as number) >= 0) {
+      throw new ReviewIncompleteError(
+        { conversations: conversations as number, quizzes: quizzes as number },
+        payload.error.message ?? "this review still has unresolved work",
+      );
+    }
+  }
+  if (!response.ok) throw new Error(payload.error?.message ?? "review completion was rejected");
+}
+
 /** One scope's target file path and its sparse, currently-set overrides. */
 export interface ConfigScope {
   path: string;

@@ -23,7 +23,12 @@ import {
 import type { ScopeValues } from "../shared/config.js";
 import { canonicalizeGitHubRepo, parseKnowledgeHash } from "../shared/knowledge.js";
 import type { KnowledgeTarget } from "../shared/knowledge.js";
-import { parsePullRequestMetadata } from "../shared/review.js";
+import {
+  latestReviewCompletion,
+  parsePullRequestMetadata,
+  reviewDoneEvent,
+} from "../shared/review.js";
+import type { ReviewCompletionSummary, ReviewDoneEvent } from "../shared/review.js";
 import { parseReviewQuizGrade } from "../shared/review-quiz.js";
 import type { ReviewQuizAnswerEvent, ReviewQuizPublicState } from "../shared/review-quiz.js";
 import type { ReviewReportRevisionPayload } from "../shared/review-report.js";
@@ -35,7 +40,7 @@ import {
   repoLocalConfigPath,
 } from "../shared/paths.js";
 import { parseQuestionSpec } from "../shared/question-spec.js";
-import { TERMINAL_STATUSES } from "../shared/types.js";
+import { isTerminalSession } from "../shared/types.js";
 import type {
   Anchor,
   CommentItem,
@@ -363,12 +368,49 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     return seq;
   };
 
+  const sameReviewDoneWork = (payload: EventPayload, event: ReviewDoneEvent): boolean =>
+    payload.event === "review-done" && payload.session === event.session &&
+    payload.completion.eventSeq === event.completion.eventSeq &&
+    payload.completion.completedAt === event.completion.completedAt;
+
+  /** Finish a crash-interrupted completion without ever dispatching twice. */
+  const ensureReviewDoneWake = (
+    session: Extract<RegistrySession, { kind: "review" }>,
+  ): Extract<RegistrySession, { kind: "review" }> => {
+    const completion = latestReviewCompletion(session.review);
+    if (completion === undefined) throw new Error(`done review ${session.id} has no completion`);
+    if (completion.wake === "queued") return session;
+    const event = reviewDoneEvent(completion);
+    const queue = queueFor(session.id);
+    if (!queue.hasPayload((payload) => sameReviewDoneWork(payload, event))) {
+      // Cancel older quiz/thread work. The terminal wake stays undispatched
+      // until the registry marker commits, closing the restart duplicate seam.
+      queue.replaceReviewWorkWithDone(event, completion.eventSeq, false);
+    }
+    const updated = store.markReviewCompletionQueued(session.id, completion.eventSeq);
+    queue.dispatchPending();
+    if (updated.kind !== "review") throw new Error(`session ${session.id} changed kind`);
+    return updated;
+  };
+
   // A crash may land after the attempt's atomic state write but before queue
   // enqueue. Reconstruct from durable quiz state before any request/SSE can
   // observe this daemon: deterministic choices finish locally, while missing
   // open-answer work is appended once using its full immutable identity.
   for (const session of store.listSessions()) {
-    if (session.kind !== "review" || TERMINAL_STATUSES.includes(session.status)) continue;
+    if (session.kind !== "review") continue;
+    if (session.status === "done") {
+      try {
+        ensureReviewDoneWake(session);
+      } catch {
+        // The detail/Done route surfaces malformed completion state. A single
+        // damaged review must not prevent the daemon starting.
+      }
+      continue;
+    }
+    // A changed head reopens this same durable session. A terminal wake from
+    // its prior completion must not make the new review agent exit immediately.
+    queueFor(session.id).dropReviewDone();
     try {
       const recovered = quizzes.recoverPending(session);
       const queue = queueFor(session.id);
@@ -382,6 +424,8 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     }
     try {
       for (const thread of readReviewThreads(store.threadsPath(session.id), session.id)) {
+        if (thread.identity.headRevision !== session.review.revision ||
+            thread.identity.headSha !== session.review.head.sha) continue;
         // Once code work is explicitly requested it owns the eventual report
         // refresh/response. Do not resurrect an already-acked older
         // report-feedback wake after a restart and let it race the code result.
@@ -411,8 +455,8 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   // terminal set (TERMINAL_STATUSES), so an `implementing` session — which
   // re-opens the mutating verbs — sails through.
   const sessionEnded = (id: string): boolean => {
-    const status = store.getSession(id)?.status;
-    return status !== undefined && TERMINAL_STATUSES.includes(status);
+    const session = store.getSession(id);
+    return session !== undefined && isTerminalSession(session);
   };
 
   // Agent presence (review loop and daemon API): ephemeral, in-memory liveness only — the
@@ -447,10 +491,13 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     }
   };
   const safePendingReviewWork = (session: Extract<RegistrySession, { kind: "review" }>): number => {
+    if (isTerminalSession(session)) return 0;
     try {
       return readReviewThreads(store.threadsPath(session.id), session.id).reduce((count, thread) => {
-        const activeCodeAction = thread.codeAction?.status === "requested" || thread.codeAction?.status === "working";
-        return count + (activeCodeAction ? 1 : thread.response === undefined ? 1 : 0);
+        if (thread.identity.headRevision !== session.review.revision ||
+            thread.identity.headSha !== session.review.head.sha) return count;
+        const unresolvedCodeAction = thread.codeAction !== undefined && thread.codeAction.status !== "completed";
+        return count + (thread.response === undefined || unresolvedCodeAction ? 1 : 0);
       }, 0);
     } catch {
       return 0;
@@ -464,7 +511,9 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
         // remains the PR-head generation and may advance before a report lands.
         revision: reviews.latestSubmittedRevision(session.id),
         lastReviewedRevision: 0,
-        pendingEvents: safePendingQuizCount(session) + safePendingReviewWork(session),
+        pendingEvents: isTerminalSession(session)
+          ? 0
+          : safePendingQuizCount(session) + safePendingReviewWork(session),
         openQuestions: 0,
         lastContactAt: lastContact.get(session.id),
         parked: queueFor(session.id).waiterCount > 0,
@@ -559,7 +608,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   const makeTailer = options.makeTailer ?? ((deps: TailerDeps) => new Tailer(deps));
   const startTailer = (session: RegistrySession): void => {
     if (tailers.has(session.id)) return; // idempotent — already watching
-    if (TERMINAL_STATUSES.includes(session.status)) return; // over: nothing to tail
+    if (isTerminalSession(session)) return; // over: nothing to tail
     const tailer = makeTailer({
       repoRoot: session.repo,
       nextSeq: () => nextStreamSeq(session.id),
@@ -1019,6 +1068,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       pullRequest,
       force: force === true,
     });
+    if (result.action === "reopened-changed") queueFor(result.session.id).dropReviewDone();
     const preparation = reviews.prepareForSession(result.session);
     publishSession(result.session);
     return c.json({ ...result, preparation }, result.action === "created" ? 201 : 200);
@@ -1040,12 +1090,17 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       }, 409);
     }
     const unchanged = pullRequest.headSha === session.review.head.sha;
+    const wasDone = session.status === "done";
     const updated = store.refreshReviewHead(session.id, pullRequest);
+    if (!unchanged) queueFor(updated.id).dropReviewDone();
     const preparation = reviews.prepareForSession(updated);
     // Same-SHA refreshes still carry mutable title/state/ref/permissions and
     // must reach the registry/UI; only the head generation stays unchanged.
     publishSession(updated);
-    return c.json({ action: unchanged ? "reused" : "revised", session: summarize(updated), preparation });
+    const action = unchanged
+      ? wasDone ? "reused-complete" : "reused"
+      : wasDone ? "reopened-changed" : "revised";
+    return c.json({ action, session: summarize(updated), preparation });
   });
 
   /** Explicit same-head report revision, used by later report-feedback refreshes. */
@@ -1184,6 +1239,108 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     } catch (error) {
       if (error instanceof ReviewRevisionCorruptError) {
         return reviewRevisionUnavailable(c, "one of the requested review revisions is missing or corrupt");
+      }
+      throw error;
+    }
+  });
+
+  /** Deliberate terminal transition; unresolved work requires an explicit force. */
+  app.post("/api/reviews/:id/done", async (c) => {
+    const before = store.getSession(c.req.param("id"));
+    if (before === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (before.kind !== "review") {
+      return codedBadRequest(c, "E_SESSION_KIND", `session ${before.id} is not a review`);
+    }
+    const body = (await readJsonBody(c)) ?? {};
+    const keys = body.force === undefined ? [] : ["force"];
+    if (!hasExactKeys(body, keys) || (body.force !== undefined && typeof body.force !== "boolean")) {
+      return codedBadRequest(c, "E_REVIEW_DONE_INPUT", "Done accepts only an optional boolean force");
+    }
+    const current = store.getSession(before.id);
+    if (current?.kind !== "review") return notFound(c, `unknown review: ${before.id}`);
+    if (current.status === "done") {
+      try {
+        const repaired = ensureReviewDoneWake(current);
+        const completion = latestReviewCompletion(repaired.review)!;
+        publishSession(repaired);
+        return c.json({ session: summarize(repaired), completion, repeated: true });
+      } catch (error) {
+        return c.json({
+          error: {
+            code: "E_REVIEW_COMPLETION_UNAVAILABLE",
+            message: error instanceof Error ? error.message : "review completion is unavailable",
+          },
+        }, 409);
+      }
+    }
+
+    const reportRevision = reviews.latestSubmittedRevision(current.id);
+    if (reportRevision < 1) {
+      return c.json({
+        error: { code: "E_REVIEW_NOT_READY", message: "submit a review report before marking it Done" },
+      }, 409);
+    }
+    try {
+      const report = reviews.readRevision(current.id, reportRevision);
+      if (report.revision.status !== "submitted" ||
+          report.revision.headRevision !== current.review.revision ||
+          report.revision.headSha !== current.review.head.sha) {
+        return c.json({
+          error: { code: "E_REVIEW_HEAD_STALE", message: "the latest report belongs to an older PR head" },
+        }, 409);
+      }
+      const quiz = quizzes.publicState(current, reportRevision);
+      if (quiz.stale) {
+        return c.json({
+          error: { code: "E_REVIEW_HEAD_STALE", message: "the latest quiz belongs to an older PR head" },
+        }, 409);
+      }
+      const unresolved = {
+        conversations: publicReviewThreads(store.threadsPath(current.id), current.id).filter((thread) =>
+          thread.identity.headRevision === current.review.revision &&
+          thread.identity.headSha === current.review.head.sha &&
+          (thread.response === undefined ||
+          (thread.codeAction !== undefined && thread.codeAction.status !== "completed"))
+        ).length,
+        quizzes: quiz.questions.filter((question) => question.status !== "passed").length,
+      };
+      if ((unresolved.conversations > 0 || unresolved.quizzes > 0) && body.force !== true) {
+        return c.json({
+          error: {
+            code: "E_REVIEW_INCOMPLETE",
+            message: "this review still has unresolved conversations or quizzes",
+          },
+          warning: { unresolved, action: "send force:true to Close anyway" },
+        }, 409);
+      }
+
+      const completedAt = new Date().toISOString();
+      const eventSeq = store.bumpCounter(current.id, "eventSeq");
+      const completion: ReviewCompletionSummary = {
+        version: 1,
+        session: current.id,
+        completedAt,
+        reportRevision,
+        headRevision: current.review.revision,
+        headSha: current.review.head.sha,
+        forced: body.force === true,
+        unresolved,
+        eventSeq,
+        wake: "pending",
+      };
+      const completed = store.completeReviewSession(current.id, completion);
+      const queued = ensureReviewDoneWake(completed);
+      stopTailer(current.id);
+      publishQueue(current.id, queueFor(current.id).size);
+      publishSession(queued);
+      return c.json({
+        session: summarize(queued),
+        completion: latestReviewCompletion(queued.review),
+        repeated: false,
+      });
+    } catch (error) {
+      if (error instanceof ReviewRevisionCorruptError || error instanceof ReviewQuizCorruptError) {
+        return reviewRevisionUnavailable(c, "the current report or quiz is missing or corrupt");
       }
       throw error;
     }
@@ -1534,7 +1691,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     const queue = queueFor(session.id);
     const pendingEvents = queue.size;
     stopTailer(session.id); // the session is going away — stop watching its transcript
-    if (TERMINAL_STATUSES.includes(session.status)) {
+    if (isTerminalSession(session)) {
       // Deregister first — it can throw (registry flush), and an early queue
       // eviction would orphan in-flight ack tracking for a session that is in
       // fact still registered. Close the evicted instance before the removal so
@@ -1801,10 +1958,13 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   app.post("/api/sessions/:id/reopen", (c) => {
     const session = sessionFor(c);
     if (!session) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.kind !== "plan") {
+      return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a plan`);
+    }
     // Agent-driven verb (a `/otacon` run): bump liveness like its siblings so the
     // reopened session reads live, not offline-until-next-call.
     bumpContact(session.id);
-    if (!TERMINAL_STATUSES.includes(session.status)) {
+    if (!isTerminalSession(session)) {
       return c.json(
         {
           error: {

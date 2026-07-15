@@ -11,6 +11,7 @@ import { describe, expect, test } from "bun:test";
 import type { SessionStatus, SessionSummary } from "../shared/types.js";
 import {
   isOver,
+  partitionReviewSessions,
   partitionSessionKinds,
   partitionSessions,
   prInReview,
@@ -180,5 +181,17 @@ describe("partitionSessionKinds", () => {
     const groups = partitionSessionKinds([plan, review]);
     expect(groups.plans.map((item) => item.id)).toEqual(["plan"]);
     expect(groups.reviews.map((item) => item.id)).toEqual(["review"]);
+  });
+});
+
+describe("partitionReviewSessions", () => {
+  test("keeps active reviews visible and completed reviews in Done", () => {
+    const active = { kind: "review", id: "active", status: "reviewing" } as unknown as
+      Extract<SessionSummary, { kind: "review" }>;
+    const done = { kind: "review", id: "done", status: "done" } as unknown as
+      Extract<SessionSummary, { kind: "review" }>;
+    const groups = partitionReviewSessions([done, active]);
+    expect(groups.active.map((item) => item.id)).toEqual(["active"]);
+    expect(groups.done.map((item) => item.id)).toEqual(["done"]);
   });
 });

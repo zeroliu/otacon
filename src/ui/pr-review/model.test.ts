@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { balancedFixture } from "./fixtures.js";
-import { LiveReviewAdapter } from "./model.js";
+import { LiveReviewAdapter, unresolvedThreadCount } from "./model.js";
 import type { QuizDefinition, ReviewThread, ThreadDraft } from "./model.js";
 
 function passed(quizzes: QuizDefinition[], id: string): QuizDefinition[] {
@@ -120,5 +120,61 @@ describe("LiveReviewAdapter conversation transport", () => {
     }));
     await adapter.conductCodeChange("t1");
     expect(adapter.getSnapshot().threads[0]).toMatchObject({ status: "change-requested", codeActionStatus: "requested" });
+  });
+
+  test("marks the report closed only after durable Done succeeds", async () => {
+    const calls: boolean[] = [];
+    let fail = true;
+    const adapter = new LiveReviewAdapter(
+      structuredClone(balancedFixture),
+      undefined,
+      undefined,
+      undefined,
+      async (force) => {
+        calls.push(force);
+        if (fail) {
+          fail = false;
+          throw new Error("completion rejected");
+        }
+      },
+    );
+    await expect(adapter.close(true)).rejects.toThrow("completion rejected");
+    expect(adapter.getSnapshot().closed).toBe(false);
+    await adapter.close(true);
+    expect(calls).toEqual([true, true]);
+    expect(adapter.getSnapshot().closed).toBe(true);
+  });
+
+  test("coalesces concurrent Done calls and does not reopen on an older SSE frame", async () => {
+    let release: (() => void) | undefined;
+    let calls = 0;
+    const adapter = new LiveReviewAdapter(
+      structuredClone(balancedFixture),
+      undefined,
+      undefined,
+      undefined,
+      async () => {
+        calls += 1;
+        await new Promise<void>((resolve) => { release = resolve; });
+      },
+    );
+    const first = adapter.close(false);
+    const second = adapter.close(false);
+    expect(calls).toBe(1);
+    release?.();
+    await Promise.all([first, second]);
+    expect(adapter.getSnapshot().closed).toBe(true);
+    adapter.replaceSnapshot({ ...structuredClone(balancedFixture), closed: false });
+    expect(adapter.getSnapshot().closed).toBe(true);
+  });
+
+  test("does not count preserved unresolved conversations from an older head", () => {
+    const fixture = structuredClone(balancedFixture);
+    fixture.pr.headSha = "b".repeat(40);
+    fixture.threads = [
+      { id: "q1", intent: "question", anchor: "old", body: "old", status: "open", identity: { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) } },
+      { id: "q2", intent: "question", anchor: "new", body: "new", status: "open", identity: { reportRevision: 2, headRevision: 2, headSha: "b".repeat(40) } },
+    ];
+    expect(unresolvedThreadCount(fixture)).toBe(1);
   });
 });

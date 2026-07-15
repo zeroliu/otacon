@@ -217,6 +217,33 @@ describe("review start", () => {
     }));
   });
 
+  test("reports an unchanged completed review as read-only instead of returning authoring paths", async () => {
+    const session = reviewSession();
+    session.status = "done";
+    session.review.completions = [{
+      version: 1,
+      session: session.id,
+      completedAt: "2026-07-15T12:00:00.000Z",
+      reportRevision: 4,
+      headRevision: 3,
+      headSha: "a".repeat(40),
+      forced: false,
+      unresolved: { conversations: 0, quizzes: 0 },
+      eventSeq: 7,
+      wake: "queued",
+    }];
+    const printed = await capture(["start", "--pr", "42"], deps({
+      api: async () => ({
+        status: 200,
+        body: { action: "reused-complete", session, preparation: frozenPreparation() },
+      }),
+    }));
+    expect(printed).toMatchObject({ action: "reused-complete", readOnly: true, completion: { eventSeq: 7 } });
+    expect(printed.report).toBeUndefined();
+    expect(printed.quiz).toBeUndefined();
+    expect(printed.knowledge).toBeUndefined();
+  });
+
   test("repo mismatch fails before daemon contact or API creation", async () => {
     let ensured = 0;
     let apiCalls = 0;
@@ -575,6 +602,35 @@ describe("review refresh-head", () => {
       },
     });
     expect(calls.some(({ path }) => path === "/api/reviews")).toBe(false);
+  });
+
+  test("keeps an unchanged completed head read-only without returning authoring paths", async () => {
+    const completed = reviewSession();
+    completed.status = "done";
+    completed.review.completions = [{
+      version: 1,
+      session: completed.id,
+      completedAt: "2026-07-15T12:00:00.000Z",
+      reportRevision: 4,
+      headRevision: 3,
+      headSha: "a".repeat(40),
+      forced: false,
+      unresolved: { conversations: 0, quizzes: 0 },
+      eventSeq: 7,
+      wake: "queued",
+    }];
+    const printed = await capture(["refresh-head", "--session", completed.id], deps({
+      api: async (method) => method === "GET"
+        ? { status: 200, body: completed as unknown as Record<string, unknown> }
+        : {
+          status: 200,
+          body: { action: "reused-complete", session: completed, preparation: frozenPreparation() },
+        },
+    }));
+    expect(printed).toMatchObject({ action: "reused-complete", readOnly: true, completion: { eventSeq: 7 } });
+    expect(printed.report).toBeUndefined();
+    expect(printed.quiz).toBeUndefined();
+    expect(printed.knowledge).toBeUndefined();
   });
 
   test("requires an explicit review session before contacting the daemon", async () => {

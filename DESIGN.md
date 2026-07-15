@@ -379,7 +379,7 @@ the model is suspended — no inference, no token spend.
 | Command                                                                     | Effect                                                                        |
 | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | `otacon start --title <t> [--prompt <t>] [--quick] [--socratic]`            | Mint session, register it, print review URL (`--socratic` overrides the `socratic.default` config; `--prompt` records the user's verbatim request, trimmed and uncapped, on the session record) |
-| `otacon review start --pr <URL\|number> [--force]`                           | Resolve the PR against the current repo's GitHub origin; create, reuse, or head-revise its canonical review session. `--force` alone creates a separate session. Prepares an immutable report revision and prints report/quiz working paths plus current and frozen user/project knowledge paths and hashes |
+| `otacon review start --pr <URL\|number> [--force]`                           | Resolve the PR against the current repo's GitHub origin; create, reuse, or head-revise its canonical review session. An unchanged completed review reports `reused-complete` and stays read-only; a changed completed head reports `reopened-changed` and returns fresh authoring paths. `--force` alone creates a separate session |
 | `otacon review submit --report <report.md> --quiz <quiz.json>`                | Derive the session from fixed report frontmatter; strict-lint and immutably publish the report/quiz pair. A rejection prints bounded line-aware issues |
 | `otacon review grade <question-id> --file <grade.json>`                       | Complete one pending open-answer attempt with a schema-validated pass/retry verdict, specific feedback, report/head identity, and current knowledge CAS hash. Duplicate grades are idempotent; conflicts leave the attempt pending |
 | `otacon submit [plan.md] [--resolutions res.json]`                          | Lint → reject with errors, or store revision N, notify UI                     |
@@ -467,6 +467,8 @@ copy is written), and the agent reads the plan from there to walk the build loop
 `otacon implement-done`). `deleted` is terminal: the agent stops — it means the reviewer
 discarded a pending session in the UI (§12), so there is no artifact; a parked `wait` is
 woken with it immediately rather than left to 404 on its next call.
+`review-done` is the equivalent terminal wake for a PR explanation: it carries the exact
+report/head completion baseline and unresolved counts, and tells `/otacon-review` to stop.
 
 ### HTTP API (daemon, 127.0.0.1 only)
 
@@ -529,6 +531,10 @@ GET  /api/reviews/:id/revisions/:n          one immutable report/quiz/snapshot r
 POST /api/reviews/:id/submit                strict-lint and publish a prepared report/quiz pair;
                                             422 includes line-aware report issues
 GET  /api/reviews/:id/diff?from=&to=        structural diff between submitted report revisions
+POST /api/reviews/:id/done                  finish the current report/head. Without force,
+                                            unresolved conversations/quizzes return 409
+                                            E_REVIEW_INCOMPLETE plus both counts; force:true
+                                            preserves history and closes anyway
 POST /api/reviews/:id/quiz/:question/answer {revision,answer,idempotencyKey}; choice answers
                                             return pass/retry immediately, open answers persist
                                             grading state and enqueue one private quiz-answer event
@@ -889,7 +895,10 @@ discriminant. Registry v1 files created before this field existed decode a missi
 migration rewrite. New plan sessions store `kind:"plan"`. Review sessions use an
 independent `working → reviewing → done` lifecycle and carry canonical GitHub base
 repository + PR number, current metadata, an immutable head snapshot, and a **head
-generation** counter. They do not create or reinterpret the plan-specific `session.json`.
+generation** counter. `done` is review-terminal. Each completion appends its exact report
+revision, head generation/SHA, force flag, unresolved counts, time, and terminal-event seq
+to the registry-resident review detail; later head changes never erase that history. They
+do not create or reinterpret the plan-specific `session.json`.
 Persisted report revisions have a separate monotonic counter: several explanations may be
 published for one unchanged head, while a head advance may occur before its next report is
 ready. The generic `SessionSummary.revision` for a review is the latest submitted report
@@ -899,8 +908,10 @@ revision; `session.review.revision` remains the PR-head generation.
 without a GitHub origin. The CLI resolves a URL or positive number with `gh pr view`,
 then compares the PR URL's canonical base `owner/repo` with the current clone before it
 contacts the create API. Canonical repo + PR number is the durable identity: an unchanged
-head returns the existing session without mutation; a changed head updates metadata,
-increments the same session's review revision, and reopens it to `working`; `--force`
+active head returns the existing session, and an unchanged completed head returns that same
+read-only session as `reused-complete`. A changed head updates metadata, increments the same
+session's review revision, reopens it to `working` as `reopened-changed` when necessary, and
+marks the older head's quiz definition stale/read-only; `--force`
 creates another session for the same identity. The `gh` process boundary is injectable
 and uses argument arrays, not a shell. A second `gh repo view --json viewerPermission`
 query records the authenticated viewer's base-repository capability. V1 is read-only for
@@ -937,8 +948,10 @@ unread badge. Plans and PR explanation reviews are partitioned by `kind` behind 
 collapsible groups: an **Open PRs** group (terminal sessions whose latest PR is still open, expanded by default and
 carrying a count, so work waiting on review stays visible) and a **Done** group (finished
 work: Save-only approvals, merged or closed PRs, failed builds, collapsed by default and
-uncounted), the same split every session surface reads. On desktop
-(≥960px) it's a drag-resizable, collapsible column (240px by default) wrapping every
+uncounted), the same split every session surface reads. Review rows use the same
+disclosure grammar in an expanded, counted **Active** group
+followed by a collapsed **Done** group; completion never replaces the existing vertical
+sidebar or moves the mode switch. On desktop (≥960px) it's a drag-resizable, collapsible column (240px by default) wrapping every
 route, so switching is one click from anywhere; `/` itself is a welcome pane, not the
 index. Below 960px the sidebar is hidden: the home route renders the list inline (the
 phone index), and from an open plan the same condensed rows are one tap away through the
@@ -1651,9 +1664,19 @@ main agent verifies, commits, pushes, calls `refresh-head`, and authors the repl
 report. A same-SHA refresh updates mutable title/state/ref/permission metadata without
 advancing the head generation.
 
-**Done** is deliberate rather than destructive. If quizzes or conversation threads are
-still unresolved, the confirmation names both counts and offers Continue or Close anyway;
-a force-closed session keeps the report readable. The Knowledge screen is a Markdown
+**Done** is deliberate rather than destructive. A conversation is unresolved until it has
+an agent response; requested, working, or failed code work also remains unresolved, and a
+completed code action cannot hide a missing response. A quiz is unresolved until passed.
+When a changed PR head reopens the session, older-head conversations remain readable history
+but are not re-enqueued and do not block completion of the new head.
+The clean case finishes immediately. Otherwise the dialog names both counts and offers
+Continue or Close anyway. The daemon derives those counts from the same public durable
+quiz/thread projection the browser renders; without `force:true` it returns 409 and writes
+nothing. Completion appends a baseline before replacing ordinary review work with one durable
+`review-done` wake. Its pending/queued marker is repaired at startup before routes open, so a
+retry or restart cannot enqueue a second terminal event. Force close preserves every report,
+quiz attempt, and thread byte; the finished screen stays readable but all mutation controls
+are disabled. The Knowledge screen is a Markdown
 editor with explicit User/Project targets and saved, dirty, and concurrent-change states.
 On conflict it preserves the local draft, exposes the newer disk value, and makes the
 reviewer choose which version survives.
@@ -1976,6 +1999,12 @@ draft ─► in_review ⇄ revising ──────────┤  (Send to 
 
 Any **terminal** state has a `reopen` reverse edge back to `revising` (the dashed line
 above), used by worktree-keyed amendment (above).
+
+PR explanations use a separate kind-aware state machine:
+`working → reviewing → done` (terminal). Only a changed canonical PR head moves `done →
+working`; an unchanged start keeps the exact completed session read-only. Generic plan reopen
+never accepts a review id. The shared terminal helpers discriminate session kind so the plan
+and review machines cannot accidentally admit one another's reverse edges.
 
 ### Implement: worktree, per-phase commits, PR
 

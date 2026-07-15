@@ -32,7 +32,8 @@ import { repoName } from "./format";
 import { DeleteDialog } from "./review/delete";
 import { navigate } from "./router";
 import { unreadCount } from "./seen";
-import { isOver, partitionSessionKinds, partitionSessions } from "./session-filter";
+import { partitionReviewSessions, partitionSessionKinds, partitionSessions } from "./session-filter";
+import { isTerminalSession } from "../shared/types";
 import type { NavIcon } from "./session-status";
 import { navState } from "./session-status";
 import { useNow } from "./tick";
@@ -90,6 +91,7 @@ export function SessionListContents({
     if (currentKind !== undefined) setMode(currentKind);
   }, [currentKind]);
   const { active, prReview, done } = partitionSessions(plans);
+  const { active: activeReviews, done: doneReviews } = partitionReviewSessions(reviews);
   return (
     <nav className="session-list" aria-label="sessions">
       <div className="session-kind-switch" role="group" aria-label="session kind">
@@ -129,15 +131,30 @@ export function SessionListContents({
           onNavigate={onNavigate}
         />
       )}
-      {mode === "review" && reviews.map((session) => (
-        <SessionRow
-          key={session.id}
-          session={session}
-          current={session.id === current}
+      {mode === "review" && activeReviews.length > 0 && (
+        <SessionGroup
+          key="active-reviews"
+          label="Active"
+          sessions={activeReviews}
+          defaultOpen={true}
+          showCount={true}
+          current={current}
           now={now}
           onNavigate={onNavigate}
         />
-      ))}
+      )}
+      {mode === "review" && doneReviews.length > 0 && (
+        <SessionGroup
+          key="done-reviews"
+          label="Done"
+          sessions={doneReviews}
+          defaultOpen={false}
+          showCount={false}
+          current={current}
+          now={now}
+          onNavigate={onNavigate}
+        />
+      )}
     </nav>
   );
 }
@@ -221,7 +238,7 @@ function SessionRow({
   // home folder (`~/.otacon/sessions/<id>/`). `over` only drives the confirm
   // copy: for a terminal session the durable copy survives elsewhere (the Save
   // copy under plans.dir, or the PR for Implement plans).
-  const over = isOver(session.status);
+  const over = isTerminalSession(session);
   const location = session.kind === "review"
     ? session.review.pullRequest.identity.repository
     : repoName(session.repo);

@@ -7,7 +7,7 @@
 // permanently removes the home session folder; no archive").
 
 import { parseArgs } from "node:util";
-import { TERMINAL_STATUSES } from "../../shared/types.js";
+import { isTerminalSession } from "../../shared/types.js";
 import { api, ensureDaemon } from "../client.js";
 import { notice, printJson } from "../output.js";
 import { findRepoRoot, listSessions, realpathOr } from "../session.js";
@@ -25,7 +25,7 @@ export async function cleanCommand(argv: string[]): Promise<number> {
   // stays terminal, so clean only ever sweeps finished sessions: a racing
   // status change cannot sweep a live (including `implementing`) session.
   const targets = (await listSessions()).filter(
-    (s) => TERMINAL_STATUSES.includes(s.status) && (values.all || realpathOr(s.repo) === root),
+    (s) => isTerminalSession(s) && (values.all || realpathOr(s.repo) === root),
   );
 
   const cleaned: { session: string; title: string; repo: string }[] = [];

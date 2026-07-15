@@ -386,3 +386,66 @@ describe("SessionQueue persistence", () => {
     expect(parsed.events).toHaveLength(2);
   });
 });
+
+describe("SessionQueue review terminal replacement", () => {
+  const done: EventPayload = {
+    event: "review-done",
+    session: "otc_abc123",
+    completion: {
+      version: 1,
+      session: "otc_abc123",
+      completedAt: "2026-07-15T12:00:00.000Z",
+      reportRevision: 2,
+      headRevision: 3,
+      headSha: "a".repeat(40),
+      forced: true,
+      unresolved: { conversations: 1, quizzes: 2 },
+      eventSeq: 9,
+    },
+  };
+
+  test("defers the terminal wake until its owner marks it queued and drops older review work", () => {
+    const q = new SessionQueue(file);
+    const got: EventPayload[] = [];
+    q.park((event) => got.push(event.payload));
+    q.replaceReviewWorkWithDone(done, 9, false);
+    expect(got).toEqual([]);
+    expect(new SessionQueue(file).take()?.payload).toEqual(done);
+    q.dispatchPending();
+    expect(got).toEqual([done]);
+
+    const oldPath = join(dir, "old-work.json");
+    const withOldWork = new SessionQueue(oldPath);
+    withOldWork.enqueue(payload(1), 1);
+    withOldWork.replaceReviewWorkWithDone(done, 9, false);
+    const restarted = new SessionQueue(oldPath);
+    expect(restarted.take()?.payload).toEqual(done);
+    expect(restarted.take()).toBeUndefined();
+  });
+
+  test("drops an obsolete terminal wake when its review reopens", () => {
+    const q = new SessionQueue(file);
+    q.enqueue(payload(1), 1, false);
+    q.enqueue(done, 9, false);
+    q.dropReviewDone();
+    const restarted = new SessionQueue(file);
+    expect(restarted.take()?.payload).toEqual(payload(1));
+    expect(restarted.take()).toBeUndefined();
+  });
+
+  test("rejects a terminal wake whose private seq does not own its queue envelope", () => {
+    const q = new SessionQueue(file);
+    expect(() => q.replaceReviewWorkWithDone(done, 10, false)).toThrow("event seq");
+    expect(q.size).toBe(0);
+  });
+
+  test("ordinary plan enqueue retains its immediate FIFO wake behavior", () => {
+    const q = new SessionQueue(file);
+    const got: EventPayload[] = [];
+    q.park((event) => got.push(event.payload));
+    q.enqueue(payload(1), 1);
+    q.enqueue(payload(2), 2);
+    expect(got).toEqual([payload(1)]);
+    expect(q.take()?.payload).toEqual(payload(2));
+  });
+});

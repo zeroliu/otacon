@@ -5,6 +5,7 @@ import { Window } from "happy-dom";
 import type { CapturedSelection } from "../review/anchor.js";
 import { balancedFixture } from "./fixtures.js";
 import { MemoryReviewAdapter } from "./model.js";
+import type { ReviewPresentation } from "./model.js";
 import { PrReviewScreen, ProductionPrReviewScreen, productionPresentation } from "./pr-review-screen.js";
 
 interface Mounted {
@@ -20,6 +21,7 @@ let mounted: Mounted | undefined;
 async function mountReview(
   gradingDelayMs = 1,
   selectionOverride?: CapturedSelection,
+  fixture: ReviewPresentation = balancedFixture,
 ): Promise<Mounted> {
   const win = new Window({ url: "http://localhost/" });
   const previousDocument = (globalThis as { document?: unknown }).document;
@@ -37,7 +39,7 @@ async function mountReview(
   win.document.body.appendChild(happyHost);
   const host = happyHost as unknown as HTMLElement;
   const root = createRoot(host);
-  const adapter = new MemoryReviewAdapter(balancedFixture, gradingDelayMs);
+  const adapter = new MemoryReviewAdapter(fixture, gradingDelayMs);
   await act(async () => root.render(
     <PrReviewScreen adapter={adapter} selectionOverride={selectionOverride} />,
   ));
@@ -336,7 +338,7 @@ describe("PrReviewScreen", () => {
     expect(active.host.querySelector(".pr-review-page")?.tagName).toBe("DIV");
     expect(active.host.querySelector(".pr-stale-report")?.textContent).toContain("current head generation 2");
     expect(active.host.querySelector(".pr-report-revision-banner")?.textContent).toContain("report head generation 1");
-    expect(active.host.querySelector(".pr-report-capability-note")?.textContent).toContain("Quiz answers and anchored conversations are live");
+    expect(active.host.querySelector(".pr-report-capability-note")?.textContent).toContain("durable completion");
     expect(button(active.host, "Done").disabled).toBe(true);
     expect([...active.host.querySelectorAll(".pr-toc-group")].map((link) => [
       link.textContent,
@@ -388,8 +390,9 @@ describe("PrReviewScreen", () => {
     expect(sidebarChildren.indexOf(sidebar?.querySelector(".pr-sidebar-switch") as Element)).toBeLessThan(
       sidebarChildren.indexOf(sidebar?.querySelector(".pr-side-list") as Element),
     );
-    expect(sidebar?.querySelectorAll(".pr-side-list > .sl-row")).toHaveLength(2);
-    expect(sidebar?.querySelector(".pr-side-list > .sl-row .sl-text")).not.toBeNull();
+    expect(sidebar?.querySelectorAll(".pr-side-list > .sl-group")).toHaveLength(2);
+    expect(sidebar?.querySelector('[aria-label="Active review sessions (1)"] .sl-row .sl-text')).not.toBeNull();
+    expect(sidebar?.querySelector('[aria-label="Done review sessions"] .sl-group-rows')).toBeNull();
     await click(button(sidebar as HTMLElement, "Plans"));
     expect(sidebar?.querySelectorAll(".pr-side-list > .sl-row")).toHaveLength(1);
     expect(sidebar?.querySelector(".pr-side-list > .sl-row .sl-text")).not.toBeNull();
@@ -607,7 +610,7 @@ describe("PrReviewScreen", () => {
     const { host, adapter } = await mountReview();
     await click(button(host, "Done"));
     const dialog = host.querySelector('[role="dialog"]');
-    expect(dialog?.textContent).toContain("2 unresolved threads");
+    expect(dialog?.textContent).toContain("2 unresolved conversations");
     expect(dialog?.textContent).toContain("3 unfinished quizzes");
     expect(host.ownerDocument.activeElement?.textContent).toBe("Continue review");
 
@@ -627,5 +630,20 @@ describe("PrReviewScreen", () => {
       scope: "project",
     }));
     expect(adapter.getSnapshot()).toBe(before);
+  });
+
+  test("finishes a clean review immediately and keeps the report read-only", async () => {
+    const clean = structuredClone(balancedFixture);
+    clean.quizzes = clean.quizzes.map((quiz) => ({ ...quiz, status: "passed" as const }));
+    clean.threads = clean.threads.map((thread) => ({
+      ...thread,
+      status: "answered" as const,
+      response: thread.response ?? "Resolved.",
+      codeActionStatus: undefined,
+    }));
+    const { host } = await mountReview(1, undefined, clean);
+    await click(button(host, "Done"));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(host.textContent).toContain("Review closed · report preserved as read-only");
   });
 });

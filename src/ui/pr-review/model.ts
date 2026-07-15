@@ -208,7 +208,7 @@ export interface ReviewAdapter {
   submitQuiz: (quizId: string, answer: string) => Promise<void>;
   createThread: (draft: ThreadDraft) => Promise<void>;
   conductCodeChange: (threadId: string) => Promise<void>;
-  close: (force: boolean) => void;
+  close: (force: boolean) => Promise<void>;
 }
 
 function replaceQuiz(
@@ -305,7 +305,7 @@ export class MemoryReviewAdapter implements ReviewAdapter {
     });
   }
 
-  close(force: boolean): void {
+  async close(force: boolean): Promise<void> {
     const unresolved = unresolvedThreadCount(this.state) > 0;
     const incomplete = this.state.quizzes.some((quiz) => quiz.status !== "passed");
     if (!force && (unresolved || incomplete)) return;
@@ -328,6 +328,7 @@ export class LiveReviewAdapter implements ReviewAdapter {
   private readonly listeners = new Set<() => void>();
   private readonly inFlight = new Map<string, Promise<void>>();
   private readonly retryKeys = new Map<string, { answer: string; key: string }>();
+  private closeInFlight?: Promise<void>;
   private externalSnapshotGeneration = 0;
 
   constructor(
@@ -335,6 +336,7 @@ export class LiveReviewAdapter implements ReviewAdapter {
     private readonly submitLiveQuiz?: (quizId: string, answer: string, idempotencyKey: string) => Promise<QuizDefinition[]>,
     private readonly createLiveThread?: (draft: ThreadDraft, idempotencyKey: string) => Promise<ReviewThread>,
     private readonly conductLiveCodeChange?: (thread: ReviewThread) => Promise<ReviewThread>,
+    private readonly closeLiveReview?: (force: boolean) => Promise<void>,
   ) {
     this.state = initial;
   }
@@ -347,7 +349,9 @@ export class LiveReviewAdapter implements ReviewAdapter {
 
   replaceSnapshot(next: ReviewPresentation): void {
     this.externalSnapshotGeneration += 1;
-    this.updateSnapshot(next);
+    // A successful terminal mutation is sticky until a changed head creates a
+    // new adapter key. An older SSE frame must not briefly reopen controls.
+    this.updateSnapshot(this.state.closed && !next.closed ? { ...next, closed: true } : next);
   }
 
   private updateSnapshot(next: ReviewPresentation): void {
@@ -417,13 +421,23 @@ export class LiveReviewAdapter implements ReviewAdapter {
     });
   }
 
-  close(): void {
-    // Phase 7 owns the durable Done transition.
+  async close(force: boolean): Promise<void> {
+    if (this.state.closed) return;
+    if (this.closeLiveReview === undefined) throw new Error("review completion is not available yet");
+    if (this.closeInFlight !== undefined) return this.closeInFlight;
+    const request = this.closeLiveReview(force)
+      .then(() => this.updateSnapshot({ ...this.state, closed: true }))
+      .finally(() => { this.closeInFlight = undefined; });
+    this.closeInFlight = request;
+    return request;
   }
 }
 
 export function unresolvedThreadCount(state: ReviewPresentation): number {
-  return state.threads.filter((thread) => thread.status !== "answered").length;
+  return state.threads.filter((thread) =>
+    thread.status !== "answered" &&
+    (thread.identity === undefined || thread.identity.headSha === state.pr.headSha)
+  ).length;
 }
 
 export function incompleteQuizCount(state: ReviewPresentation): number {
