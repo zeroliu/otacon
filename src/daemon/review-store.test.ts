@@ -102,6 +102,23 @@ Structured cards render at this stable insertion point.
 `;
 }
 
+function quiz(revision: number, head = "abc123", headRevision = 1): string {
+  return JSON.stringify({
+    version: 1,
+    session: "otc_store1",
+    revision,
+    headRevision,
+    headSha: head,
+    questions: [{
+      id: "q1",
+      concept: { id: "snapshot", label: "Snapshot ownership", scope: "project" },
+      prompt: "Why freeze the snapshot?",
+      mode: "open",
+      rubric: { criteria: ["Explains stable authorship input"] },
+    }],
+  });
+}
+
 beforeEach(() => {
   savedHome = process.env.OTACON_HOME;
   home = mkdtempSync(join(tmpdir(), "otacon-review-store-"));
@@ -131,7 +148,7 @@ describe("ReviewStore", () => {
     const prepared = store.beginRevision(session());
     const submitted = store.submit(session(), {
       report: report(1, prepared.snapshot.hash),
-      quiz: JSON.stringify({ version: 1, questions: [] }),
+      quiz: quiz(1),
     });
     const beforeBytes = readFileSync(reviewRevisionReportPath(session().id, 1), "utf8");
     const current = knowledge.read({ scope: "project", repo: repository });
@@ -146,10 +163,10 @@ describe("ReviewStore", () => {
   test("supports a second report revision on the same head without overwriting the first", () => {
     const store = new ReviewStore();
     const first = store.beginRevision(session());
-    store.submit(session(), { report: report(1, first.snapshot.hash), quiz: "{}" });
+    store.submit(session(), { report: report(1, first.snapshot.hash), quiz: quiz(1) });
     const second = store.beginRevision(session());
     expect(second.revision).toMatchObject({ revision: 2, headRevision: 1, headSha: "abc123" });
-    store.submit(session(), { report: report(2, second.snapshot.hash), quiz: "{}" });
+    store.submit(session(), { report: report(2, second.snapshot.hash), quiz: quiz(2) });
     expect(store.listRevisions(session().id)).toEqual([1, 2]);
     expect(store.readRevision(session().id, 1).report).toContain("revision: 1");
     expect(store.readRevision(session().id, 2).report).toContain("revision: 2");
@@ -158,7 +175,7 @@ describe("ReviewStore", () => {
   test("does not reuse an old report when a later head generation returns to the same SHA", () => {
     const store = new ReviewStore();
     const first = store.beginRevision(session("abc123", 1));
-    store.submit(session("abc123", 1), { report: report(1, first.snapshot.hash), quiz: "{}" });
+    store.submit(session("abc123", 1), { report: report(1, first.snapshot.hash), quiz: quiz(1) });
     expect(store.prepareForSession(session("def456", 2)).revision.revision).toBe(2);
     const reverted = store.prepareForSession(session("abc123", 3));
     expect(reverted.revision).toMatchObject({ revision: 3, headRevision: 3, headSha: "abc123" });
@@ -169,11 +186,11 @@ describe("ReviewStore", () => {
     const prepared = store.beginRevision(session());
     expect(() => store.submit(session(), {
       report: report(1, prepared.snapshot.hash).replace("## Background", "## Intuition"),
-      quiz: "{}",
+      quiz: quiz(1),
     })).toThrow(ReviewReportInvalidError);
     const accepted = report(1, prepared.snapshot.hash);
-    store.submit(session(), { report: accepted, quiz: "{}" });
-    expect(() => store.submit(session(), { report: accepted.replace("labeled", "mutable"), quiz: "{}" }))
+    store.submit(session(), { report: accepted, quiz: quiz(1) });
+    expect(() => store.submit(session(), { report: accepted.replace("labeled", "mutable"), quiz: quiz(1) }))
       .toThrow(ReviewRevisionExistsError);
     expect(readFileSync(reviewRevisionReportPath(session().id, 1), "utf8")).toBe(accepted);
   });
@@ -185,7 +202,7 @@ describe("ReviewStore", () => {
     try {
       store.submit(session("def456", 2), {
         report: report(1, prepared.snapshot.hash),
-        quiz: "{}",
+        quiz: quiz(1),
       });
     } catch (error) {
       thrown = error as ReviewReportInvalidError;
@@ -205,7 +222,7 @@ describe("ReviewStore", () => {
     const abandonedSubmission = join(reviewRevisionsDir(session().id), "r1", ".tmp-submission-crash");
     mkdirSync(abandonedSubmission);
     writeFileSync(join(abandonedSubmission, "partial"), "x");
-    store.submit(session(), { report: report(1, prepared.snapshot.hash), quiz: "{}" });
+    store.submit(session(), { report: report(1, prepared.snapshot.hash), quiz: quiz(1) });
     expect(existsSync(abandonedSubmission)).toBe(false);
     writeFileSync(join(reviewRevisionsDir(session().id), "r1", "user.md"), "corrupt");
     expect(() => store.readRevision(session().id, 1)).toThrow(ReviewRevisionCorruptError);

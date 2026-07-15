@@ -519,6 +519,22 @@ export class Store {
 
   /** Increment one daemon-owned counter (review loop and daemon API stable ids) and persist it. */
   bumpCounter(id: string, key: keyof SessionStateFile["counters"]): number {
+    const session = this.require(id);
+    if (session.kind === "review") {
+      if (key !== "eventSeq") throw new Error(`review sessions do not own the ${key} plan counter`);
+      const path = paths.reviewEventSeqPath(id);
+      let current = 0;
+      try {
+        const raw = readFileSync(path, "utf8").trim();
+        if (!/^\d+$/.test(raw)) throw new Error("invalid review event sequence");
+        current = Number(raw);
+      } catch (error) {
+        if (existsSync(path)) throw error;
+      }
+      const next = current + 1;
+      writeFileAtomic(path, `${next}\n`);
+      return next;
+    }
     return this.bumpCounters(id, { [key]: 1 })[key];
   }
 

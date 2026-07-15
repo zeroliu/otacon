@@ -381,8 +381,9 @@ the model is suspended — no inference, no token spend.
 | `otacon start --title <t> [--prompt <t>] [--quick] [--socratic]`            | Mint session, register it, print review URL (`--socratic` overrides the `socratic.default` config; `--prompt` records the user's verbatim request, trimmed and uncapped, on the session record) |
 | `otacon review start --pr <URL\|number> [--force]`                           | Resolve the PR against the current repo's GitHub origin; create, reuse, or head-revise its canonical review session. `--force` alone creates a separate session. Prepares an immutable report revision and prints report/quiz working paths plus current and frozen user/project knowledge paths and hashes |
 | `otacon review submit --report <report.md> --quiz <quiz.json>`                | Derive the session from fixed report frontmatter; strict-lint and immutably publish the report/quiz pair. A rejection prints bounded line-aware issues |
+| `otacon review grade <question-id> --file <grade.json>`                       | Complete one pending open-answer attempt with a schema-validated pass/retry verdict, specific feedback, report/head identity, and current knowledge CAS hash. Duplicate grades are idempotent; conflicts leave the attempt pending |
 | `otacon submit [plan.md] [--resolutions res.json]`                          | Lint → reject with errors, or store revision N, notify UI                     |
-| `otacon wait [--timeout 540] [--session <id>]`                              | Long-poll this session's queue; print next event as JSON                      |
+| `otacon wait [--timeout 540] [--session <id>]`                              | Long-poll this session's queue; an explicit review id may receive private `quiz-answer` work, while implicit resolution continues to consider plan sessions only |
 | `otacon ask --question "…" [--options "A\|B\|C"] [--recommend A] [--multi]` | Post agent question card to UI (or a batch of independent questions via `--batch <file\|->`); answer arrives via `wait` |
 | `otacon answer <question-id> (--body "…" \| --file f.md)`                   | Answer a user question; no revision                                           |
 | `otacon progress "<note>" [--session <id>]`                                 | Append a narration note to the live activity feed (UI-only; non-blocking, never parks, never an event) |
@@ -524,6 +525,12 @@ GET  /api/reviews/:id/revisions/:n          one immutable report/quiz/snapshot r
 POST /api/reviews/:id/submit                strict-lint and publish a prepared report/quiz pair;
                                             422 includes line-aware report issues
 GET  /api/reviews/:id/diff?from=&to=        structural diff between submitted report revisions
+POST /api/reviews/:id/quiz/:question/answer {revision,answer,idempotencyKey}; choice answers
+                                            return pass/retry immediately, open answers persist
+                                            grading state and enqueue one private quiz-answer event
+POST /api/reviews/:id/quiz/:question/grade  agent-private, schema-validated grade with report/head,
+                                            attempt, verdict, feedback, and knowledgeBaseHash;
+                                            CAS conflicts return 409 without completing the attempt
 GET  /api/sessions/:id                      session detail (+ revision, pending events)
 DELETE /api/sessions/:id                    deregister a session and permanently remove
                                             its home folder ~/.otacon/sessions/<id>/ for
@@ -1523,7 +1530,15 @@ but neither altitude may omit the changed interface or integration seam.
 
 #### Persisted review report contract
 
-The durable authoring format is Markdown plus a structured quiz companion. Frontmatter is
+The durable authoring format is Markdown plus a structured quiz companion. The private
+companion contains version/session/report-revision/PR-head identity and 1–20 unique
+questions. Each question has a concept id/label plus User or Project knowledge scope,
+prompt, answer mode, and a non-empty rubric. Open-ended is the authoring default. Choice is
+used only for naturally bounded contracts and additionally carries 2–10 unique options plus
+one answer key that must name an option. Concept labels are single-line Markdown-safe text;
+choice options and their key are trimmed before uniqueness/ownership validation. Rubrics and answer keys remain in daemon-private
+immutable storage and in the private agent event; browser detail, revision, submit, SSE
+snapshot, and SSE update payloads receive only a sanitized projection. Frontmatter is
 fixed and ordered: `type: otacon-pr-review`, `version: 1`, `session`, independent report
 `revision`, canonical `pr` (`github.com/<owner>/<repo>#<n>`), `head`, composite
 `knowledge-snapshot`, and `altitude` (`balanced` or `expert`). It is followed by exactly
@@ -1556,10 +1571,36 @@ ready, the old report stays readable but the UI labels its frozen report head an
 distinct current head explicitly.
 
 Quiz cards expose four legible states: unanswered, agent grading, retry with actionable
-feedback, and passed with a knowledge-destination receipt. Open answers are the default;
-the user writes the mechanism in their own words and can retry until the explanation is
-sound. Reading a file records exposure only. A passed quiz is the evidence that can
-promote a concept to demonstrated understanding.
+feedback, and passed with a knowledge-destination receipt. Their summary shows demonstrated
+progress and orders grading/retry work before unanswered and passed cards. Open answers are
+the default; the user writes the mechanism in their own words and can retry until the
+explanation is sound. One question has at most one pending attempt, so an old verdict cannot
+race a newer explanation. Choice answers are graded deterministically inside the daemon and
+never wake the agent. An open answer is atomically persisted before its private `quiz-answer`
+event is queued; the event carries the answer, rubric, attempt/report/head identity, concept,
+scope, and answer-time knowledge hash. Repeating the same idempotency key requests delivery
+of the same ungraded work without creating another attempt: queued or in-flight work is not
+duplicated and consumes no new event sequence, while acknowledged work may be enqueued again
+if the attempt is still pending. The agent returns pass/retry
+with specific feedback through `review grade`; the attempt remains grading until that verdict
+lands even after the queue event has been consumed. Sanitized quiz state travels on the
+existing single per-session SSE connection, so a grade updates the card without changing the
+immutable report revision URL. Reading a file records exposure only. A passed quiz is the
+evidence that can promote a concept to demonstrated understanding.
+
+On daemon startup, attempt state is the recovery source for the narrow crash window between
+its atomic write and queue enqueue. Pending choices are deterministically finished/rebased
+without agent work, including one synchronous CAS rebase retry when the profile changes
+during repair. Each pending open attempt is compared against queued and in-flight work
+by full report/head/question/attempt identity; only a missing wake is enqueued and consumes a
+new monotonic event sequence. This repair happens before browser routes or SSE are registered,
+so private answer/rubric/CAS payloads never enter the UI stream. Malformed persisted queue
+envelopes are quarantined rather than making this recovery fail later on a null payload.
+
+If immediate choice grading loses a knowledge CAS, its pending deterministic attempt remains
+durable. Replaying the same idempotency key rebases that known verdict onto the latest valid
+profile and CASes the managed patch again, preserving intervening user prose instead of
+trapping the browser on the answer-time hash.
 
 Selecting report prose or text inside a rendered code fence opens the same compact contextual actions used
 by plan review: **Ask** or **Comment**. There is no direct code-mutation intent at the
@@ -1600,8 +1641,18 @@ Evidence is a distinct append-only audit trail:
 Each line retains its scope/repository, source session and optional PR/head, concept id,
 verdict (`retry`, `pass`, `exposed`, or `remembered`), compact rationale, and timestamp.
 A retry followed by a pass therefore remains two facts even when the Markdown summary is
-edited to describe only the superseding demonstrated state. Raw quiz transcripts remain
-in the review session rather than bloating the knowledge ledger.
+edited to describe only the superseding demonstrated state. Quiz grading patches only
+attempt-specific managed list items. Marker ownership includes session, report revision,
+concept, and attempt, and crash replay recognizes it only as an exact managed list line, never
+as arbitrary matching prose. Retry adds/replaces a marked `Needs reinforcement`
+item without touching `Demonstrated concepts`; pass removes that concept's managed gap and
+adds a marked demonstrated item. All surrounding user prose survives unchanged. The grade
+supplies the current scope hash; a mismatch writes neither evidence nor terminal attempt and
+returns the current hash for a safe retry. Summary CAS lands first, deterministic evidence id
+is append-once second, and the terminal attempt state is atomic last. A transaction timestamp
+is persisted before mutation, so replay after a crash produces byte-identical evidence and
+recognizes only its own concept+attempt marker. Raw quiz transcripts remain in the review
+session rather than bloating the knowledge ledger.
 
 Summary editing uses optimistic concurrency. GET returns SHA-256 over the exact Markdown;
 PUT carries that value as `baseHash`, validates the full standard shape, then performs a
@@ -1775,7 +1826,7 @@ Operational requirement: the Mac stays awake while a plan is in review
 | Location                                          | Contents                                                                                                       | Git                                        |
 | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
 | `<repo>/.otacon/`                                 | Project config only: `config.json` (team-shared) and `config.local.json` (personal override). On Save, also the project copy under `plans.dir` (default `.otacon/plans`). NO per-session working state                                              | the user's call (otacon manages no `.gitignore`) |
-| `~/.otacon/sessions/<id>/`                        | Per-session working state, keyed by session id. Plan sessions keep `plan.md`, `r1.md…rN.md`, warnings/changelogs, threads/transcript/activity/stream/queues, and the canonical approved plan. Review sessions keep working `review.md`/`quiz.json` plus `review/revisions/rN/`: immutable `revision.json`, `knowledge-snapshot.json`, exact `user.md` + `project.md`, and an atomically-published `submission/` containing report, quiz, warnings, timestamp, and `submission.json` integrity hashes. Removed outright when the session is deleted | n/a (global)                              |
+| `~/.otacon/sessions/<id>/`                        | Per-session working state, keyed by session id. Plan sessions keep `plan.md`, `r1.md…rN.md`, warnings/changelogs, threads/transcript/activity/stream/queues, and the canonical approved plan. Review sessions keep working `review.md`/`quiz.json`, a dedicated monotonic review event sequence, plus `review/revisions/rN/`: immutable `revision.json`, `knowledge-snapshot.json`, exact `user.md` + `project.md`, an atomically-published `submission/` containing private report/quiz, warnings, timestamp and integrity hashes, and mutable atomic `quiz-state.json` + backup for attempts/verdict recovery. Removed outright when the session is deleted | n/a (global)                              |
 | `~/.otacon/worktrees/<slug>/`                     | Implement build's git worktree on branch `otacon/impl-<slug>` (base dir is `worktree.dir`, default `~/.otacon/worktrees` — outside the repo)                    | n/a (global, outside the repo)             |
 | `<repo>/<plans.dir>/YYYY-MM-DD-<slug>.md`         | Save-time project copy (default `.otacon/plans`; set `plans.dir=docs/plans` to group with tracked plans)       | yours to commit (or not)                   |
 | `~/.otacon/registry.json`                         | Session registry: ID → `kind`, repo, branch, title, and kind-specific status. Plan entries retain optional `prompt`, `prUrl`, `prState`, and `impl`; review entries carry canonical PR metadata, head snapshot, and review revision. Legacy entries missing `kind` decode as plans.                                                             | n/a (global)                               |

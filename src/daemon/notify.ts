@@ -11,6 +11,7 @@ import type {
   Thread,
   TranscriptEntry,
 } from "../shared/types.js";
+import type { ReviewQuizPublicState } from "../shared/review-quiz.js";
 
 /**
  * One UI event: `type` becomes the SSE event name, `session` is the routing
@@ -36,6 +37,7 @@ export type UiEvent =
       data: { session: string; revision: number; changelog: string | null };
     }
   | { type: "queue"; session: string; data: { session: string; pending: number } }
+  | { type: "quiz"; session: string; data: { session: string; quiz: ReviewQuizPublicState } }
   | { type: "thread"; session: string; data: { session: string; thread: Thread } }
   | { type: "grill"; session: string; data: { session: string; entry: TranscriptEntry } }
   | { type: "activity"; session: string; data: { session: string; note: ActivityNote } }

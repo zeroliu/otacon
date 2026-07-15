@@ -19,12 +19,14 @@ import type {
   QuizDefinition,
 } from "./model";
 import { incompleteQuizCount, LiveReviewAdapter, unresolvedThreadCount } from "./model";
-import { QuizCard } from "./quiz-card";
 import { ThreadRail } from "./thread-rail";
 import { parseReviewReport } from "../../shared/review-report";
 import type { ReviewReportRevisionPayload } from "../../shared/review-report";
+import type { ReviewQuizPublicState } from "../../shared/review-quiz";
 import type { ReviewLiveSession } from "../api";
+import { postReviewQuizAnswer } from "../api";
 import { SessionMenuButton } from "../session-sheet";
+import { QuizSection } from "./quiz-section";
 
 const ReportView = lazy(() => import("./report-view").then((module) => ({ default: module.ReportView })));
 
@@ -371,17 +373,11 @@ function Report({
       <section id="quiz" className="pr-report-section pr-quiz-section">
         <span className="pr-section-number">04</span><h2>Quiz</h2>
         <p className="pr-section-lead">Explain the mechanism in your own words. Passing answers update demonstrated knowledge; reading alone only records exposure.</p>
-        <div className="pr-quiz-list">
-          {state.quizzes.map((quiz, index) => (
-            <QuizCard
-              key={quiz.id}
-              quiz={quiz}
-              number={index + 1}
-              disabled={state.closed}
-              onSubmit={(answer) => adapter.submitQuiz(quiz.id, answer)}
-            />
-          ))}
-        </div>
+        <QuizSection
+          quizzes={state.quizzes}
+          disabled={state.closed}
+          onSubmit={(id, answer) => adapter.submitQuiz(id, answer)}
+        />
       </section>
     </>
   );
@@ -653,26 +649,44 @@ export function PrReviewScreen({
   );
 }
 
-function quizDefinitions(raw: unknown): QuizDefinition[] {
-  const questions = (raw as { questions?: unknown })?.questions;
+export function quizDefinitions(raw: unknown): QuizDefinition[] {
+  const questions = (raw as ReviewQuizPublicState | undefined)?.questions;
   if (!Array.isArray(questions)) return [];
   return questions.flatMap((rawQuestion, index) => {
     if (typeof rawQuestion !== "object" || rawQuestion === null) return [];
-    const question = rawQuestion as Record<string, unknown>;
+    const question = rawQuestion as unknown as Record<string, unknown>;
     if (typeof question.prompt !== "string" || question.prompt.trim() === "") return [];
-    const kind = question.kind === "choice" ? "choice" : "open";
+    const kind = question.mode === "choice" ? "choice" : "open";
     const options = Array.isArray(question.options)
       ? question.options.filter((item): item is string => typeof item === "string")
       : undefined;
     return [{
       id: typeof question.id === "string" ? question.id : `q${index + 1}`,
       concept: typeof question.concept === "string" ? question.concept : "important change",
+      ...(typeof question.concept === "object" && question.concept !== null && typeof (question.concept as { label?: unknown }).label === "string"
+        ? { concept: (question.concept as { label: string }).label }
+        : {}),
       prompt: question.prompt,
       kind,
       ...(kind === "choice" && options !== undefined ? { options } : {}),
       expected: [],
-      retryFeedback: "Quiz grading is enabled in the next review phase.",
-      status: "unanswered" as const,
+      retryFeedback: typeof (question.latest as { feedback?: unknown } | undefined)?.feedback === "string"
+        ? (question.latest as { feedback: string }).feedback
+        : "Explain the missing causal link and try again.",
+      status: question.status === "grading" || question.status === "retry" || question.status === "passed"
+        ? question.status
+        : "unanswered" as const,
+      ...(typeof (question.latest as { answer?: unknown } | undefined)?.answer === "string"
+        ? { answer: (question.latest as { answer: string }).answer }
+        : {}),
+      ...(typeof (question.latest as { feedback?: unknown } | undefined)?.feedback === "string"
+        ? { feedback: (question.latest as { feedback: string }).feedback }
+        : {}),
+      ...((question.latest as { knowledge?: { scope?: unknown } } | undefined)?.knowledge?.scope === "user"
+        ? { knowledgeScope: "user" as const }
+        : (question.latest as { knowledge?: { scope?: unknown } } | undefined)?.knowledge?.scope === "project"
+          ? { knowledgeScope: "project" as const }
+          : {}),
     }];
   });
 }
@@ -720,15 +734,42 @@ export function productionPresentation(
 export function ProductionPrReviewScreen({
   session,
   payload,
+  liveQuiz,
 }: {
   session: ReviewLiveSession;
   payload: ReviewReportRevisionPayload;
+  liveQuiz?: ReviewQuizPublicState;
 }) {
-  const presentation = useMemo(() => productionPresentation(session, payload), [session, payload]);
-  // Build the read-only adapter from the exact session/report pair in this
-  // render. Replacing it atomically avoids one painted frame with an rN report
-  // under rN-1 header state while an SSE-driven fetch swaps revisions.
-  const adapter = useMemo(() => new LiveReviewAdapter(presentation), [presentation]);
+  const matchingLiveQuiz = liveQuiz?.session === payload.revision.session &&
+    liveQuiz.revision === payload.revision.revision &&
+    liveQuiz.headRevision === payload.revision.headRevision &&
+    liveQuiz.headSha === payload.revision.headSha
+    ? liveQuiz
+    : undefined;
+  const presentation = useMemo(
+    () => productionPresentation(session, matchingLiveQuiz === undefined ? payload : { ...payload, quiz: matchingLiveQuiz }),
+    [session, payload, matchingLiveQuiz],
+  );
+  // Keep transport state (especially a response-loss idempotency key) stable
+  // across ordinary session/quiz SSE renders. A report revision is a new
+  // immutable quiz contract, so only that identity gets a fresh adapter.
+  const adapterKey = `${session.id}:r${payload.revision.revision}`;
+  const adapterSlot = useRef<{ key: string; adapter: LiveReviewAdapter } | undefined>(undefined);
+  if (adapterSlot.current?.key !== adapterKey) {
+    adapterSlot.current = {
+      key: adapterKey,
+      adapter: new LiveReviewAdapter(
+        presentation,
+        async (question, answer, idempotencyKey) => quizDefinitions(
+          await postReviewQuizAnswer(session.id, payload.revision.revision, question, answer, idempotencyKey),
+        ),
+      ),
+    };
+  }
+  const adapter = adapterSlot.current.adapter;
+  // The same adapter consumes the newest parent/SSE projection before paint;
+  // its private retry-key map deliberately survives this snapshot replacement.
+  useLayoutEffect(() => adapter.replaceSnapshot(presentation), [adapter, presentation]);
   const parsed = useMemo(() => parseReviewReport(payload.report ?? ""), [payload.report]);
   const staleHead = payload.revision.headRevision !== session.review.revision ||
     payload.revision.headSha !== session.review.head.sha;
@@ -755,7 +796,7 @@ export function ProductionPrReviewScreen({
       )}
       interactionNotice={(
         <div className="pr-report-capability-note" role="note">
-          Reading mode · comments, quiz grading, code changes, and Done are enabled in later review phases.
+          Quiz answers are live. Comments, code changes, and Done remain disabled until their review phases.
         </div>
       )}
       renderReport={(state, liveAdapter) => (
@@ -763,17 +804,11 @@ export function ProductionPrReviewScreen({
           <ReportView
             markdown={payload.report ?? ""}
             quiz={state.quizzes.length === 0 ? undefined : (
-              <div className="pr-quiz-list" aria-label="quiz preview">
-                {state.quizzes.map((quiz, index) => (
-                  <QuizCard
-                    key={quiz.id}
-                    quiz={quiz}
-                    number={index + 1}
-                    disabled
-                    onSubmit={(answer) => liveAdapter.submitQuiz(quiz.id, answer)}
-                  />
-                ))}
-              </div>
+              <QuizSection
+                quizzes={state.quizzes}
+                disabled={staleHead || olderReport || state.closed}
+                onSubmit={(id, answer) => liveAdapter.submitQuiz(id, answer)}
+              />
             )}
           />
         </Suspense>

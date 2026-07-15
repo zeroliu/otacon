@@ -3,6 +3,7 @@
 
 import type { QuestionSpec } from "./question-spec.js";
 import type { ReviewSessionDetail, ReviewSessionStatus } from "./review.js";
+import type { ReviewQuizAnswerEvent } from "./review-quiz.js";
 
 export type { QuestionSpec };
 
@@ -246,6 +247,7 @@ export type EventPayload =
       /** The pre-overwrite answer's content (no `answeredAt`); present only alongside `revised`. */
       prior?: { choice?: string; choices?: string[]; text?: string };
     }
+  | ReviewQuizAnswerEvent
   // The approval wake-up. `home` is the absolute canonical
   // copy under `~/.otacon/sessions/<id>/`. `path` is the copy the agent acts on:
   // on **Save** (no `implement`) the repo-relative project copy under `plans.dir`,

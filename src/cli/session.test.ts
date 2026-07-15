@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RegistrySession, SessionStatus } from "../shared/types.js";
 import { CliError } from "./output.js";
-import { currentBranch, findRepoRoot, resolveSession, worktreeOwners } from "./session.js";
+import { currentBranch, findRepoRoot, resolveSession, resolveWaitSession, worktreeOwners } from "./session.js";
 
 let dir: string;
 
@@ -153,6 +153,19 @@ describe("resolveSession: registry scan", () => {
     const error = caught(() => resolveSession([session("otc_aaaaaa", "/elsewhere")], undefined, dir));
     expect(error.code).toBe("E_NO_SESSION");
     expect(error.message).toContain("otacon start");
+  });
+});
+
+describe("resolveWaitSession", () => {
+  test("an explicit review id may consume its private work queue", () => {
+    const review = { ...session("otc_review", dir), kind: "review", status: "reviewing", review: {} } as unknown as RegistrySession;
+    expect(resolveWaitSession([review], "otc_review", dir)).toBe(review);
+  });
+
+  test("implicit wait never guesses a review session", () => {
+    const review = { ...session("otc_review", dir), kind: "review", status: "reviewing", review: {} } as unknown as RegistrySession;
+    const error = caught(() => resolveWaitSession([review], undefined, dir));
+    expect(error.code).toBe("E_NO_SESSION");
   });
 });
 

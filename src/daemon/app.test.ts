@@ -13,6 +13,8 @@ import {
   otaconPort,
   repoConfigPath,
   repoLocalConfigPath,
+  reviewEventSeqPath,
+  reviewRevisionQuizStatePath,
   reviewRevisionReportPath,
   revisionPath,
   sessionDir,
@@ -29,6 +31,9 @@ import type { NodeBindings } from "./app.js";
 import { createApp } from "./app.js";
 import type { DesktopNotification } from "./desktop-notify.js";
 import { Presence } from "./presence.js";
+import { KnowledgeStore } from "./knowledge-store.js";
+import { ReviewQuizConflictError, ReviewQuizStore } from "./review-quiz-store.js";
+import { ReviewStore } from "./review-store.js";
 import { Store } from "./store.js";
 import { Viewers } from "./viewers.js";
 
@@ -184,6 +189,23 @@ ${group("Implementation walkthrough", "Atomic commit")}
 
 Structured cards render at this stable insertion point.
 `;
+}
+
+function validReviewQuiz(id: string, revision: number, head = "a".repeat(40), headRevision = 1): string {
+  return JSON.stringify({
+    version: 1,
+    session: id,
+    revision,
+    headRevision,
+    headSha: head,
+    questions: [{
+      id: "q1",
+      concept: { id: "snapshot-boundary", label: "Snapshot boundary", scope: "project" },
+      prompt: "Why is the snapshot immutable?",
+      mode: "open",
+      rubric: { criteria: ["Connects stable input to reproducible explanation"] },
+    }],
+  });
 }
 
 type FakeOutgoing = Omit<ServerResponse, "writableFinished"> & {
@@ -593,7 +615,7 @@ describe("review session identity and lifecycle", () => {
     const id = first.session.id;
     const submitted = await postJson(`/api/reviews/${id}/submit`, {
       report: validReviewReport(id, 1, first.preparation.snapshot.hash),
-      quiz: JSON.stringify({ version: 1, questions: [] }),
+      quiz: validReviewQuiz(id, 1),
     });
     expect(submitted.status).toBe(201);
     expect(((await submitted.json()) as { revision: { revision: { status: string } } }).revision.revision.status).toBe("submitted");
@@ -614,7 +636,7 @@ describe("review session identity and lifecycle", () => {
     expect(nextBody.preparation.revision.revision).toBe(2);
     const second = await postJson(`/api/reviews/${id}/submit`, {
       report: validReviewReport(id, 2, nextBody.preparation.snapshot.hash).replace("old input", "prior input"),
-      quiz: "{}",
+      quiz: validReviewQuiz(id, 2),
     });
     expect(second.status).toBe(201);
     expect((await app.request(`/api/reviews/${id}/revisions/1`)).status).toBe(200);
@@ -637,7 +659,7 @@ describe("review session identity and lifecycle", () => {
     const invalid = await postJson(`/api/reviews/${first.session.id}/submit`, {
       report: validReviewReport(first.session.id, 1, first.preparation.snapshot.hash)
         .replace("## Background", "## Intuition"),
-      quiz: "{}",
+      quiz: validReviewQuiz(first.session.id, 1),
     });
     expect(invalid.status).toBe(422);
     const body = (await invalid.json()) as { issues: Array<{ code: string }> };
@@ -653,7 +675,7 @@ describe("review session identity and lifecycle", () => {
     };
     const unavailable = await postJson(`/api/reviews/${first.session.id}/submit`, {
       report: validReviewReport(first.session.id, 99, first.preparation.snapshot.hash),
-      quiz: "{}",
+      quiz: validReviewQuiz(first.session.id, 99),
     });
     expect(unavailable.status).toBe(409);
     expect((await unavailable.json()) as object).toMatchObject({
@@ -670,7 +692,7 @@ describe("review session identity and lifecycle", () => {
     const id = first.session.id;
     expect((await postJson(`/api/reviews/${id}/submit`, {
       report: validReviewReport(id, 1, first.preparation.snapshot.hash),
-      quiz: "{}",
+      quiz: validReviewQuiz(id, 1),
     })).status).toBe(201);
     writeFileSync(reviewRevisionReportPath(id, 1), "corrupt\n");
     const corrupted = await app.request(`/api/reviews/${id}?revision=1`);
@@ -678,6 +700,288 @@ describe("review session identity and lifecycle", () => {
     expect((await corrupted.json()) as object).toMatchObject({
       error: { code: "E_REVIEW_REVISION_UNAVAILABLE" },
     });
+  });
+
+  test("keeps quiz secrets private while choice and open grading update live state", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const id = first.session.id;
+    const privateQuiz = JSON.stringify({
+      version: 1,
+      session: id,
+      revision: 1,
+      headRevision: 1,
+      headSha: "a".repeat(40),
+      questions: [
+        {
+          id: "q-open",
+          concept: { id: "boundary", label: "Boundary", scope: "project" },
+          prompt: "Explain the handoff.",
+          mode: "open",
+          rubric: { criteria: ["SECRET_RUBRIC_SENTINEL"] },
+        },
+        {
+          id: "q-choice",
+          concept: { id: "mode", label: "Mode", scope: "user" },
+          prompt: "Which mode wakes the agent?",
+          mode: "choice",
+          rubric: { criteria: ["Bounded response"] },
+          options: ["choice", "open"],
+          answerKey: "open",
+        },
+      ],
+    });
+    const submitted = await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 1, first.preparation.snapshot.hash),
+      quiz: privateQuiz,
+    });
+    expect(submitted.status).toBe(201);
+    expect(JSON.stringify(await submitted.json())).not.toContain("SECRET_RUBRIC_SENTINEL");
+    const detailWire = JSON.stringify(await (await app.request(`/api/reviews/${id}`)).json());
+    const revisionWire = JSON.stringify(await (await app.request(`/api/reviews/${id}/revisions/1`)).json());
+    for (const wire of [detailWire, revisionWire]) {
+      expect(wire).not.toContain("SECRET_RUBRIC_SENTINEL");
+      expect(wire).not.toContain("answerKey");
+      expect(wire).toContain("q-choice");
+    }
+
+    const choice = await postJson(`/api/reviews/${id}/quiz/q-choice/answer`, {
+      revision: 1,
+      answer: "open",
+      idempotencyKey: "choice-1",
+    });
+    expect(choice.status).toBe(201);
+    expect((await choice.json()) as object).toMatchObject({ attempt: { status: "pass" } });
+    expect(((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as { event: string }).event).toBe("timeout");
+
+    const open = await postJson(`/api/reviews/${id}/quiz/q-open/answer`, {
+      revision: 1,
+      answer: "The daemon hands a sanitized projection to the UI.",
+      idempotencyKey: "open-1",
+    });
+    expect(open.status).toBe(201);
+    expect(readFileSync(reviewEventSeqPath(id), "utf8").trim()).toBe("1");
+    const replayWhileQueued = await postJson(`/api/reviews/${id}/quiz/q-open/answer`, {
+      revision: 1,
+      answer: "The daemon hands a sanitized projection to the UI.",
+      idempotencyKey: "open-1",
+    });
+    expect(replayWhileQueued.status).toBe(200);
+    expect(eventsOnDisk(id)).toHaveLength(1);
+    expect(readFileSync(reviewEventSeqPath(id), "utf8").trim()).toBe("1");
+    const outgoing = fakeOutgoing();
+    const deliveredInFlight = await app.request(`/api/sessions/${id}/events?wait=0`, {}, { outgoing });
+    const privateEvent = (await deliveredInFlight.json()) as {
+      event: string;
+      revision: number;
+      headRevision: number;
+      headSha: string;
+      question: string;
+      attempt: string;
+      rubric: { criteria: string[] };
+      knowledge: { baseHash: string };
+    };
+    expect(privateEvent).toMatchObject({ event: "quiz-answer", rubric: { criteria: ["SECRET_RUBRIC_SENTINEL"] } });
+    const replayWhileInFlight = await postJson(`/api/reviews/${id}/quiz/q-open/answer`, {
+      revision: 1,
+      answer: "The daemon hands a sanitized projection to the UI.",
+      idempotencyKey: "open-1",
+    });
+    expect(replayWhileInFlight.status).toBe(200);
+    expect(eventsOnDisk(id)).toHaveLength(1);
+    expect(readFileSync(reviewEventSeqPath(id), "utf8").trim()).toBe("1");
+    outgoing.writableFinished = true;
+    outgoing.emit("close");
+    expect(eventsOnDisk(id)).toEqual([]);
+    const replayAfterAck = await postJson(`/api/reviews/${id}/quiz/q-open/answer`, {
+      revision: 1,
+      answer: "The daemon hands a sanitized projection to the UI.",
+      idempotencyKey: "open-1",
+    });
+    expect(replayAfterAck.status).toBe(200);
+    expect(eventsOnDisk(id)).toHaveLength(1);
+    expect(readFileSync(reviewEventSeqPath(id), "utf8").trim()).toBe("2");
+    expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as object)
+      .toMatchObject({ event: "quiz-answer", attempt: privateEvent.attempt });
+    // Consuming the wake does not complete the cognition task.
+    expect((await (await app.request(`/api/sessions/${id}`)).json()) as object).toMatchObject({ pendingEvents: 1 });
+
+    const stream = sseReader(await app.request(`/api/sessions/${id}/stream`));
+    const snapshot = await stream.next();
+    const snapshotWire = JSON.stringify(snapshot.data);
+    expect(snapshotWire).not.toContain("SECRET_RUBRIC_SENTINEL");
+    expect(snapshotWire).not.toContain("knowledgeBaseHash");
+    expect(snapshotWire).not.toContain("idempotencyKey");
+    expect(snapshotWire).not.toContain("gradeStartedAt");
+    expect(snapshotWire).not.toContain(privateEvent.knowledge.baseHash);
+    expect((snapshot.data as { quiz: { questions: unknown[] } }).quiz.questions[0]).toMatchObject({ id: "q-open", status: "grading" });
+    const grade = await postJson(`/api/reviews/${id}/quiz/q-open/grade`, {
+      version: 1,
+      session: id,
+      revision: privateEvent.revision,
+      headRevision: privateEvent.headRevision,
+      headSha: privateEvent.headSha,
+      question: privateEvent.question,
+      attempt: privateEvent.attempt,
+      verdict: "pass",
+      feedback: "You named both sides of the handoff.",
+      knowledgeBaseHash: privateEvent.knowledge.baseHash,
+    });
+    expect(grade.status).toBe(200);
+    const quizFrame = await stream.next();
+    expect(quizFrame.event).toBe("quiz");
+    const quizWire = JSON.stringify(quizFrame.data);
+    expect(quizWire).not.toContain("SECRET_RUBRIC_SENTINEL");
+    expect(quizWire).not.toContain("knowledgeBaseHash");
+    expect(quizWire).not.toContain("idempotencyKey");
+    expect(quizWire).not.toContain("gradeStartedAt");
+    expect((quizFrame.data as { quiz: { questions: unknown[] } }).quiz.questions[0]).toMatchObject({ id: "q-open", status: "passed" });
+    expect((await (await app.request(`/api/sessions/${id}`)).json()) as object).toMatchObject({ pendingEvents: 0 });
+    for (const wire of [
+      JSON.stringify(await (await app.request(`/api/reviews/${id}`)).json()),
+      JSON.stringify(await (await app.request(`/api/reviews/${id}/revisions/1`)).json()),
+    ]) {
+      expect(wire).not.toContain("knowledgeBaseHash");
+      expect(wire).not.toContain("idempotencyKey");
+      expect(wire).not.toContain("gradeStartedAt");
+    }
+    await stream.cancel();
+  });
+
+  test("keeps the session index and SSE alive when mutable quiz state is corrupt", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const id = first.session.id;
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 1, first.preparation.snapshot.hash),
+      quiz: validReviewQuiz(id, 1),
+    })).status).toBe(201);
+    expect((await postJson(`/api/reviews/${id}/quiz/q1/answer`, {
+      revision: 1,
+      answer: "The daemon owns the boundary.",
+      idempotencyKey: "corrupt-state",
+    })).status).toBe(201);
+
+    const path = reviewRevisionQuizStatePath(id, 1);
+    writeFileSync(path, "{broken\n");
+    writeFileSync(`${path}.backup`, "{also broken\n");
+
+    const index = await app.request("/api/sessions");
+    expect(index.status).toBe(200);
+    expect(((await index.json()) as { sessions: Array<{ id: string }> }).sessions.map((item) => item.id)).toContain(id);
+    const detailSummary = await app.request(`/api/sessions/${id}`);
+    expect(detailSummary.status).toBe(200);
+    expect((await detailSummary.json()) as object).toMatchObject({ id, pendingEvents: 0 });
+
+    const stream = sseReader(await app.request(`/api/sessions/${id}/stream`));
+    const snapshot = await stream.next();
+    expect(snapshot.event).toBe("snapshot");
+    expect(snapshot.data).not.toHaveProperty("quiz");
+    await stream.cancel();
+
+    const detail = await app.request(`/api/reviews/${id}`);
+    expect(detail.status).toBe(409);
+    expect((await detail.json()) as object).toMatchObject({
+      error: { code: "E_REVIEW_REVISION_UNAVAILABLE" },
+    });
+  });
+
+  test("repairs the durable-before-enqueue crash window once across daemon restarts", async () => {
+    const created = await startReview();
+    const first = (await created.json()) as {
+      session: { id: string };
+      preparation: { snapshot: { hash: string } };
+    };
+    const id = first.session.id;
+    const quiz = JSON.stringify({
+      version: 1,
+      session: id,
+      revision: 1,
+      headRevision: 1,
+      headSha: "a".repeat(40),
+      questions: [
+        {
+          id: "q-open",
+          concept: { id: "handoff", label: "Handoff", scope: "project" },
+          prompt: "Explain the handoff.",
+          mode: "open",
+          rubric: { criteria: ["Names both sides"] },
+        },
+        {
+          id: "q-choice",
+          concept: { id: "mode", label: "Mode", scope: "user" },
+          prompt: "Which answer wakes the agent?",
+          mode: "choice",
+          rubric: { criteria: ["Picks open"] },
+          options: ["choice", "open"],
+          answerKey: "open",
+        },
+      ],
+    });
+    expect((await postJson(`/api/reviews/${id}/submit`, {
+      report: validReviewReport(id, 1, first.preparation.snapshot.hash),
+      quiz,
+    })).status).toBe(201);
+
+    const knowledge = new KnowledgeStore();
+    const reviews = new ReviewStore(knowledge);
+    const quizzes = new ReviewQuizStore(reviews, knowledge);
+    const session = store.getSession(id);
+    if (session?.kind !== "review") throw new Error("fixture review disappeared");
+    const pendingOpen = quizzes.answer(session, {
+      revision: 1, question: "q-open", answer: "daemon to browser", idempotencyKey: "crash-open",
+    });
+    expect(pendingOpen.event?.event).toBe("quiz-answer");
+
+    const originalReplace = knowledge.replace.bind(knowledge);
+    knowledge.replace = ((target, _markdown, _baseHash) => ({ ok: false as const, current: knowledge.read(target) })) as KnowledgeStore["replace"];
+    expect(() => quizzes.answer(session, {
+      revision: 1, question: "q-choice", answer: "open", idempotencyKey: "crash-choice",
+    })).toThrow(ReviewQuizConflictError);
+
+    const conflictedApp = createApp({ store, knowledge, reviews, quizzes, uiDir, notify: () => {} });
+    const conflict = await conflictedApp.request(`/api/reviews/${id}/quiz/q-choice/answer`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ revision: 1, answer: "open", idempotencyKey: "crash-choice" }),
+    });
+    expect(conflict.status).toBe(409);
+    const conflictWire = JSON.stringify(await conflict.json());
+    expect(conflictWire).not.toContain("currentHash");
+    expect(conflictWire).not.toMatch(/[a-f0-9]{64}/);
+
+    knowledge.replace = originalReplace;
+    const restartedStore = new Store();
+    const restartedKnowledge = new KnowledgeStore();
+    const restartedReviews = new ReviewStore(restartedKnowledge);
+    const restartedQuizzes = new ReviewQuizStore(restartedReviews, restartedKnowledge);
+    createApp({
+      store: restartedStore,
+      knowledge: restartedKnowledge,
+      reviews: restartedReviews,
+      quizzes: restartedQuizzes,
+      uiDir,
+      notify: () => {},
+    });
+    const restartedSession = restartedStore.getSession(id);
+    if (restartedSession?.kind !== "review") throw new Error("restarted review disappeared");
+    expect(restartedQuizzes.publicState(restartedSession, 1).questions.find((question) => question.id === "q-choice")?.status).toBe("passed");
+    expect((JSON.parse(readFileSync(eventsPath(id), "utf8")) as { events: unknown[] }).events).toHaveLength(1);
+    expect(readFileSync(reviewEventSeqPath(id), "utf8").trim()).toBe("1");
+
+    const restartedAgain = createApp({ store: new Store(), uiDir, notify: () => {} });
+    expect((JSON.parse(readFileSync(eventsPath(id), "utf8")) as { events: unknown[] }).events).toHaveLength(1);
+    expect(readFileSync(reviewEventSeqPath(id), "utf8").trim()).toBe("1");
+    const delivered = await restartedAgain.request(`/api/sessions/${id}/events?wait=0`);
+    expect(delivered.status).toBe(200);
+    expect((await delivered.json()) as object).toMatchObject({ event: "quiz-answer", question: "q-open" });
+    expect(((await (await restartedAgain.request(`/api/sessions/${id}/events?wait=0`)).json()) as { event: string }).event).toBe("timeout");
   });
 });
 

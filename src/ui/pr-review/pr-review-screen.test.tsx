@@ -269,7 +269,7 @@ describe("PrReviewScreen", () => {
     expect(active.host.querySelector(".pr-review-page")?.tagName).toBe("DIV");
     expect(active.host.querySelector(".pr-stale-report")?.textContent).toContain("current head generation 2");
     expect(active.host.querySelector(".pr-report-revision-banner")?.textContent).toContain("report head generation 1");
-    expect(active.host.querySelector(".pr-report-capability-note")?.textContent).toContain("Reading mode");
+    expect(active.host.querySelector(".pr-report-capability-note")?.textContent).toContain("Quiz answers are live");
     expect(button(active.host, "Done").disabled).toBe(true);
     expect([...active.host.querySelectorAll(".pr-toc-group")].map((link) => [
       link.textContent,
@@ -279,6 +279,35 @@ describe("PrReviewScreen", () => {
       ["Submit handoff", "#code-integration-submit-handoff"],
       ["Atomic storage", "#code-implementation-atomic-storage"],
     ]);
+  });
+
+  test("never overlays a stale live quiz projection onto a newer report revision", async () => {
+    const active = await mountReview();
+    const payload = productionPayload();
+    (payload as unknown as { quiz: unknown }).quiz = {
+        version: 1, session: "otc_prod1", revision: 1, headRevision: 1, headSha: "abc",
+        questions: [{
+          id: "current-question",
+          concept: { id: "current", label: "Current concept", scope: "project" },
+          prompt: "Current report question", mode: "open", status: "unanswered", attempts: 0,
+        }],
+        progress: { passed: 0, total: 1, pending: 0 },
+      };
+    const staleLiveQuiz = {
+      version: 1, session: "otc_prod1", revision: 2, headRevision: 2, headSha: "def",
+      questions: [{
+        id: "stale-question",
+        concept: { id: "stale", label: "Stale concept", scope: "project" },
+        prompt: "Wrong report question", mode: "open", status: "unanswered", attempts: 0,
+      }],
+      progress: { passed: 0, total: 1, pending: 0 },
+    } as never;
+    await act(async () => active.root.render(
+      <ProductionPrReviewScreen session={productionSession()} payload={payload} liveQuiz={staleLiveQuiz} />,
+    ));
+    await wait(10);
+    expect(active.host.textContent).toContain("Current report question");
+    expect(active.host.textContent).not.toContain("Wrong report question");
   });
 
   test("keeps Plans and Reviews inside the existing collapsible app sidebar hierarchy", async () => {

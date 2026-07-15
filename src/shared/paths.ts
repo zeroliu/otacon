@@ -85,6 +85,11 @@ export function reviewRevisionsDir(id: string): string {
   return join(sessionDir(id), "review", "revisions");
 }
 
+/** Review queues share the daemon's monotonic event-seq contract without plan session.json. */
+export function reviewEventSeqPath(id: string): string {
+  return join(sessionDir(id), "review", "event-seq");
+}
+
 export function reviewRevisionDir(id: string, revision: number): string {
   return join(reviewRevisionsDir(id), `r${revision}`);
 }
@@ -123,6 +128,11 @@ export function reviewRevisionQuizPath(id: string, revision: number): string {
 
 export function reviewRevisionWarningsPath(id: string, revision: number): string {
   return join(reviewRevisionSubmissionDir(id, revision), "warnings.json");
+}
+
+/** Mutable quiz attempt state; report, companion, and knowledge snapshot stay immutable. */
+export function reviewRevisionQuizStatePath(id: string, revision: number): string {
+  return join(reviewRevisionDir(id, revision), "quiz-state.json");
 }
 
 /**

@@ -32,6 +32,8 @@ import type {
   ReviewReportRevisionPayload,
 } from "../shared/review-report.js";
 import type { ReviewRegistrySession } from "../shared/types.js";
+import { parseReviewQuizCompanion } from "../shared/review-quiz.js";
+import type { ReviewQuizCompanion } from "../shared/review-quiz.js";
 import { KnowledgeStore } from "./knowledge-store.js";
 import { lintReviewReport } from "./review-linter.js";
 import { hashReviewSnapshot } from "./review-snapshot.js";
@@ -246,8 +248,15 @@ export class ReviewStore {
     } catch {
       contractError("E_REPORT_QUIZ_JSON", "quiz companion must be valid JSON");
     }
-    if (typeof quiz !== "object" || quiz === null || Array.isArray(quiz)) {
-      contractError("E_REPORT_QUIZ_SHAPE", "quiz companion must be a JSON object");
+    const parsedQuiz = parseReviewQuizCompanion(quiz);
+    if (parsedQuiz.value === undefined) {
+      for (const message of parsedQuiz.errors) contractError("E_REPORT_QUIZ_SHAPE", message);
+    } else {
+      if (parsedQuiz.value.session !== session.id) contractError("E_REPORT_QUIZ_SESSION", "quiz session does not match the report");
+      if (parsedQuiz.value.revision !== revision) contractError("E_REPORT_QUIZ_REVISION", "quiz revision does not match the report");
+      if (parsedQuiz.value.headRevision !== current.revision.headRevision || parsedQuiz.value.headSha !== current.revision.headSha) {
+        contractError("E_REPORT_QUIZ_HEAD", "quiz head identity does not match the prepared report revision");
+      }
     }
     const errors = [...lint.errors, ...contractIssues];
     if (errors.length > 0) throw new ReviewReportInvalidError(errors);
@@ -275,6 +284,19 @@ export class ReviewStore {
       writeFileSync(join(directory, "submitted-at"), submittedAt);
     });
     return this.readRevision(session.id, revision);
+  }
+
+  /** Daemon-private raw companion; never return this object on a browser route. */
+  readQuizCompanion(id: string, revision: number): ReviewQuizCompanion {
+    const payload = this.readRevision(id, revision);
+    if (payload.revision.status !== "submitted") {
+      throw new ReviewRevisionCorruptError(`review revision ${revision} has no submitted quiz companion`);
+    }
+    const parsed = parseReviewQuizCompanion(payload.quiz);
+    if (parsed.value === undefined) {
+      throw new ReviewRevisionCorruptError(`review revision ${revision} quiz companion is invalid: ${parsed.errors.join("; ")}`);
+    }
+    return parsed.value;
   }
 
   readRevision(id: string, revision: number): ReviewReportRevisionPayload {

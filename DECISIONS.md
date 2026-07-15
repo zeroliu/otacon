@@ -4535,3 +4535,59 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   Stable semantic anchors survive line movement better than diff order or line-number ids.
 - **Revisit when:** The report needs richer typed blocks that Markdown labels cannot express, or
   anchor migration requires persisted UUIDs rather than authored semantic identity.
+
+## Quiz rubrics are private while live state is a sanitized projection (2026-07-14)
+
+- **Decision:** A report owns one strict 1–20-question companion with open/choice modes,
+  concept scope, and private rubric; bounded choices additionally own a private answer key.
+  Browser detail, revision, submit, snapshot, and `quiz` SSE frames replace that companion
+  with prompt/options plus sanitized attempt state. Open answers wake the agent through a
+  private `quiz-answer` event; choices grade inside the daemon without a wake.
+- **Why:** Rubrics and keys in browser JSON turn a comprehension check into answer lookup.
+  Keeping one immutable private source while deriving every public payload through one
+  projection prevents accidental leakage without forking report storage or UI structure.
+- **Revisit when:** Grading moves to a separate trusted service, encrypted local profiles are
+  introduced, or a rubric needs a reviewer-visible hint distinct from its answer criteria.
+
+## Open-ended grading is durable, at-least-once, and single-pending (2026-07-14)
+
+- **Decision:** Open-ended is the default authoring mode; adaptive complexity chooses one to
+  twenty questions. An answer is atomically persisted before the event queue is touched and
+  one question may have only one pending attempt. Retrying an answer's idempotency key
+  requests the same private work while it is pending: queued/in-flight work is not duplicated,
+  but acknowledged work may be enqueued again. On daemon startup, pending choices are
+  finished locally with one synchronous CAS rebase retry, and pending open attempts reconstruct
+  only missing durable queue work after deduplication against queued/in-flight
+  report/head/question/attempt identity. Malformed persisted queue envelopes are quarantined
+  before recovery. A verdict is identity-bound to report,
+  head, question, and attempt; duplicate identical grades are no-ops. Pending cognition, not
+  queue length, drives summary counts. Sanitized quiz updates ride the existing per-session
+  SSE stream.
+- **Why:** The daemon may crash between persistence and enqueue, including before a browser can
+  retry, or the response may disappear after enqueue. State-driven startup repair, at-least-once
+  delivery, and idempotent grading close both windows without exposing private wake payloads. A single
+  pending attempt prevents an older retry from regressing a newer pass, and separating grade
+  state from queue occupancy keeps the UI honest after the agent consumes its wake.
+- **Revisit when:** Agent grading becomes a durable job service with transactional enqueue, or
+  parallel rubric graders need an explicit quorum/merge state.
+
+## Quiz verdict knowledge updates use managed CAS patches and append-once evidence (2026-07-14)
+
+- **Decision:** Each session+report+concept+attempt owns a narrowly-scoped Markdown list marker,
+  recognized for crash replay only when it is an exact managed list line. Retry writes
+  only Needs reinforcement; pass removes that managed gap and writes Demonstrated concepts.
+  The grade transaction persists a stable timestamp, CAS-patches the current summary, appends
+  deterministic revision-aware evidence exactly once, then atomically records the terminal
+  attempt. A summary conflict leaves the attempt pending and appends nothing; crash replay may
+  recognize only its exact marker and byte-identical evidence id/content. Because a bounded
+  choice's verdict is daemon-known, replaying that same pending idempotency key may rebase its
+  managed patch to the latest profile hash; open-answer grades still require the agent to
+  resubmit the explicit current hash.
+- **Why:** Replacing whole knowledge documents would clobber manual edits, while marking pass
+  before knowledge commits would claim understanding the profile never received. Managed
+  items preserve user prose, revision-aware ids avoid cross-report collisions, and the ordered
+  replayable transaction handles local crashes without a database transaction. Deterministic
+  choice rebasing is safe because no rubric judgment changes, and avoids a stale-hash dead end
+  the browser cannot resolve itself.
+- **Revisit when:** Knowledge summaries are generated entirely from evidence, multiple daemon
+  processes write concurrently, or a transactional database replaces Markdown plus JSONL.

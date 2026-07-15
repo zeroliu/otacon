@@ -9,6 +9,7 @@ import { maybeSelfHeal } from "./self-heal";
 import type { ConfigField, ScopeFieldError, ScopeValues } from "../shared/config";
 import type { KnowledgeDocument, KnowledgeScope } from "../shared/knowledge";
 import type { ReviewReportRevisionPayload } from "../shared/review-report";
+import type { ReviewQuizPublicState } from "../shared/review-quiz";
 import type {
   ActivityNote,
   Anchor,
@@ -221,6 +222,8 @@ export function useSessions(): SessionsState {
 
 export interface SessionDetail {
   session?: LiveSession;
+  /** Sanitized review quiz state, live on the same per-session stream. */
+  quiz?: ReviewQuizPublicState;
   /** Review threads, oldest first; live over the stream's `thread` frames. */
   threads: Thread[];
   /** The grill transcript, oldest first; live over `grill` frames (interview questions). */
@@ -256,6 +259,7 @@ export function useSession(id: string): SessionDetail {
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [activity, setActivity] = useState<ActivityNote[]>([]);
   const [stream, setStream] = useState<StreamEvent[]>([]);
+  const [quiz, setQuiz] = useState<ReviewQuizPublicState>();
   const [missing, setMissing] = useState(false);
   const [cleaned, setCleaned] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -266,6 +270,7 @@ export function useSession(id: string): SessionDetail {
     setTranscript([]);
     setActivity([]);
     setStream([]);
+    setQuiz(undefined);
     setMissing(false);
     setCleaned(false);
     setConnected(false);
@@ -301,6 +306,7 @@ export function useSession(id: string): SessionDetail {
             transcript?: TranscriptEntry[];
             activity?: ActivityNote[];
             stream?: StreamEvent[];
+            quiz?: ReviewQuizPublicState;
           }>(source, "snapshot", (data) => {
             // Self-heal on a daemon version change (install/update): a reconnect
             // after an update-restart re-delivers the version, reloading a stale
@@ -311,6 +317,7 @@ export function useSession(id: string): SessionDetail {
             setTranscript(data.transcript ?? []);
             setActivity(data.activity ?? []);
             setStream(data.stream ?? []);
+            setQuiz(data.quiz);
           });
           on<{ session: SessionSummary }>(source, "session", (data) =>
             setSession({ ...data.session, changedAt: Date.now() }),
@@ -320,6 +327,9 @@ export function useSession(id: string): SessionDetail {
           );
           on<{ session: string; pending: number }>(source, "queue", (data) =>
             setSession((prev) => (prev ? { ...prev, pendingEvents: data.pending } : prev)),
+          );
+          on<{ session: string; quiz: ReviewQuizPublicState }>(source, "quiz", (data) =>
+            setQuiz(data.quiz),
           );
           on<{ session: string; thread: Thread }>(source, "thread", ({ thread }) =>
             setThreads((prev) => upsertById(prev, thread)),
@@ -362,7 +372,7 @@ export function useSession(id: string): SessionDetail {
     };
   }, [id]);
 
-  return { session, threads, transcript, activity, stream, missing, cleaned, connected };
+  return { session, quiz, threads, transcript, activity, stream, missing, cleaned, connected };
 }
 
 const PRESENCE_HEARTBEAT_MS = 20_000;
@@ -687,6 +697,27 @@ export function useReviewDiff(id: string, from: number, to: number): DiffPayload
   return usePolledJson<DiffPayload>(
     to < 1 || from >= to ? null : `/api/reviews/${id}/diff?from=${from}&to=${to}`,
   );
+}
+
+/** Submit one durable quiz attempt; bounded choices may already be graded in this response. */
+export async function postReviewQuizAnswer(
+  id: string,
+  revision: number,
+  question: string,
+  answer: string,
+  idempotencyKey: string = crypto.randomUUID(),
+): Promise<ReviewQuizPublicState> {
+  const response = await fetch(`/api/reviews/${id}/quiz/${question}/answer`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ revision, answer, idempotencyKey }),
+  });
+  const body = (await response.json().catch(() => ({}))) as {
+    quiz?: ReviewQuizPublicState;
+    error?: { message?: string };
+  };
+  if (!response.ok || body.quiz === undefined) throw new Error(body.error?.message ?? `quiz answer failed: ${response.status}`);
+  return body.quiz;
 }
 
 /** One scope's target file path and its sparse, currently-set overrides. */

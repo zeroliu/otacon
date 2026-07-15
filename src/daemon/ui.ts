@@ -15,6 +15,7 @@ import type {
   Thread,
   TranscriptEntry,
 } from "../shared/types.js";
+import type { ReviewQuizPublicState } from "../shared/review-quiz.js";
 import { VERSION } from "../shared/version.js";
 import type { NodeBindings } from "./app.js";
 import type { Notifier, UiEvent } from "./notify.js";
@@ -31,6 +32,8 @@ export interface UiDeps {
   getActivity: (id: string) => ActivityNote[];
   /** The session's normalized live-activity stream (newest last, last N) — rides the snapshot. */
   getStream: (id: string) => StreamEvent[];
+  /** Sanitized quiz state for review-session snapshots; absent for plans/pre-report reviews. */
+  getQuiz?: (id: string) => ReviewQuizPublicState | undefined;
   /** undefined = resolve the built UI next to this module; null = no UI (503s). */
   uiDir?: string | null;
   /** Test override; production keeps the 25s default. */
@@ -246,6 +249,7 @@ export function registerUiRoutes(app: Hono<{ Bindings: NodeBindings }>, deps: Ui
         transcript: deps.getTranscript(id),
         activity: deps.getActivity(id),
         stream: deps.getStream(id),
+        quiz: deps.getQuiz?.(id),
       }),
       id,
     );

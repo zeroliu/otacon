@@ -111,3 +111,18 @@ export function resolveSession(
     { sessions: here.map((s) => ({ id: s.id, title: s.title, status: s.status })) },
   );
 }
+
+/**
+ * `wait` alone still resolves only the repo's plan session, but an explicit
+ * review id is allowed so `/otacon-review` can consume private quiz work.
+ */
+export function resolveWaitSession(
+  sessions: RegistrySession[],
+  explicit: string | undefined,
+  cwd: string,
+): RegistrySession {
+  if (explicit === undefined) return resolveSession(sessions, undefined, cwd);
+  const session = sessions.find((candidate) => candidate.id === explicit);
+  if (session === undefined) fail("E_UNKNOWN_SESSION", `--session ${explicit}: not in the daemon registry`);
+  return session;
+}

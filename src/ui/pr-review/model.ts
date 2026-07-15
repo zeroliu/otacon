@@ -317,8 +317,14 @@ export class MemoryReviewAdapter implements ReviewAdapter {
 export class LiveReviewAdapter implements ReviewAdapter {
   private state: ReviewPresentation;
   private readonly listeners = new Set<() => void>();
+  private readonly inFlight = new Map<string, Promise<void>>();
+  private readonly retryKeys = new Map<string, { answer: string; key: string }>();
+  private externalSnapshotGeneration = 0;
 
-  constructor(initial: ReviewPresentation) {
+  constructor(
+    initial: ReviewPresentation,
+    private readonly submitLiveQuiz?: (quizId: string, answer: string, idempotencyKey: string) => Promise<QuizDefinition[]>,
+  ) {
     this.state = initial;
   }
 
@@ -329,12 +335,50 @@ export class LiveReviewAdapter implements ReviewAdapter {
   };
 
   replaceSnapshot(next: ReviewPresentation): void {
+    this.externalSnapshotGeneration += 1;
+    this.updateSnapshot(next);
+  }
+
+  private updateSnapshot(next: ReviewPresentation): void {
     this.state = next;
     this.listeners.forEach((listener) => listener());
   }
 
-  async submitQuiz(): Promise<void> {
-    throw new Error("quiz grading is not available yet");
+  async submitQuiz(quizId: string, answer: string): Promise<void> {
+    if (this.submitLiveQuiz === undefined) throw new Error("quiz grading is not available yet");
+    const active = this.inFlight.get(quizId);
+    if (active !== undefined) return active;
+    const prior = this.retryKeys.get(quizId);
+    const idempotencyKey = prior?.answer === answer ? prior.key : crypto.randomUUID();
+    const externalAtStart = this.externalSnapshotGeneration;
+    this.retryKeys.set(quizId, { answer, key: idempotencyKey });
+    this.updateSnapshot(replaceQuiz(this.state, quizId, (quiz) => ({ ...quiz, answer, status: "grading" })));
+    const request = this.submitLiveQuiz(quizId, answer, idempotencyKey)
+      .then((quizzes) => {
+        this.retryKeys.delete(quizId);
+        this.replaceQuizzes(quizzes);
+      })
+      .catch((error: unknown) => {
+        const latest = this.state.quizzes.find((quiz) => quiz.id === quizId);
+        const serverConfirmed = this.externalSnapshotGeneration > externalAtStart &&
+          latest?.answer === answer &&
+          (latest.status === "grading" || latest.status === "retry" || latest.status === "passed");
+        if (serverConfirmed) return;
+        this.updateSnapshot(replaceQuiz(this.state, quizId, (quiz) => ({
+          ...quiz,
+          answer,
+          status: "retry",
+          feedback: "Could not confirm this attempt. Retry sends the same durable answer safely.",
+        })));
+        void error;
+      })
+      .finally(() => this.inFlight.delete(quizId));
+    this.inFlight.set(quizId, request);
+    return request;
+  }
+
+  replaceQuizzes(quizzes: QuizDefinition[]): void {
+    this.updateSnapshot({ ...this.state, quizzes });
   }
 
   async createThread(): Promise<void> {

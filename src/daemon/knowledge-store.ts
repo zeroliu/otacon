@@ -144,4 +144,17 @@ export class KnowledgeStore {
     mkdirSync(dirname(path), { recursive: true });
     appendFileSync(path, `${JSON.stringify(evidence)}\n`, { encoding: "utf8", flag: "a" });
   }
+
+  /** Deterministic quiz evidence ids make grade retries and crash replay exactly-once. */
+  appendEvidenceOnce(target: KnowledgeTarget, evidence: KnowledgeEvidence): boolean {
+    const existing = this.readEvidence(target).find((item) => item.id === evidence.id);
+    if (existing !== undefined) {
+      if (JSON.stringify(existing) !== JSON.stringify(evidence)) {
+        throw new Error(`knowledge evidence id ${evidence.id} already names different content`);
+      }
+      return false;
+    }
+    this.appendEvidence(target, evidence);
+    return true;
+  }
 }

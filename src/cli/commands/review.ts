@@ -19,6 +19,7 @@ import {
 import { parseReviewReport } from "../../shared/review-report.js";
 import type { ReviewReportRevisionPayload } from "../../shared/review-report.js";
 import type { ReviewRegistrySession } from "../../shared/types.js";
+import { parseReviewQuizGrade } from "../../shared/review-quiz.js";
 import { api, baseUrl, ensureDaemon } from "../client.js";
 import type { ApiResponse } from "../client.js";
 import {
@@ -54,7 +55,48 @@ export async function reviewCommand(
 ): Promise<number> {
   if (argv[0] === "start") return startReview(argv.slice(1), deps);
   if (argv[0] === "submit") return submitReview(argv.slice(1), deps);
-  usageError("usage: otacon review start --pr <URL|number> [--force] | otacon review submit --report <report.md> --quiz <quiz.json>");
+  if (argv[0] === "grade") return gradeReview(argv.slice(1), deps);
+  usageError("usage: otacon review start --pr <URL|number> [--force] | otacon review submit --report <report.md> --quiz <quiz.json> | otacon review grade <question-id> --file <grade.json>");
+}
+
+async function gradeReview(argv: string[], deps: ReviewCommandDeps | undefined): Promise<number> {
+  const { positionals, values } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: { file: { type: "string" } },
+  });
+  const question = positionals[0];
+  if (positionals.length !== 1 || question === undefined || values.file === undefined) {
+    usageError("otacon review grade requires <question-id> --file <grade.json>");
+  }
+  const readFile = deps?.readFile ?? ((path: string) => readFileSync(path, "utf8"));
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFile(values.file)) as unknown;
+  } catch (error) {
+    fail("E_QUIZ_GRADE", `could not read grade file: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const parsed = parseReviewQuizGrade(raw);
+  if (parsed.value === undefined) fail("E_QUIZ_GRADE", parsed.errors.join("; "), { issues: parsed.errors });
+  if (parsed.value.question !== question) fail("E_QUIZ_STALE_GRADE", `grade file names ${parsed.value.question}, not ${question}`);
+  const commandDeps = deps ?? DEFAULT_DEPS;
+  await commandDeps.ensureDaemon();
+  const response = await commandDeps.api(
+    "POST",
+    `/api/reviews/${parsed.value.session}/quiz/${question}/grade`,
+    parsed.value,
+  );
+  if (response.status === 409) {
+    const error = response.body.error as { code?: string; message?: string } | undefined;
+    fail(error?.code ?? "E_QUIZ_CONFLICT", error?.message ?? "quiz grade conflicted", response.body);
+  }
+  if (response.status === 400 || response.status === 404 || response.status === 422) {
+    const error = response.body.error as { code?: string; message?: string } | undefined;
+    fail(error?.code ?? "E_QUIZ_GRADE", error?.message ?? "quiz grade was rejected", response.body);
+  }
+  if (response.status !== 200) fail("E_INTERNAL", `review grade failed: ${JSON.stringify(response.body)}`, undefined, 2);
+  printJson({ ok: true, session: parsed.value.session, question, ...response.body });
+  return 0;
 }
 
 async function startReview(

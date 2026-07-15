@@ -12,7 +12,7 @@
 import { parseArgs } from "node:util";
 import { api, ensureDaemon, sleep } from "../client.js";
 import { CliError, fail, printJson, usageError } from "../output.js";
-import { listSessions, realpathOr, resolveSession } from "../session.js";
+import { listSessions, realpathOr, resolveWaitSession } from "../session.js";
 
 const MAX_PARK_SECONDS = 240;
 const RESPONSE_GRACE_MS = 10_000;
@@ -29,7 +29,7 @@ export async function waitCommand(argv: string[]): Promise<number> {
   }
 
   await ensureDaemon();
-  const session = resolveSession(await listSessions(), values.session, realpathOr(process.cwd()));
+  const session = resolveWaitSession(await listSessions(), values.session, realpathOr(process.cwd()));
 
   const deadline = Date.now() + timeoutSeconds * 1000;
   for (;;) {

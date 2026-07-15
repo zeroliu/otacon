@@ -304,3 +304,66 @@ Intuition.
     expect(error?.message).toBe("unknown session");
   });
 });
+
+describe("review grade", () => {
+  const grade = {
+    version: 1,
+    session: "otc_review1",
+    revision: 2,
+    headRevision: 3,
+    headSha: "a".repeat(40),
+    question: "q-open",
+    attempt: "qa2",
+    verdict: "pass",
+    feedback: "You connected the producer and consumer.",
+    knowledgeBaseHash: "f".repeat(64),
+  };
+
+  test("validates the grade file and preserves question/attempt identity on the wire", async () => {
+    const path = join(repo, "grade.json");
+    writeFileSync(path, JSON.stringify(grade));
+    let wire: unknown;
+    const printed = await capture(["grade", "q-open", "--file", path], deps({
+      api: async (method, apiPath, body) => {
+        expect(method).toBe("POST");
+        expect(apiPath).toBe("/api/reviews/otc_review1/quiz/q-open/grade");
+        wire = body;
+        return { status: 200, body: { repeated: false, attempt: { id: "qa2", status: "pass" }, quiz: { progress: { passed: 1 } } } };
+      },
+    }));
+    expect(wire).toMatchObject({ question: "q-open", attempt: "qa2", knowledgeBaseHash: "f".repeat(64) });
+    expect(printed).toMatchObject({ ok: true, session: "otc_review1", question: "q-open", repeated: false });
+  });
+
+  test("surfaces a knowledge CAS conflict without treating the attempt as graded", async () => {
+    const path = join(repo, "grade.json");
+    writeFileSync(path, JSON.stringify(grade));
+    let error: CliError | undefined;
+    try {
+      await reviewCommand(["grade", "q-open", "--file", path], deps({
+        api: async () => ({
+          status: 409,
+          body: { error: { code: "E_KNOWLEDGE_CONFLICT", message: "grade again with current hash" }, currentHash: "e".repeat(64) },
+        }),
+      }));
+    } catch (caught) {
+      error = caught as CliError;
+    }
+    expect(error?.code).toBe("E_KNOWLEDGE_CONFLICT");
+    expect(error?.extra.currentHash).toBe("e".repeat(64));
+  });
+
+  test("rejects stale question identity and private-schema drift before daemon contact", async () => {
+    const path = join(repo, "grade.json");
+    writeFileSync(path, JSON.stringify({ ...grade, answerKey: "secret" }));
+    let ensured = 0;
+    let error: CliError | undefined;
+    try {
+      await reviewCommand(["grade", "other-question", "--file", path], deps({ ensure: async () => { ensured += 1; } }));
+    } catch (caught) {
+      error = caught as CliError;
+    }
+    expect(error?.code).toBe("E_QUIZ_GRADE");
+    expect(ensured).toBe(0);
+  });
+});

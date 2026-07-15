@@ -30,6 +30,7 @@ import {
   useSession,
 } from "./api";
 import { ProductionPrReviewScreen } from "./pr-review/pr-review-screen";
+import type { ReviewQuizPublicState } from "../shared/review-quiz";
 import {
   captureSelection,
   clearThreadHighlights,
@@ -138,7 +139,7 @@ const COMPOSER_GUESS_HEIGHT = 240;
 // opened a desktop popover anchored off-thumb would otherwise sit at 560–639px.
 const SHEET_VIEWPORT = 640;
 
-function PrReviewLoop({ session }: { session: ReviewLiveSession }) {
+function PrReviewLoop({ session, quiz }: { session: ReviewLiveSession; quiz?: ReviewQuizPublicState }) {
   const detail = useReviewDetail(session.id, session.revision);
   if (session.revision < 1) {
     return (
@@ -154,7 +155,7 @@ function PrReviewLoop({ session }: { session: ReviewLiveSession }) {
   if (detail?.report === undefined || detail.report === null) {
     return <p className="loading">loading review r{session.revision}…</p>;
   }
-  return <ProductionPrReviewScreen session={session} payload={detail.report} />;
+  return <ProductionPrReviewScreen session={session} payload={detail.report} liveQuiz={quiz} />;
 }
 
 /** The review loop: plan + rail + grill + interview + now-playing/console + approve + composer + drawer. */
@@ -919,7 +920,7 @@ function ReviewLoop({
 }
 
 export function SessionScreen({ id }: { id: string }) {
-  const { session, threads, transcript, stream, missing, cleaned } = useSession(id);
+  const { session, quiz, threads, transcript, stream, missing, cleaned } = useSession(id);
   // One ticking clock for the presence dot + activity/relative timestamps, so
   // they stay honest while the screen idles between SSE frames.
   const now = useNow(30_000);
@@ -1008,7 +1009,7 @@ export function SessionScreen({ id }: { id: string }) {
   }
 
   if (session.kind === "review") {
-    return <PrReviewLoop session={session} />;
+    return <PrReviewLoop session={session} quiz={quiz} />;
   }
 
   return (

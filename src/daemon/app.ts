@@ -24,6 +24,9 @@ import type { ScopeValues } from "../shared/config.js";
 import { canonicalizeGitHubRepo, parseKnowledgeHash } from "../shared/knowledge.js";
 import type { KnowledgeTarget } from "../shared/knowledge.js";
 import { parsePullRequestMetadata } from "../shared/review.js";
+import { parseReviewQuizGrade } from "../shared/review-quiz.js";
+import type { ReviewQuizAnswerEvent, ReviewQuizPublicState } from "../shared/review-quiz.js";
+import type { ReviewReportRevisionPayload } from "../shared/review-report.js";
 import {
   expandTilde,
   globalConfigPath,
@@ -75,6 +78,11 @@ import {
   ReviewRevisionExistsError,
   ReviewStore,
 } from "./review-store.js";
+import {
+  ReviewQuizConflictError,
+  ReviewQuizCorruptError,
+  ReviewQuizStore,
+} from "./review-quiz-store.js";
 import type { Store } from "./store.js";
 import { writeFileAtomic } from "./store.js";
 import {
@@ -101,6 +109,8 @@ export interface AppOptions {
   knowledge?: KnowledgeStore;
   /** Test seam for immutable review reports and their frozen knowledge snapshots. */
   reviews?: ReviewStore;
+  /** Test seam for durable quiz attempts and cognition updates. */
+  quizzes?: ReviewQuizStore;
   /** Invoked once POST /api/shutdown's response is out; main.ts exits in it. */
   onShutdown?: () => void;
   /** Test override: where the built SPA lives (null = no UI). Default: resolved next to the module. */
@@ -248,6 +258,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   const { store } = options;
   const knowledge = options.knowledge ?? new KnowledgeStore();
   const reviews = options.reviews ?? new ReviewStore(knowledge);
+  const quizzes = options.quizzes ?? new ReviewQuizStore(reviews, knowledge);
 
   // One queue instance per session for the daemon's lifetime — every request
   // must park on / enqueue into the same in-memory waiter list, and the
@@ -262,6 +273,35 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     }
     return queue;
   };
+
+  const sameQuizWork = (payload: EventPayload, event: ReviewQuizAnswerEvent): boolean => {
+    if (typeof payload !== "object" || payload === null) return false;
+    const candidate = payload as Partial<ReviewQuizAnswerEvent>;
+    return candidate.event === "quiz-answer" &&
+      candidate.session === event.session && candidate.revision === event.revision &&
+      candidate.headRevision === event.headRevision && candidate.headSha === event.headSha &&
+      candidate.question === event.question && candidate.attempt === event.attempt;
+  };
+
+  // A crash may land after the attempt's atomic state write but before queue
+  // enqueue. Reconstruct from durable quiz state before any request/SSE can
+  // observe this daemon: deterministic choices finish locally, while missing
+  // open-answer work is appended once using its full immutable identity.
+  for (const session of store.listSessions()) {
+    if (session.kind !== "review" || TERMINAL_STATUSES.includes(session.status)) continue;
+    try {
+      const recovered = quizzes.recoverPending(session);
+      if (recovered.events.length === 0) continue;
+      const queue = queueFor(session.id);
+      for (const event of recovered.events) {
+        if (queue.hasPayload((payload) => sameQuizWork(payload, event))) continue;
+        queue.enqueue(event, store.bumpCounter(session.id, "eventSeq"));
+      }
+    } catch {
+      // Detail routes surface corrupt/stale quiz state with typed errors. One
+      // damaged review must not prevent the daemon or other sessions starting.
+    }
+  }
 
   const sessionFor = (c: AppContext) => store.getSession(c.req.param("id") ?? "");
 
@@ -290,6 +330,24 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   // UI pub/sub (DECISIONS.md "UI live updates"): every state mutation below
   // publishes, and the SSE routes in ui.ts fan the events out to browsers.
   const notifier = new Notifier();
+  const safePendingQuizCount = (session: Extract<RegistrySession, { kind: "review" }>): number => {
+    try {
+      return quizzes.pendingCount(session);
+    } catch {
+      // Corruption is surfaced by the typed review/detail routes. One bad
+      // local revision must not take down the daemon-wide session index.
+      return 0;
+    }
+  };
+  const safePublicQuiz = (session: Extract<RegistrySession, { kind: "review" }>): ReviewQuizPublicState | undefined => {
+    const revision = reviews.latestSubmittedRevision(session.id);
+    if (revision < 1) return undefined;
+    try {
+      return quizzes.publicState(session, revision);
+    } catch {
+      return undefined;
+    }
+  };
   const summarize = (session: RegistrySession): SessionSummary => {
     if (session.kind === "review") {
       return {
@@ -298,7 +356,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
         // remains the PR-head generation and may advance before a report lands.
         revision: reviews.latestSubmittedRevision(session.id),
         lastReviewedRevision: 0,
-        pendingEvents: queueFor(session.id).size,
+        pendingEvents: safePendingQuizCount(session),
         openQuestions: 0,
         lastContactAt: lastContact.get(session.id),
         parked: queueFor(session.id).waiterCount > 0,
@@ -320,14 +378,27 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
   };
   const publishSession = (session: RegistrySession): void =>
     notifier.publish({ type: "session", session: session.id, data: { session: summarize(session) } });
-  const publishQueue = (id: string, pending: number): void =>
-    notifier.publish({ type: "queue", session: id, data: { session: id, pending } });
+  const publishQueue = (id: string, pending: number): void => {
+    const session = store.getSession(id);
+    const effective = session?.kind === "review" ? safePendingQuizCount(session) : pending;
+    notifier.publish({ type: "queue", session: id, data: { session: id, pending: effective } });
+  };
+  const publishQuiz = (id: string, quiz: ReviewQuizPublicState): void =>
+    notifier.publish({ type: "quiz", session: id, data: { session: id, quiz } });
   const publishThread = (id: string, thread: Thread): void =>
     notifier.publish({ type: "thread", session: id, data: { session: id, thread } });
   const publishGrill = (id: string, entry: TranscriptEntry): void =>
     notifier.publish({ type: "grill", session: id, data: { session: id, entry } });
   const publishStream = (id: string, events: StreamEvent[]): void =>
     notifier.publish({ type: "stream", session: id, data: { session: id, events } });
+
+  /** Replace the private immutable companion with its browser-safe live projection. */
+  const publicReviewRevision = (
+    session: Extract<RegistrySession, { kind: "review" }>,
+    payload: ReviewReportRevisionPayload,
+  ): ReviewReportRevisionPayload => payload.revision.status === "submitted"
+    ? { ...payload, quiz: quizzes.publicState(session, payload.revision.revision) }
+    : payload;
 
   // The PR poller refreshes un-settled PRs (timer + on-demand) and publishes any
   // state change so the home UI re-sections an implemented plan when its PR
@@ -583,7 +654,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     if (session?.kind === "review") {
       const base = `/api/sessions/${session.id}`;
       const suffix = c.req.path.slice(base.length);
-      if (suffix !== "/events" && suffix !== "/presence" && suffix !== "/stream") {
+      if (suffix !== "" && suffix !== "/events" && suffix !== "/presence" && suffix !== "/stream") {
         return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a plan`);
       }
     }
@@ -902,7 +973,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
         data: { session: current.id, revision: revision.revision.revision, changelog: null },
       });
       maybeNotify(updated, { kind: "revision", revision: revision.revision.revision });
-      return c.json({ revision }, 201);
+      return c.json({ revision: publicReviewRevision(current, revision) }, 201);
     } catch (error) {
       if (error instanceof ReviewReportInvalidError) {
         return c.json({
@@ -913,7 +984,7 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       if (error instanceof ReviewRevisionExistsError) {
         return c.json({ error: { code: "E_REVIEW_REVISION_EXISTS", message: error.message } }, 409);
       }
-      if (error instanceof ReviewRevisionCorruptError) {
+      if (error instanceof ReviewRevisionCorruptError || error instanceof ReviewQuizCorruptError) {
         return c.json({
           error: {
             code: "E_REVIEW_REVISION_UNAVAILABLE",
@@ -947,11 +1018,14 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
       }
       return c.json({
         session: summarize(session),
-        report,
-        preparation: reviews.latestForHead(session) ?? null,
+        report: report === null ? null : publicReviewRevision(session, report),
+        preparation: (() => {
+          const preparation = reviews.latestForHead(session);
+          return preparation === undefined ? null : publicReviewRevision(session, preparation);
+        })(),
       });
     } catch (error) {
-      if (error instanceof ReviewRevisionCorruptError) {
+      if (error instanceof ReviewRevisionCorruptError || error instanceof ReviewQuizCorruptError) {
         return reviewRevisionUnavailable(c, `review revision ${revision} is missing or corrupt`);
       }
       throw error;
@@ -967,9 +1041,9 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     const revision = Number(c.req.param("n"));
     if (!Number.isInteger(revision) || revision < 1) return badRequest(c, "revision must be a positive integer");
     try {
-      return c.json({ revision: reviews.readRevision(session.id, revision) });
+      return c.json({ revision: publicReviewRevision(session, reviews.readRevision(session.id, revision)) });
     } catch (error) {
-      if (error instanceof ReviewRevisionCorruptError) {
+      if (error instanceof ReviewRevisionCorruptError || error instanceof ReviewQuizCorruptError) {
         return reviewRevisionUnavailable(c, `review revision ${revision} is missing or corrupt`);
       }
       throw error;
@@ -997,6 +1071,77 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     } catch (error) {
       if (error instanceof ReviewRevisionCorruptError) {
         return reviewRevisionUnavailable(c, "one of the requested review revisions is missing or corrupt");
+      }
+      throw error;
+    }
+  });
+
+  /** User answer: choices grade inline; open answers durably wake the review agent. */
+  app.post("/api/reviews/:id/quiz/:question/answer", async (c) => {
+    const session = store.getSession(c.req.param("id"));
+    if (session === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.kind !== "review") return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a review`);
+    if (session.status === "done") return sessionOver(c, session.id);
+    const body = (await readJsonBody(c)) ?? {};
+    if (!Number.isInteger(body.revision) || typeof body.answer !== "string" || typeof body.idempotencyKey !== "string") {
+      return badRequest(c, "revision, answer, and idempotencyKey are required");
+    }
+    try {
+      const result = quizzes.answer(session, {
+        revision: body.revision as number,
+        question: c.req.param("question"),
+        answer: body.answer,
+        idempotencyKey: body.idempotencyKey,
+      });
+      // Re-emit a repeated still-pending open answer: this closes the crash
+      // window between durable attempt state and durable queue enqueue.
+      if (result.event !== undefined) {
+        const queue = queueFor(session.id);
+        if (!queue.hasPayload((payload) => sameQuizWork(payload, result.event!))) {
+          queue.enqueue(result.event, store.bumpCounter(session.id, "eventSeq"));
+        }
+      }
+      publishQuiz(session.id, result.quiz);
+      publishQueue(session.id, queueFor(session.id).size);
+      publishSession(session);
+      return c.json({ quiz: result.quiz, attempt: result.quiz.questions.find((item) => item.id === c.req.param("question"))?.latest, repeated: result.repeated }, result.repeated ? 200 : 201);
+    } catch (error) {
+      if (error instanceof ReviewQuizConflictError) {
+        // This route is browser-facing. A deterministic choice can be retried
+        // without revealing the private profile CAS hash; only the agent-only
+        // grade route below receives currentHash for an explicit re-grade.
+        return c.json({ error: { code: error.code, message: error.message } }, 409);
+      }
+      if (error instanceof ReviewQuizCorruptError || error instanceof ReviewRevisionCorruptError) {
+        return reviewRevisionUnavailable(c, error.message);
+      }
+      throw error;
+    }
+  });
+
+  /** Agent-private grade endpoint. The browser never receives its input schema. */
+  app.post("/api/reviews/:id/quiz/:question/grade", async (c) => {
+    const session = store.getSession(c.req.param("id"));
+    if (session === undefined) return notFound(c, `unknown session: ${c.req.param("id")}`);
+    if (session.kind !== "review") return codedBadRequest(c, "E_SESSION_KIND", `session ${session.id} is not a review`);
+    if (session.status === "done") return sessionOver(c, session.id);
+    const parsed = parseReviewQuizGrade((await readJsonBody(c)) ?? {});
+    if (parsed.value === undefined) return c.json({ error: { code: "E_QUIZ_GRADE", message: parsed.errors.join("; ") } }, 422);
+    if (parsed.value.question !== c.req.param("question") || parsed.value.session !== session.id) {
+      return c.json({ error: { code: "E_QUIZ_STALE_GRADE", message: "grade route and file identity do not match" } }, 409);
+    }
+    try {
+      const result = quizzes.grade(session, parsed.value);
+      publishQuiz(session.id, result.quiz);
+      publishQueue(session.id, queueFor(session.id).size);
+      publishSession(session);
+      return c.json({ quiz: result.quiz, attempt: result.quiz.questions.find((item) => item.id === parsed.value!.question)?.latest, repeated: result.repeated });
+    } catch (error) {
+      if (error instanceof ReviewQuizConflictError) {
+        return c.json({ error: { code: error.code, message: error.message }, ...(error.currentHash ? { currentHash: error.currentHash } : {}) }, 409);
+      }
+      if (error instanceof ReviewQuizCorruptError || error instanceof ReviewRevisionCorruptError) {
+        return reviewRevisionUnavailable(c, error.message);
       }
       throw error;
     }
@@ -2168,6 +2313,10 @@ export function createApp(options: AppOptions): Hono<{ Bindings: NodeBindings }>
     getTranscript: (id) => readTranscript(store.transcriptPath(id)),
     getActivity: (id) => readActivity(store.activityPath(id)),
     getStream: (id) => readStream(store.streamPath(id), loadStreamCap(id)),
+    getQuiz: (id) => {
+      const session = store.getSession(id);
+      return session?.kind === "review" ? safePublicQuiz(session) : undefined;
+    },
     // The index stream (onlySession === undefined) connecting means the home UI
     // is showing the section list: refresh un-settled PRs so a merge/close that
     // landed while no tab was open re-sections within a frame, not a poll cycle.

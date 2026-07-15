@@ -46,6 +46,16 @@ describe("SessionQueue fast path", () => {
     expect(event.payload).toEqual(payload(1));
   });
 
+  test("startup repair can deduplicate against queued and in-flight payloads", () => {
+    const q = new SessionQueue(file);
+    q.enqueue(payload(1), 1);
+    q.enqueue(payload(2), 2);
+    expect(q.hasPayload((item) => item.event === "question" && item.id === "q1")).toBe(true);
+    expect(q.hasPayload((item) => item.event === "question" && item.id === "q3")).toBe(false);
+    q.take();
+    expect(q.hasPayload((item) => item.event === "question" && item.id === "q1")).toBe(true);
+  });
+
   test("parking when events are already queued delivers synchronously", () => {
     const q = new SessionQueue(file);
     q.enqueue(payload(1), 1);
@@ -316,6 +326,16 @@ describe("SessionQueue persistence", () => {
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ version: 1, events: [] });
     q.enqueue(payload(1), 1);
     expect(new SessionQueue(file).size).toBe(1);
+  });
+
+  test("a queued envelope with a null payload is corrupt, not deliverable work", () => {
+    writeFileSync(file, JSON.stringify({
+      version: 1,
+      events: [{ seq: 1, queuedAt: "2026-07-14T00:00:00.000Z", payload: null }],
+    }));
+    const q = new SessionQueue(file);
+    expect(q.size).toBe(0);
+    expect(q.hasPayload(() => true)).toBe(false);
   });
 
   test("wrong-shape events files are quarantined too", () => {

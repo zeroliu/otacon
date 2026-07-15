@@ -23,6 +23,21 @@ export interface ParkHandle {
   cancel(): void;
 }
 
+const EVENT_KINDS = new Set(["comments", "question", "answer", "quiz-answer", "approved", "deleted"]);
+
+function validQueuedEvent(value: unknown): value is QueuedEvent {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const event = value as Record<string, unknown>;
+  const payload = event.payload;
+  return Number.isSafeInteger(event.seq) && (event.seq as number) >= 0 &&
+    typeof event.queuedAt === "string" && Number.isFinite(Date.parse(event.queuedAt)) &&
+    typeof payload === "object" && payload !== null && !Array.isArray(payload) &&
+    typeof (payload as Record<string, unknown>).event === "string" &&
+    EVENT_KINDS.has((payload as Record<string, unknown>).event as string) &&
+    typeof (payload as Record<string, unknown>).session === "string" &&
+    ((payload as Record<string, unknown>).session as string) !== "";
+}
+
 export class SessionQueue {
   private events: QueuedEvent[] = [];
   /** Dequeued (taken or delivered to a waiter) but not yet acked via flush(event). */
@@ -39,7 +54,7 @@ export class SessionQueue {
       raw = undefined;
     }
     const file = raw as EventsFile | undefined;
-    if (file?.version !== 1 || !Array.isArray(file.events)) {
+    if (file?.version !== 1 || !Array.isArray(file.events) || !file.events.every(validQueuedEvent)) {
       // Quarantine, never wedge (DECISIONS.md "Corrupt state files are
       // quarantined, not fatal"): pending events are preserved in the
       // quarantined file for manual recovery, and the session keeps working
@@ -63,6 +78,17 @@ export class SessionQueue {
 
   get waiterCount(): number {
     return this.waiters.length;
+  }
+
+  /** Inspect durable queued/in-flight work without consuming it (startup repair). */
+  hasPayload(predicate: (payload: EventPayload) => boolean): boolean {
+    // The constructor rejects malformed durable envelopes, and enqueue only
+    // accepts EventPayload. Keep this inspection defensive too: startup repair
+    // must never skip a missing wake because an unexpected null entry throws
+    // before the predicate reaches later valid work.
+    return [...this.inFlight, ...this.events].some((event) =>
+      validQueuedEvent(event) && predicate(event.payload)
+    );
   }
 
   /** Durably append (flushes before any waiter sees it), then wake the first waiter. */

@@ -6012,7 +6012,10 @@ code {
 .pr-memory-scope button:disabled { opacity: 0.5; cursor: default; }
 .pr-quiz-actions .btn { margin-left: auto; }
 
-.pr-quiz-list { display: grid; gap: 14px; margin-top: 22px; }
+.pr-quiz-experience { display: grid; gap: 14px; margin-top: 22px; }
+.pr-quiz-progress { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 10px 12px; border: 1px solid var(--line); background: var(--panel); }
+.pr-quiz-progress span { color: var(--ink-soft); font-size: var(--fs-meta); }
+.pr-quiz-list { display: grid; gap: 14px; }
 .pr-quiz-card { padding: 15px; border: 1px solid var(--line); background: var(--surface); }
 .pr-quiz-card.is-retry { border-left: 3px solid var(--chip-await-ink); }
 .pr-quiz-card.is-passed { border-left: 3px solid var(--chip-approved-ink); }
