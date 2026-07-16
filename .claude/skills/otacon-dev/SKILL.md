@@ -18,8 +18,8 @@ Save the approved plan is also copied into the repo under `plans.dir` (default
 `.otacon/plans`). `<repo>/.otacon/` itself holds only config and those Save copies.
 
 After editing **daemon** source (`src/daemon/**`) mid-session, restart the running
-daemon so your change loads: `./bin/otacon restart` (the next command respawns it
-from current source). Use `./bin/otacon restart`, not a raw curl to a fixed port —
+daemon so your change loads: `./bin/otacon restart` (the command respawns it
+immediately from current source). Use `./bin/otacon restart`, not a raw curl to a fixed port —
 in a git worktree the shim runs the daemon on a derived port, and `restart` always
 targets the one this checkout talks to. CLI/linter/parser edits need no restart.
 

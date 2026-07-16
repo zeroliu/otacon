@@ -12,7 +12,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { VERSION } from "../shared/version.js";
-import { ensureDaemon } from "./client.js";
+import { ensureDaemon, restartDaemon } from "./client.js";
 import { CliError } from "./output.js";
 
 let home: string;
@@ -168,4 +168,30 @@ test("a stale daemon that exits on shutdown is replaced by a real spawned otacon
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+}, 20000);
+
+test("explicit restart replaces an already-current daemon with a fresh process", async () => {
+  let shutdowns = 0;
+  await listen((req, res) => {
+    res.setHeader("content-type", "application/json");
+    if (req.url === "/api/health") return void res.end(health(VERSION));
+    if (req.method === "POST" && req.url === "/api/shutdown") {
+      shutdowns++;
+      res.end('{"ok":true}');
+      setImmediate(() => void closeServer());
+      return;
+    }
+    res.statusCode = 404;
+    res.end("{}");
+  });
+
+  const result = await restartDaemon();
+  expect(shutdowns).toBe(1);
+  expect(result.restarted).toBe(true);
+  expect(result.previous?.pid).toBe(99999);
+  expect(result.daemon.version).toBe(VERSION);
+  expect(result.daemon.pid).not.toBe(99999);
+
+  const base = `http://127.0.0.1:${process.env.OTACON_PORT}`;
+  await fetch(`${base}/api/shutdown`, { method: "POST" }).catch(() => undefined);
 }, 20000);

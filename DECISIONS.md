@@ -355,8 +355,8 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   directory) and — unless the caller already set them — derives a stable per-worktree
   `OTACON_PORT` (`4800 + cksum(root) % 1000`) and `OTACON_HOME`
   (`~/.otacon-worktrees/<basename>-<cksum>`) before exec'ing the CLI. The main checkout
-  (`.git` is a directory) is left on 4747 / `~/.otacon`. The shim also intercepts
-  `./bin/otacon restart`, POSTing `/api/shutdown` at the resolved port.
+  (`.git` is a directory) is left on 4747 / `~/.otacon`. The shim exports those values
+  and delegates every command, including `restart`, to the source CLI.
 - **Why:** One shared daemon (the port is the lock) is fine for parallel *planning* —
   sessions are already isolated by repo root (DESIGN.md §7). But it defeats testing
   *divergent daemon source* across worktrees: the version handshake only restarts on a
@@ -367,8 +367,11 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   unchanged, so DESIGN.md's one-daemon model still holds for installed otacon. `restart`
   exists because the same-`VERSION` handshake can't auto-restart after a daemon-source
   edit, and the raw `curl … :4747` it replaces would hit the wrong daemon in a worktree.
+  Delegating `restart` keeps source dogfood on the same tested lifecycle command as the
+  installed product while the shim still owns only per-worktree address selection.
 - **Revisit when:** Worktree port collisions actually bite (the cksum range is 1000
-  wide), or the CLI grows a real `restart` subcommand the shim's intercept would shadow.
+  wide), or installed Otacon gains a first-class worktree registry that can select an
+  isolated daemon without environment variables.
 
 ## Multiple waiters: FIFO, one event each
 
@@ -587,6 +590,24 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
   genuine version fight into an actionable error.
 - **Revisit when:** `/api/shutdown` grows a conditional "only if you are version X"
   parameter, which would close the remaining race window entirely.
+
+## Explicit restart is one CLI lifecycle operation
+
+- **Decision:** `otacon restart` probes the configured port, refuses a non-Otacon
+  owner, shuts down an owned daemon even when it already matches the CLI version, waits
+  until that PID disappears (or a peer replacement appears), and immediately converges
+  through `ensureDaemon` so the replacement comes from this CLI's resolved daemon entry.
+  It prints one JSON result containing `restarted`, the previous version/PID when one
+  existed, and the fresh daemon version/PID/port. With no running daemon it starts one
+  and reports `restarted:false`. The dogfood shim delegates to this command instead of
+  implementing a stop-only shell special case.
+- **Why:** Users need one installed command after package replacement or same-version
+  source edits; "POST shutdown, then remember to run another command" leaves static UI
+  bytes and the in-memory API process on different versions. Reusing the client lifecycle
+  preserves port ownership checks, resolved-path spawning, bounded version-fight handling,
+  JSON-only stdout, and per-worktree `OTACON_PORT`/`OTACON_HOME` behavior in one place.
+- **Revisit when:** The daemon can atomically exec the replacement binary itself, or
+  restart must drain/transfer parked waits instead of relying on their reconnect loop.
 
 ## UI live updates: in-process Notifier, snapshot-first SSE, no replay
 

@@ -389,6 +389,7 @@ the model is suspended — no inference, no token spend.
 | `otacon progress "<note>" [--session <id>]`                                 | Append a narration note to the live activity feed (UI-only; non-blocking, never parks, never an event) |
 | `otacon implement-done [--pr <url>] [--failed]`                             | End an `implementing` session: record the PR link and flip to `implemented`, or `--failed` → `implement_failed` (§12) |
 | `otacon resume [--session <id>]`                                            | Reopen a finished session for amendment (flip terminal → `revising`): auto-detects the session that owns the cwd build worktree (its recorded `impl.worktree`), or `--session` names one. Prints the daemon's reopen body plus `title`, `repo`, `plan` (the file to amend, in the home store `~/.otacon/sessions/<id>/`) (§12) |
+| `otacon restart`                                                            | Explicitly replace the daemon on the configured port, even when its version already matches the CLI, and immediately respawn it from this CLI's resolved install/source path. Prints the previous version/PID plus the fresh daemon version/PID/port; if no daemon is running, starts one and reports `restarted:false` |
 | `otacon status [--all]`                                                     | Session state + undelivered event count (crash/resume entry point); also surfaces `resumeCandidate` (id, title, status, plan) when the cwd is inside a known build worktree |
 | `otacon open [--session <id>]`                                              | Open the review URL, or the index when no session resolves. With an existing Otacon tab, route the freshest visible tab (otherwise the freshest live tab) to that exact page; with none, launch the browser. `OTACON_NO_BROWSER` stays print-only and reports `reused: true`/`false` without browser side effects |
 | `otacon config [open]`                                                      | Open the Settings web UI in the browser: `/settings?repo=<cwd repo root>` inside a repo (Project scope), bare `/settings` outside one (User scope); `OTACON_NO_BROWSER` prints the URL instead |
@@ -2307,6 +2308,8 @@ otacon doctor                # verify: node ≥ 20, daemon boots + port free-or-
                              # confirmed when present, never flagged when absent. Run
                              # inside a repo, each skill check also accepts a project
                              # install (otacon install --project), reporting its scope
+otacon restart               # replace the current daemon immediately after an update
+                             # or when a same-version daemon must reload fresh code
 otacon expose                # optional, phone access: checks the tailscale CLI exists
                              # and is logged in, runs `tailscale serve` against the
                              # daemon port, verifies the tailnet URL actually serves
@@ -2375,7 +2378,9 @@ missing or mismatched one/both points to `otacon install --agent <agent>` becaus
 binds the pair. `otacond` is never
 installed or started by hand — any `otacon` command auto-spawns it if it isn't
 running, and the CLI restarts a stale daemon on version mismatch (version handshake
-on every call).
+on every call). `otacon restart` is the explicit same-version lifecycle control: it
+always replaces an owned daemon immediately and uses the same configured port/home and
+resolved daemon entry as ordinary auto-spawn.
 
 **One source per protocol card.** `protocolCard(cmd)` owns plan review and
 `reviewProtocolCard(cmd)` owns PR review in `src/cli/install/assets.ts`. Each is

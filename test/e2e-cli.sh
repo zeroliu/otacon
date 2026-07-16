@@ -58,6 +58,21 @@ otacon status > "$TMP/status2.json"
   || fail "second status respawned instead of reusing the daemon"
 ok "status auto-spawned otacond (pid $DAEMON_PID), reported empty state, exited 0"
 
+# --- 1b. explicit restart replaces even a current-version daemon ------------
+OLD_DAEMON_PID="$DAEMON_PID"
+otacon restart > "$TMP/restart-command.json" 2> "$TMP/restart-command.err" \
+  || fail "restart exited nonzero ($(cat "$TMP/restart-command.err"))"
+[ "$(json_field restarted "$TMP/restart-command.json")" = "true" ] \
+  || fail "restart did not report that it replaced the daemon"
+[ "$(json_field previous.pid "$TMP/restart-command.json")" = "$OLD_DAEMON_PID" ] \
+  || fail "restart reported the wrong previous pid"
+DAEMON_PID="$(json_field daemon.pid "$TMP/restart-command.json")"
+[ "$DAEMON_PID" != "$OLD_DAEMON_PID" ] || fail "restart reused pid $OLD_DAEMON_PID"
+curl -sf "$BASE/api/health" > "$TMP/restart-command-health.json"
+[ "$(json_field pid "$TMP/restart-command-health.json")" = "$DAEMON_PID" ] \
+  || fail "restart output does not match the live daemon"
+ok "restart replaced current otacond pid $OLD_DAEMON_PID with pid $DAEMON_PID"
+
 # --- 2. start in a git repo: leaves .gitignore alone, registers --------------
 cd "$REPO"
 git init -q -b main .

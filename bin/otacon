@@ -15,7 +15,7 @@
 # always win. See DECISIONS.md "Per-worktree daemon isolation in the dogfood shim".
 #
 # After editing DAEMON source (src/daemon/**), restart this worktree's daemon so
-# the next command respawns it fresh (the handshake won't — same VERSION):
+# it respawns fresh from this checkout (the handshake won't — same VERSION):
 #   ./bin/otacon restart
 #
 # Resolve through any symlink chain so this works whether invoked as ./bin/otacon
@@ -41,19 +41,6 @@ if [ -f "$root/.git" ]; then
     OTACON_HOME="$HOME/.otacon-worktrees/$(basename "$root")-$wt_hash"
     export OTACON_HOME
   fi
-fi
-
-# `./bin/otacon restart` — shut down the daemon this worktree talks to (resolved
-# port) so the next command respawns it from current source. Works in the main
-# checkout too (defaults to :4747).
-if [ "$1" = restart ]; then
-  port=${OTACON_PORT:-4747}
-  if curl -sS -X POST "http://127.0.0.1:$port/api/shutdown" >/dev/null 2>&1; then
-    echo "otacon: daemon on :$port shutting down; next command respawns from current source" >&2
-  else
-    echo "otacon: no daemon answered on :$port (already down); next command spawns fresh" >&2
-  fi
-  exit 0
 fi
 
 exec bun run "$root/src/cli/main.ts" "$@"

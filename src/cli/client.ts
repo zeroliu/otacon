@@ -1,5 +1,5 @@
-// HTTP client for otacond, plus ensureDaemon — the auto-spawn and version
-// handshake every CLI command runs first (install/update).
+// HTTP client for otacond, plus ensureDaemon/restartDaemon — the auto-spawn,
+// version handshake, and explicit lifecycle control used by the CLI.
 //
 // The daemon is spawned by resolved path — the dist/daemon/main.js sibling of
 // this very module — never via PATH (DECISIONS.md "Daemon spawned by resolved
@@ -23,6 +23,12 @@ export interface DaemonHealth {
   pid: number;
   /** Daemon-wide count of live SSE viewers (open otacon tabs from this daemon). */
   viewers: number;
+}
+
+export interface RestartResult {
+  restarted: boolean;
+  previous?: DaemonHealth;
+  daemon: DaemonHealth;
 }
 
 const PROBE_TIMEOUT_MS = 1500;
@@ -223,4 +229,48 @@ export async function ensureDaemon(): Promise<DaemonHealth> {
     "E_VERSION_MISMATCH",
     `daemon on port ${otaconPort()} still runs another version after ${RESTART_ATTEMPTS} restart attempts — a CLI of a different version keeps respawning it; retry`,
   );
+}
+
+/**
+ * Explicitly replace the daemon currently owning this CLI's configured port,
+ * even when it already runs VERSION. If no daemon is up, restart degrades to a
+ * start and reports restarted:false. A peer may win the respawn race; the
+ * normal version handshake adopts it only when it matches this CLI.
+ */
+export async function restartDaemon(): Promise<RestartResult> {
+  const initial = await probe();
+  if (initial.state === "foreign") portConflict();
+  if (initial.state === "down") {
+    return { restarted: false, daemon: await ensureDaemon() };
+  }
+
+  // Refresh immediately before the explicit shutdown. Unlike stale-version
+  // recovery, restart intentionally replaces a current-version daemon too.
+  const recheck = await probe();
+  if (recheck.state === "foreign") portConflict();
+  if (recheck.state === "down") {
+    return { restarted: true, previous: initial.health, daemon: await ensureDaemon() };
+  }
+  const previous = recheck.health;
+
+  try {
+    await api("POST", "/api/shutdown");
+  } catch {
+    // The daemon may close the connection while exiting; replacement polling
+    // below is authoritative.
+  }
+
+  const deadline = Date.now() + SPAWN_DEADLINE_MS;
+  while (Date.now() < deadline) {
+    const current = await probe();
+    if (current.state === "foreign") portConflict();
+    if (current.state === "down") {
+      return { restarted: true, previous, daemon: await ensureDaemon() };
+    }
+    if (current.health.pid !== previous.pid) {
+      return { restarted: true, previous, daemon: await ensureDaemon() };
+    }
+    await sleep(POLL_INTERVAL_MS);
+  }
+  fail("E_DAEMON_RESTART", `otacond pid ${previous.pid} did not exit after POST /api/shutdown`);
 }
