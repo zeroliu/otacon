@@ -80,7 +80,7 @@ const initialSessions = (): LiveSession[] => [
   review("done-review", "done"),
 ];
 
-async function mount(sessions = initialSessions()): Promise<HTMLElement> {
+async function mount(sessions = initialSessions(), current?: string): Promise<HTMLElement> {
   const win = new Window({ url: "http://localhost/" });
   const previousDocument = globalThis.document;
   const previousWindow = globalThis.window;
@@ -99,6 +99,7 @@ async function mount(sessions = initialSessions()): Promise<HTMLElement> {
   await act(async () => root?.render(
     <SessionListContents
       sessions={sessions}
+      current={current}
       now={Date.now()}
     />,
   ));
@@ -134,6 +135,34 @@ describe("production Plans / Reviews sidebar switch", () => {
     await act(async () => (remove as HTMLButtonElement).click());
     expect(document.body.textContent).toContain("report, quiz history, threads, and local session");
     expect(document.body.textContent).not.toContain("approved plan still survives");
+  });
+
+  test("clicking Plans while a review session is open switches and sticks", async () => {
+    // Regression: mode used to snap back to the open session's kind on every
+    // render, so with a review open the Plans button read as dead.
+    const host = await mount(initialSessions(), "review");
+    expect(host.textContent).toContain("#42 Typed sessions");
+    expect(host.textContent).not.toContain("Active plan");
+
+    const plansButton = [...host.querySelectorAll("button")].find((button) => button.textContent === "Plans");
+    if (!plansButton) throw new Error("Plans switch missing");
+    await act(async () => (plansButton as HTMLButtonElement).click());
+    expect(host.textContent).toContain("Active plan");
+    expect(host.textContent).not.toContain("#42 Typed sessions");
+
+    // A live registry frame (same open session) must not undo the manual choice.
+    await act(async () => root?.render(
+      <SessionListContents sessions={initialSessions()} current="review" now={Date.now()} />,
+    ));
+    expect(host.textContent).toContain("Active plan");
+    expect(host.textContent).not.toContain("#42 Typed sessions");
+
+    // Navigating to a session of the other kind still follows the open session.
+    await act(async () => root?.render(
+      <SessionListContents sessions={initialSessions()} current="done-review" now={Date.now()} />,
+    ));
+    expect(host.textContent).toContain("#42 Typed sessions");
+    expect(host.textContent).not.toContain("Active plan");
   });
 
   test("switches to the populated kind when live registry updates empty the current mode", async () => {
