@@ -2485,6 +2485,11 @@ holds the same base and only the timestamp advances. Re-cutting a staging
 build yields a newer (higher) timestamp, which moves the `staging` dist-tag to the newest
 build; the maintainer runbook is in RELEASING.md.
 
+Both the local cut and the publish workflow run the package's `bun run test` gate before
+mutating or publishing. That script uses one isolated Bun worker (`bun test --parallel=1`)
+so test files that temporarily change process-wide state such as cwd or DOM globals cannot
+race one another; a failing test still blocks the release.
+
 The CLI's self-update (below) is **channel-aware**: a staging install (its own version
 carries the `-staging.` suffix) tracks the `staging` dist-tag and auto-updates
 staging→staging, so it is never pulled back to a stable build; a clean install tracks
