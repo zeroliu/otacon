@@ -344,6 +344,52 @@ describe("PrReviewScreen", () => {
     });
   });
 
+  test("marks a born-unanchored thread so the rail can mute its generated-surface quote", () => {
+    const base = {
+      id: "q1",
+      surface: "review",
+      intent: "question",
+      anchor: { section: "quiz", exact: "Why is the snapshot immutable?" },
+      body: "What does immutable mean here?",
+      createdAt: "2026-07-15T00:00:00.000Z",
+      identity: { session: "otc_prod1", reportRevision: 1, headRevision: 2, headSha: "def" },
+    } as const;
+    const unanchored = productionPresentation(productionSession(), productionPayload(), [{
+      ...base,
+      anchorState: "orphaned",
+    }] as never);
+    expect(unanchored.threads[0]).toMatchObject({
+      anchor: "Why is the snapshot immutable?",
+      unanchored: true,
+    });
+    const anchored = productionPresentation(productionSession(), productionPayload(), [base] as never);
+    expect(anchored.threads[0]?.unanchored).toBeUndefined();
+  });
+
+  test("renders an unanchored quote muted with an explanation instead of a plain report quote", async () => {
+    const { host } = await mountReview(1, undefined, {
+      ...balancedFixture,
+      threads: [
+        ...balancedFixture.threads,
+        {
+          id: "q9",
+          intent: "question" as const,
+          anchor: "Why is the snapshot immutable?",
+          unanchored: true,
+          body: "What does immutable mean here?",
+          status: "open" as const,
+        },
+      ],
+    });
+    const muted = host.querySelector('[data-thread-id="q9"] q') as HTMLElement;
+    expect(muted.classList.contains("pr-thread-quote-muted")).toBe(true);
+    expect(muted.getAttribute("title")).toContain("not part of the report text");
+    expect(muted.textContent).toContain("Why is the snapshot immutable?");
+    const anchoredQuote = host.querySelector('[data-thread-id="q1"] q') as HTMLElement;
+    expect(anchoredQuote.classList.contains("pr-thread-quote-muted")).toBe(false);
+    expect(anchoredQuote.getAttribute("title")).toBeNull();
+  });
+
   test("embeds one content landmark, shows exact stale-head provenance, and disables deferred actions", async () => {
     const active = await mountReview();
     await act(async () => active.root.render(

@@ -932,6 +932,7 @@ export function productionPresentation(
       id: thread.id,
       intent: thread.intent,
       anchor: thread.anchor.exact ?? thread.anchor.section,
+      ...(thread.anchorState === "orphaned" ? { unanchored: true } : {}),
       sourceAnchor: thread.anchor,
       body: thread.body,
       createdAt: thread.createdAt,

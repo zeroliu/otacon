@@ -822,6 +822,11 @@ Revisit when**. Every tradeoff made in a change gets its entry here in the same 
 - **Revisit when:** plans grow selectable generated surfaces users legitimately
   want to discuss (e.g. diagram nodes) — that calls for a different anchor type,
   not a looser guard.
+- *Partially revisited (2026-07-15) on the PR-review surface: quiz content is
+  selectable and asks on it are accepted as unanchored threads — see
+  "Unanchorable review asks are accepted as unanchored threads". Plan-renderer
+  chrome suppression itself stands (different surface, different anchor
+  lifecycle).*
 
 ## Review screen: reading surface only until the verbs exist
 
@@ -4873,6 +4878,9 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   projection keeps stale-revision refusal while accepting every legitimate selection.
 - **Revisit when:** Anchors carry structured source positions (section id + source line
   range) captured at render time, making text projection unnecessary.
+- *Superseded in part (2026-07-15): the projection check remains, but its failure now
+  classifies the thread as unanchored (`anchorState:"orphaned"`) instead of refusing it as
+  E_REVIEW_ANCHOR — see "Unanchorable review asks are accepted as unanchored threads".*
 
 ## `otacon open` routes one existing tab to the exact session (2026-07-15)
 
@@ -4986,3 +4994,28 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   UI's explicit ability to discard a live session.
 - **Revisit when:** Session mutations move behind a general version/CAS token that can
   express deletion preconditions consistently for every caller.
+
+## Unanchorable review asks are accepted as unanchored threads, not refused (2026-07-15)
+
+- **Decision:** When review-thread creation finds the anchor quote absent from the
+  submitted report's rendered-text projection, the daemon no longer refuses with
+  E_REVIEW_ANCHOR. The thread is created with `anchorState:"orphaned"` — the same
+  vocabulary plan threads use for quotes lost to revision, here stamped from birth —
+  with the full anchor preserved. Follow-ups inherit the stamp, the private
+  `review-thread` event carries it so the agent treats the quote itself as the
+  question's context, and the rail renders the quote muted with a tooltip. The
+  head/revision staleness refusals (E_REVIEW_THREAD_STALE) are unchanged.
+- **Why:** Quiz prompts, options, and graded feedback are legitimate discussion
+  surfaces that exist only in the quiz companion and per-attempt grading, never in the
+  report markdown, so their quotes can never pass containment. The reviewer already
+  holds the context they need — the highlighted text — and a question that arrives with
+  its quote is answerable without ever locating it in the report. Revision identity is
+  independently guarded by the head/revision equality checks, and review reports are
+  immutable per revision, so a born-unanchored thread has no re-anchor lifecycle to
+  corrupt. The stamp is recomputed deterministically from the same immutable revision,
+  keeping idempotent retries byte-identical. Cost accepted: an older daemon reading a
+  `threads.json` containing the new field quarantines the file (strict schema);
+  field-free files parse unchanged.
+- **Revisit when:** Anchors carry structured source positions, or generated surfaces
+  (quiz questions, diagram nodes) get their own first-class anchor type that can
+  re-locate within their owning artifact.

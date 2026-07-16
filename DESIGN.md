@@ -590,16 +590,22 @@ POST /api/sessions/:id/threads/:tid/resolve   the reviewer's Resolve verb: {reso
                                             terminal session (E_SESSION_OVER)
 GET  /api/sessions/:id/threads              comment + question threads (the UI's rail)
 POST /api/reviews/:id/threads               create an anchored Ask/Comment on the exact current
-                                            report/head. The anchor quote is what the browser
-                                            selection rendered, so presence is checked against a
-                                            rendered-text projection of the report (inline
-                                            markdown syntax stripped, whitespace collapsed), not
-                                            its raw bytes; a quote from any other revision is
-                                            still refused (E_REVIEW_ANCHOR)
+                                            report/head. A stale report revision, head revision,
+                                            or head SHA is refused (E_REVIEW_THREAD_STALE). The
+                                            anchor quote is what the browser selection rendered,
+                                            so presence is checked against a rendered-text
+                                            projection of the report (inline markdown syntax
+                                            stripped, whitespace collapsed), not its raw bytes;
+                                            a quote absent from that projection (quiz prompts,
+                                            options, and graded feedback live only on generated
+                                            surfaces) no longer refuses — the thread is created
+                                            unanchored (anchorState:"orphaned") with its full
+                                            anchor preserved as the conversation's context
 POST /api/reviews/:id/threads/:tid/followups
                                             create a same-intent turn on a root conversation;
-                                            inherit its anchor, bind the current report on the
-                                            same PR head, and request no additional memory update
+                                            inherit its anchor and anchorState, bind the current
+                                            report on the same PR head, and request no additional
+                                            memory update
 POST /api/reviews/:id/threads/:tid/respond  agent answer/report response + optional matching memory acknowledgement
 POST /api/reviews/:id/threads/:tid/code-action
                                             explicit reviewer authorization for code work on a persisted Comment only
@@ -1728,7 +1734,13 @@ code-action-locked targets. Response, saved receipt, and code-action lifecycle f
 server-owned and rejected when supplied by a browser. Each entry owns
 the complete W3C-style anchor, immutable source report revision and PR head generation/SHA,
 the visible Ask/Comment intent, optional requested memory scope, agent response, exact saved
-receipt, and Comment-only code-action lifecycle. The browser projection omits its create
+receipt, and Comment-only code-action lifecycle. A root whose quote cannot be located in the
+submitted report's rendered-text projection (quiz prompts, options, and graded feedback are
+the canonical case — they live only in the quiz companion) is stamped
+`anchorState:"orphaned"` at creation; the server recomputes that stamp deterministically from
+the same immutable revision so idempotent retries match, follow-ups inherit it alongside the
+anchor, the private event carries it so the agent treats the quote itself as the context, and
+the browser rail shows the quote muted. The browser projection omits its create
 idempotency key. Agent work is a private `review-thread` event whose `work` is `question`,
 `report-feedback`, or `code-change`; it carries an ordered self-contained conversation
 projection, and a code action persists the exact authorized turn ids. The durable

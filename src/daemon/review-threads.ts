@@ -58,10 +58,11 @@ function isIdentity(raw: unknown): raw is ReviewThread["identity"] {
 function isReviewThread(raw: unknown): raw is ReviewThread {
   if (typeof raw !== "object" || raw === null) return false;
   const value = raw as Record<string, unknown>;
-  const optional = ["replyTo", "remember", "response", "saved", "codeAction"].filter((key) => value[key] !== undefined);
+  const optional = ["anchorState", "replyTo", "remember", "response", "saved", "codeAction"].filter((key) => value[key] !== undefined);
   if (!exactKeys(value, ["id", "surface", "intent", "anchor", "body", "createdAt", "identity", "idempotencyKey", ...optional])) return false;
   if (
     value.surface !== "review" || (value.intent !== "question" && value.intent !== "comment") ||
+    (value.anchorState !== undefined && value.anchorState !== "orphaned") ||
     typeof value.id !== "string" || !/^[qt][1-9]\d{0,8}$/.test(value.id) ||
     (value.intent === "question" ? !value.id.startsWith("q") : !value.id.startsWith("t")) ||
     !isAnchor(value.anchor) || typeof value.body !== "string" || value.body.trim() === "" || value.body.length > 20_000 ||
@@ -129,7 +130,7 @@ function parseReviewThreads(raw: unknown, expectedSession?: string): ReviewThrea
     if (thread.replyTo === undefined) continue;
     const root = byId.get(thread.replyTo);
     if (root === undefined || root.replyTo !== undefined || root.intent !== thread.intent ||
-      JSON.stringify(root.anchor) !== JSON.stringify(thread.anchor) ||
+      JSON.stringify(root.anchor) !== JSON.stringify(thread.anchor) || root.anchorState !== thread.anchorState ||
       root.identity.headRevision !== thread.identity.headRevision || root.identity.headSha !== thread.identity.headSha ||
       thread.identity.reportRevision < root.identity.reportRevision || Date.parse(thread.createdAt) < Date.parse(root.createdAt) ||
       thread.remember !== undefined || thread.codeAction !== undefined) return undefined;

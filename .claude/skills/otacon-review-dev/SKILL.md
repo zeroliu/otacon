@@ -113,7 +113,11 @@ Handle exactly one returned event, then park again:
 A `review-thread` event may carry `conversation:{root,turns}`. Treat those
 ordered turns as the self-contained context for the current `thread`; answer or
 revise only for the event's current work. A follow-up keeps its root intent and
-does not inherit the root's Remember request.
+does not inherit the root's Remember request. An event may carry
+`anchorState:"orphaned"`: the quoted `anchor.exact` comes from a generated
+surface (a quiz prompt, option, or graded feedback) or is otherwise absent from
+the report markdown — treat the quote itself as the question's context and do
+not search the report for it.
 
 - `quiz-answer`: Compare the answer with every private rubric criterion and the
   code. Write a grade JSON containing exactly `version:1`, `session`,

@@ -363,6 +363,7 @@ export function createApp(options: AppOptions): DaemonApp {
     headRevision: thread.identity.headRevision,
     headSha: thread.identity.headSha,
     anchor: thread.anchor,
+    ...(thread.anchorState === undefined ? {} : { anchorState: thread.anchorState }),
     body: thread.body,
     ...(thread.remember === undefined ? {} : { remember: thread.remember }),
     conversation: (() => {
@@ -1544,9 +1545,12 @@ export function createApp(options: AppOptions): DaemonApp {
     if (report.revision.status !== "submitted" || report.revision.headRevision !== current.review.revision || report.revision.headSha !== current.review.head.sha) {
       return c.json({ error: { code: "E_REVIEW_THREAD_STALE", message: "current report has not been submitted for the current PR head" } }, 409);
     }
-    if (report.report === undefined || !reportContainsAnchorQuote(report.report, anchor.exact!)) {
-      return c.json({ error: { code: "E_REVIEW_ANCHOR", message: "selected quote is not present in the named report revision" } }, 409);
-    }
+    // A quote absent from the report markdown (quiz prompts/options/feedback
+    // live only in the quiz companion) still deserves an answer: the thread is
+    // born unanchored and the quote itself carries the context. Recomputed
+    // deterministically from the same immutable revision, so idempotent
+    // retries produce the same thread.
+    const unanchored = report.report === undefined || !reportContainsAnchorQuote(report.report, anchor.exact!);
     const path = store.threadsPath(current.id);
     const existingThreads = readReviewThreads(path, current.id);
     const existing = existingThreads.find((thread) => thread.idempotencyKey === body.idempotencyKey);
@@ -1567,6 +1571,7 @@ export function createApp(options: AppOptions): DaemonApp {
         surface: "review",
         intent,
         anchor,
+        ...(unanchored ? { anchorState: "orphaned" as const } : {}),
         body: body.body,
         createdAt,
         identity: {
@@ -1654,6 +1659,7 @@ export function createApp(options: AppOptions): DaemonApp {
         surface: "review",
         intent: root.intent,
         anchor: root.anchor,
+        ...(root.anchorState === undefined ? {} : { anchorState: root.anchorState }),
         body: body.body,
         createdAt: existing?.createdAt ?? new Date().toISOString(),
         replyTo: root.id,

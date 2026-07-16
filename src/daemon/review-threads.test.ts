@@ -111,6 +111,35 @@ describe("review thread persistence", () => {
     }
   });
 
+  test("round-trips a born-unanchored thread and rejects unknown or mismatched anchor states", () => {
+    createReviewThread(path, question({ anchorState: "orphaned" }));
+    expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({
+      version: 2,
+      threads: [{ id: "q1", anchorState: "orphaned" }],
+    });
+    expect(publicReviewThreads(path)[0]).toMatchObject({ anchorState: "orphaned" });
+
+    path = join(dir, "bogus-state.json");
+    writeFileSync(path, JSON.stringify({ version: 2, threads: [{ ...question(), anchorState: "lost" }] }));
+    expect(readReviewThreads(path)).toEqual([]);
+    expect(readdirSync(dir).some((name) => name.startsWith("bogus-state.json.corrupt-"))).toBe(true);
+
+    // A follow-up must carry its root's anchor state — an anchored follow-up on
+    // an unanchored root (or vice versa) is inconsistent persisted state.
+    path = join(dir, "mismatched-state.json");
+    const followup = question({
+      id: "q2",
+      createdAt: "2026-07-15T10:01:00.000Z",
+      replyTo: "q1",
+      idempotencyKey: "create-q2",
+    });
+    writeFileSync(path, JSON.stringify({
+      version: 2,
+      threads: [question({ anchorState: "orphaned" }), followup],
+    }));
+    expect(readReviewThreads(path)).toEqual([]);
+  });
+
   test("records a response and only acknowledges the requested memory scope", () => {
     createReviewThread(path, comment());
     const result = respondToReviewThread(path, "t1", {
