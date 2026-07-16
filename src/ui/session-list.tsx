@@ -87,15 +87,23 @@ export function SessionListContents({
   const [mode, setMode] = useState<"plan" | "review">(
     currentKind ?? (plans.length > 0 ? "plan" : "review"),
   );
+  // Follow the open session's kind on NAVIGATION only (`current` changed), not on
+  // every render — otherwise a manual tab click while a session is open snaps
+  // straight back to the open session's kind and the switch reads as dead.
+  const [seenCurrent, setSeenCurrent] = useState(current);
+  if (current !== seenCurrent) {
+    setSeenCurrent(current);
+    if (currentKind !== undefined && currentKind !== mode) setMode(currentKind);
+  }
   useEffect(() => {
-    if (currentKind !== undefined) {
-      setMode(currentKind);
-    } else if (mode === "plan" && plans.length === 0 && reviews.length > 0) {
+    // Empty-side fallback: never leave the switch on a kind with nothing to show
+    // while the other side has sessions (e.g. the last review is deleted).
+    if (mode === "plan" && plans.length === 0 && reviews.length > 0) {
       setMode("review");
     } else if (mode === "review" && reviews.length === 0 && plans.length > 0) {
       setMode("plan");
     }
-  }, [currentKind, mode, plans.length, reviews.length]);
+  }, [mode, plans.length, reviews.length]);
   const { active, prReview, done } = partitionSessions(plans);
   const { active: activeReviews, done: doneReviews } = partitionReviewSessions(reviews);
   return (
