@@ -172,6 +172,8 @@ export interface ReviewThread {
   id: string;
   intent: FeedbackIntent;
   anchor: string;
+  /** The quote is not part of the report text (e.g. quiz content); shown muted. */
+  unanchored?: boolean;
   body: string;
   createdAt?: string;
   replyTo?: string;

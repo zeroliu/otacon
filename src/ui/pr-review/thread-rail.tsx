@@ -4,6 +4,8 @@ import type { ReviewThread } from "./model";
 
 const LABEL = { question: "Question", comment: "Comment" } as const;
 
+const UNANCHORED_TITLE = "this quote comes from a generated surface (such as the quiz) and is not part of the report text; it is kept as the conversation's context";
+
 function Turn({ thread, root = false }: { thread: ReviewThread; root?: boolean }) {
   return (
     <div className={root ? "pr-thread-turn is-root" : "pr-thread-turn is-followup"} data-thread-id={thread.id}>
@@ -99,7 +101,14 @@ function ConversationCard({
         <span>{root.id}</span>
         <span className="pr-thread-status">{status === "change-requested" ? "change requested" : status}</span>
       </header>
-      <q>{root.anchor}</q>
+      {root.unanchored === true
+        ? (
+          <q className="pr-thread-quote-muted" title={UNANCHORED_TITLE}>
+            <span className="pr-thread-quote-glyph" aria-hidden="true">⌀</span>
+            {root.anchor}
+          </q>
+        )
+        : <q>{root.anchor}</q>}
       {turns.map((turn, index) => <Turn key={turn.id} thread={turn} root={index === 0} />)}
       {!disabled && root.canFollowup !== false && <FollowupBox root={root} onFollowup={onFollowup} />}
       {root.intent === "comment" && action === undefined && root.canConductCodeChange !== false && (

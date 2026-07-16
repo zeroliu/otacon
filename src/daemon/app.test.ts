@@ -1689,6 +1689,78 @@ describe("review session identity and lifecycle", () => {
     await stream.cancel();
   });
 
+  test("a quote absent from the report is accepted as an unanchored thread that follow-ups inherit", async () => {
+    const { id } = await submittedReview();
+    const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };
+    // The quiz prompt renders from the quiz companion, never the report markdown.
+    const anchor = { section: "quiz", exact: "Why is the snapshot immutable?" };
+
+    const stale = await postJson(`/api/reviews/${id}/threads`, {
+      intent: "question",
+      anchor,
+      body: "What makes this immutable?",
+      reportRevision: 2,
+      headRevision: 1,
+      headSha: "a".repeat(40),
+      idempotencyKey: "quiz-ask-stale",
+    });
+    expect(stale.status).toBe(409);
+    expect((await stale.json()) as object).toMatchObject({ error: { code: "E_REVIEW_THREAD_STALE" } });
+
+    const created = await postJson(`/api/reviews/${id}/threads`, {
+      intent: "question",
+      anchor,
+      body: "What makes this immutable?",
+      ...source,
+      idempotencyKey: "quiz-ask-1",
+    });
+    expect(created.status).toBe(201);
+    expect((await created.json()) as object).toMatchObject({
+      thread: { id: "q1", anchor, anchorState: "orphaned" },
+    });
+    expect((await (await app.request(`/api/sessions/${id}/events?wait=0`)).json()) as object).toMatchObject({
+      event: "review-thread",
+      work: "question",
+      thread: "q1",
+      anchor,
+      anchorState: "orphaned",
+    });
+
+    const replay = await postJson(`/api/reviews/${id}/threads`, {
+      intent: "question",
+      anchor,
+      body: "What makes this immutable?",
+      ...source,
+      idempotencyKey: "quiz-ask-1",
+    });
+    expect(replay.status).toBe(200);
+    expect((await replay.json()) as object).toMatchObject({
+      thread: { id: "q1", anchorState: "orphaned" },
+      repeated: true,
+    });
+
+    const followup = await postJson(`/api/reviews/${id}/threads/q1/followups`, {
+      body: "And who freezes it?",
+      ...source,
+      idempotencyKey: "quiz-ask-followup",
+    });
+    expect(followup.status).toBe(201);
+    expect((await followup.json()) as object).toMatchObject({
+      thread: { id: "q2", replyTo: "q1", anchor, anchorState: "orphaned" },
+    });
+
+    const anchored = await postJson(`/api/reviews/${id}/threads`, {
+      intent: "question",
+      anchor: { section: "background", exact: "The old input could move while the report was open." },
+      body: "Why could it move?",
+      ...source,
+      idempotencyKey: "report-ask-1",
+    });
+    expect(anchored.status).toBe(201);
+    expect(((await anchored.json()) as { thread: Record<string, unknown> }).thread)
+      .not.toHaveProperty("anchorState");
+  });
+
   test("Comment escalation is explicit/idempotent, Ask is refused, and report response names a real newer revision", async () => {
     const { id } = await submittedReview();
     const source = { reportRevision: 1, headRevision: 1, headSha: "a".repeat(40) };

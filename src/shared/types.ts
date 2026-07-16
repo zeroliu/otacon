@@ -238,6 +238,12 @@ export interface ReviewThread {
   surface: "review";
   intent: "question" | "comment";
   anchor: Anchor;
+  /**
+   * "orphaned" from creation when the quoted selection could not be located
+   * in the report markdown (e.g. quiz prompts/options/feedback rendered from
+   * the quiz companion); the quote itself remains the conversation's context.
+   */
+  anchorState?: "orphaned";
   body: string;
   createdAt: string;
   /** Root conversation id; absent on the root turn itself. */
@@ -287,6 +293,8 @@ export interface ReviewThreadEvent {
   headRevision: number;
   headSha: string;
   anchor: Anchor;
+  /** "orphaned": the quote is not in the report markdown; don't search for it. */
+  anchorState?: "orphaned";
   body: string;
   remember?: { scope: ReviewKnowledgeScope };
   /** Self-contained ordered context; optional only for legacy queued events. */
