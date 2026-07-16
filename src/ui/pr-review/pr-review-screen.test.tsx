@@ -621,9 +621,10 @@ describe("PrReviewScreen", () => {
     const toolbar = host.querySelector('[role="toolbar"][aria-label="selection actions"]') as HTMLElement;
     await click(button(toolbar, "commentc"));
     const composer = host.querySelector('[role="dialog"][aria-label="comment composer"]') as HTMLElement;
-    // 720 + 48 + 300 overflows the 768px viewport, so the card pins above the
-    // selection instead of rendering below the fold: 700 - 8 - 300.
-    expect(composer.style.getPropertyValue("--cy")).toBe("392px");
+    // Shared plan-review placement (composerPlacement): 720 + 12 + 240
+    // overflows the 768px viewport, so the card pins above the selection
+    // instead of rendering below the fold: 700 - 240 - 12.
+    expect(composer.style.getPropertyValue("--cy")).toBe("448px");
   });
 
   test("turns selected report text into Ask or Comment threads, then escalates only from a Comment thread", async () => {

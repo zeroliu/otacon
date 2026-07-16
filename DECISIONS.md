@@ -5040,3 +5040,27 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** Anchors carry structured source positions, or generated surfaces
   (quiz questions, diagram nodes) get their own first-class anchor type that can
   re-locate within their owning artifact.
+
+## PR review adopts the docked selection bar and shared composer placement (2026-07-16)
+
+- **Decision:** Supersedes the contextual-bar half of "PR-review selection feedback
+  uses a two-stage comment-to-change flow (2026-07-14)": PR review now renders the
+  same docked Comment/Ask bar as plan review (the `contextual` placement mode and its
+  CSS are removed), and both surfaces pin the composer through one exported
+  `composerPlacement` helper plus shared `useKeyboardInsetVar`/`useSheetViewport`
+  hooks. The two-stage Ask/Comment → Conduct-code-change flow of that entry is
+  unchanged.
+- **Why:** The contextual bar hit the exact failure the docked design exists to avoid
+  — native selection popovers (iOS long-press callout, macOS Look-Up) land on the
+  selection and can't be suppressed — which was the 2026-07-14 entry's own revisit
+  trigger ("browsers make contextual selection placement unreliable"). And the
+  re-derived caller math had already drifted from the tuned plan-review numbers
+  (sheet breakpoint 600 vs 640, height guess 300 vs 240, gap 48px vs 12px, a fixed
+  202px edge clamp) while never wiring the keyboard inset, so the PR composer sat
+  visibly lower and its phone sheet hid under the on-screen keyboard. One shared
+  helper makes future tuning land on both surfaces. Cost accepted: PR review's sheet
+  breakpoint moves 600 → 640, so 600–639px widths (the tablet band plan review
+  already sheets) switch from popover to bottom sheet.
+- **Revisit when:** PR review needs a selection affordance the docked bar can't
+  carry, or the surfaces' placement needs genuinely diverge (at which point the
+  divergence belongs as a parameter of the shared helper, not a re-derived copy).

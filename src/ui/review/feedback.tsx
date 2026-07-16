@@ -1,9 +1,9 @@
 // The selection instruments (review UI): a docked Comment/Ask bar that
 // appears when review text is selected, plus the anchored composer both actions
-// open. Plan review docks the bar at a fixed bottom edge so it never competes
-// with the OS selection/dictionary popover; PR review reuses the instrument in
-// a contextual placement next to selected prose or code. Comment delivery is
-// likewise configurable: the plan can stack a draft into its drawer, while a
+// open. Plan review and PR review dock the bar at the same fixed bottom edge so
+// it never competes with the OS selection/dictionary popover, and both pin the
+// composer through the shared `composerPlacement`. Comment delivery is
+// configurable: the plan can stack a draft into its drawer, while a
 // PR creates a conversation thread immediately. The composer pins where it
 // opened — its anchor is already captured, so the live selection no longer
 // matters once it is open.
@@ -60,42 +60,15 @@ export function SelectionBar({
   selection,
   onComment,
   onAsk,
-  placement = "docked",
 }: {
   selection: CapturedSelection;
   onComment: () => void;
   onAsk: () => void;
-  /** Plan review stays docked; PR review places the same actions beside prose/code selection. */
-  placement?: "docked" | "contextual";
 }) {
-  const { anchor, rect } = selection;
-  const viewportWidth = typeof window === "undefined" ? 1024 : window.innerWidth;
-  const viewportHeight = typeof window === "undefined" ? 768 : window.innerHeight;
-  const contextual = placement === "contextual";
-  const above = contextual && rect.bottom + 52 > viewportHeight;
-  // The full slug + two actions measure about 280px; keep half plus a 12px
-  // gutter inside the viewport, while still degrading safely below 304px.
-  const contextualEdge = Math.min(152, viewportWidth / 2);
-  const x = Math.max(
-    contextualEdge,
-    Math.min(viewportWidth - contextualEdge, rect.left + rect.width / 2),
-  );
-  // A drag that auto-scrolls can leave the selection spanning past the
-  // viewport (rect.top negative, rect.bottom beyond the fold); clamp the bar
-  // fully on screen in both directions — 52 keeps its ~36px height plus a
-  // gutter visible when flipped above.
-  const y = Math.max(52, Math.min(viewportHeight - 8, above ? rect.top - 8 : rect.bottom + 8));
-  const style = contextual
-    ? ({ "--sx": `${x}px`, "--sy": `${y}px` } as CSSProperties)
-    : undefined;
+  const { anchor } = selection;
   return (
     <div
-      className={[
-        "sel-bar",
-        contextual && "sel-bar-contextual",
-        above && "is-above",
-      ].filter(Boolean).join(" ")}
-      style={style}
+      className="sel-bar"
       role="toolbar"
       aria-label="selection actions"
       // preventDefault keeps the text selection alive through the click
@@ -111,6 +84,49 @@ export function SelectionBar({
       </button>
     </div>
   );
+}
+
+// The phone face: below this width the composer (and plan review's section ⋯
+// menu) docks as a bottom sheet instead of a floating popover. Kept in
+// lockstep with the CSS `max-width: 639px` breakpoint that swaps the
+// bar/switcher faces (styles.css) — so the whole phone control surface (chips,
+// sticky bar, sheets) flips together; a tablet-band gap where the visual face
+// is the phone's but a tap opened a desktop popover anchored off-thumb would
+// otherwise sit at 560–639px.
+export const SHEET_VIEWPORT = 640;
+
+const COMPOSER_WIDTH = 380;
+const COMPOSER_GUESS_HEIGHT = 240;
+
+/**
+ * The composer's viewport pin for a selection rect, or null for the phone
+ * bottom sheet. Centers on the selection, clamped a 12px gutter inside the
+ * viewport; opens just below the selection, flipping above when the guessed
+ * card height would overflow the fold. The guess only picks below vs above —
+ * the rendered card self-corrects its exact pin (the nudge clamp in Composer).
+ * Pure (viewport passed in) so it unit-tests without a DOM. Both review
+ * surfaces MUST place through this helper — its numbers were tuned together
+ * with the phone face and drifted apart once when PR review re-derived them.
+ */
+export function composerPlacement(
+  rect: { top: number; bottom: number; left: number; width: number },
+  viewport: { width: number; height: number },
+): { x: number; y: number } | null {
+  if (viewport.width < SHEET_VIEWPORT) {
+    // Selection popovers don't fit a phone; the composer becomes a sheet.
+    return null;
+  }
+  const width = Math.min(COMPOSER_WIDTH, viewport.width - 24);
+  const x = Math.min(
+    Math.max(rect.left + rect.width / 2, width / 2 + 12),
+    viewport.width - width / 2 - 12,
+  );
+  const below = rect.bottom + 12;
+  const y =
+    below + COMPOSER_GUESS_HEIGHT > viewport.height
+      ? Math.max(12, rect.top - COMPOSER_GUESS_HEIGHT - 12)
+      : below;
+  return { x, y };
 }
 
 export interface ComposerState {

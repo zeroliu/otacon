@@ -1,8 +1,9 @@
 // Keyboard-aware bottom sheets (review UI): on a phone the on-screen
 // keyboard slides over the bottom-docked composer/menu/approve sheets, burying
-// their Send buttons, and the page behind keeps scrolling while you type. Two
-// hooks fix both: `useKeyboardInset` measures how much of the layout the
-// keyboard now covers (so a sheet can ride above it via a CSS var), and
+// their Send buttons, and the page behind keeps scrolling while you type. The
+// hooks here fix both: `useKeyboardInset` measures how much of the layout the
+// keyboard now covers, `useKeyboardInsetVar` publishes that as the CSS var
+// sheets ride, `useSheetViewport` tracks the phone breakpoint, and
 // `useScrollLock` pins the page behind an open sheet. The math/DOM primitives
 // are pulled out as pure functions so they unit-test without a real
 // VisualViewport or a live React tree (the same split as compact.ts).
@@ -49,6 +50,43 @@ export function useKeyboardInset(): number {
     };
   }, []);
   return inset;
+}
+
+/**
+ * Publish the live keyboard inset as the `--kb-inset` CSS var on the root
+ * element (removed on unmount). Bottom sheets style their `bottom` with
+ * `var(--kb-inset, 0px)` (styles.css), so any screen that mounts this hook
+ * gets keyboard-riding sheets; the fallback keeps them resting when no
+ * screen publishes the var.
+ */
+export function useKeyboardInsetVar(): void {
+  const inset = useKeyboardInset();
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty("--kb-inset", `${inset}px`);
+    return () => {
+      root.style.removeProperty("--kb-inset");
+    };
+  }, [inset]);
+}
+
+/**
+ * True below `breakpoint` px, tracked reactively via matchMedia so the value
+ * follows rotations and window resizes. Callers gate phone-sheet concerns
+ * (the scroll lock, bottom-sheet placement) on it; pass a breakpoint kept in
+ * lockstep with the CSS face-swap media query (SHEET_VIEWPORT, feedback.tsx)
+ * so the lock engages exactly when sheets are bottom-docked.
+ */
+export function useSheetViewport(breakpoint: number): boolean {
+  const [phone, setPhone] = useState(() => window.innerWidth < breakpoint);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${breakpoint - 1}px)`);
+    const update = () => setPhone(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, [breakpoint]);
+  return phone;
 }
 
 /**
