@@ -1426,7 +1426,9 @@ its exact action owner can release it.
   fixed bottom edge instead of floating over the selection: the native selection and
   dictionary popovers (the iOS long-press callout, the macOS force-click Look-Up) can't
   be suppressed on the web and land right on the selection, so the bar coexists by
-  staying out of that zone on both phone and desktop. It only appears where the anchor
+  staying out of that zone on both phone and desktop. This docked bar, the composer
+  placement math, and the phone bottom-sheet/keyboard-inset behavior are one shared
+  implementation used identically by plan review and PR review. It only appears where the anchor
   can survive: selections touching renderer chrome (mermaid SVG labels, fence captions,
   slug anchors, size badges — text that exists only in the rendered DOM, never in the
   plan markdown the agent reads) get no bar. Desktop keeps the `c`/`q` shortcuts.
@@ -1711,9 +1713,12 @@ durable. Replaying the same idempotency key rebases that known verdict onto the 
 profile and CASes the managed patch again, preserving intervening user prose instead of
 trapping the browser on the answer-time hash.
 
-Selecting report prose or text inside a rendered code fence opens the same compact contextual actions used
-by plan review: **Ask** or **Comment**. There is no direct code-mutation intent at the
-selection. The shared anchored composer can optionally remember either exchange in
+Selecting report prose or text inside a rendered code fence opens the same docked
+Comment/Ask bar and anchored composer as plan review — one shared placement strategy:
+the bar docks at the fixed bottom edge (out of the native selection-popover zone), the
+composer pins by the shared placement math (below the selection, flipping above at the
+fold), and on phones both become keyboard-aware bottom sheets. There is no direct
+code-mutation intent at the selection. The shared anchored composer can optionally remember either exchange in
 **User** or **Project** knowledge (Project is the initial scope). Submitted items render
 as conversation cards in a desktop rail and a phone drawer, including the selected quote,
 every reviewer turn paired with its agent response, and the exact knowledge destination

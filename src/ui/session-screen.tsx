@@ -48,13 +48,19 @@ import { DiffView } from "./review/diff";
 import type { PendingComment } from "./review/drawer";
 import { CommentDrawer } from "./review/drawer";
 import type { ComposerState } from "./review/feedback";
-import { Composer, SelectionBar, useSelection } from "./review/feedback";
+import {
+  Composer,
+  composerPlacement,
+  SelectionBar,
+  SHEET_VIEWPORT,
+  useSelection,
+} from "./review/feedback";
 import { ReviewHeader } from "./review/header";
 import type { InterviewTarget } from "./review/interview";
 import { InterviewPanel } from "./review/interview";
 import { useInterviewOpen } from "./review/interview-open";
 import { PromptCard } from "./review/prompt-card";
-import { useKeyboardInset, useScrollLock } from "./review/keyboard";
+import { useKeyboardInsetVar, useScrollLock, useSheetViewport } from "./review/keyboard";
 import { ActivityDock } from "./review/activity-dock";
 import { ThreadsRail } from "./review/rail";
 import type { SectionMenuState } from "./review/section-menu";
@@ -127,16 +133,6 @@ class RendererBoundary extends Component<{ children: ReactNode }, { failed: bool
     );
   }
 }
-
-const COMPOSER_WIDTH = 380;
-const COMPOSER_GUESS_HEIGHT = 240;
-// The phone face: below this width the composer and the section ⋯ menu dock as
-// bottom sheets instead of floating popovers. Kept in lockstep with the CSS
-// `max-width: 639px` breakpoint that swaps the bar/switcher faces (styles.css)
-// — so the whole phone control surface (chips, sticky bar, sheets) flips
-// together; a tablet-band gap where the visual face is the phone's but a tap
-// opened a desktop popover anchored off-thumb would otherwise sit at 560–639px.
-const SHEET_VIEWPORT = 640;
 
 function PrReviewLoop({
   session,
@@ -293,28 +289,10 @@ function ReviewLoop({
     composer === null && menu === null && view === "clean" && !readOnly,
   );
 
-  // Keyboard-aware bottom sheets (review UI). The keyboard inset publishes
-  // as a CSS var the sheets add to their `bottom`, so they ride above the
-  // keyboard as it animates; it stays 0 on desktop (no on-screen keyboard).
-  const kbInset = useKeyboardInset();
-  useEffect(() => {
-    const root = document.documentElement;
-    root.style.setProperty("--kb-inset", `${kbInset}px`);
-    return () => {
-      root.style.removeProperty("--kb-inset");
-    };
-  }, [kbInset]);
-  // Scroll-lock + the keyboard inset are phone-sheet concerns; desktop popovers
-  // need neither. Track the breakpoint reactively (matches the CSS max-width:
-  // 639px face swap) so the lock engages exactly when sheets are bottom-docked.
-  const [phone, setPhone] = useState(() => window.innerWidth < SHEET_VIEWPORT);
-  useEffect(() => {
-    const mq = window.matchMedia(`(max-width: ${SHEET_VIEWPORT - 1}px)`);
-    const update = () => setPhone(mq.matches);
-    update();
-    mq.addEventListener("change", update);
-    return () => mq.removeEventListener("change", update);
-  }, []);
+  // Keyboard-aware bottom sheets (review UI): publish the keyboard inset the
+  // sheets ride, and track the phone breakpoint that gates the scroll lock.
+  useKeyboardInsetVar();
+  const phone = useSheetViewport(SHEET_VIEWPORT);
   // One shared lock for every bottom sheet (composer, section ⋯ menu, approve),
   // not just the composer: any open sheet freezes the plan behind it so the
   // page stops drifting under the keyboard while typing. The gate mirrors the
@@ -477,22 +455,11 @@ function ReviewLoop({
 
   const openComposer = useCallback((mode: "comment" | "ask", sel: CapturedSelection) => {
     composerSeq.current += 1;
-    if (window.innerWidth < SHEET_VIEWPORT) {
-      // Selection popovers don't fit a phone; the composer becomes a sheet.
-      setComposer({ mode, anchor: sel.anchor, at: null });
-      return;
-    }
-    const width = Math.min(COMPOSER_WIDTH, window.innerWidth - 24);
-    const x = Math.min(
-      Math.max(sel.rect.left + sel.rect.width / 2, width / 2 + 12),
-      window.innerWidth - width / 2 - 12,
-    );
-    const below = sel.rect.bottom + 12;
-    const y =
-      below + COMPOSER_GUESS_HEIGHT > window.innerHeight
-        ? Math.max(12, sel.rect.top - COMPOSER_GUESS_HEIGHT - 12)
-        : below;
-    setComposer({ mode, anchor: sel.anchor, at: { x, y } });
+    setComposer({
+      mode,
+      anchor: sel.anchor,
+      at: composerPlacement(sel.rect, { width: window.innerWidth, height: window.innerHeight }),
+    });
   }, []);
 
   // Keyboard: c = comment on selection, q = ask, j/k = jump changed sections

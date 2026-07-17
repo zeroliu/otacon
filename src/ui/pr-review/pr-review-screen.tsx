@@ -4,9 +4,9 @@ import type { CSSProperties, ReactNode, RefObject } from "react";
 import wordmarkUrl from "../otacon.svg";
 import { CodeFence } from "../plan/code";
 import type { CapturedSelection } from "../review/anchor";
-import { Composer, SelectionBar, useSelection } from "../review/feedback";
+import { Composer, composerPlacement, SelectionBar, SHEET_VIEWPORT, useSelection } from "../review/feedback";
 import type { ComposerState } from "../review/feedback";
-import { useScrollLock } from "../review/keyboard";
+import { useKeyboardInsetVar, useScrollLock, useSheetViewport } from "../review/keyboard";
 import { isDesktopWidth } from "../session-sheet-state";
 import type {
   CodeExcerpt,
@@ -603,7 +603,13 @@ export function PrReviewScreen({
     mobileNavOpen && "is-mobile-nav-open",
   ].filter(Boolean).join(" ");
 
-  useScrollLock(mobileNavOpen);
+  // Keyboard-aware bottom sheets, same wiring as plan review: publish the
+  // keyboard inset the composer sheet rides, and lock the page behind the
+  // phone-width sheet (or the mobile nav drawer) so it stops drifting under
+  // the keyboard while typing.
+  useKeyboardInsetVar();
+  const phone = useSheetViewport(SHEET_VIEWPORT);
+  useScrollLock(mobileNavOpen || (phone && composer !== null));
 
   useLayoutEffect(() => {
     if (mobileNavOpen) collapseRef.current?.focus();
@@ -641,25 +647,13 @@ export function PrReviewScreen({
 
   const openComposer = (mode: ComposerState["mode"]): void => {
     if (selection === null || selection === undefined || state.closed) return;
-    const narrow = typeof window !== "undefined" && window.innerWidth < 600;
-    // .composer is a fixed 380px-wide card centered on --cx whose top sits at
-    // --cy; a selection near a viewport edge would otherwise pin it off
-    // screen. Mirror SelectionBar: flip above short-bottomed selections, then
-    // clamp both axes to the viewport.
-    const composerHeight = 300;
-    const edge = Math.min(202, window.innerWidth / 2);
-    const x = Math.max(
-      edge,
-      Math.min(window.innerWidth - edge, selection.rect.left + selection.rect.width / 2),
-    );
-    const below = selection.rect.bottom + 48;
-    const y = below + composerHeight > window.innerHeight
-      ? Math.max(12, selection.rect.top - 8 - composerHeight)
-      : below;
     setComposer({
       mode,
       anchor: selection.anchor,
-      at: narrow ? null : { x, y },
+      at: composerPlacement(selection.rect, {
+        width: window.innerWidth,
+        height: window.innerHeight,
+      }),
     });
   };
   const sendThread = async (
@@ -787,7 +781,6 @@ export function PrReviewScreen({
       {feedbackEnabled && selection !== null && selection !== undefined && composer === null && !state.closed && (
         <SelectionBar
           selection={selection}
-          placement="contextual"
           onComment={() => openComposer("comment")}
           onAsk={() => openComposer("ask")}
         />

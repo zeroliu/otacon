@@ -1595,9 +1595,8 @@ code {
  * selection popovers (iOS long-press callout, macOS force-click Look-Up) can't
  * be suppressed on the web and land right over the selection, so the bar docks
  * at a fixed bottom edge — out of that zone on both platforms — instead of
- * floating over plan text. PR review opts into the contextual modifier below
- * so its selection stays visibly tied to prose or code. It keeps the inverted
- * paper-on-ink treatment in both placements. */
+ * floating over the selected text. Plan review and PR review share this one
+ * docked placement, with the inverted paper-on-ink treatment. */
 .sel-bar {
   position: fixed;
   z-index: 40;
@@ -1616,36 +1615,11 @@ code {
   user-select: none;
 }
 
-.sel-bar-contextual {
-  left: var(--sx);
-  top: var(--sy);
-  bottom: auto;
-}
-
-.sel-bar-contextual.is-above {
-  transform: translate(-50%, -100%);
-}
-
 @keyframes sel-bar-in {
   from {
     opacity: 0;
     transform: translateX(-50%) translateY(8px);
   }
-}
-
-@keyframes sel-bar-contextual-in {
-  from {
-    opacity: 0;
-    transform: translateX(-50%) translateY(5px);
-  }
-}
-
-.sel-bar-contextual {
-  animation-name: sel-bar-contextual-in;
-}
-
-.sel-bar-contextual.is-above {
-  animation-name: none;
 }
 
 .sel-slug {
@@ -4279,10 +4253,6 @@ code {
    * docks higher to clear it and stay in thumb range above it. */
   .sel-bar {
     bottom: calc(84px + env(safe-area-inset-bottom));
-  }
-
-  .sel-bar-contextual {
-    bottom: auto;
   }
 
   /* The bar compacts to glyph telemetry: ✎ alone, ◆N alone, review folded
