@@ -78,7 +78,11 @@ export function useKeyboardInsetVar(): void {
  * so the lock engages exactly when sheets are bottom-docked.
  */
 export function useSheetViewport(breakpoint: number): boolean {
-  const [phone, setPhone] = useState(() => window.innerWidth < breakpoint);
+  // Guard the initializer only: it runs wherever the component renders (a
+  // window-less environment included), while the effect below is browser-only.
+  const [phone, setPhone] = useState(
+    () => typeof window !== "undefined" && window.innerWidth < breakpoint,
+  );
   useEffect(() => {
     const mq = window.matchMedia(`(max-width: ${breakpoint - 1}px)`);
     const update = () => setPhone(mq.matches);
