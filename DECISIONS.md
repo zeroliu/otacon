@@ -5263,3 +5263,33 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   structure beyond free-form markdown (schemas, includes, per-branch scoping); teams
   need shared rather than user-private conventions (a project-visible location); or
   accreted prompt files grow large enough to need their own curation pass.
+
+## Review V2 bootstraps PRs created outside Plan V2 (2026-07-17)
+
+- **Decision:** A GitHub PR absent from every Plan V2 `implementation.md` selects an
+  external Review V2 mode instead of refusing. The card resolves the PR from its target
+  clone, reconstructs a unique linear open stack from exact base/head repository+ref
+  edges, and asks for an explicit order when that graph is ambiguous. It creates a
+  timestamped session with a `review-brief.md`, exact ordered head-SHA vector, and the
+  usual four-part per-PR packets. A fresh clean-context read-only verifier checks each
+  packet against the exact diff; one correction and fresh retry are allowed before a
+  non-clean packet blocks the walkthrough. Exact active head vectors resume, while
+  changed or archived vectors create new historical sessions. External author voice
+  distinguishes source-backed intent from inference. Closed, merged, forked, and
+  insufficient-permission PRs are read-only. Standalone writable PRs update by
+  fast-forward push; Graphite stacks import/restack and update existing PRs only; a
+  non-Graphite descendant rewrite requires explicit confirmation and SHA-pinned
+  force-with-lease. Every mutation revalidates heads and permissions, reruns gates and
+  packet verification, and preserves open/closed/draft/ready state. Close-out reconciles
+  explicit PR/issue promises against delivery; inferred rationale is not a promise
+  unless the user adopts it. The existing Plan V2 artifact path remains unchanged.
+- **Why:** A live authored walkthrough is useful for any PR, not only one produced by
+  Otacon's Plan V2 implementer. The previous artifact requirement protected review
+  quality but incorrectly made provenance a capability gate. External mode rebuilds
+  the missing context from inspectable PR evidence and restores independent packet
+  verification without inventing a historical plan. Exact-head sessions and
+  lease-protected updates keep that broader entry point reviewable and safe.
+- **Revisit when:** GitHub exposes a durable stack identity instead of branch-topology
+  inference; external sessions need a central registry; verifier latency outweighs its
+  confidence benefit; or non-Graphite stack rewrites should move to a dedicated import
+  workflow.

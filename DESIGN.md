@@ -2328,10 +2328,12 @@ registry, queue, and browser, but neither card teaches the other kind's commands
 Three prototype skills ship alongside them: `skills/otacon-plan-v2/`, the Plan V2 live
 co-design planning protocol, `skills/otacon-implement-v2/`, the Plan V2 stacked
 implementation protocol, and `skills/otacon-review-v2/`, the Plan V2 PR review
-walkthrough. All run entirely agent-side — conversation, session files
+walkthrough plus the entry point for PRs created elsewhere. All run entirely
+agent-side — conversation, session files
 under `~/.otacon/v2-sessions/<topic-slug>-<UTC timestamp>[-N]/` (created without
-reusing an existing directory), and fresh native subagents — and never invoke the
-otacon CLI, daemon, or UI. Plan-v2 grows `design.md` with the user and synthesizes the
+reusing an existing directory), plus fresh native subagents where specified — and never
+invoke the otacon CLI, daemon, or UI. Plan-v2 grows `design.md` with the user and
+synthesizes the
 `polished.md` handoff; its plan-only write gate also permits exact, user-approved writes
 to the private repo prompt directory that the same card offers to scaffold. Implement-v2
 consumes ONLY that `polished.md` (never `design.md`)
@@ -2341,26 +2343,49 @@ review packet (`packets/pr-<N>.md`: decision→diff mapping, boundary report, be
 evidence, risk spots) and an independent clean-context verifier subagent checks the
 packet's claims before the next node begins, with the orchestrator writing
 `packets/pr-<N>-verify.md` and a live `implementation.md` the review card
-consumes. Review-v2 is the human-facing pass over that stack: per PR node, in stack
-order, it runs a live authored walkthrough — the agent speaks as the PR's author, opens
-with a per-PR roadmap, brings hunks/tests/demos/traces just-in-time, and gives every
-packet risk hunk eyes-on treatment; it never pastes the packet or any written review
-report (the packet is prepared material, not the deliverable). The user then issues a
-per-node verdict: approve; request changes (the agent checks out the node's branch,
-edits directly, keeps gates green, `gt restack`s descendants — resolving conflicts via
-`gt continue`, never leaving the worktree mid-rebase — refreshes affected packets, and
-resubmits via `gt submit --stack --draft --no-edit` when a remote exists, noting a
-local-only stack otherwise); or escalate a plan-level defect back to the plan judgment
-— amended with the user in-conversation, or fully re-planned in a fresh plan-v2 session
-— rather than patching it silently. Per-node state and a session phase
+consumes.
+
+Review-v2 accepts either that Plan V2 handoff or a GitHub PR from the current target
+repository. A PR absent from every `implementation.md` selects external mode rather
+than refusing. External mode resolves exact PR metadata and permissions with `gh`,
+then reconstructs the unique open linear stack containing the selected PR from exact
+base-repository/ref → head-repository/ref edges. No edges means a standalone PR;
+branches, cycles, duplicate heads, cross-repository edges, and other ambiguities require
+an explicit user-supplied order. It creates a timestamped collision-safe review session
+whose `review-brief.md` records the ordered PR/head-SHA vector, explicit promises from
+PR/issue/commit text, E2E expectations, and clearly labeled inferred rationale. The
+orchestrator authors the usual four-part packet for each PR, then a fresh clean-context
+read-only verifier independently checks the exact diff and packet. One correction and
+fresh retry is allowed; a second non-clean verdict blocks the walkthrough. Exact active
+head vectors resume; changed or archived vectors start a new session so review history
+is immutable. Closed, merged, forked, and insufficient-permission PRs are reviewable
+but read-only.
+
+In either mode, each PR gets a live authored walkthrough: the agent opens with a
+per-PR roadmap, brings hunks/tests/demos/traces just-in-time, and gives every risk hunk
+eyes-on treatment; it never pastes the packet or a written report. Plan V2 uses direct
+author voice. External reviews present explicit source rationale as fact and label
+reconstructed intent as inference. The user then issues a per-node verdict: approve;
+request changes; or escalate an intent-level judgment back into the source artifact
+(`polished.md` or `review-brief.md`) rather than patching it silently. Plan V2
+changes keep the existing Graphite restack and draft refresh path. A writable standalone
+external PR fast-forward-pushes its existing head ref. An external stack imports and
+updates existing PRs through Graphite when safe
+(`gt get --remote-upstack --unfrozen`, then
+`gt submit --stack --update-only --no-edit`); the non-Graphite fallback requires
+explicit confirmation before rebasing descendants and uses SHA-pinned
+`--force-with-lease`. Every mutation revalidates remote heads and permissions, runs
+gates, refreshes and re-verifies affected packets, and preserves merge/open/draft/ready
+state. Per-node state and a session phase
 (nodes-in-review → all-approved → e2e-done → reconciled → archived) persist in
 `review-state.md` (resume continues at the recorded phase and first unapproved node;
-skipped nodes surface at reconciliation, a missing worktree refuses at locate). After
-every node is approved the session closes out: a live whole-feature E2E demo against
-the plan's expectations, an interactive promised-vs-delivered reconciliation whose gap
-dispositions are the user's rulings (accepted gaps written back into `polished.md` as
-Known gaps), and a mechanical `closeout.md` archive confirmed in one line — PRs stay
-drafts; merging is the user's own act. All three cards adapt to per-repo rules through
+skipped Plan V2 nodes surface at reconciliation, a missing worktree refuses at locate).
+After every node is approved the session closes out: a live whole-feature E2E demo
+against the source artifact, an interactive promised-vs-delivered reconciliation whose
+gap dispositions are the user's rulings (external inferences are not promises unless
+the user adopts them), and a mechanical `closeout.md` archive confirmed in one line.
+PR state remains unchanged and merging is the user's own act. All three cards adapt to
+per-repo rules through
 user-private **repo custom prompts**: at start each card resolves the repo identity from
 `git remote get-url origin` (normalized `owner__repo`, ssh and https forms; repo-root
 directory name when remoteless) and reads `~/.otacon/prompts/<id>/common.md` plus its

@@ -437,35 +437,63 @@ describe("reviewV2SkillMd", () => {
     expect(text).not.toContain("Stop hook");
   });
 
-  test("locates the session, requires its artifacts, and resumes from review-state.md", () => {
+  test("selects Plan V2 artifacts when present and external PR mode otherwise", () => {
     expect(text).toContain("~/.otacon/v2-sessions/*/implementation.md");
-    // All three inputs are required; a missing one refuses with a pointer at
-    // the producing skill, degrading gracefully when it is not installed.
+    // A matched Plan V2 session keeps its complete artifact contract.
     expect(text).toContain("polished.md");
     expect(text).toContain("implementation.md");
     expect(text).toContain("packets/pr-<N>.md");
-    expect(text).toContain("refuse to run");
+    expect(text).toContain("**Plan V2 mode**");
     expect(text).toContain("/otacon-implement-v2` (if installed)");
-    expect(text).toContain("Never improvise a review from the\ndiffs alone");
-    // implementation.md teaches the stack shape; review-state.md carries resume.
-    expect(text).toContain("verifier verdict, PR URL");
+    expect(text).toContain("verifier verdicts");
     expect(text).toContain("deviation rulings");
+    // A valid PR with no Plan V2 match bootstraps instead of refusing.
+    expect(text).toContain("**external PR mode**");
+    expect(text).toContain("missing Plan V2 match is NOT an error");
+    expect(text).toContain("current clone's canonical GitHub origin must");
+    expect(text).not.toContain("Never improvise a review from the\ndiffs alone");
+  });
+
+  test("prepares and resumes an exact-head external review session", () => {
+    expect(text).toContain("Query every open PR in the base repository with\n   pagination");
+    expect(text).toContain("unique linear chain");
+    expect(text).toContain("No edges means one standalone PR");
+    expect(text).toContain("branch, cycle, duplicate head, cross-repository edge");
+    expect(text).toContain("ask for an explicit order");
+    expect(text).toContain("review-<owner>-<repo>-pr-<number>-<UTC timestamp>[-N]");
+    expect(text).toContain("ordered exact\n   head-SHA vector");
+    expect(text).toContain("new directory so historical reviews remain\n   immutable");
+    expect(text).toContain("review-brief.md");
+    expect(text).toContain("Label every inference");
+    expect(text).toContain("decision/intent→diff mapping");
+    // External packets recover implementation-time independence with a fresh
+    // read-only verifier and a bounded retry.
+    expect(text).toContain("fresh clean-context verifier");
+    expect(text).toContain("read-only against the project and writes nothing");
+    expect(text).toContain("one correction and one fresh\n   re-verification");
+    expect(text).toContain("second non-clean verdict blocks the walkthrough");
+    expect(text).toContain("Closed,\n   merged, forked, or insufficient-permission PRs");
+    expect(text).toContain("maintainerCanModify");
+    // review-state.md carries resume for both source modes.
     expect(text).toContain("review-state.md");
+    expect(text).toContain("the source mode, prompt files, worktree");
+    expect(text).toContain("write/read-only status and reason");
     expect(text).toContain("pending / walked-through / approved /\nchanges-applied / escalated");
     expect(text).toContain("first node\nthat is not yet approved");
-    // Close-out progress is resumable too, and degenerate stacks are handled:
-    // skipped nodes route to reconciliation, a lost worktree refuses early.
     expect(text).toContain("nodes-in-review → all-approved → e2e-done →\nreconciled → archived");
-    expect(text).toContain("skipped (no branch, no packet)");
+    expect(text).toContain("skipped node");
     expect(text).toContain("promised-but-undelivered");
     expect(text).toContain("missing or pruned, refuse with the fix");
   });
 
   test("the walkthrough is authored dialogue, never a pasted report (D32)", () => {
-    // The author voice with the verified packet as speaker notes.
+    // Plan V2 keeps author voice; external reviews distinguish evidence from
+    // reconstructed intent.
     expect(text).toContain("SPEAK AS THE PR'S AUTHOR");
+    expect(text).toContain("speak from the author's perspective");
+    expect(text).toContain('"The PR says…" versus "My read of why this lives here is…"');
     expect(text).toContain("packets/pr-<N>-verify.md");
-    expect(text).toContain("prepared material and coverage checklist");
+    expect(text).toContain("prepared material and coverage\nchecklists");
     expect(text).toContain("never the deliverable");
     // The anti-wall-of-text rule is explicit and prohibitive.
     expect(text).toContain("dialogue, never a report");
@@ -488,7 +516,7 @@ describe("reviewV2SkillMd", () => {
     expect(text).toContain("you answer and own as the author");
   });
 
-  test("verdicts apply changes through the stack or escalate plan defects (D31 step 4)", () => {
+  test("keeps the Plan V2 change and escalation path (D31 step 4)", () => {
     expect(text).toContain("**approve** / **request changes** / **escalate**");
     // Request changes: check out the right branch, direct edits, restack with
     // a conflict path, gates, packet refresh, draft resubmission (skipped
@@ -507,15 +535,40 @@ describe("reviewV2SkillMd", () => {
     expect(text).toContain("local-only");
     expect(text).toContain("Record what changed and why");
     expect(text).toContain("resume the walkthrough at the point of change");
-    // Escalation reopens the plan judgment in-conversation (plan-v2 has no
-    // amend mode; a fresh planning session is only for full re-planning).
-    expect(text).toContain("plan-level judgment");
+    // Escalation reopens the source judgment in-conversation.
+    expect(text).toContain("intent-level judgment");
     expect(text).toContain("do NOT patch it silently");
-    expect(text).toContain("amend `polished.md` together");
+    expect(text).toContain("`polished.md` for Plan V2");
+    expect(text).toContain("`review-brief.md` for an external review");
     expect(text).toContain("changes-requested");
-    expect(text).toContain("full re-planning");
+    expect(text).toContain("full re-planning can route");
     expect(text).toContain("/otacon-plan-v2` (if installed)");
-    expect(text).toContain("consumes the existing");
+    expect(text).toContain("external mode never invents a missing plan");
+  });
+
+  test("updates standalone external PRs and restacks external chains safely", () => {
+    // Every mutation revalidates the exact remote state first.
+    expect(text).toContain("external mode, immediately before any\nmutation, re-resolve every remote head and permission");
+    expect(text).toContain("unexpected SHA or\ntopology change");
+    // Standalone updates are fast-forward-only.
+    expect(text).toContain("writable standalone same-repository PR");
+    expect(text).toContain("fast-forward push `HEAD:<head-ref>`");
+    expect(text).toContain("Never force-push it");
+    // Graphite can import an existing remote stack and updates only its
+    // existing PRs without changing draft/ready state.
+    expect(text).toContain("Graphite-initialized repository");
+    expect(text).toContain("gt get <selected-PR> --remote-upstack --unfrozen");
+    expect(text).toContain("gt submit --stack --update-only --no-edit");
+    expect(text).toContain("Never initialize Graphite or\n   create a PR");
+    // A non-Graphite stack requires explicit rewrite authority and pins every
+    // force-with-lease to the head reviewed.
+    expect(text).toContain("ask once for explicit confirmation");
+    expect(text).toContain("--force-with-lease=<ref>:<recorded-sha>");
+    expect(text).toContain("without it, mutate\n   nothing");
+    expect(text).toContain("mismatch or conflict stops");
+    expect(text).toContain("Rerun gates on every affected node");
+    expect(text).toContain("re-verify them");
+    expect(text).toContain("Preserve all PR draft/ready\n   states");
   });
 
   test("closes out with a live E2E demo, interactive reconciliation, and a one-line archive (D33)", () => {
@@ -530,8 +583,10 @@ describe("reviewV2SkillMd", () => {
     expect(text).toContain("USER's ruling");
     expect(text).toContain("known gap");
     expect(text).toContain("follow-up");
-    expect(text).toContain("back into `polished.md` as a Known gaps");
-    expect(text).toContain("what actually shipped, not what was\nhoped");
+    expect(text).toContain("the explicit\nPR/issue promises in `review-brief.md`");
+    expect(text).toContain("external inferences are not promises unless the user\nadopts them");
+    expect(text).toContain("back into the source artifact as a Known gaps");
+    expect(text).toContain("archive describes what actually shipped");
     // Close-out progress is phase-tracked for resume.
     expect(text).toContain("all-approved → e2e-done → reconciled → archived");
     // The archive is mechanical: no forced dialogue, one confirmation line.
@@ -539,13 +594,15 @@ describe("reviewV2SkillMd", () => {
     expect(text).toContain("participation theater");
     expect(text).toContain("closeout.md");
     expect(text).toContain("confirm to the user in ONE line");
+    expect(text).toContain("PR\nstate remains unchanged");
   });
 
-  test("hard rails: draft-only, stack-only, orchestrator-owned session writes, green gates", () => {
-    expect(text).toContain("Never merge, never mark ready");
+  test("hard rails preserve PR state and contain writes to the resolved stack", () => {
+    expect(text).toContain("Never merge or change review state");
+    expect(text).toContain("Never merge, close, publish, mark\n  draft, or mark ready");
     expect(text).toContain("merging is the user's own act");
     expect(text).toContain("~/.otacon/worktrees/<slug>");
-    expect(text).toContain("otacon/v2-<slug>-pr<N>-<short>");
+    expect(text).toContain("branches recorded in\n  `review-state.md`");
     expect(text).toContain("never any other branch or checkout");
     expect(text).toContain("Session-dir writes are yours");
     expect(text).toContain("Gates stay green");
@@ -564,7 +621,7 @@ describe("reviewV2SkillMd", () => {
     // Precedence: prompt beats defaults, rails never yield, conflicts surface.
     expect(flat).toContain("the custom prompt wins");
     expect(flat).toContain(
-      "never merge or mark ready, gates green after every change, stack-only branch touches",
+      "never merge or change review state, gates green after every change, resolved-stack-only branch touches",
     );
     expect(flat).toContain("surfaced to the user, never followed silently");
     // Silence → ask → offer to append; load recording; no-dir no-op.
@@ -580,7 +637,7 @@ describe("reviewV2SkillMd", () => {
     expect(flat).toContain("a refreshed body must satisfy the same law the original did");
     // Close-out reconciliation walks prompt-defined anchor artifacts too.
     expect(flat).toContain(
-      "anchor artifacts the repo custom prompt defines — e.g. a linked issue's success criteria",
+      "linked issue's success criteria and other anchor artifacts the repo custom prompt defines",
     );
   });
 

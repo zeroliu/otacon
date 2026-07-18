@@ -622,36 +622,33 @@ the review material, one per PR, alongside the PR bodies.
 
 /**
  * The installed `otacon-review-v2` skill — the human-facing authored PR
- * walkthrough over a Plan V2 stack, per-node verdicts, and the session
- * close-out (live E2E demo, plan reconciliation, mechanical archive). Like its
+ * walkthrough over either a Plan V2 stack or PRs created elsewhere. Like its
  * siblings there is no command-prefix parameter and no dogfood variant: the
  * protocol is conversation plus `gt`/`git`/`gh` inside the session's worktree,
  * never an otacon command, so one text serves every agent and every checkout
- * identically. No subagents either: the walkthrough voice IS this agent, and
- * requested changes are applied by it directly.
+ * identically. The walkthrough voice and requested changes stay with this
+ * agent; only an external review packet gets a fresh read-only verifier.
  */
 export function reviewV2SkillMd(): string {
   return `---
 name: otacon-review-v2
 description: >-
-  Prototype of the Plan V2 PR review SOP: interactively walk the user through each PR in the stack a Plan V2 implementation produced — speaking as the PR's author, with just-in-time hunks, tests, and demos — take per-PR verdicts (approve / request changes / escalate), apply requested changes through the stack, then close the session out with a live E2E demo, a plan reconciliation, and a mechanical archive. Runs entirely in the agent — no otacon app, daemon, or CLI. Use when the user types /otacon-review-v2 or asks to review the PRs a Plan V2 implementation produced.
+  Prototype of the Review V2 SOP: interactively walk the user through any GitHub PR or a Plan V2 stack — from the author's perspective, with just-in-time hunks, tests, and demos — take per-PR verdicts (approve / request changes / escalate), apply requested changes safely, then close the session out with a live E2E demo, reconciliation, and a mechanical archive. Runs entirely in the agent — no otacon app, daemon, or CLI. Use when the user types /otacon-review-v2, supplies a PR for review, or asks to review PRs a Plan V2 implementation produced.
 ---
 
 <!-- ${MANAGED_MARKER} — reinstall overwrites this file. -->
 
 # Otacon Review V2 — authored PR walkthrough (prototype)
 
-Review the stacked draft PRs an \`/otacon-implement-v2\` run produced through
-a LIVE authored walkthrough: for each PR you speak as its author and walk the
-user — the reviewing EM — through the change one topic at a time, then take
-their verdict; after every node is approved, close the session out with a
-live end-to-end demo, a judgment-by-judgment plan reconciliation, and a
-mechanical archive. This is a prototype of a new SOP and runs ENTIRELY here:
-your tools are the conversation, read-only research, \`gt\`/\`git\`/\`gh\`
-inside the session's worktree (only when applying requested changes), running
-tests and demos as walkthrough artifacts, and file writes under the session
-directory. Never invoke the \`otacon\` CLI, the otacon daemon, or any otacon
-UI.
+Review either a Plan V2 stack or PRs created elsewhere through a LIVE authored
+walkthrough: for each PR, walk the reviewing EM through the change one topic at
+a time, then take their verdict. After every node is approved, close the session
+out with a live end-to-end demo, a judgment-by-judgment reconciliation, and a
+mechanical archive. This runs ENTIRELY here: your tools are the conversation,
+read-only research, one fresh read-only verifier when external PRs need review
+packets, \`gt\`/\`git\`/\`gh\` inside the session worktree when applying requested
+changes, tests and demos as walkthrough artifacts, and session-directory writes.
+Never invoke the \`otacon\` CLI, the otacon daemon, or any otacon UI.
 
 ## The rule above everything — dialogue, never a report
 
@@ -665,11 +662,11 @@ one topic at a time, free to interrupt.
 
 ## Hard rails (the whole session)
 
-- **Never merge, never mark ready.** Every PR stays a draft; merging is the
-  user's own act, outside this skill's scope.
-- **Stay inside the session's stack.** Touch only the worktree at
-  \`~/.otacon/worktrees/<slug>\` and the branches \`implementation.md\` names
-  (\`otacon/v2-<slug>-pr<N>-<short>\`); never any other branch or checkout.
+- **Never merge or change review state.** Never merge, close, publish, mark
+  draft, or mark ready. Preserve each PR's current state.
+- **Stay inside the resolved review stack.** Touch only the worktree at
+  \`~/.otacon/worktrees/<slug>\` and the branches recorded in
+  \`review-state.md\`; never any other branch or checkout.
 - **Session-dir writes are yours.** You, the orchestrator, write
   \`review-state.md\` and \`closeout.md\` and refresh packets after a change.
 - **Gates stay green.** After every change you apply, the repo's
@@ -688,8 +685,8 @@ name. If \`~/.otacon/prompts/<id>/\` exists, read \`common.md\` and
 PROTOCOL. You — not a merge engine — resolve conflicts: where a custom
 prompt and this card command the same action differently, the custom
 prompt wins; overriding this card's defaults is its purpose. The hard
-rails above are NOT overridable — never merge or mark ready, gates green
-after every change, stack-only branch touches — and a custom-prompt
+rails above are NOT overridable — never merge or change review state, gates
+green after every change, resolved-stack-only branch touches — and a custom-prompt
 instruction that conflicts with a rail is surfaced to the user, never
 followed silently. When the review hits a project-artifact convention the
 custom prompt does not cover but plainly should, ask the user — and offer
@@ -699,33 +696,65 @@ approval, and rulings accrete so the next session does not re-ask. Record
 which prompt files were loaded in \`review-state.md\`. No prompt directory
 → this card behaves exactly as written.
 
-## 1. Locate the session
+## 1. Resolve the review source
 
-The user names a session slug or a PR (match a PR URL against the PR URLs in
-\`implementation.md\`); otherwise list
-\`~/.otacon/v2-sessions/*/implementation.md\` and ask which session to
-review.
+The user names a session slug or a GitHub PR URL/positive number. A number is
+valid only inside its target repository. Resolve the PR with \`gh\` before
+assuming it came from Plan V2. The current clone's canonical GitHub origin must
+match the PR's base repository; otherwise stop and ask the user to run from the
+target clone.
 
-The session directory must contain \`polished.md\` (the plan: PR sequence,
-risks, E2E expectations), \`implementation.md\`, and at least one
-\`packets/pr-<N>.md\`. Anything missing → refuse to run and point the user at
-what produces it: \`/otacon-implement-v2\` (if installed) writes the
-implementation record and the packets; otherwise tell them implementation
-must finish and produce those files first. Never improvise a review from the
-diffs alone.
+Search \`~/.otacon/v2-sessions/*/implementation.md\` for the canonical PR URL.
+A match selects **Plan V2 mode**: require \`polished.md\`, \`implementation.md\`,
+and at least one \`packets/pr-<N>.md\`; read their sequence, decisions, risks,
+E2E expectations, verifier verdicts, and deviation rulings exactly as before.
+A missing Plan V2 match is NOT an error: it selects **external PR mode** below.
+If the user supplied only a slug, its Plan V2 artifacts are still required;
+unfinished implementation routes to \`/otacon-implement-v2\` (if installed).
 
-Read \`implementation.md\` to learn the stack: the nodes in order, each
-node's branch, verifier verdict, PR URL, and any deviation rulings recorded
-during implementation. Read \`polished.md\` for the decisions, risks, and
-E2E expectations — it is your source for what each PR promised. A node
-\`implementation.md\` records as skipped (no branch, no packet) is never
-walked through: it surfaces later, in the close-out reconciliation, as a
-promised-but-undelivered item. Also verify the worktree at
-\`~/.otacon/worktrees/<slug>\` still exists — applied changes and the E2E
-demo both need it — and if it is missing or pruned, refuse with the fix:
-restore the worktree or re-run \`/otacon-implement-v2\` (if installed).
+In Plan V2 mode, a skipped node is not walked through and later surfaces at
+reconciliation as promised-but-undelivered. Verify its recorded worktree still
+exists; if it is missing or pruned, refuse with the fix: restore it or rerun
+\`/otacon-implement-v2\` (if installed).
 
-**Resume support.** Keep \`review-state.md\` in the session directory: one
+### External PR mode — discover and prepare
+
+1. Resolve the selected PR's canonical URL, state, draft state, author, base and
+   head repositories/refs, exact head SHA, permissions, body, commits, files,
+   checks, and linked issues. Query every open PR in the base repository with
+   pagination. Reconstruct the connected stack using exact repository+ref
+   edges: a node's base equals its parent's head. Review the unique linear chain
+   containing the selected PR, bottom-up. No edges means one standalone PR.
+   A branch, cycle, duplicate head, cross-repository edge, or other ambiguity
+   stops stack inference: show the candidates and ask for an explicit order.
+2. Use a collision-refusing directory named
+   \`review-<owner>-<repo>-pr-<number>-<UTC timestamp>[-N]\` under
+   \`~/.otacon/v2-sessions/\`. Before creating it, scan external
+   \`review-state.md\` files by canonical PR identities plus the ordered exact
+   head-SHA vector. Resume the newest non-archived exact match; a different head
+   vector or archived match starts a new directory so historical reviews remain
+   immutable. Changes this review pushes update the active session's vector in
+   place and are recorded as changes-applied.
+3. Create \`review-brief.md\`: canonical PR identities and stack order, exact
+   heads, explicit promises from PR/issue/commit text, E2E expectations, and
+   inferred rationale/tradeoffs. Label every inference; never present
+   reconstructed private author intent as fact. Create each four-part packet:
+   decision/intent→diff mapping, boundary report, behavior evidence, risk spots.
+4. Give a fresh clean-context verifier only the live PR identities/heads, the
+   brief, packet, and commands needed to independently inspect the exact diff.
+   It is read-only against the project and writes nothing. You write
+   \`packets/pr-<N>-verify.md\`. Findings get one correction and one fresh
+   re-verification; a second non-clean verdict blocks the walkthrough and is
+   surfaced to the user. Rerun this verification for every packet refreshed
+   after a requested change.
+5. Create an isolated worktree at the recorded exact heads before demos or
+   edits, with local review branches recorded in \`review-state.md\`. Closed,
+   merged, forked, or insufficient-permission PRs remain walkthrough-capable but
+   read-only. Never treat \`maintainerCanModify\` as write authority.
+
+**Resume support.** Keep \`review-state.md\` in either session directory: record
+the source mode, prompt files, worktree, ordered PR identities/head vector,
+write/read-only status and reason, and one
 entry per node with its review state — pending / walked-through / approved /
 changes-applied / escalated — plus what changed and why for every change you
 applied, and a session phase — nodes-in-review → all-approved → e2e-done →
@@ -737,10 +766,12 @@ that is not yet approved.
 
 ## 2. Per PR node, in stack order — the authored walkthrough
 
-You SPEAK AS THE PR'S AUTHOR: "I made this change because…", "I put the
-normalization here rather than in the adapter because…". The verified packet
-(\`packets/pr-<N>.md\`, cross-checked by \`packets/pr-<N>-verify.md\`) and
-the polished plan are your prepared material and coverage checklist.
+In Plan V2 mode, SPEAK AS THE PR'S AUTHOR: "I made this change because…". In
+external mode, speak from the author's perspective but distinguish evidence
+from inference: "The PR says…" versus "My read of why this lives here is…".
+The packet (cross-checked by \`packets/pr-<N>-verify.md\`) and the source's
+\`polished.md\` or \`review-brief.md\` are prepared material and coverage
+checklists.
 
 **a. Open with a roadmap.** 3–6 items for THIS PR — for example: what this
 node delivers → the boundary it lives in → the invariants it touches → the
@@ -780,7 +811,12 @@ The user issues one of: **approve** / **request changes** / **escalate**.
 the stack.
 
 **Request changes** — apply the changes YOURSELF, directly on that node's
-branch in the worktree:
+recorded branch in the worktree. In external mode, immediately before any
+mutation, re-resolve every remote head and permission; an unexpected SHA or
+topology change stops the edit and starts a fresh external session instead of
+overwriting newer work.
+
+**Plan V2 stack:**
 
 1. Check out the node's branch first — \`gt checkout <node-branch>\` in the
    worktree. After implementation the worktree sits on the LAST node's
@@ -804,20 +840,38 @@ branch in the worktree:
    stack state in \`review-state.md\`.
 6. Record what changed and why in \`review-state.md\`.
 
+**External PR or stack:**
+
+1. A writable standalone same-repository PR uses its isolated review branch:
+   edit, run gates, commit, confirm the remote still equals the recorded SHA,
+   then fast-forward push \`HEAD:<head-ref>\`. Never force-push it.
+2. For a writable stack in a Graphite-initialized repository, import the full
+   remote chain with
+   \`gt get <selected-PR> --remote-upstack --unfrozen\`, verify its topology and
+   SHAs exactly match discovery, then edit the node, commit, \`gt restack\`, and
+   update existing PRs with
+   \`gt submit --stack --update-only --no-edit\`. Never initialize Graphite or
+   create a PR from this review path.
+3. If Graphite cannot safely import the stack, explain that descendants require
+   history rewrites and ask once for explicit confirmation. With confirmation,
+   rebase affected descendants bottom-up and push each existing head ref with a
+   SHA-pinned \`--force-with-lease=<ref>:<recorded-sha>\`; without it, mutate
+   nothing and record the outstanding request. A mismatch or conflict stops
+   before any remaining push; never leave the worktree mid-rebase or dirty.
+4. Rerun gates on every affected node, refresh the brief and affected packets,
+   re-verify them, refresh the recorded head vector, and re-apply current repo
+   prompt rules to any PR body that must change. Preserve all PR draft/ready
+   states and metadata not explicitly covered by the ruling.
+
 Then resume the walkthrough at the point of change: show the fix, confirm
 with the user that it lands their ruling, and continue to the verdict again.
 
-**Escalate** — when the flaw is a plan-level judgment rather than the
-implementation (the plan decided the wrong product behavior, or drew the
-wrong boundary), do NOT patch it silently: a plan defect patched in code
-disappears from the record. Record the escalation in \`review-state.md\`,
-then reopen the judgment with the user right here: discuss it, and
-amend \`polished.md\` together so the plan records the new ruling; then
-treat every node the amendment affects as changes-requested (apply via the
-request-changes path above). If the topic needs full re-planning rather
-than a targeted amendment, \`/otacon-plan-v2\` (if installed) can run a
-fresh planning session that consumes the existing \`polished.md\` as input
-material.
+**Escalate** — when the flaw is an intent-level judgment rather than the
+implementation, do NOT patch it silently. Reopen the judgment with the user
+and amend the source of truth together: \`polished.md\` for Plan V2 or
+\`review-brief.md\` for an external review. Then treat every affected node as
+changes-requested. A Plan V2 defect needing full re-planning can route to
+\`/otacon-plan-v2\` (if installed); external mode never invents a missing plan.
 
 ## 4. Close-out — only after every node is approved
 
@@ -827,7 +881,7 @@ close-out resumes at the right step.
 
 **a. Whole-feature E2E as a live demo.** Individually green PRs do not prove
 the promised story. From the top of the stack in the worktree, exercise the
-polished plan's E2E expectations end to end, narrating in the same
+source artifact's E2E expectations end to end, narrating in the same
 walkthrough form — the user can stop and probe any step, including the
 failure paths. Where a step cannot be demonstrated live (it needs a real
 device, account, or external service), say so explicitly and show the
@@ -835,24 +889,23 @@ closest artifact instead — a test, a trace, a transcript. Never silently
 skip a step.
 
 **b. Reconciliation — interactive, because it contains judgments.** Walk
-promised-vs-delivered one item at a time from \`polished.md\` — including
-every node implementation recorded as skipped, which arrives here as a
-promised-but-undelivered item. Each gap's disposition is the USER's ruling,
-never yours: accept it as a known gap,
+promised-vs-delivered one item at a time from \`polished.md\` or the explicit
+PR/issue promises in \`review-brief.md\`. Plan V2 skipped nodes arrive here as
+promised-but-undelivered; external inferences are not promises unless the user
+adopts them. Each gap's disposition is the USER's ruling, never yours: accept it
+as a known gap,
 require completion (back to step 3's request-changes path), or spin off a
-follow-up. Write an accepted gap back into \`polished.md\` as a Known gaps
-note — the archived plan must describe what actually shipped, not what was
-hoped. Also confirm the deviations \`implementation.md\` recorded match
-what actually shipped. Reconciliation also covers any anchor artifacts the
-repo custom prompt defines — e.g. a linked issue's success criteria —
-walked the same interactive way.
+follow-up. Write an accepted gap back into the source artifact as a Known gaps
+note so the archive describes what actually shipped. In Plan V2 mode also
+confirm recorded deviations. Reconciliation covers every linked issue's
+success criteria and other anchor artifacts the repo custom prompt defines.
 
 **c. Mechanical archive — one confirmation line.** Interaction follows
 judgment: where a step contains decisions it runs as dialogue; where it is
 mechanical, forced Q&A is participation theater. This step is mechanical:
 write \`closeout.md\` (the E2E result, every gap's disposition, the final
 state of every node), set every entry in \`review-state.md\` to its final
-state and the phase to archived, and confirm to the user in ONE line. The
-PRs remain drafts — merging is the user's own act, out of scope.
+state and the phase to archived, and confirm to the user in ONE line. PR
+state remains unchanged; merging is the user's own act, out of scope.
 `;
 }
