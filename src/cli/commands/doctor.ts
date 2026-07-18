@@ -154,6 +154,9 @@ export async function doctorCommand(argv: string[]): Promise<number> {
     ["codex", codexSkillPath],
     ["opencode", opencodeSkillPath],
   ] as const) {
+    // The v2 prototype cards (otacon-plan-v2, otacon-implement-v2,
+    // otacon-review-v2) are deliberately absent: they run no otacon command,
+    // so there is no protocol surface for doctor to verify yet.
     for (const skill of ["otacon", "otacon-review"] as const) {
       checks.push(protocolSkillCheck(agent, skill, candidates(skillPath, skill), {
         managedMarker: MANAGED_MARKER,

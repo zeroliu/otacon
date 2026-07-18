@@ -89,9 +89,9 @@ node -e '
 const out = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
 const claude = out.installed.find((entry) => entry.agent === "claude");
 if (out.scope !== "user") process.exit(1);
-if (claude.skills.map((skill) => skill.name).join(",") !== "otacon,otacon-review") process.exit(2);
-' "$TMP/install1.json" || fail "claude install did not report both user-scope skills"
-ok "install --agent claude linked both user skills and wrote the hook script"
+if (claude.skills.map((skill) => skill.name).join(",") !== "otacon,otacon-review,otacon-plan-v2,otacon-implement-v2,otacon-review-v2") process.exit(2);
+' "$TMP/install1.json" || fail "claude install did not report all user-scope skills"
+ok "install --agent claude linked the user skills and wrote the hook script"
 
 # --- 2. reinstall is idempotent ------------------------------------------------
 cp "$SKILL" "$TMP/skill.before"; cp "$REVIEW_SKILL" "$TMP/review-skill.before"; cp "$HOOK" "$TMP/hook.before"
@@ -180,10 +180,10 @@ node -e '
 const out = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
 if (out.installed.length !== 3) process.exit(1);
 for (const entry of out.installed) {
-  if (entry.skills.length !== 2 || entry.skills.some((skill) => skill.mode !== "copy")) process.exit(2);
+  if (entry.skills.length !== 5 || entry.skills.some((skill) => skill.mode !== "copy")) process.exit(2);
 }
-' "$TMP/install-project.json" || fail "project install did not report two copied skills for every agent"
-ok "install --all --project copied both isolated skills for every agent"
+' "$TMP/install-project.json" || fail "project install did not report five copied skills for every agent"
+ok "install --all --project copied every isolated skill for every agent"
 
 # --- 7. a legacy plan-only install gains review without changing plan bytes ----
 cd "$MIGRATION_REPO"

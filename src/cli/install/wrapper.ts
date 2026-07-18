@@ -20,6 +20,7 @@ import { isSourceRun } from "../client.js";
 import { notice } from "../output.js";
 import { findRepoRoot } from "../session.js";
 import { MANAGED_MARKER, reviewSkillMd, skillMd } from "./assets.js";
+import { implementV2SkillMd, planV2SkillMd, reviewV2SkillMd } from "./assets-v2.js";
 import {
   claudeSkillPath,
   codexSkillPath,
@@ -27,10 +28,27 @@ import {
   opencodeSkillPath,
 } from "./locations.js";
 
-export const OTACON_SKILLS: readonly OtaconSkillName[] = ["otacon", "otacon-review"];
+export const OTACON_SKILLS: readonly OtaconSkillName[] = [
+  "otacon",
+  "otacon-review",
+  "otacon-plan-v2",
+  "otacon-implement-v2",
+  "otacon-review-v2",
+];
 
 function skillContent(skill: OtaconSkillName): string {
-  return skill === "otacon" ? skillMd() : reviewSkillMd();
+  switch (skill) {
+    case "otacon":
+      return skillMd();
+    case "otacon-review":
+      return reviewSkillMd();
+    case "otacon-plan-v2":
+      return planV2SkillMd();
+    case "otacon-implement-v2":
+      return implementV2SkillMd();
+    case "otacon-review-v2":
+      return reviewV2SkillMd();
+  }
 }
 
 /**

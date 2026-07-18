@@ -5064,3 +5064,179 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
 - **Revisit when:** PR review needs a selection affordance the docked bar can't
   carry, or the surfaces' placement needs genuinely diverge (at which point the
   divergence belongs as a parameter of the shared helper, not a re-derived copy).
+
+## Plan V2 ships as a prototype third skill with agent-side-only protocol (2026-07-17)
+
+- **Decision:** `otacon install` writes a third managed skill, `otacon-plan-v2` — the
+  first of three Plan V2 prototype cards encoding the live co-design SOP. Its protocol
+  never invokes the otacon CLI, daemon, or UI: the session lives in the conversation,
+  files under `~/.otacon/v2-sessions/<slug>/` (`design.md`, `polished.md`,
+  `review-r<N>.md`), and fresh native subagents for the independent design review. The
+  generator lives in a new `src/cli/install/assets-v2.ts` (importing only
+  `MANAGED_MARKER` from `assets.ts`), reserved for the v2 family; plumbing reuses the
+  existing skill pipeline (`OtaconSkillName` union member, `OTACON_SKILLS`,
+  `skillContent()`, packaged `dist/skills/otacon-plan-v2/SKILL.md`). No dogfood variant
+  under `.claude/skills/` and no doctor check yet.
+- **Why:** The v2 SOP is an experiment in building the reviewer's system model during
+  planning instead of revealing a finished plan; shipping it as an ordinary installable
+  skill lets it ride the symlink/copy/refresh machinery for free while touching neither
+  the daemon nor the UI. Isolating the generator in `assets-v2.ts` keeps the stable v1
+  cards untouched as two more v2 generators land, and skipping the dogfood variant is
+  deliberate: the card contains no command prefix to parametrize.
+- **Revisit when:** The v2 skills graduate from prototype (daemon/UI integration,
+  doctor coverage, a dogfood story) or the experiment is abandoned.
+
+## Implement V2 delivers the polished plan as a verified Graphite stack (2026-07-17)
+
+- **Decision:** `otacon install` writes a fourth managed skill, `otacon-implement-v2` —
+  the second Plan V2 prototype card (`implementV2SkillMd()` in `assets-v2.ts`, same
+  agent-side-only rules and install plumbing as `otacon-plan-v2`). It consumes ONLY a
+  session's `polished.md` (`design.md` is off-limits — the polished plan is the clean
+  handoff, and gaps in it are plan defects to surface, not material to reconstruct) and
+  implements the plan's stated PR sequence as a stacked series of Graphite (`gt`) draft
+  PRs in an isolated worktree (`~/.otacon/worktrees/<slug>`, branches
+  `otacon/v2-<slug>-pr<N>-<short>`). Per PR node: a fresh implement+test subagent
+  implements the node and authors a four-section review packet
+  (`packets/pr-<N>.md`: decision→diff mapping, boundary report, behavior evidence, risk
+  spots) and COMMITS the node before verification (the verifier diffs committed refs,
+  so uncommitted work would be invisible to it); an independent clean-context verifier
+  subagent — given only the polished plan, the packet, and the means to diff the node
+  itself — verifies the packet's claims before the next node begins, and a fix pass
+  must re-author the packet against the new diff before re-verification; the
+  orchestrator owns `implementation.md` and every `packets/pr-<N>-verify.md` write. A
+  missing PR sequence stops the run and routes back to planning (never silently
+  invented); plan-level deviations (behavior, boundary, scope, risk posture) escalate
+  to the user and the ruling is recorded in `implementation.md`; blockers ask
+  retry/skip/abort/guidance — no auto-retry, and a skip must leave the worktree clean;
+  submission is always `gt submit --stack --draft --no-edit`, never ready/merge, with
+  Graphite auth prechecked at setup; the worktree bases on the fetched remote default
+  branch (`origin/<default>`, local fallback when remoteless); Graphite initialization
+  is probed via `.graphite_repo_config` under `git rev-parse --git-common-dir` — never
+  `gt log`, which silently initializes an uninitialized repo — and `gt repo init` runs
+  only with the user's explicit consent. The per-PR human
+  walkthrough (the review SOP's EM pass) is deliberately NOT in this card — it belongs
+  to the future `otacon-review-v2`, referenced only with an "(if installed)" fallback
+  to the packets themselves.
+- **Why:** The v2 review SOP front-loads cognition into planning so PR review can be
+  conformance-plus-risk instead of comprehension-from-scratch: the packet makes review
+  cheap, and the clean-context verifier makes the packet trustworthy — self-reported
+  conformance is exactly where an implementing agent's blind spots hide. The `gt` stack
+  realizes the plan-owned PR sequence (a user-visible surface: it sets the reviewer's
+  confidence-building order and rollback granularity, which is also why the agent may
+  never invent or change it), and drafts-by-default keep publishing in the human's
+  hands.
+- **Revisit when:** `otacon-review-v2` lands (the packet/implementation.md handoff shape
+  may need to change), the v2 prototypes graduate or are abandoned, or Graphite's CLI
+  surface changes enough that the encoded `gt` flow (`create`/`track`/`submit --stack
+  --draft --no-edit`, the `.graphite_repo_config` probe, `gt log`'s silent-init
+  behavior) no longer matches.
+
+## Review V2 runs the PR walkthrough as authored dialogue, never a report (2026-07-17)
+
+- **Decision:** `otacon install` writes a fifth managed skill, `otacon-review-v2` — the
+  third and final Plan V2 prototype card (`reviewV2SkillMd()` in `assets-v2.ts`, same
+  agent-side-only rules and install plumbing as its siblings). It is the human-facing
+  review of the stack `otacon-implement-v2` produced: it requires `polished.md`,
+  `implementation.md`, and at least one packet (anything missing refuses with a pointer
+  at the producing skill, "(if installed)"), then per PR node in stack order runs a
+  LIVE authored walkthrough — the agent speaks as the PR's author, opens with a 3–6
+  item per-PR roadmap, advances one topic at a time in dependency order, checks shared
+  context as a peer ("I know" skips), brings hunks/tests/demos/traces just-in-time,
+  and gives every packet risk hunk eyes-on treatment. The verified packet is the
+  author's prepared material and coverage checklist, NEVER pasted to the user; the card
+  explicitly forbids dumping any written review report. Per-node verdict: approve;
+  request changes — applied by the orchestrator itself directly on the node's branch
+  (`gt checkout` the node's branch first, since the worktree sits on the LAST node's
+  branch after implementation; then edit, gates green, commit, `gt restack` with
+  conflicts resolved via `gt continue` and the worktree never left mid-rebase, rerun
+  gates upstack, refresh affected packets, and `gt submit --stack --draft --no-edit`
+  from any branch in the stack when a remote exists — remoteless stacks skip
+  submission and record the local-only state), then the walkthrough resumes at the
+  point of change; or escalate a plan-level defect back to the plan judgment —
+  reopened with the user in-conversation and `polished.md` amended together;
+  `/otacon-plan-v2` "(if installed)" is pointed at only for a full re-planning that
+  consumes the existing `polished.md`, since the plan card has no amend mode — never
+  silently patched. Per-node state (pending / walked-through / approved /
+  changes-applied / escalated) plus a session phase (nodes-in-review → all-approved →
+  e2e-done → reconciled → archived) persist in a `review-state.md` the orchestrator
+  owns; resume continues at the recorded phase and first unapproved node; a node
+  implementation recorded as skipped is not walked through (it surfaces at
+  reconciliation as promised-but-undelivered), and a missing/pruned worktree refuses
+  at locate time. After all nodes approve, close-out runs: a live whole-feature E2E
+  demo of the plan's expectations (undemonstrable steps are named and shown by closest
+  artifact, never silently skipped), an interactive promised-vs-delivered
+  reconciliation whose gap dispositions are the user's rulings — accepted gaps are
+  written back into `polished.md` as Known gaps so the archived plan matches shipped
+  reality — and a mechanical `closeout.md` archive confirmed in ONE line. PRs stay
+  drafts; merging is out of scope. No subagents: the walkthrough voice is the agent
+  itself.
+- **Why:** The v2 SOP's founding failure is the wall of text — a finished review
+  report, like a finished plan, carries correct content but builds no cognition.
+  Review therefore reuses the planning conversation's grammar (roadmap, one topic at a
+  time, natural context checks, just-in-time artifacts) with the packet as speaker
+  notes. Interaction follows judgment: verdicts, gap dispositions, and escalations are
+  dialogue because they contain the user's product rulings; the archive is one
+  confirmation line because forcing Q&A on a mechanical step is participation theater.
+  Requested changes are applied by the reviewer-agent itself (not a fresh implementer)
+  because the ruling context is already in the conversation, and restack + packet
+  refresh + draft resubmission keep the stack and its review record consistent with
+  every applied change.
+- **Revisit when:** The v2 prototypes graduate or are abandoned, real sessions show
+  the reviewer-agent applying changes needs the implement card's fresh-subagent +
+  independent-verifier loop instead, or Graphite's `restack`/`submit` surface changes.
+
+## V2 cards adapt to per-repo rules via user-private custom prompts (2026-07-17)
+
+- **Decision:** All three v2 generators gain a "Repo custom prompt" hook near the top
+  of each card. Identity: `git remote get-url origin` normalized to `owner__repo`
+  (both `git@host:owner/repo.git` and `https://host/owner/repo(.git)` forms, `.git`
+  stripped; repo-root directory name when remoteless). If
+  `~/.otacon/prompts/<id>/` exists, the card reads `common.md` and its own
+  `<skill-name>.md`; their instructions are part of the protocol. Precedence is
+  agent-resolved, not engine-resolved: the custom prompt wins over card defaults
+  (overriding them is its purpose), each card's hard rails are NOT overridable (plan:
+  the implementation gate and the reviewer's clean context; implement:
+  draft-only/never-merge, the verifier gate, stack-only branch touches; review: never
+  merge/mark ready, gates green after every change, stack-only), and a prompt
+  instruction conflicting with a rail is surfaced to the user, never silently
+  followed. A project-artifact convention gap asks the user and offers to append the
+  ruling to the prompt file — `~/.otacon/prompts` is the user's private space, so with
+  approval the agent may edit it, and rulings accrete so later sessions don't re-ask.
+  Loaded prompt files are recorded per card (plan: design.md; implement:
+  implementation.md; review: review-state.md); no prompt directory → each card behaves
+  exactly as before. Per card: plan-v2 offers ONCE per session to scaffold a missing
+  prompt dir from repo-declared conventions (PR/issue templates, CONTRIBUTING,
+  AGENTS.md) plus the user's answers, and polished.md gains a `## Conventions` section
+  (loaded files + downstream parameters such as PR target/base and issue anchors) —
+  the D17 reviewer still receives only polished.md, with conventions reaching it
+  through that section, never raw prompt files. Implement-v2 may have defaults like
+  the worktree base branch, PR target repo, and branch naming overridden — polished.md
+  Conventions carries the session's resolved values and also wins over card defaults —
+  and the ORCHESTRATOR passes prompt excerpts + Conventions into every
+  implementer/verifier brief (subagents never re-resolve prompts); the prompt may
+  delegate PR content/gates to external rule texts it names, fetched fresh at use time
+  via recorded commands (`gh api`, `npx skills`), followed in full including BLOCKING
+  gates before opening/updating a PR, with silence about protocol-introduced
+  structures (stacked PRs) falling back to recorded rulings, then to asking the user
+  (project-facing conventions are never invented); loaded prompts and applied rule
+  texts are recorded per PR in implementation.md. Review-v2 RE-APPLIES the prompt's PR
+  rules when refreshing an amended PR body — re-fetch named rule texts, re-run their
+  gates against the amended node diff, recompute required body facts (e.g. diff
+  totals) — so a refreshed body satisfies the same law the original did, and close-out
+  reconciliation walks prompt-defined anchor artifacts (e.g. a linked issue's success
+  criteria).
+- **Why:** Cards install byte-identically everywhere, so repo conventions must not be
+  hardcoded into them; a user-private prompt directory adapts behavior per repo while
+  keeping project trees clean. Agent-resolved precedence avoids building a config
+  engine into a prose protocol, and the rails carve-out keeps each card's safety
+  properties non-negotiable no matter what a prompt says. Routing conventions into
+  polished.md's Conventions section preserves the artifact self-containment rule — the
+  reviewer's clean context and the session-dir handoff stay the only surfaces — and
+  accreting rulings into the prompt file turns every convention gap into a durable
+  repair instead of a per-session re-ask. Fresh-fetched external rule texts keep the
+  agent obeying the repo's current law rather than a stale copy, and re-applying them
+  on refresh keeps amended PRs from silently drifting out of compliance.
+- **Revisit when:** The v2 prototypes graduate or are abandoned; prompts need
+  structure beyond free-form markdown (schemas, includes, per-branch scoping); teams
+  need shared rather than user-private conventions (a project-visible location); or
+  accreted prompt files grow large enough to need their own curation pass.

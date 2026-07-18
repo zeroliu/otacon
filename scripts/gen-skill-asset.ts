@@ -23,6 +23,11 @@ import {
   reviewSkillMd,
   skillMd,
 } from "../src/cli/install/assets.js";
+import {
+  implementV2SkillMd,
+  planV2SkillMd,
+  reviewV2SkillMd,
+} from "../src/cli/install/assets-v2.js";
 
 // Resolve the shipped asset path relative to this script (scripts/ -> repo root),
 // independent of the cwd the generator is invoked from.
@@ -47,6 +52,39 @@ export function reviewSkillAssetTarget(): string {
 export function writeReviewSkillAsset(target = reviewSkillAssetTarget()): string {
   mkdirSync(dirname(target), { recursive: true });
   writeFileSync(target, reviewSkillMd());
+  return target;
+}
+
+// The Plan V2 prototype card ships packaged like the others so user installs
+// can symlink to it. It has NO dogfood variant under `.claude/skills/` — the
+// protocol never runs otacon commands, so there is nothing source-mode about it.
+export function planV2SkillAssetTarget(): string {
+  return fileURLToPath(new URL("../dist/skills/otacon-plan-v2/SKILL.md", import.meta.url));
+}
+
+export function writePlanV2SkillAsset(target = planV2SkillAssetTarget()): string {
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, planV2SkillMd());
+  return target;
+}
+
+export function implementV2SkillAssetTarget(): string {
+  return fileURLToPath(new URL("../dist/skills/otacon-implement-v2/SKILL.md", import.meta.url));
+}
+
+export function writeImplementV2SkillAsset(target = implementV2SkillAssetTarget()): string {
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, implementV2SkillMd());
+  return target;
+}
+
+export function reviewV2SkillAssetTarget(): string {
+  return fileURLToPath(new URL("../dist/skills/otacon-review-v2/SKILL.md", import.meta.url));
+}
+
+export function writeReviewV2SkillAsset(target = reviewV2SkillAssetTarget()): string {
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, reviewV2SkillMd());
   return target;
 }
 
@@ -81,10 +119,16 @@ export function writeDogfoodReviewAsset(target = dogfoodReviewAssetTarget()): st
 if (import.meta.main) {
   const published = writeSkillAsset();
   const publishedReview = writeReviewSkillAsset();
+  const publishedPlanV2 = writePlanV2SkillAsset();
+  const publishedImplementV2 = writeImplementV2SkillAsset();
+  const publishedReviewV2 = writeReviewV2SkillAsset();
   const dogfood = writeDogfoodAsset();
   const dogfoodReview = writeDogfoodReviewAsset();
   console.log(`Wrote ${published}`);
   console.log(`Wrote ${publishedReview}`);
+  console.log(`Wrote ${publishedPlanV2}`);
+  console.log(`Wrote ${publishedImplementV2}`);
+  console.log(`Wrote ${publishedReviewV2}`);
   console.log(`Wrote ${dogfood}`);
   console.log(`Wrote ${dogfoodReview}`);
 }
