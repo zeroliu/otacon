@@ -19,7 +19,8 @@ import { MANAGED_MARKER } from './assets.js';
 export function planV2SkillMd(): string {
   return `---
 name: otacon-plan-v2
-description: Prototype of the Plan V2 live co-design SOP: plan a feature WITH the user through an incrementally growing shared design doc, jointly formed judgments, artifact-grounded discussion, a polished implementation handoff, and an independent fresh-agent design review. Runs entirely in the agent — no otacon app, daemon, or CLI. Use when the user types /otacon-plan-v2 or asks to co-design or plan a feature with the v2 live co-design process.
+description: >-
+  Prototype of the Plan V2 live co-design SOP: plan a feature WITH the user through an incrementally growing shared design doc, jointly formed judgments, artifact-grounded discussion, a polished implementation handoff, and an independent fresh-agent design review. Runs entirely in the agent — no otacon app, daemon, or CLI. Use when the user types /otacon-plan-v2 or asks to co-design or plan a feature with the v2 live co-design process.
 ---
 
 <!-- ${MANAGED_MARKER} — reinstall overwrites this file. -->
@@ -43,10 +44,12 @@ project files, run code-modifying commands, or implement the requested change
 at any point in this protocol. A request phrased as "can you make/fix/build…"
 is still a planning request while this skill is active. Allowed actions:
 conversation, read-only research commands, writing files under the session
-directory (below), and spawning subagents that are themselves read-only against
-the project. Implementation begins only after the user explicitly chooses it at
-the very end, and even then it is handed off (step 10's Implement choice) —
-never done here.
+directory (below), writing or appending repo custom-prompt files under
+\`~/.otacon/prompts/<id>/\` only after the user explicitly approves that exact
+write, and spawning subagents that are themselves read-only against the project.
+Implementation begins only after the user explicitly chooses it at the very
+end, and even then it is handed off (step 10's Implement choice) — never done
+here.
 
 ## Facts vs judgments — the rule under everything
 
@@ -111,9 +114,14 @@ already-approved product model.
 
 ## 2. Session setup
 
-Once the scope routes as one session, derive a kebab-case slug from the topic
-(e.g. \`edit-diff-preview\`) and create \`~/.otacon/v2-sessions/<slug>/\`. The
-session's files:
+Once the scope routes as one session, derive a kebab-case topic slug (e.g.
+\`edit-diff-preview\`), append a UTC timestamp (e.g.
+\`edit-diff-preview-20260718-031522\`), and create
+\`~/.otacon/v2-sessions/<slug>/\` with a collision-refusing create (plain
+\`mkdir\`, not \`mkdir -p\`). If that exact second collides, append \`-2\`,
+\`-3\`, and so on until the create succeeds. The resulting unique name is the
+session slug used by downstream skills. Never reuse or merge into an existing
+session directory. The session's files:
 
 - \`design.md\` — the raw evolving design doc. Live-edit it all session long.
 - \`polished.md\` — the final implementation handoff, written at synthesis
@@ -362,7 +370,8 @@ After a clean round, ask the user to choose one:
 export function implementV2SkillMd(): string {
   return `---
 name: otacon-implement-v2
-description: Prototype of the Plan V2 stacked implementation SOP: implement the polished plan a Plan V2 session produced as a stacked sequence of Graphite (gt) draft PRs, with a fresh implement+test subagent and an independent clean-context verifier per PR. Runs entirely in the agent — no otacon app, daemon, or CLI. Use when the user types /otacon-implement-v2 or asks to implement a plan produced by a Plan V2 session.
+description: >-
+  Prototype of the Plan V2 stacked implementation SOP: implement the polished plan a Plan V2 session produced as a stacked sequence of Graphite (gt) draft PRs, with a fresh implement+test subagent and an independent clean-context verifier per PR. Runs entirely in the agent — no otacon app, daemon, or CLI. Use when the user types /otacon-implement-v2 or asks to implement a plan produced by a Plan V2 session.
 ---
 
 <!-- ${MANAGED_MARKER} — reinstall overwrites this file. -->
@@ -457,18 +466,35 @@ The user names a session slug, or you list
 ## 2. Setup
 
 1. Verify \`gt\` is available (\`gt --version\`). Missing → stop and ask the
-   user to install the Graphite CLI first. If the repo has a GitHub remote
-   (you will submit later), also verify Graphite auth now (\`gt auth\`
-   reports whether a token is configured — see \`gt auth --help\`): missing
-   auth is a setup failure to surface immediately, not a blocker to hit at
-   submit time.
-2. Fetch the remote first (\`git fetch origin\`), then create an isolated
-   worktree off the REMOTE default branch — \`origin/<default-branch>\`,
-   falling back to the local default branch when there is no remote — so
-   the stack never sits on a stale local main. Check it out on the FIRST
-   node's branch (the base of the stack):
+   user to install the Graphite CLI first. Determine whether an \`origin\`
+   remote exists and whether it is GitHub-hosted before doing any auth or
+   fetch work. For a GitHub remote (you will submit later), preflight BOTH
+   clients now:
+   - verify Graphite auth without running a \`gt\` command or printing a
+     secret. Accept a non-empty \`GRAPHITE_AUTH_TOKEN\`; otherwise inspect
+     Graphite's documented config precedence read-only —
+     \`~/.config/graphite/auth\` first, then legacy
+     \`~/.config/graphite/user_config\` — for a non-empty \`authToken\` for
+     the active profile. Never run \`gt auth\` as a status probe: it is an
+     auth-writing command. Missing/ambiguous auth → stop and ask the user to
+     authenticate with \`gt auth --token <token>\`.
+   - verify \`gh\` is available (\`gh --version\`) and authenticated for the
+     remote's host (\`gh auth status --active --hostname <host>\`). Missing
+     or unauthenticated \`gh\` is a setup failure to surface before
+     \`gt submit\`, not after draft PRs exist.
+2. Only when \`origin\` exists, run \`git fetch origin\` and resolve its
+   remote default branch. Before creating the worktree, make the local
+   \`<default-branch>\` point at the fetched
+   \`origin/<default-branch>\` with a fast-forward-only update. If it is
+   checked out in another worktree, update it there only when that worktree
+   is clean; if it cannot be fast-forwarded safely, STOP and ask the user
+   instead of creating a stack with mismatched ancestry. Then create the
+   isolated worktree at that now-identical fetched/local base. With no
+   \`origin\`, skip fetch and use the local default branch. Let \`<base-ref>\`
+   mean \`origin/<default-branch>\` in the remote case and
+   \`<default-branch>\` in the remoteless case:
 
-   \`git worktree add ~/.otacon/worktrees/<slug> -b otacon/v2-<slug>-pr1-<short> origin/<default-branch>\`
+   \`git worktree add ~/.otacon/worktrees/<slug> -b otacon/v2-<slug>-pr1-<short> <base-ref>\`
 
    Branch naming for every node: \`otacon/v2-<slug>-pr<N>-<short>\` where
    \`<short>\` is a 1–3-word kebab summary of the node. Every command below
@@ -480,8 +506,9 @@ The user names a session slug, or you list
    use \`gt log\` as the probe: on an uninitialized repo it silently
    initializes it, which is exactly the repo-level change that needs
    consent. If the file is absent, ASK the user before running
-   \`gt repo init\` — repo-level configuration is their call, never yours.
-   Then track the first branch as the stack base:
+   \`gt init --trunk <default-branch>\` — repo-level configuration is their
+   call, never yours. Because step 2 made the local trunk and fetched base
+   identical, track the first branch against that same commit:
    \`gt track --parent <default-branch>\`.
 4. Create \`~/.otacon/v2-sessions/<slug>/implementation.md\` (and the
    \`packets/\` directory next to it) and keep it current for the whole run
@@ -606,7 +633,8 @@ the review material, one per PR, alongside the PR bodies.
 export function reviewV2SkillMd(): string {
   return `---
 name: otacon-review-v2
-description: Prototype of the Plan V2 PR review SOP: interactively walk the user through each PR in the stack a Plan V2 implementation produced — speaking as the PR's author, with just-in-time hunks, tests, and demos — take per-PR verdicts (approve / request changes / escalate), apply requested changes through the stack, then close the session out with a live E2E demo, a plan reconciliation, and a mechanical archive. Runs entirely in the agent — no otacon app, daemon, or CLI. Use when the user types /otacon-review-v2 or asks to review the PRs a Plan V2 implementation produced.
+description: >-
+  Prototype of the Plan V2 PR review SOP: interactively walk the user through each PR in the stack a Plan V2 implementation produced — speaking as the PR's author, with just-in-time hunks, tests, and demos — take per-PR verdicts (approve / request changes / escalate), apply requested changes through the stack, then close the session out with a live E2E demo, a plan reconciliation, and a mechanical archive. Runs entirely in the agent — no otacon app, daemon, or CLI. Use when the user types /otacon-review-v2 or asks to review the PRs a Plan V2 implementation produced.
 ---
 
 <!-- ${MANAGED_MARKER} — reinstall overwrites this file. -->

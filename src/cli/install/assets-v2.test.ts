@@ -2,14 +2,20 @@ import { describe, expect, test } from "bun:test";
 import { MANAGED_MARKER, reviewSkillMd, skillMd } from "./assets.js";
 import { implementV2SkillMd, planV2SkillMd, reviewV2SkillMd } from "./assets-v2.js";
 
+function frontmatter(text: string): Record<string, unknown> {
+  const close = text.indexOf("\n---\n", 4);
+  return Bun.YAML.parse(text.slice(4, close)) as Record<string, unknown>;
+}
+
 describe("planV2SkillMd", () => {
   const text = planV2SkillMd();
 
   test("is concise and carries only name + description frontmatter plus the managed marker", () => {
     expect(text.split("\n").length).toBeLessThan(500);
-    const close = text.indexOf("\n---\n", 4);
-    const keys = text.slice(4, close).split("\n").map((line) => line.split(":", 1)[0]);
-    expect(keys).toEqual(["name", "description"]);
+    const metadata = frontmatter(text);
+    expect(Object.keys(metadata)).toEqual(["name", "description"]);
+    expect(metadata.name).toBe("otacon-plan-v2");
+    expect(metadata.description).toContain("SOP: plan a feature");
     expect(text.startsWith("---\nname: otacon-plan-v2\n")).toBe(true);
     expect(text).toContain(MANAGED_MARKER);
   });
@@ -38,6 +44,14 @@ describe("planV2SkillMd", () => {
     expect(text).toContain("review-r<N>.md");
     expect(text).toContain("## Hard implementation gate");
     expect(text).toContain("MUST NOT create, edit, delete, or format");
+    expect(text).toContain("only after the user explicitly approves that exact\nwrite");
+  });
+
+  test("uses collision-safe session slugs instead of reusing a topic directory", () => {
+    expect(text).toContain("append a UTC timestamp");
+    expect(text).toContain("collision-refusing create");
+    expect(text).toContain("append `-2`,\n`-3`, and so on");
+    expect(text).toContain("Never reuse or merge into an existing\nsession directory");
   });
 
   test("routes through the four-question tree and defaults uncertainty to project mode", () => {
@@ -193,9 +207,10 @@ describe("implementV2SkillMd", () => {
 
   test("is concise and carries only name + description frontmatter plus the managed marker", () => {
     expect(text.split("\n").length).toBeLessThan(500);
-    const close = text.indexOf("\n---\n", 4);
-    const keys = text.slice(4, close).split("\n").map((line) => line.split(":", 1)[0]);
-    expect(keys).toEqual(["name", "description"]);
+    const metadata = frontmatter(text);
+    expect(Object.keys(metadata)).toEqual(["name", "description"]);
+    expect(metadata.name).toBe("otacon-implement-v2");
+    expect(metadata.description).toContain("SOP: implement the polished plan");
     expect(text.startsWith("---\nname: otacon-implement-v2\n")).toBe(true);
     expect(text).toContain(MANAGED_MARKER);
   });
@@ -235,24 +250,30 @@ describe("implementV2SkillMd", () => {
     expect(text).toContain("git worktree add ~/.otacon/worktrees/<slug>");
     expect(text).toContain("otacon/v2-<slug>-pr<N>-<short>");
     expect(text).toContain("gt --version");
-    // Auth is prechecked at setup so an unauthenticated submit is a setup
-    // failure, not a late generic blocker.
-    expect(text).toContain("gt auth");
-    expect(text).toContain("setup failure to surface immediately");
+    // Auth is prechecked read-only so an unauthenticated submit is a setup
+    // failure, not a late generic blocker or a mutating auth flow.
+    expect(text).toContain("GRAPHITE_AUTH_TOKEN");
+    expect(text).toContain("~/.config/graphite/auth");
+    expect(text).toContain("Never run `gt auth` as a status probe");
+    expect(text).toContain("gh auth status --active --hostname <host>");
+    expect(text).toContain("setup failure to surface before");
     // The stack bases on the freshly fetched remote default branch, falling
     // back to the local one only when there is no remote.
-    expect(text).toContain("git fetch origin");
+    expect(text).toContain("Only when `origin` exists, run `git fetch origin`");
+    expect(text).toContain("With no\n   `origin`, skip fetch");
     expect(text).toContain("origin/<default-branch>");
-    expect(text).toContain("stale local main");
+    expect(text).toContain("fast-forward-only update");
+    expect(text).toContain("local trunk and fetched base\n   identical");
     // The initialization probe is NON-MUTATING: `gt log` silently initializes
     // an uninitialized repo, so the config file is checked instead, and
-    // `gt repo init` runs only with the user's consent.
+    // `gt init` runs only with the user's consent.
     expect(text).toContain("WITHOUT running a gt command");
     expect(text).toContain("git rev-parse --git-common-dir");
     expect(text).toContain(".graphite_repo_config");
     expect(text).toContain("silently\n   initializes");
     expect(text).toContain("ASK the user before running");
-    expect(text).toContain("gt repo init");
+    expect(text).toContain("gt init --trunk <default-branch>");
+    expect(text).not.toContain("gt repo init");
     expect(text).toContain("gt track --parent <default-branch>");
     // Later nodes stack on the previous increment via gt create.
     expect(text).toContain("gt create otacon/v2-<slug>-pr<N>-<short>");
@@ -396,9 +417,10 @@ describe("reviewV2SkillMd", () => {
 
   test("is concise and carries only name + description frontmatter plus the managed marker", () => {
     expect(text.split("\n").length).toBeLessThan(500);
-    const close = text.indexOf("\n---\n", 4);
-    const keys = text.slice(4, close).split("\n").map((line) => line.split(":", 1)[0]);
-    expect(keys).toEqual(["name", "description"]);
+    const metadata = frontmatter(text);
+    expect(Object.keys(metadata)).toEqual(["name", "description"]);
+    expect(metadata.name).toBe("otacon-review-v2");
+    expect(metadata.description).toContain("SOP: interactively walk the user");
     expect(text.startsWith("---\nname: otacon-review-v2\n")).toBe(true);
     expect(text).toContain(MANAGED_MARKER);
   });

@@ -2329,9 +2329,12 @@ Three prototype skills ship alongside them: `skills/otacon-plan-v2/`, the Plan V
 co-design planning protocol, `skills/otacon-implement-v2/`, the Plan V2 stacked
 implementation protocol, and `skills/otacon-review-v2/`, the Plan V2 PR review
 walkthrough. All run entirely agent-side — conversation, session files
-under `~/.otacon/v2-sessions/<slug>/`, and fresh native subagents — and never invoke the
+under `~/.otacon/v2-sessions/<topic-slug>-<UTC timestamp>[-N]/` (created without
+reusing an existing directory), and fresh native subagents — and never invoke the
 otacon CLI, daemon, or UI. Plan-v2 grows `design.md` with the user and synthesizes the
-`polished.md` handoff; implement-v2 consumes ONLY that `polished.md` (never `design.md`)
+`polished.md` handoff; its plan-only write gate also permits exact, user-approved writes
+to the private repo prompt directory that the same card offers to scaffold. Implement-v2
+consumes ONLY that `polished.md` (never `design.md`)
 and delivers its stated PR sequence as a stacked series of Graphite (`gt`) draft PRs in
 an isolated worktree — per PR node a fresh implement+test subagent authors a four-section
 review packet (`packets/pr-<N>.md`: decision→diff mapping, boundary report, behavior
@@ -2381,7 +2384,13 @@ whenever it refreshes an amended PR body (re-fetch rule texts, re-run gates agai
 amended diff, recompute body facts like diff totals), walks prompt-defined anchor
 artifacts (e.g. a linked issue's success criteria) during reconciliation, and records
 loaded prompts in `review-state.md`. No prompt directory → every card behaves exactly
-as before. Their generators live in `src/cli/install/assets-v2.ts`
+as before. Implement-v2's setup is side-effect-aware: it detects `origin` before fetching
+and skips submission preflights for remoteless repos; GitHub-bound runs read Graphite's
+documented token sources without invoking `gt auth`, verify `gh` authentication before
+creating draft PRs, fetch `origin`, and fast-forward the local trunk to the fetched
+remote default before creating the stack so the worktree base and `gt track --parent`
+refer to the same commit. Graphite initialization is consented `gt init --trunk`, using
+the current CLI surface. Their generators live in `src/cli/install/assets-v2.ts`
 (`planV2SkillMd()`, `implementV2SkillMd()`, `reviewV2SkillMd()`); they have no
 command-prefix parameter and no committed dogfood variant (there is nothing source-mode
 about a card that runs no otacon command), and `otacon doctor` does not yet check them.
@@ -2453,7 +2462,8 @@ parametrized only by command prefix: installed skills use `otacon`; this repo's 
 dogfood skills use `./bin/otacon` plus the same source-mode preamble. Their names are
 `otacon-dev` and `otacon-review-dev`, so neither collides with the installed product
 commands. Both committed files are generated, never hand-edited, and exact-parity tests
-guard them. Skill frontmatter deliberately contains only `name` and `description`; this
+guard them. Skill frontmatter deliberately contains only `name` and a YAML-safe folded
+`description`; this
 repo's deterministic cross-agent install architecture does not emit `agents/openai.yaml`
 for one agent while Claude/OpenCode consume the same directory contract.
 

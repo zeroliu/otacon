@@ -5131,6 +5131,29 @@ Supersedes the prior staging design (a separate `bun run release:staging` /
   --draft --no-edit`, the `.graphite_repo_config` probe, `gt log`'s silent-init
   behavior) no longer matches.
 
+## Plan V2 setup favors collision safety and read-only preflights (2026-07-17)
+
+- **Decision:** The three V2 skill descriptions use YAML folded scalars, and plan-v2
+  creates every session under a timestamp-suffixed topic slug with a refusing `mkdir`
+  plus numeric collision suffix; it never reopens a same-topic directory implicitly.
+  The plan-only write rail explicitly admits exact, user-approved writes to that repo's
+  private prompt directory. Implement-v2 detects `origin` before fetching or checking
+  submission auth. Remoteless repos skip both; GitHub-remoted repos inspect Graphite's
+  documented environment/config token sources without invoking `gt auth`, preflight
+  `gh` and its host authentication, fetch, and fast-forward the local trunk to the
+  remote default before creating the worktree. The first stack branch therefore bases
+  on the same commit named by `gt track --parent`. New Graphite repos initialize only
+  with explicit consent via the current `gt init --trunk` command.
+- **Why:** Plain YAML descriptions containing `: ` can prevent skill discovery; a topic
+  alone is not a session identity; and a hard write rail must authorize the prompt
+  scaffold the protocol itself offers. Setup probes must not mutate auth state or leave
+  partially submitted PRs, while the Graphite parent and Git worktree base must describe
+  one ancestry. Refusing on a dirty/diverged trunk is safer than silently changing
+  another worktree or recording stale stack metadata.
+- **Revisit when:** The V2 sessions gain a central registry with generated identities,
+  Graphite exposes a guaranteed read-only auth-status command, `gt track` can name a
+  remote ref directly, or submission no longer depends on a separate `gh pr edit` pass.
+
 ## Review V2 runs the PR walkthrough as authored dialogue, never a report (2026-07-17)
 
 - **Decision:** `otacon install` writes a fifth managed skill, `otacon-review-v2` — the
