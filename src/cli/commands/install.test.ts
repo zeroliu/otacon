@@ -55,6 +55,9 @@ afterEach(() => {
 const lastJson = () => JSON.parse(stdout.trim().split("\n").at(-1) as string);
 const REL = join("skills", "otacon", "SKILL.md");
 const REVIEW_REL = join("skills", "otacon-review", "SKILL.md");
+const PLAN_V2_REL = join("skills", "otacon-plan-v2", "SKILL.md");
+const IMPLEMENT_V2_REL = join("skills", "otacon-implement-v2", "SKILL.md");
+const REVIEW_V2_REL = join("skills", "otacon-review-v2", "SKILL.md");
 
 function gitInit(dir: string): void {
   execFileSync("git", ["init", "-q"], { cwd: dir, stdio: "ignore" });
@@ -68,12 +71,21 @@ describe("install --project", () => {
 
     expect(existsSync(join(cwd, ".claude", REL))).toBe(true);
     expect(existsSync(join(cwd, ".claude", REVIEW_REL))).toBe(true);
+    expect(existsSync(join(cwd, ".claude", PLAN_V2_REL))).toBe(true);
+    expect(existsSync(join(cwd, ".claude", IMPLEMENT_V2_REL))).toBe(true);
+    expect(existsSync(join(cwd, ".claude", REVIEW_V2_REL))).toBe(true);
     // Project scope roots codex/opencode under the repo, ignoring $CODEX_HOME /
     // $XDG_CONFIG_HOME (both pinned to /should/be/ignored in beforeEach).
     expect(existsSync(join(cwd, ".codex", REL))).toBe(true);
     expect(existsSync(join(cwd, ".codex", REVIEW_REL))).toBe(true);
+    expect(existsSync(join(cwd, ".codex", PLAN_V2_REL))).toBe(true);
+    expect(existsSync(join(cwd, ".codex", IMPLEMENT_V2_REL))).toBe(true);
+    expect(existsSync(join(cwd, ".codex", REVIEW_V2_REL))).toBe(true);
     expect(existsSync(join(cwd, ".opencode", REL))).toBe(true);
     expect(existsSync(join(cwd, ".opencode", REVIEW_REL))).toBe(true);
+    expect(existsSync(join(cwd, ".opencode", PLAN_V2_REL))).toBe(true);
+    expect(existsSync(join(cwd, ".opencode", IMPLEMENT_V2_REL))).toBe(true);
+    expect(existsSync(join(cwd, ".opencode", REVIEW_V2_REL))).toBe(true);
     // The project claude install writes ONLY the skill wrapper — no Stop hook script.
     expect(existsSync(join(cwd, ".claude", "hooks", "otacon-stop.sh"))).toBe(false);
 
@@ -86,10 +98,16 @@ describe("install --project", () => {
     expect(claude.files).toEqual([
       join(cwd, ".claude", REL),
       join(cwd, ".claude", REVIEW_REL),
+      join(cwd, ".claude", PLAN_V2_REL),
+      join(cwd, ".claude", IMPLEMENT_V2_REL),
+      join(cwd, ".claude", REVIEW_V2_REL),
     ]);
     expect(claude.skills.map((skill: { name: string }) => skill.name)).toEqual([
       "otacon",
       "otacon-review",
+      "otacon-plan-v2",
+      "otacon-implement-v2",
+      "otacon-review-v2",
     ]);
     // Project-scope wrappers are always copied (a committed file cannot symlink to a
     // machine-local global path), so every reported mode is "copy".
@@ -98,28 +116,49 @@ describe("install --project", () => {
     }
   });
 
-  test("--project --agent claude writes only the two project skill wrappers", async () => {
+  test("--project --agent claude writes only the project skill wrappers", async () => {
     gitInit(cwd);
     await installCommand(["--agent", "claude", "--project"]);
     expect(readFileSync(join(cwd, ".claude", REL), "utf8")).toContain("otacon start --title");
     expect(readFileSync(join(cwd, ".claude", REVIEW_REL), "utf8")).toContain(
       "otacon review start --pr",
     );
+    expect(readFileSync(join(cwd, ".claude", PLAN_V2_REL), "utf8")).toContain(
+      "name: otacon-plan-v2",
+    );
+    expect(readFileSync(join(cwd, ".claude", IMPLEMENT_V2_REL), "utf8")).toContain(
+      "name: otacon-implement-v2",
+    );
+    expect(readFileSync(join(cwd, ".claude", REVIEW_V2_REL), "utf8")).toContain(
+      "name: otacon-review-v2",
+    );
     expect(existsSync(join(cwd, ".claude", "hooks", "otacon-stop.sh"))).toBe(false);
   });
 
-  test("reinstall is idempotent and keeps the two skill protocols isolated", async () => {
+  test("reinstall is idempotent and keeps the skill protocols isolated", async () => {
     gitInit(cwd);
     await installCommand(["--agent", "codex", "--project"]);
     const firstPlan = readFileSync(join(cwd, ".codex", REL), "utf8");
     const firstReview = readFileSync(join(cwd, ".codex", REVIEW_REL), "utf8");
+    const firstPlanV2 = readFileSync(join(cwd, ".codex", PLAN_V2_REL), "utf8");
+    const firstImplementV2 = readFileSync(join(cwd, ".codex", IMPLEMENT_V2_REL), "utf8");
+    const firstReviewV2 = readFileSync(join(cwd, ".codex", REVIEW_V2_REL), "utf8");
     stdout = "";
     await installCommand(["--agent", "codex", "--project"]);
     expect(readFileSync(join(cwd, ".codex", REL), "utf8")).toBe(firstPlan);
     expect(readFileSync(join(cwd, ".codex", REVIEW_REL), "utf8")).toBe(firstReview);
+    expect(readFileSync(join(cwd, ".codex", PLAN_V2_REL), "utf8")).toBe(firstPlanV2);
+    expect(readFileSync(join(cwd, ".codex", IMPLEMENT_V2_REL), "utf8")).toBe(firstImplementV2);
+    expect(readFileSync(join(cwd, ".codex", REVIEW_V2_REL), "utf8")).toBe(firstReviewV2);
     expect(firstPlan).not.toContain("review start --pr");
     expect(firstReview).not.toContain("start --title <kebab-title>");
-    expect(lastJson().installed[0].skills).toHaveLength(2);
+    expect(firstPlanV2).not.toContain("review start --pr");
+    expect(firstPlanV2).not.toContain("start --title <kebab-title>");
+    expect(firstImplementV2).not.toContain("review start --pr");
+    expect(firstImplementV2).not.toContain("start --title <kebab-title>");
+    expect(firstReviewV2).not.toContain("review start --pr");
+    expect(firstReviewV2).not.toContain("start --title <kebab-title>");
+    expect(lastJson().installed[0].skills).toHaveLength(5);
   });
 
   test("one skill failure is isolated, remaining skills are attempted, and every result is reported", async () => {
@@ -128,14 +167,16 @@ describe("install --project", () => {
     const code = await installCommand(["--all", "--project"], {
       ensureNamedSkill: (skill, path, scope, pkgPath, symlink) => {
         attempted.push(path);
-        if (path.includes(join(".claude", "skills", "otacon-review"))) {
+        // Exact-directory match: "otacon-review" is a path prefix of
+        // "otacon-review-v2", so include the SKILL.md leaf to fail only one.
+        if (path.includes(join(".claude", "skills", "otacon-review", "SKILL.md"))) {
           throw new Error("review destination is read-only");
         }
         return ensureNamedSkill(skill, path, scope, pkgPath, symlink);
       },
     });
     expect(code).toBe(1);
-    expect(attempted).toHaveLength(6);
+    expect(attempted).toHaveLength(15);
     expect(existsSync(join(cwd, ".claude", REL))).toBe(true);
     expect(existsSync(join(cwd, ".claude", REVIEW_REL))).toBe(false);
     expect(existsSync(join(cwd, ".codex", REVIEW_REL))).toBe(true);

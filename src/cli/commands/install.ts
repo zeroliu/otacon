@@ -1,5 +1,6 @@
 // otacon install --agent claude|codex|opencode [--agent …] | --all [--hooks] —
-// write both protocol wrappers into each agent's skill location (install/update).
+// write every managed protocol wrapper into each agent's skill location
+// (install/update).
 // Pure file writes — no daemon needed. Wrappers are managed files: reinstall
 // overwrites them wholesale. --hooks additionally registers the Claude Code Stop
 // hook in ~/.claude/settings.json — merged additively and idempotently, with a
@@ -65,8 +66,8 @@ function installAgent(
       case "opencode": return opencodeSkillPath(scope, skill);
     }
   };
-  // One install action always binds both discoverable skills. Each complete
-  // directory converges independently so neither protocol can leak into the other.
+  // One install action always binds every discoverable skill. Each complete
+  // directory converges independently so no protocol can leak into another.
   const skills: (InstalledSkill | FailedSkill)[] = OTACON_SKILLS.map((name) => {
     const path = pathFor(name);
     try {

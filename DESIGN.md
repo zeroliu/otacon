@@ -2321,10 +2321,70 @@ otacon expose                # optional, phone access: checks the tailscale CLI 
                              # (needs HTTPS certs enabled), prints the URL to bookmark
 ```
 
-`otacon install` writes two separate protocol skills into every selected agent:
+`otacon install` writes separate protocol skills into every selected agent:
 `skills/otacon/` owns plan review and `skills/otacon-review/` owns PR explanation. Each
 has its own generated card and trigger metadata; they share the same CLI, daemon, session
 registry, queue, and browser, but neither card teaches the other kind's commands/events.
+Three prototype skills ship alongside them: `skills/otacon-plan-v2/`, the Plan V2 live
+co-design planning protocol, `skills/otacon-implement-v2/`, the Plan V2 stacked
+implementation protocol, and `skills/otacon-review-v2/`, the Plan V2 PR review
+walkthrough. All run entirely agent-side — conversation, session files
+under `~/.otacon/v2-sessions/<slug>/`, and fresh native subagents — and never invoke the
+otacon CLI, daemon, or UI. Plan-v2 grows `design.md` with the user and synthesizes the
+`polished.md` handoff; implement-v2 consumes ONLY that `polished.md` (never `design.md`)
+and delivers its stated PR sequence as a stacked series of Graphite (`gt`) draft PRs in
+an isolated worktree — per PR node a fresh implement+test subagent authors a four-section
+review packet (`packets/pr-<N>.md`: decision→diff mapping, boundary report, behavior
+evidence, risk spots) and an independent clean-context verifier subagent checks the
+packet's claims before the next node begins, with the orchestrator writing
+`packets/pr-<N>-verify.md` and a live `implementation.md` the review card
+consumes. Review-v2 is the human-facing pass over that stack: per PR node, in stack
+order, it runs a live authored walkthrough — the agent speaks as the PR's author, opens
+with a per-PR roadmap, brings hunks/tests/demos/traces just-in-time, and gives every
+packet risk hunk eyes-on treatment; it never pastes the packet or any written review
+report (the packet is prepared material, not the deliverable). The user then issues a
+per-node verdict: approve; request changes (the agent checks out the node's branch,
+edits directly, keeps gates green, `gt restack`s descendants — resolving conflicts via
+`gt continue`, never leaving the worktree mid-rebase — refreshes affected packets, and
+resubmits via `gt submit --stack --draft --no-edit` when a remote exists, noting a
+local-only stack otherwise); or escalate a plan-level defect back to the plan judgment
+— amended with the user in-conversation, or fully re-planned in a fresh plan-v2 session
+— rather than patching it silently. Per-node state and a session phase
+(nodes-in-review → all-approved → e2e-done → reconciled → archived) persist in
+`review-state.md` (resume continues at the recorded phase and first unapproved node;
+skipped nodes surface at reconciliation, a missing worktree refuses at locate). After
+every node is approved the session closes out: a live whole-feature E2E demo against
+the plan's expectations, an interactive promised-vs-delivered reconciliation whose gap
+dispositions are the user's rulings (accepted gaps written back into `polished.md` as
+Known gaps), and a mechanical `closeout.md` archive confirmed in one line — PRs stay
+drafts; merging is the user's own act. All three cards adapt to per-repo rules through
+user-private **repo custom prompts**: at start each card resolves the repo identity from
+`git remote get-url origin` (normalized `owner__repo`, ssh and https forms; repo-root
+directory name when remoteless) and reads `~/.otacon/prompts/<id>/common.md` plus its
+own `<skill-name>.md` when present — never files in the project. Their instructions are
+part of the protocol and win over card defaults; the agent (not an engine) resolves
+conflicts, each card's hard rails are non-overridable, and a prompt instruction
+conflicting with a rail is surfaced, never silently followed. A convention gap the
+prompt should cover asks the user and — with approval — appends the ruling to the prompt
+file, so rulings accrete across sessions. Plan-v2 offers once per session to scaffold a
+missing prompt dir from repo-declared conventions (PR/issue templates, CONTRIBUTING,
+AGENTS.md) and writes a `## Conventions` section into `polished.md` (loaded files plus
+downstream parameters — the independent reviewer still receives only `polished.md`,
+never raw prompt files); implement-v2 lets the prompt override defaults like the
+worktree base branch, PR target, and branch naming, passes prompt excerpts and the
+Conventions into every subagent brief (subagents never re-resolve prompts), honors
+external rule texts the prompt names — fetched fresh at use time, blocking gates
+included — before PR authoring (silence on protocol-introduced structures like stacked
+PRs falls back to recorded rulings, then the user), and records loaded prompts and
+applied rule texts in `implementation.md`; review-v2 re-applies the prompt's PR rules
+whenever it refreshes an amended PR body (re-fetch rule texts, re-run gates against the
+amended diff, recompute body facts like diff totals), walks prompt-defined anchor
+artifacts (e.g. a linked issue's success criteria) during reconciliation, and records
+loaded prompts in `review-state.md`. No prompt directory → every card behaves exactly
+as before. Their generators live in `src/cli/install/assets-v2.ts`
+(`planV2SkillMd()`, `implementV2SkillMd()`, `reviewV2SkillMd()`); they have no
+command-prefix parameter and no committed dogfood variant (there is nothing source-mode
+about a card that runs no otacon command), and `otacon doctor` does not yet check them.
 Claude Code receives both under `~/.claude/skills/` plus the optional Stop hook script
 `~/.claude/hooks/otacon-stop.sh`; Codex receives both under
 `$CODEX_HOME/skills/` (default `~/.codex/`); OpenCode receives both under
@@ -2397,10 +2457,13 @@ guard them. Skill frontmatter deliberately contains only `name` and `description
 repo's deterministic cross-agent install architecture does not emit `agents/openai.yaml`
 for one agent while Claude/OpenCode consume the same directory contract.
 
-The build **materializes** `skillMd()` into `dist/skills/otacon/SKILL.md` and
-`reviewSkillMd()` into `dist/skills/otacon-review/SKILL.md`
+The build **materializes** `skillMd()` into `dist/skills/otacon/SKILL.md`,
+`reviewSkillMd()` into `dist/skills/otacon-review/SKILL.md`, `planV2SkillMd()` into
+`dist/skills/otacon-plan-v2/SKILL.md`, `implementV2SkillMd()` into
+`dist/skills/otacon-implement-v2/SKILL.md`, and `reviewV2SkillMd()` into
+`dist/skills/otacon-review-v2/SKILL.md`
 (`scripts/gen-skill-asset.ts`, run after `tsc` in the `build` chain; `files: ["dist"]`
-ships them), so the package carries both cards as real on-disk files. From the installed
+ships them), so the package carries every card as a real on-disk file. From the installed
 package `packagedSkillPath(name)` (`src/cli/install/wrapper.ts`) resolves that
 skill's absolute path; it returns `undefined` when no stable packaged copy exists:
 running from source (the path lands under `src/skills/`, which never exists)

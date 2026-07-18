@@ -14,8 +14,17 @@ import { join } from "node:path";
  */
 export type InstallScope = { kind: "user" } | { kind: "project"; root: string };
 
-/** The two independently-discoverable skills shipped by one Otacon install. */
-export type OtaconSkillName = "otacon" | "otacon-review";
+/**
+ * The independently-discoverable skills shipped by one Otacon install: the two
+ * daemon-backed protocol cards plus the agent-side Plan V2 prototype cards
+ * (plan + implement + review).
+ */
+export type OtaconSkillName =
+  | "otacon"
+  | "otacon-review"
+  | "otacon-plan-v2"
+  | "otacon-implement-v2"
+  | "otacon-review-v2";
 
 export function claudeSkillPath(
   scope: InstallScope = { kind: "user" },

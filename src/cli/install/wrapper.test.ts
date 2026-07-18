@@ -12,8 +12,14 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { writeSkillAsset } from "../../../scripts/gen-skill-asset.js";
+import {
+  writeImplementV2SkillAsset,
+  writePlanV2SkillAsset,
+  writeReviewV2SkillAsset,
+  writeSkillAsset,
+} from "../../../scripts/gen-skill-asset.js";
 import { reviewSkillMd, skillMd } from "./assets.js";
+import { implementV2SkillMd, planV2SkillMd, reviewV2SkillMd } from "./assets-v2.js";
 import {
   ensureSkill,
   ensureNamedSkill,
@@ -47,6 +53,9 @@ function reviewPkgFile(dir: string): string {
 test("packagedSkillPath is undefined when run from source", () => {
   expect(packagedSkillPath()).toBeUndefined();
   expect(packagedSkillPath("otacon-review")).toBeUndefined();
+  expect(packagedSkillPath("otacon-plan-v2")).toBeUndefined();
+  expect(packagedSkillPath("otacon-implement-v2")).toBeUndefined();
+  expect(packagedSkillPath("otacon-review-v2")).toBeUndefined();
 });
 
 test("ensureNamedSkill copies only the selected review protocol", () => {
@@ -80,6 +89,60 @@ test("ensureNamedSkill links the complete packaged review directory", () => {
   }
 });
 
+test("ensureNamedSkill copies only the selected plan-v2 protocol", () => {
+  const dir = scratch();
+  try {
+    const wrapper = join(dir, "skills", "otacon-plan-v2", "SKILL.md");
+    expect(ensureNamedSkill("otacon-plan-v2", wrapper, "user", undefined)).toEqual({
+      mode: "copy",
+      changed: true,
+    });
+    const written = readFileSync(wrapper, "utf8");
+    expect(written).toBe(planV2SkillMd());
+    // The agent-side prototype never absorbs either daemon-backed protocol.
+    expect(written).not.toContain("otacon start --title");
+    expect(written).not.toContain("review start --pr");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ensureNamedSkill copies only the selected implement-v2 protocol", () => {
+  const dir = scratch();
+  try {
+    const wrapper = join(dir, "skills", "otacon-implement-v2", "SKILL.md");
+    expect(ensureNamedSkill("otacon-implement-v2", wrapper, "user", undefined)).toEqual({
+      mode: "copy",
+      changed: true,
+    });
+    const written = readFileSync(wrapper, "utf8");
+    expect(written).toBe(implementV2SkillMd());
+    // The agent-side prototype never absorbs either daemon-backed protocol.
+    expect(written).not.toContain("otacon start --title");
+    expect(written).not.toContain("review start --pr");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ensureNamedSkill copies only the selected review-v2 protocol", () => {
+  const dir = scratch();
+  try {
+    const wrapper = join(dir, "skills", "otacon-review-v2", "SKILL.md");
+    expect(ensureNamedSkill("otacon-review-v2", wrapper, "user", undefined)).toEqual({
+      mode: "copy",
+      changed: true,
+    });
+    const written = readFileSync(wrapper, "utf8");
+    expect(written).toBe(reviewV2SkillMd());
+    // The agent-side prototype never absorbs either daemon-backed protocol.
+    expect(written).not.toContain("otacon start --title");
+    expect(written).not.toContain("review start --pr");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // Drift guard: the shipped asset must byte-equal skillMd(). writeSkillAsset() is the
 // exact write the build runs, so exercising it against a temp target proves the
 // generator emits current protocol text (no stale copy in the package).
@@ -89,6 +152,39 @@ test("writeSkillAsset writes a byte-equal copy of skillMd()", () => {
     const written = writeSkillAsset(target);
     expect(written).toBe(target);
     expect(readFileSync(target, "utf8")).toBe(skillMd());
+  } finally {
+    rmSync(target, { force: true });
+  }
+});
+
+test("writePlanV2SkillAsset writes a byte-equal copy of planV2SkillMd()", () => {
+  const target = join(tmpdir(), `otacon-plan-v2-asset-${process.pid}-${Date.now()}.md`);
+  try {
+    const written = writePlanV2SkillAsset(target);
+    expect(written).toBe(target);
+    expect(readFileSync(target, "utf8")).toBe(planV2SkillMd());
+  } finally {
+    rmSync(target, { force: true });
+  }
+});
+
+test("writeImplementV2SkillAsset writes a byte-equal copy of implementV2SkillMd()", () => {
+  const target = join(tmpdir(), `otacon-implement-v2-asset-${process.pid}-${Date.now()}.md`);
+  try {
+    const written = writeImplementV2SkillAsset(target);
+    expect(written).toBe(target);
+    expect(readFileSync(target, "utf8")).toBe(implementV2SkillMd());
+  } finally {
+    rmSync(target, { force: true });
+  }
+});
+
+test("writeReviewV2SkillAsset writes a byte-equal copy of reviewV2SkillMd()", () => {
+  const target = join(tmpdir(), `otacon-review-v2-asset-${process.pid}-${Date.now()}.md`);
+  try {
+    const written = writeReviewV2SkillAsset(target);
+    expect(written).toBe(target);
+    expect(readFileSync(target, "utf8")).toBe(reviewV2SkillMd());
   } finally {
     rmSync(target, { force: true });
   }
